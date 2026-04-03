@@ -1,5 +1,16 @@
 // src/ollama/client.ts
-// Ollama REST API client w/ streaming & non-streaming chat
+// Ollama REST API client w/ streaming chat
+
+// JSON Schema subset for tool parameters
+export interface JsonSchema {
+  type: "object";
+  properties: Record<string, {
+    type: string;
+    description?: string;
+    enum?: string[];
+  }>;
+  required?: string[];
+}
 
 // chat message
 export interface OllamaMessage {
@@ -22,7 +33,7 @@ export interface OllamaTool {
   function: {
     name: string;
     description: string;
-    parameters: Record<string, unknown>;
+    parameters: JsonSchema;
   };
 }
 
@@ -73,15 +84,20 @@ export class OllamaClient {
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = "";
+    // collect partial-line chunks in an array to avoid O(n²) string concat
+    const remainderParts: string[] = [];
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
+      remainderParts.push(decoder.decode(value, { stream: true }));
+      const joined = remainderParts.join("");
+      remainderParts.length = 0;
+
+      const lines = joined.split("\n");
+      const tail = lines.pop() ?? "";
+      if (tail) remainderParts.push(tail);
 
       for (const line of lines) {
         if (line.trim()) {
@@ -90,20 +106,9 @@ export class OllamaClient {
       }
     }
 
-    if (buffer.trim()) {
-      yield JSON.parse(buffer) as ChatResponse;
+    const final = remainderParts.join("");
+    if (final.trim()) {
+      yield JSON.parse(final) as ChatResponse;
     }
-  }
-
-  // send a non-streaming chat request
-  async chat(request: ChatRequest): Promise<ChatResponse> {
-    const res = await fetch(`${this.baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...request, stream: false }),
-    });
-
-    if (!res.ok) throw new Error(`Ollama API error: ${res.status}`);
-    return (await res.json()) as ChatResponse;
   }
 }

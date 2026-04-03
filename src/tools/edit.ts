@@ -1,8 +1,9 @@
 // src/tools/edit.ts
 // surgical find/replace file edits
 
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import type { Tool, ToolResult } from "./tool.js";
+import { readFileGuarded } from "./file-utils.js";
 
 // count non-overlapping occurrences of a substring
 function countOccurrences(haystack: string, needle: string): number {
@@ -15,7 +16,6 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
-// edit_file tool
 export const editTool: Tool = {
   name: "edit_file",
   description:
@@ -46,12 +46,9 @@ export const editTool: Tool = {
       return { output: "", error: "old_string & new_string are identical — nothing to change" };
     }
 
-    let content: string;
-    try {
-      content = await readFile(path, "utf-8");
-    } catch (err) {
-      return { output: "", error: `Failed to read ${path}: ${err}` };
-    }
+    const readResult = await readFileGuarded(path);
+    if (!readResult.ok) return readResult.result;
+    const content = readResult.content;
 
     const count = countOccurrences(content, oldString);
 

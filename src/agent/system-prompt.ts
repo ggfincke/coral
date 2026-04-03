@@ -5,15 +5,11 @@ import type { Tool } from "../tools/tool.js";
 
 // format a single tool into a readable block
 function formatTool(tool: Tool): string {
-  const params = tool.parameters as {
-    properties?: Record<string, { type: string; description?: string }>;
-    required?: string[];
-  };
-  const props = params.properties ?? {};
-  const required = new Set(params.required ?? []);
+  const { properties, required = [] } = tool.parameters;
+  const requiredSet = new Set(required);
 
-  const paramLines = Object.entries(props).map(([name, schema]) => {
-    const req = required.has(name) ? " (required)" : " (optional)";
+  const paramLines = Object.entries(properties).map(([name, schema]) => {
+    const req = requiredSet.has(name) ? " (required)" : " (optional)";
     const desc = schema.description ? ` — ${schema.description}` : "";
     return `    - ${name}: ${schema.type}${req}${desc}`;
   });

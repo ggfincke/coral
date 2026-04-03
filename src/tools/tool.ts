@@ -1,7 +1,7 @@
 // src/tools/tool.ts
 // tool interface & conversion to Ollama format
 
-import type { OllamaTool } from "../ollama/client.js";
+import type { OllamaTool, JsonSchema } from "../ollama/client.js";
 
 // result returned after tool execution
 export interface ToolResult {
@@ -13,7 +13,7 @@ export interface ToolResult {
 export interface Tool {
   name: string;
   description: string;
-  parameters: Record<string, unknown>;
+  parameters: JsonSchema;
   execute(args: Record<string, unknown>): Promise<ToolResult>;
 }
 

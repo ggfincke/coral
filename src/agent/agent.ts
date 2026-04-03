@@ -6,6 +6,12 @@ import type { OllamaMessage, ChatResponse } from "../ollama/client.js";
 import { allTools, getToolByName, toolToOllamaFormat } from "../tools/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 
+// pre-compute Ollama tool format (static after registration)
+const ollamaTools = allTools.map(toolToOllamaFormat);
+
+// max messages to keep in history (system prompt + recent context)
+const MAX_HISTORY = 100;
+
 // callbacks for streaming tokens, tool calls, & completion
 export interface AgentEvents {
   onToken: (token: string) => void;
@@ -34,19 +40,19 @@ export class Agent {
     this.messages.push({ role: "system", content: systemContent });
   }
 
-  // return a copy of the conversation history
-  getMessages(): OllamaMessage[] {
-    return [...this.messages];
-  }
-
   // run a user message through the agent loop
   async run(userMessage: string, events: AgentEvents): Promise<void> {
     this.messages.push({ role: "user", content: userMessage });
 
-    const ollamaTools = allTools.map(toolToOllamaFormat);
-
     // keep going while the model wants to call tools
     while (true) {
+      // trim history if it grows too large, preserving system prompt
+      if (this.messages.length > MAX_HISTORY) {
+        const systemMsg = this.messages[0];
+        const recent = this.messages.slice(-(MAX_HISTORY - 1));
+        this.messages = [systemMsg, ...recent];
+      }
+
       let fullContent = "";
       let toolCalls: ChatResponse["message"]["tool_calls"] = undefined;
 
@@ -85,29 +91,32 @@ export class Agent {
         return;
       }
 
-      // execute each tool call & feed results back
-      for (const call of toolCalls) {
-        const toolName = call.function.name;
-        const toolArgs = call.function.arguments;
-        events.onToolCall(toolName, toolArgs);
+      // execute tool calls concurrently & feed results back
+      const toolResults = await Promise.all(
+        toolCalls.map(async (call) => {
+          const toolName = call.function.name;
+          const toolArgs = call.function.arguments;
+          events.onToolCall(toolName, toolArgs);
 
-        const tool = getToolByName(toolName);
-        if (!tool) {
-          const errorMsg = `Unknown tool: ${toolName}`;
-          events.onToolResult(toolName, "", errorMsg);
-          this.messages.push({ role: "tool", content: errorMsg });
-          continue;
-        }
+          const tool = getToolByName(toolName);
+          if (!tool) {
+            const errorMsg = `Unknown tool: ${toolName}`;
+            events.onToolResult(toolName, "", errorMsg);
+            return { role: "tool" as const, content: errorMsg };
+          }
 
-        const result = await tool.execute(toolArgs);
-        events.onToolResult(toolName, result.output, result.error);
-        this.messages.push({
-          role: "tool",
-          content: result.error
-            ? `Error: ${result.error}\n${result.output}`
-            : result.output,
-        });
-      }
+          const result = await tool.execute(toolArgs);
+          events.onToolResult(toolName, result.output, result.error);
+          return {
+            role: "tool" as const,
+            content: result.error
+              ? `Error: ${result.error}\n${result.output}`
+              : result.output,
+          };
+        }),
+      );
+
+      this.messages.push(...toolResults);
     }
   }
 }

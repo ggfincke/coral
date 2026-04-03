@@ -5,7 +5,6 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Tool, ToolResult } from "./tool.js";
 
-// write_file tool
 export const writeTool: Tool = {
   name: "write_file",
   description: "Write content to a file, creating directories as needed.",

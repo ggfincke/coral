@@ -6,7 +6,6 @@ import type { Tool, ToolResult } from "./tool.js";
 
 const DEFAULT_TIMEOUT = 30_000;
 
-// bash tool
 export const bashTool: Tool = {
   name: "bash",
   description: "Execute a bash command and return its output.",

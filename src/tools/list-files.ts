@@ -1,8 +1,9 @@
 // src/tools/list-files.ts
 // list directory contents as an indented tree
 
-import { readdir, stat, lstat } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { readdir, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
+import { join } from "node:path";
 import type { Tool, ToolResult } from "./tool.js";
 
 const MAX_ENTRIES = 200;
@@ -35,49 +36,48 @@ interface Entry {
 // BFS directory traversal w/ depth limiting
 async function collectEntries(root: string, maxDepth: number): Promise<{ entries: Entry[]; truncated: boolean }> {
   const entries: Entry[] = [];
-  // queue: [dirPath, depth]
+  // queue: [dirPath, depth]; use index counter to avoid O(n²) shift
   const queue: [string, number][] = [[root, 0]];
+  let qi = 0;
 
-  while (queue.length > 0) {
-    const [dir, depth] = queue.shift()!;
+  while (qi < queue.length) {
+    const [dir, depth] = queue[qi++];
 
-    let names: string[];
+    let dirents: Dirent[];
     try {
-      names = await readdir(dir);
+      dirents = await readdir(dir, { withFileTypes: true });
     } catch {
-      // skip unreadable directories
       continue;
     }
 
-    names.sort();
+    // filter ignored entries & sort for consistent output
+    const filtered = dirents
+      .filter((d) => !IGNORED.has(d.name))
+      .sort((a, b) => a.name.localeCompare(b.name));
 
-    for (const name of names) {
-      if (IGNORED.has(name)) continue;
+    for (const dirent of filtered) {
+      const isSymlink = dirent.isSymbolicLink();
+      let isDir = dirent.isDirectory();
 
-      const fullPath = join(dir, name);
-      let isDir = false;
-      let isSymlink = false;
-
-      try {
-        const lstats = await lstat(fullPath);
-        isSymlink = lstats.isSymbolicLink();
-        // follow symlinks to check if they point to a directory
-        const stats = isSymlink ? await stat(fullPath) : lstats;
-        isDir = stats.isDirectory();
-      } catch {
-        // skip entries we can't stat
-        continue;
+      // follow symlinks to check if they point to a directory
+      if (isSymlink) {
+        try {
+          const stats = await stat(join(dir, dirent.name));
+          isDir = stats.isDirectory();
+        } catch {
+          continue;
+        }
       }
 
-      entries.push({ name, depth, isDir, isSymlink });
+      entries.push({ name: dirent.name, depth, isDir, isSymlink });
 
       if (entries.length >= MAX_ENTRIES) {
         return { entries, truncated: true };
       }
 
-      // recurse into directories (not symlinks to avoid cycles)
+      // recurse into directories (skip symlinks to avoid cycles)
       if (isDir && !isSymlink && depth + 1 < maxDepth) {
-        queue.push([fullPath, depth + 1]);
+        queue.push([join(dir, dirent.name), depth + 1]);
       }
     }
   }
@@ -104,7 +104,6 @@ function formatTree(root: string, entries: Entry[], truncated: boolean): string 
   return lines.join("\n");
 }
 
-// list_files tool
 export const listFilesTool: Tool = {
   name: "list_files",
   description:

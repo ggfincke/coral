@@ -1,10 +1,9 @@
 // src/tools/read.ts
 // read file contents from disk
 
-import { readFile } from "node:fs/promises";
 import type { Tool, ToolResult } from "./tool.js";
+import { readFileGuarded } from "./file-utils.js";
 
-// read_file tool
 export const readTool: Tool = {
   name: "read_file",
   description: "Read the contents of a file at the given path.",
@@ -17,11 +16,8 @@ export const readTool: Tool = {
   },
   async execute(args): Promise<ToolResult> {
     const path = args.path as string;
-    try {
-      const content = await readFile(path, "utf-8");
-      return { output: content };
-    } catch (err) {
-      return { output: "", error: `Failed to read ${path}: ${err}` };
-    }
+    const result = await readFileGuarded(path);
+    if (!result.ok) return result.result;
+    return { output: result.content };
   },
 };

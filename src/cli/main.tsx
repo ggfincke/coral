@@ -17,4 +17,4 @@ const program = new Command()
 
 const opts = program.opts<{ model: string; host: string }>();
 
-render(<App model={opts.model} />);
+render(<App model={opts.model} host={opts.host} />);
