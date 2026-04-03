@@ -7,10 +7,11 @@ import { writeTool } from "./write.js";
 import { editTool } from "./edit.js";
 import { grepTool } from "./grep.js";
 import { globTool } from "./glob.js";
+import { listFilesTool } from "./list-files.js";
 import { bashTool } from "./bash.js";
 
 // all available tools
-export const allTools: Tool[] = [readTool, writeTool, editTool, grepTool, globTool, bashTool];
+export const allTools: Tool[] = [readTool, writeTool, editTool, grepTool, globTool, listFilesTool, bashTool];
 
 // find a tool by name
 export function getToolByName(name: string): Tool | undefined {
