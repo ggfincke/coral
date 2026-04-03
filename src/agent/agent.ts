@@ -4,6 +4,7 @@
 import { OllamaClient } from "../ollama/client.js";
 import type { OllamaMessage, ChatResponse } from "../ollama/client.js";
 import { allTools, getToolByName, toolToOllamaFormat } from "../tools/index.js";
+import { buildSystemPrompt } from "./system-prompt.js";
 
 // callbacks for streaming tokens, tool calls, & completion
 export interface AgentEvents {
@@ -20,9 +21,17 @@ export class Agent {
   private messages: OllamaMessage[] = [];
   private model: string;
 
-  constructor(model: string, baseUrl?: string) {
+  constructor(model: string, baseUrl?: string, cwd?: string) {
     this.model = model;
     this.client = new OllamaClient(baseUrl);
+
+    // inject system prompt as first message
+    const systemContent = buildSystemPrompt({
+      model,
+      cwd: cwd ?? process.cwd(),
+      tools: allTools,
+    });
+    this.messages.push({ role: "system", content: systemContent });
   }
 
   // return a copy of the conversation history
