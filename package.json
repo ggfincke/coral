@@ -1,0 +1,26 @@
+{
+  "name": "coral",
+  "version": "0.0.1",
+  "description": "A CLI/TUI coding agent for Ollama",
+  "type": "module",
+  "bin": {
+    "coral": "./dist/cli/main.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli/main.tsx",
+    "start": "node dist/cli/main.js"
+  },
+  "dependencies": {
+    "ink": "^5.2.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1",
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "typescript": "^5.8.2",
+    "tsx": "^4.19.3",
+    "@types/node": "^22.15.3"
+  }
+}
