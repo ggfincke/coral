@@ -3,6 +3,7 @@
 
 import type { Tool, ToolResult } from "./tool.js";
 import { execRipgrep, truncateOutput } from "./ripgrep-utils.js";
+import { resolvePath } from "../cwd.js";
 
 const MAX_FILES = 100;
 
@@ -26,7 +27,7 @@ export const globTool: Tool = {
   },
   async execute(args): Promise<ToolResult> {
     const pattern = args.pattern as string;
-    const path = (args.path as string) ?? ".";
+    const path = resolvePath((args.path as string) ?? ".");
 
     const rgArgs = [
       "--files",

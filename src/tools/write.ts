@@ -4,6 +4,7 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { Tool, ToolResult } from "./tool.js";
+import { resolvePath } from "../cwd.js";
 
 export const writeTool: Tool = {
   name: "write_file",
@@ -17,7 +18,7 @@ export const writeTool: Tool = {
     required: ["path", "content"],
   },
   async execute(args): Promise<ToolResult> {
-    const path = args.path as string;
+    const path = resolvePath(args.path as string);
     const content = args.content as string;
     try {
       await mkdir(dirname(path), { recursive: true });

@@ -5,6 +5,7 @@ import { OllamaClient } from "../ollama/client.js";
 import type { OllamaMessage, ChatResponse } from "../ollama/client.js";
 import { allTools, getToolByName, toolToOllamaFormat } from "../tools/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { setCwd, getCwd } from "../cwd.js";
 
 // pre-compute Ollama tool format (static after registration)
 const ollamaTools = allTools.map(toolToOllamaFormat);
@@ -31,10 +32,13 @@ export class Agent {
     this.model = model;
     this.client = new OllamaClient(baseUrl);
 
+    // set the global working directory — all tools resolve paths against this
+    if (cwd) setCwd(cwd);
+
     // inject system prompt as first message
     const systemContent = buildSystemPrompt({
       model,
-      cwd: cwd ?? process.cwd(),
+      cwd: getCwd(),
       tools: allTools,
     });
     this.messages.push({ role: "system", content: systemContent });

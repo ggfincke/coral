@@ -5,6 +5,7 @@ import { readdir, stat } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import { join } from "node:path";
 import type { Tool, ToolResult } from "./tool.js";
+import { resolvePath } from "../cwd.js";
 
 const MAX_ENTRIES = 200;
 const DEFAULT_DEPTH = 2;
@@ -123,7 +124,7 @@ export const listFilesTool: Tool = {
     required: [],
   },
   async execute(args): Promise<ToolResult> {
-    const path = (args.path as string) ?? ".";
+    const path = resolvePath((args.path as string) ?? ".");
     const rawDepth = (args.depth as number) ?? DEFAULT_DEPTH;
     const depth = Math.max(1, Math.min(5, Math.floor(rawDepth)));
 

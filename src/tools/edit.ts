@@ -4,6 +4,7 @@
 import { writeFile } from "node:fs/promises";
 import type { Tool, ToolResult } from "./tool.js";
 import { readFileGuarded } from "./file-utils.js";
+import { resolvePath } from "../cwd.js";
 
 // count non-overlapping occurrences of a substring
 function countOccurrences(haystack: string, needle: string): number {
@@ -34,7 +35,7 @@ export const editTool: Tool = {
     required: ["path", "old_string", "new_string"],
   },
   async execute(args): Promise<ToolResult> {
-    const path = args.path as string;
+    const path = resolvePath(args.path as string);
     const oldString = args.old_string as string;
     const newString = args.new_string as string;
     const replaceAll = (args.replace_all as boolean) ?? false;

@@ -3,6 +3,7 @@
 
 import type { Tool, ToolResult } from "./tool.js";
 import { execRipgrep, truncateOutput } from "./ripgrep-utils.js";
+import { resolvePath } from "../cwd.js";
 
 const MAX_RESULTS = 200;
 
@@ -27,7 +28,7 @@ export const grepTool: Tool = {
   },
   async execute(args): Promise<ToolResult> {
     const pattern = args.pattern as string;
-    const path = (args.path as string) ?? ".";
+    const path = resolvePath((args.path as string) ?? ".");
     const include = args.include as string | undefined;
 
     const rgArgs = [

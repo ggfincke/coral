@@ -3,6 +3,7 @@
 
 import { exec } from "node:child_process";
 import type { Tool, ToolResult } from "./tool.js";
+import { getCwd } from "../cwd.js";
 
 const DEFAULT_TIMEOUT = 30_000;
 
@@ -25,7 +26,7 @@ export const bashTool: Tool = {
     const timeout = (args.timeout as number) ?? DEFAULT_TIMEOUT;
 
     return new Promise((resolve) => {
-      exec(command, { timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      exec(command, { cwd: getCwd(), timeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) {
           resolve({
             output: stdout || "",
