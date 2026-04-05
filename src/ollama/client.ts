@@ -43,6 +43,7 @@ export interface ChatRequest {
   messages: OllamaMessage[];
   stream?: boolean;
   tools?: OllamaTool[];
+  keep_alive?: string | number;
 }
 
 // response chunk from /api/chat
@@ -76,7 +77,7 @@ export class OllamaClient {
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...request, stream: true }),
+      body: JSON.stringify({ keep_alive: -1, ...request, stream: true }),
     });
 
     if (!res.ok) throw new Error(`Ollama API error: ${res.status}`);

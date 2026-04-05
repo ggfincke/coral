@@ -13,11 +13,16 @@ const ollamaTools = allTools.map(toolToOllamaFormat);
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100;
 
+// tools that require user approval before execution
+const TOOLS_REQUIRING_APPROVAL = new Set(["write_file", "edit_file", "bash"]);
+
 // callbacks for streaming tokens, tool calls, & completion
 export interface AgentEvents {
   onToken: (token: string) => void;
   onToolCall: (name: string, args: Record<string, unknown>) => void;
   onToolResult: (name: string, result: string, error?: string) => void;
+  // return true to approve, false to reject — only called for write/edit/bash
+  onToolApproval: (name: string, args: Record<string, unknown>) => Promise<boolean>;
   onDone: () => void;
   onError: (error: Error) => void;
 }
@@ -95,30 +100,41 @@ export class Agent {
         return;
       }
 
-      // execute tool calls concurrently & feed results back
-      const toolResults = await Promise.all(
-        toolCalls.map(async (call) => {
-          const toolName = call.function.name;
-          const toolArgs = call.function.arguments;
-          events.onToolCall(toolName, toolArgs);
+      // execute tool calls sequentially (approval requires serial flow)
+      const toolResults: OllamaMessage[] = [];
+      for (const call of toolCalls) {
+        const toolName = call.function.name;
+        const toolArgs = call.function.arguments;
+        events.onToolCall(toolName, toolArgs);
 
-          const tool = getToolByName(toolName);
-          if (!tool) {
-            const errorMsg = `Unknown tool: ${toolName}`;
-            events.onToolResult(toolName, "", errorMsg);
-            return { role: "tool" as const, content: errorMsg };
+        const tool = getToolByName(toolName);
+        if (!tool) {
+          const errorMsg = `Unknown tool: ${toolName}`;
+          events.onToolResult(toolName, "", errorMsg);
+          toolResults.push({ role: "tool", content: errorMsg });
+          continue;
+        }
+
+        // gate dangerous tools behind user approval
+        if (TOOLS_REQUIRING_APPROVAL.has(toolName)) {
+          const approved = await events.onToolApproval(toolName, toolArgs);
+          if (!approved) {
+            const rejectedMsg = `Tool call rejected by user`;
+            events.onToolResult(toolName, "", rejectedMsg);
+            toolResults.push({ role: "tool", content: rejectedMsg });
+            continue;
           }
+        }
 
-          const result = await tool.execute(toolArgs);
-          events.onToolResult(toolName, result.output, result.error);
-          return {
-            role: "tool" as const,
-            content: result.error
-              ? `Error: ${result.error}\n${result.output}`
-              : result.output,
-          };
-        }),
-      );
+        const result = await tool.execute(toolArgs);
+        events.onToolResult(toolName, result.output, result.error);
+        toolResults.push({
+          role: "tool",
+          content: result.error
+            ? `Error: ${result.error}\n${result.output}`
+            : result.output,
+        });
+      }
 
       this.messages.push(...toolResults);
     }

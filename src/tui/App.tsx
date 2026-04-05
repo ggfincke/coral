@@ -16,8 +16,22 @@ interface OutputBlock {
   content: string;
 }
 
+// pending approval prompt state
+interface ApprovalPrompt {
+  toolName: string;
+  args: Record<string, unknown>;
+  resolve: (approved: boolean) => void;
+}
+
 // throttle interval for batching streamed tokens (~30fps)
 const FLUSH_INTERVAL = 32;
+
+// format tool args for the approval prompt — show the most relevant arg
+function formatApprovalArgs(toolName: string, args: Record<string, unknown>): string {
+  if (toolName === "bash") return String(args.command ?? "");
+  if (toolName === "write_file" || toolName === "edit_file") return String(args.path ?? "");
+  return JSON.stringify(args);
+}
 
 export default function App({ model, host }: Props) {
   const { exit } = useApp();
@@ -26,6 +40,7 @@ export default function App({ model, host }: Props) {
   const [streaming, setStreaming] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [agent] = useState(() => new Agent(model, host));
+  const [approval, setApproval] = useState<ApprovalPrompt | null>(null);
 
   // refs for throttled token streaming
   const streamingRef = useRef("");
@@ -36,8 +51,19 @@ export default function App({ model, host }: Props) {
     setStreaming(streamingRef.current);
   }, []);
 
-  useInput((_, key) => {
+  useInput((ch, key) => {
     if (key.escape) exit();
+
+    // handle approval prompt: y to approve, n/esc to reject
+    if (approval) {
+      if (ch === "y" || ch === "Y") {
+        approval.resolve(true);
+        setApproval(null);
+      } else if (ch === "n" || ch === "N") {
+        approval.resolve(false);
+        setApproval(null);
+      }
+    }
   });
 
   // handle user input submission
@@ -59,16 +85,50 @@ export default function App({ model, host }: Props) {
           }
         },
         onToolCall(name, args) {
-          setOutput((prev) => [
-            ...prev,
-            { type: "tool", content: `[tool] ${name}(${JSON.stringify(args)})` },
-          ]);
+          // flush any accumulated thinking text before showing the tool call
+          if (flushTimerRef.current) {
+            clearTimeout(flushTimerRef.current);
+            flushTimerRef.current = null;
+          }
+          const pending = streamingRef.current;
+          if (pending) {
+            streamingRef.current = "";
+            setStreaming("");
+            setOutput((prev) => [
+              ...prev,
+              { type: "assistant", content: pending },
+              { type: "tool", content: `[tool] ${name}(${JSON.stringify(args)})` },
+            ]);
+          } else {
+            setOutput((prev) => [
+              ...prev,
+              { type: "tool", content: `[tool] ${name}(${JSON.stringify(args)})` },
+            ]);
+          }
         },
-        onToolResult(name, _result, error) {
+        onToolApproval(name, args) {
+          return new Promise<boolean>((resolve) => {
+            setApproval({ toolName: name, args, resolve });
+          });
+        },
+        onToolResult(name, result, error) {
           if (error) {
             setOutput((prev) => [
               ...prev,
               { type: "error", content: `[${name} error] ${error}` },
+            ]);
+          } else if (result) {
+            // truncate long results to keep TUI readable
+            const MAX_RESULT_LINES = 30;
+            const lines = result.split("\n");
+            const truncated =
+              lines.length > MAX_RESULT_LINES
+                ? lines.slice(0, MAX_RESULT_LINES).join("\n") +
+                  `\n… (${lines.length - MAX_RESULT_LINES} more lines)`
+                : result;
+            setOutput((prev) => [
+              ...prev,
+              { type: "tool", content: `[${name}] ${truncated}` },
             ]);
           }
         },
@@ -139,6 +199,29 @@ export default function App({ model, host }: Props) {
       {streaming && (
         <Box marginBottom={1}>
           <Text>{streaming}</Text>
+        </Box>
+      )}
+
+      {approval && (
+        <Box flexDirection="column" marginBottom={1}>
+          <Box>
+            <Text bold color="yellow">
+              {"⚡ "}
+            </Text>
+            <Text bold>
+              Allow {approval.toolName}
+            </Text>
+            <Text dimColor>
+              ({formatApprovalArgs(approval.toolName, approval.args)})
+            </Text>
+          </Box>
+          <Box>
+            <Text dimColor>  press </Text>
+            <Text bold color="green">y</Text>
+            <Text dimColor> to approve · </Text>
+            <Text bold color="red">n</Text>
+            <Text dimColor> to reject</Text>
+          </Box>
         </Box>
       )}
 

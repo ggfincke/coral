@@ -11,7 +11,7 @@ const program = new Command()
   .name("coral")
   .description("A CLI/TUI coding agent for Ollama")
   .version("0.0.1")
-  .option("-m, --model <model>", "Ollama model to use", "devstral")
+  .option("-m, --model <model>", "Ollama model to use", "devstral-2:123b-instruct-2512-q4_K_M")
   .option("--host <url>", "Ollama host URL", "http://localhost:11434")
   .parse(process.argv);
 
