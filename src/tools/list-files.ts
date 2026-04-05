@@ -34,24 +34,19 @@ interface Entry {
   isSymlink: boolean;
 }
 
-// BFS directory traversal w/ depth limiting
+// traverse the tree depth-first so children stay attached to their parent
 async function collectEntries(root: string, maxDepth: number): Promise<{ entries: Entry[]; truncated: boolean }> {
   const entries: Entry[] = [];
-  // queue: [dirPath, depth]; use index counter to avoid O(n²) shift
-  const queue: [string, number][] = [[root, 0]];
-  let qi = 0;
+  let truncated = false;
 
-  while (qi < queue.length) {
-    const [dir, depth] = queue[qi++];
-
+  async function walk(dir: string, depth: number): Promise<void> {
     let dirents: Dirent[];
     try {
       dirents = await readdir(dir, { withFileTypes: true });
     } catch {
-      continue;
+      return;
     }
 
-    // filter ignored entries & sort for consistent output
     const filtered = dirents
       .filter((d) => !IGNORED.has(d.name))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -60,7 +55,6 @@ async function collectEntries(root: string, maxDepth: number): Promise<{ entries
       const isSymlink = dirent.isSymbolicLink();
       let isDir = dirent.isDirectory();
 
-      // follow symlinks to check if they point to a directory
       if (isSymlink) {
         try {
           const stats = await stat(join(dir, dirent.name));
@@ -73,17 +67,22 @@ async function collectEntries(root: string, maxDepth: number): Promise<{ entries
       entries.push({ name: dirent.name, depth, isDir, isSymlink });
 
       if (entries.length >= MAX_ENTRIES) {
-        return { entries, truncated: true };
+        truncated = true;
+        return;
       }
 
-      // recurse into directories (skip symlinks to avoid cycles)
       if (isDir && !isSymlink && depth + 1 < maxDepth) {
-        queue.push([join(dir, dirent.name), depth + 1]);
+        await walk(join(dir, dirent.name), depth + 1);
+
+        if (truncated) {
+          return;
+        }
       }
     }
   }
 
-  return { entries, truncated: false };
+  await walk(root, 0);
+  return { entries, truncated };
 }
 
 // format entries into an indented tree string
@@ -93,13 +92,13 @@ function formatTree(root: string, entries: Entry[], truncated: boolean): string 
   for (const entry of entries) {
     const indent = INDENT.repeat(entry.depth + 1);
     let suffix = "";
-    if (entry.isDir) suffix = "/";
-    else if (entry.isSymlink) suffix = "@";
+    if (entry.isDir) suffix += "/";
+    if (entry.isSymlink) suffix += "@";
     lines.push(`${indent}${entry.name}${suffix}`);
   }
 
   if (truncated) {
-    lines.push(`\n(Showing first ${MAX_ENTRIES} entries — use a smaller depth or more specific path)`);
+    lines.push(`(Showing first ${MAX_ENTRIES} entries — use a smaller depth or more specific path)`);
   }
 
   return lines.join("\n");

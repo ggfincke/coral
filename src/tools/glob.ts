@@ -32,7 +32,7 @@ export const globTool: Tool = {
     const rgArgs = [
       "--files",
       "--hidden",
-      "--sort=modified",
+      "--sortr=modified",
       "--glob", pattern,
       path,
     ];

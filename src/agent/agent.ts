@@ -2,7 +2,7 @@
 // conversation loop w/ tool-use cycling
 
 import { OllamaClient } from "../ollama/client.js";
-import type { OllamaMessage, ChatResponse } from "../ollama/client.js";
+import type { OllamaMessage, ChatResponse, OllamaToolCall } from "../ollama/client.js";
 import { allTools, getToolByName, toolToOllamaFormat } from "../tools/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { setCwd, getCwd } from "../cwd.js";
@@ -15,6 +15,46 @@ const MAX_HISTORY = 100;
 
 // tools that require user approval before execution
 const TOOLS_REQUIRING_APPROVAL = new Set(["write_file", "edit_file", "bash"]);
+
+// merge streamed tool call chunks into a stable ordered list
+function mergeToolCalls(existing: OllamaToolCall[], incoming: OllamaToolCall[]): OllamaToolCall[] {
+  const merged = [...existing];
+
+  for (const call of incoming) {
+    const index = call.function.index;
+
+    if (typeof index === "number") {
+      const existingIndex = merged.findIndex((candidate) => candidate.function.index === index);
+
+      if (existingIndex === -1) {
+        merged.push(call);
+      } else {
+        merged[existingIndex] = call;
+      }
+
+      continue;
+    }
+
+    merged.push(call);
+  }
+
+  return merged.sort((a, b) => {
+    const left = a.function.index;
+    const right = b.function.index;
+
+    if (typeof left === "number" && typeof right === "number") {
+      return left - right;
+    }
+    if (typeof left === "number") return -1;
+    if (typeof right === "number") return 1;
+    return 0;
+  });
+}
+
+// normalize unknown thrown values into an Error
+function toError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
 
 // callbacks for streaming tokens, tool calls, & completion
 export interface AgentEvents {
@@ -47,6 +87,9 @@ export class Agent {
       tools: allTools,
     });
     this.messages.push({ role: "system", content: systemContent });
+
+    // keep model loaded in memory between requests
+    this.client.startKeepAlive(model);
   }
 
   // run a user message through the agent loop
@@ -63,7 +106,8 @@ export class Agent {
       }
 
       let fullContent = "";
-      let toolCalls: ChatResponse["message"]["tool_calls"] = undefined;
+      let fullThinking = "";
+      let toolCalls: OllamaToolCall[] = [];
 
       try {
         for await (const chunk of this.client.chatStream({
@@ -71,16 +115,19 @@ export class Agent {
           messages: this.messages,
           tools: ollamaTools,
         })) {
+          if (chunk.message.thinking) {
+            fullThinking += chunk.message.thinking;
+          }
           if (chunk.message.content) {
             fullContent += chunk.message.content;
             events.onToken(chunk.message.content);
           }
-          if (chunk.message.tool_calls) {
-            toolCalls = chunk.message.tool_calls;
+          if (chunk.message.tool_calls?.length) {
+            toolCalls = mergeToolCalls(toolCalls, chunk.message.tool_calls);
           }
         }
       } catch (err) {
-        events.onError(err instanceof Error ? err : new Error(String(err)));
+        events.onError(toError(err));
         return;
       }
 
@@ -89,13 +136,16 @@ export class Agent {
         role: "assistant",
         content: fullContent,
       };
-      if (toolCalls) {
+      if (fullThinking) {
+        assistantMessage.thinking = fullThinking;
+      }
+      if (toolCalls.length > 0) {
         assistantMessage.tool_calls = toolCalls;
       }
       this.messages.push(assistantMessage);
 
       // no tool calls means the model is done
-      if (!toolCalls || toolCalls.length === 0) {
+      if (toolCalls.length === 0) {
         events.onDone();
         return;
       }
@@ -104,32 +154,51 @@ export class Agent {
       const toolResults: OllamaMessage[] = [];
       for (const call of toolCalls) {
         const toolName = call.function.name;
-        const toolArgs = call.function.arguments;
+        const toolArgs = call.function.arguments ?? {};
         events.onToolCall(toolName, toolArgs);
 
         const tool = getToolByName(toolName);
         if (!tool) {
           const errorMsg = `Unknown tool: ${toolName}`;
           events.onToolResult(toolName, "", errorMsg);
-          toolResults.push({ role: "tool", content: errorMsg });
+          toolResults.push({ role: "tool", tool_name: toolName, content: errorMsg });
           continue;
         }
 
         // gate dangerous tools behind user approval
         if (TOOLS_REQUIRING_APPROVAL.has(toolName)) {
-          const approved = await events.onToolApproval(toolName, toolArgs);
+          let approved: boolean;
+          try {
+            approved = await events.onToolApproval(toolName, toolArgs);
+          } catch (err) {
+            const errorMsg = `Tool approval failed for ${toolName}: ${toError(err).message}`;
+            events.onToolResult(toolName, "", errorMsg);
+            toolResults.push({ role: "tool", tool_name: toolName, content: errorMsg });
+            continue;
+          }
+
           if (!approved) {
             const rejectedMsg = `Tool call rejected by user`;
             events.onToolResult(toolName, "", rejectedMsg);
-            toolResults.push({ role: "tool", content: rejectedMsg });
+            toolResults.push({ role: "tool", tool_name: toolName, content: rejectedMsg });
             continue;
           }
         }
 
-        const result = await tool.execute(toolArgs);
+        let result;
+        try {
+          result = await tool.execute(toolArgs);
+        } catch (err) {
+          result = {
+            output: "",
+            error: `Tool execution failed for ${toolName}: ${toError(err).message}`,
+          };
+        }
+
         events.onToolResult(toolName, result.output, result.error);
         toolResults.push({
           role: "tool",
+          tool_name: toolName,
           content: result.error
             ? `Error: ${result.error}\n${result.output}`
             : result.output,

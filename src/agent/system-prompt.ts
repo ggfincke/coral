@@ -1,7 +1,21 @@
 // src/agent/system-prompt.ts
 // system prompt construction
 
+import { readdirSync } from "node:fs";
+import { basename } from "node:path";
 import type { Tool } from "../tools/tool.js";
+
+const PROJECT_CONTEXT_LIMIT = 12;
+
+// root entries that add noise instead of context
+const IGNORED_ROOT_ENTRIES = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  ".cache",
+  "dist",
+  "build",
+]);
 
 // format a single tool into a readable block
 function formatTool(tool: Tool): string {
@@ -22,6 +36,25 @@ function formatTools(tools: Tool[]): string {
   return tools.map(formatTool).join("\n\n");
 }
 
+// summarize the project root so the model starts w/ lightweight repo context
+function formatProjectContext(cwd: string): string {
+  let entries: string[];
+
+  try {
+    entries = readdirSync(cwd, { withFileTypes: true })
+      .filter((entry) => !IGNORED_ROOT_ENTRIES.has(entry.name))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, PROJECT_CONTEXT_LIMIT)
+      .map((entry) => entry.isDirectory() ? `${entry.name}/` : entry.name);
+  } catch {
+    return `Project name: ${basename(cwd)}\nTop-level entries: unavailable`;
+  }
+
+  const suffix = entries.length === PROJECT_CONTEXT_LIMIT ? " (truncated)" : "";
+  const summary = entries.length > 0 ? entries.join(", ") : "(empty)";
+  return `Project name: ${basename(cwd)}\nTop-level entries${suffix}: ${summary}`;
+}
+
 // build the complete system prompt for a given model & context
 export function buildSystemPrompt(ctx: {
   model: string;
@@ -29,13 +62,20 @@ export function buildSystemPrompt(ctx: {
   tools: Tool[];
 }): string {
   const toolBlock = formatTools(ctx.tools);
+  const projectContext = formatProjectContext(ctx.cwd);
 
   return `You are Coral, a local coding agent running via Ollama. You help developers by reading code, editing files, running shell commands, & answering questions about codebases.
+
+Running model: ${ctx.model}
 
 ## Working Directory
 
 You are working in: ${ctx.cwd}
 All relative paths are resolved from this directory.
+
+## Project Context
+
+${projectContext}
 
 ## Tools
 

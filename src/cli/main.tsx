@@ -11,10 +11,11 @@ const program = new Command()
   .name("coral")
   .description("A CLI/TUI coding agent for Ollama")
   .version("0.0.1")
-  .option("-m, --model <model>", "Ollama model to use", "devstral-2:123b-instruct-2512-q4_K_M")
+  .option("-m, --model <model>", "Ollama model to use")
   .option("--host <url>", "Ollama host URL", "http://localhost:11434")
+  .option("--yolo", "skip all tool approval prompts (auto-accept everything)")
   .parse(process.argv);
 
-const opts = program.opts<{ model: string; host: string }>();
+const opts = program.opts<{ model?: string; host: string; yolo: boolean }>();
 
-render(<App model={opts.model} host={opts.host} />);
+render(<App model={opts.model} host={opts.host} yolo={opts.yolo ?? false} />);

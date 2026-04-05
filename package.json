@@ -9,18 +9,25 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/cli/main.tsx",
-    "start": "node dist/cli/main.js"
+    "start": "node dist/cli/main.js",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:watch": "node --import tsx --test --watch tests/*.test.ts"
   },
   "dependencies": {
+    "chalk": "^5.6.2",
+    "cli-highlight": "^2.1.11",
+    "commander": "^13.1.0",
     "ink": "^5.2.0",
     "ink-text-input": "^6.0.0",
+    "marked": "^17.0.6",
     "react": "^18.3.1",
-    "commander": "^13.1.0"
+    "strip-ansi": "^7.2.0",
+    "wrap-ansi": "^10.0.0"
   },
   "devDependencies": {
+    "@types/node": "^22.15.3",
     "@types/react": "^18.3.18",
-    "typescript": "^5.8.2",
     "tsx": "^4.19.3",
-    "@types/node": "^22.15.3"
+    "typescript": "^5.8.2"
   }
 }

@@ -26,14 +26,14 @@ We intentionally do not test:
 ## Running Tests
 
 ```bash
-# run all tests (single pass)
+# run all tests
 npm test
 
 # run in watch mode
 npm run test:watch
 
 # run a specific test file
-npx vitest run tests/agent.test.ts
+node --import tsx --test tests/agent.test.ts
 ```
 
 ## Adding Tests
