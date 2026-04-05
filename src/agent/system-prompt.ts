@@ -4,6 +4,7 @@
 import { readdirSync } from "node:fs";
 import { basename } from "node:path";
 import type { Tool } from "../tools/tool.js";
+import { gatherProjectContext } from "./context.js";
 
 const PROJECT_CONTEXT_LIMIT = 12;
 
@@ -63,8 +64,9 @@ export function buildSystemPrompt(ctx: {
 }): string {
   const toolBlock = formatTools(ctx.tools);
   const projectContext = formatProjectContext(ctx.cwd);
+  const injectedContext = gatherProjectContext(ctx.cwd);
 
-  return `You are Coral, a local coding agent running via Ollama. You help developers by reading code, editing files, running shell commands, & answering questions about codebases.
+  let prompt = `You are Coral, a local coding agent running via Ollama. You help developers by reading code, editing files, running shell commands, & answering questions about codebases.
 
 Running model: ${ctx.model}
 
@@ -96,4 +98,10 @@ ${toolBlock}
 - If a bash command fails, read the error carefully & try to fix the root cause rather than retrying blindly
 - When you encounter something unexpected, explain what you found & ask the user how to proceed rather than making assumptions
 - If a task requires changes across multiple files, explain the full plan before starting`;
+
+  if (injectedContext) {
+    prompt += `\n\n## Loaded Project Context\n\nThe following project files were auto-loaded for reference:\n\n${injectedContext}`;
+  }
+
+  return prompt;
 }

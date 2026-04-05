@@ -6,15 +6,21 @@ import type { OllamaMessage, ChatResponse, OllamaToolCall } from "../ollama/clie
 import { allTools, getToolByName, toolToOllamaFormat } from "../tools/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { setCwd, getCwd } from "../cwd.js";
+import { resolvePermissions, getToolPolicy, type ToolPermissions } from "../config/permissions.js";
+import {
+  shouldCompact,
+  splitForCompaction,
+  buildCompactionPrompt,
+  buildCompactedMessages,
+  type CompactionConfig,
+  DEFAULT_COMPACTION_CONFIG,
+} from "./compaction.js";
 
 // pre-compute Ollama tool format (static after registration)
 const ollamaTools = allTools.map(toolToOllamaFormat);
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100;
-
-// tools that require user approval before execution
-const TOOLS_REQUIRING_APPROVAL = new Set(["write_file", "edit_file", "bash"]);
 
 // merge streamed tool call chunks into a stable ordered list
 function mergeToolCalls(existing: OllamaToolCall[], incoming: OllamaToolCall[]): OllamaToolCall[] {
@@ -72,6 +78,8 @@ export class Agent {
   private client: OllamaClient;
   private messages: OllamaMessage[] = [];
   private model: string;
+  private permissions: ToolPermissions;
+  private compactionConfig: CompactionConfig;
 
   constructor(model: string, baseUrl?: string, cwd?: string) {
     this.model = model;
@@ -79,6 +87,12 @@ export class Agent {
 
     // set the global working directory — all tools resolve paths against this
     if (cwd) setCwd(cwd);
+
+    // load per-tool permission policies from config
+    this.permissions = resolvePermissions(getCwd());
+
+    // compaction defaults — can be overridden via setCompactionConfig()
+    this.compactionConfig = { ...DEFAULT_COMPACTION_CONFIG };
 
     // inject system prompt as first message
     const systemContent = buildSystemPrompt({
@@ -88,8 +102,74 @@ export class Agent {
     });
     this.messages.push({ role: "system", content: systemContent });
 
-    // keep model loaded in memory between requests
+    // track the active model so shutdown can unload it
     this.client.startKeepAlive(model);
+  }
+
+  // stop client background work & unload the active model
+  async dispose(): Promise<void> {
+    this.client.stopKeepAlive();
+    await this.client.unloadModel(this.model);
+  }
+
+  // restore conversation from a previous session's messages
+  // replaces the current history (keeps system prompt at index 0)
+  restoreMessages(savedMessages: OllamaMessage[]): void {
+    // find the system prompt from saved messages (or keep current one)
+    const currentSystem = this.messages[0];
+    const nonSystem = savedMessages.filter((m) => m.role !== "system");
+    this.messages = [currentSystem!, ...nonSystem];
+  }
+
+  // get a snapshot of the current message history (for session persistence)
+  getMessages(): OllamaMessage[] {
+    return [...this.messages];
+  }
+
+  // get the model name
+  getModel(): string {
+    return this.model;
+  }
+
+  // override compaction configuration
+  setCompactionConfig(config: Partial<CompactionConfig>): void {
+    this.compactionConfig = { ...this.compactionConfig, ...config };
+  }
+
+  // compact conversation history if it exceeds the context budget
+  // uses the model itself to summarize old turns
+  private async compactIfNeeded(): Promise<void> {
+    if (!shouldCompact(this.messages, this.compactionConfig)) return;
+
+    const { toSummarize, toKeep } = splitForCompaction(this.messages, this.compactionConfig);
+    if (toSummarize.length === 0) return;
+
+    // ask the model to summarize the old conversation
+    const compactionPrompt = buildCompactionPrompt(toSummarize);
+    let summary = "";
+
+    try {
+      for await (const chunk of this.client.chatStream({
+        model: this.model,
+        messages: [
+          { role: "system", content: "You are a helpful assistant. Summarize conversations concisely." },
+          { role: "user", content: compactionPrompt },
+        ],
+      })) {
+        if (chunk.message.content) {
+          summary += chunk.message.content;
+        }
+      }
+    } catch {
+      // compaction failure is non-fatal — keep using uncompacted history
+      return;
+    }
+
+    if (!summary.trim()) return;
+
+    // rebuild messages w/ summary replacing old turns
+    const systemMsg = this.messages[0]!;
+    this.messages = buildCompactedMessages(systemMsg, summary, toKeep);
   }
 
   // run a user message through the agent loop
@@ -98,6 +178,9 @@ export class Agent {
 
     // keep going while the model wants to call tools
     while (true) {
+      // compact conversation if approaching context limits
+      await this.compactIfNeeded();
+
       // trim history if it grows too large, preserving system prompt
       if (this.messages.length > MAX_HISTORY) {
         const systemMsg = this.messages[0];
@@ -165,8 +248,17 @@ export class Agent {
           continue;
         }
 
-        // gate dangerous tools behind user approval
-        if (TOOLS_REQUIRING_APPROVAL.has(toolName)) {
+        // check per-tool permission policy
+        const policy = getToolPolicy(this.permissions, toolName);
+
+        if (policy === "always_deny") {
+          const deniedMsg = `Tool ${toolName} is denied by permission policy`;
+          events.onToolResult(toolName, "", deniedMsg);
+          toolResults.push({ role: "tool", tool_name: toolName, content: deniedMsg });
+          continue;
+        }
+
+        if (policy === "require_approval") {
           let approved: boolean;
           try {
             approved = await events.onToolApproval(toolName, toolArgs);

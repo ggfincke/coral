@@ -64,47 +64,46 @@ export interface Model {
   modified_at: string;
 }
 
+const DEFAULT_KEEP_ALIVE = "10m";
+
 // * Ollama REST API client
 export class OllamaClient {
-  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
   private lastModel: string | null = null;
 
   constructor(private baseUrl = "http://localhost:11434") {}
 
-  // send a zero-predict request to keep the model loaded in memory
-  // prevents Ollama's idle timeout from evicting the model between requests
-  private async pingKeepAlive(): Promise<void> {
-    if (!this.lastModel) return;
+  // track the active model so Coral can unload it on shutdown
+  startKeepAlive(model: string): void {
+    this.lastModel = model;
+  }
+
+  // keep API compatibility w/ existing call sites
+  stopKeepAlive(): void {
+    // no-op
+  }
+
+  // unload a tracked model immediately
+  async unloadModel(model = this.lastModel): Promise<void> {
+    if (!model) return;
+
     try {
       await fetch(`${this.baseUrl}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: this.lastModel,
+          model,
           messages: [],
-          keep_alive: -1,
+          keep_alive: 0,
           stream: false,
-          // zero-token predict — just refreshes the keep_alive timer
           options: { num_predict: 0 },
         }),
       });
     } catch {
-      // swallow — ping failure is non-fatal
-    }
-  }
-
-  // start periodic keep-alive pings (every 60s)
-  startKeepAlive(model: string): void {
-    this.lastModel = model;
-    this.stopKeepAlive();
-    this.keepAliveTimer = setInterval(() => this.pingKeepAlive(), 60_000);
-  }
-
-  // stop periodic keep-alive pings
-  stopKeepAlive(): void {
-    if (this.keepAliveTimer) {
-      clearInterval(this.keepAliveTimer);
-      this.keepAliveTimer = null;
+      // swallow — shutdown unload is best-effort
+    } finally {
+      if (this.lastModel === model) {
+        this.lastModel = null;
+      }
     }
   }
 
@@ -121,7 +120,11 @@ export class OllamaClient {
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keep_alive: -1, ...request, stream: true }),
+      body: JSON.stringify({
+        ...request,
+        keep_alive: request.keep_alive ?? DEFAULT_KEEP_ALIVE,
+        stream: true,
+      }),
     });
 
     if (!res.ok) throw new Error(`Ollama API error: ${res.status}`);

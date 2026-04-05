@@ -28,6 +28,7 @@ test("Agent accumulates streamed tool calls, preserves thinking, & tags tool res
     client: {
       stopKeepAlive?: () => void;
       startKeepAlive: (model: string) => void;
+      unloadModel?: (model?: string) => Promise<void>;
       chatStream: () => AsyncGenerator<{
         message: OllamaMessage;
         done: boolean;
@@ -145,6 +146,7 @@ test("Agent only asks approval for dangerous tools & records rejections as tool 
     client: {
       stopKeepAlive?: () => void;
       startKeepAlive: (model: string) => void;
+      unloadModel?: (model?: string) => Promise<void>;
       chatStream: () => AsyncGenerator<{
         message: OllamaMessage;
         done: boolean;
@@ -227,4 +229,46 @@ test("Agent only asks approval for dangerous tools & records rejections as tool 
   );
   assert.ok(bashToolMessage);
   assert.equal(bashToolMessage.content, "Tool call rejected by user");
+});
+
+test("Agent.dispose unloads the active model on shutdown", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "coral-dispose-"));
+  tempDirs.push(dir);
+
+  const unloadedModels: string[] = [];
+
+  const agent = new Agent("fake-model", "http://localhost:11434", dir) as Agent & {
+    client: {
+      stopKeepAlive?: () => void;
+      startKeepAlive: (model: string) => void;
+      unloadModel: (model?: string) => Promise<void>;
+      chatStream: () => AsyncGenerator<{
+        message: OllamaMessage;
+        done: boolean;
+      }>;
+    };
+  };
+
+  agent.client.stopKeepAlive?.();
+  agent.client = {
+    stopKeepAlive() {},
+    startKeepAlive() {},
+    unloadModel(model) {
+      unloadedModels.push(model ?? "");
+      return Promise.resolve();
+    },
+    async *chatStream() {
+      yield {
+        message: {
+          role: "assistant",
+          content: "done",
+        },
+        done: true,
+      };
+    },
+  };
+
+  await agent.dispose();
+
+  assert.deepEqual(unloadedModels, ["fake-model"]);
 });

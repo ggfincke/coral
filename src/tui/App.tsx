@@ -1,18 +1,21 @@
 // src/tui/App.tsx
-// main TUI component w/ model picking, approvals, & scrollback
+// main TUI component w/ model picking, approvals, scrollback, & session persistence
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import TextInput from "ink-text-input";
 import { Agent } from "../agent/agent.js";
 import { OllamaClient, type Model } from "../ollama/client.js";
+import { getCwd } from "../cwd.js";
 import { buildModelPickerLines, sortModels } from "./model-picker.js";
 import { buildTranscriptLines, maxScrollOffset, sliceViewport, type OutputBlock } from "./transcript.js";
+import { createSession, saveSession, loadSession } from "../session/store.js";
 
 interface Props {
   model?: string;
   host: string;
   yolo: boolean;
+  resumeSessionId?: string;
 }
 
 interface ApprovalPrompt {
@@ -55,7 +58,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-export default function App({ model, host, yolo }: Props) {
+export default function App({ model, host, yolo, resumeSessionId }: Props) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const terminal = stdout as typeof process.stdout;
@@ -76,6 +79,9 @@ export default function App({ model, host, yolo }: Props) {
     columns: terminal.columns ?? 80,
     rows: terminal.rows ?? 24,
   });
+
+  // session tracking
+  const sessionIdRef = useRef<string | null>(resumeSessionId ?? null);
 
   const streamingRef = useRef("");
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -119,11 +125,67 @@ export default function App({ model, host, yolo }: Props) {
     setStreaming(streamingRef.current);
   }, []);
 
+  // persist session after each agent turn
+  const persistSession = useCallback((agentInstance: Agent) => {
+    try {
+      const messages = agentInstance.getMessages();
+      const modelName = agentInstance.getModel();
+      const cwd = getCwd();
+
+      if (sessionIdRef.current) {
+        saveSession(sessionIdRef.current, modelName, cwd, messages);
+      } else {
+        const meta = createSession(modelName, cwd, messages);
+        sessionIdRef.current = meta.id;
+      }
+    } catch {
+      // session save failure is non-fatal — don't interrupt the user
+    }
+  }, []);
+
   const activateModel = useCallback((nextModel: string) => {
     setActiveModel(nextModel);
-    setAgent(new Agent(nextModel, host));
+
+    const newAgent = new Agent(nextModel, host);
+
+    // restore session if resuming
+    if (resumeSessionId) {
+      const session = loadSession(resumeSessionId);
+      if (session) {
+        newAgent.restoreMessages(session.messages);
+
+        // rebuild output blocks from restored messages
+        const restoredBlocks: OutputBlock[] = [];
+        for (const msg of session.messages) {
+          if (msg.role === "system") continue;
+          if (msg.role === "user") {
+            restoredBlocks.push({ type: "user", content: msg.content });
+          } else if (msg.role === "assistant") {
+            if (msg.content) {
+              restoredBlocks.push({ type: "assistant", content: msg.content });
+            }
+          } else if (msg.role === "tool") {
+            if (msg.content) {
+              const maxResultLines = 30;
+              const lines = msg.content.split("\n");
+              const truncated = lines.length > maxResultLines
+                ? `${lines.slice(0, maxResultLines).join("\n")}\n… (${lines.length - maxResultLines} more lines)`
+                : msg.content;
+              restoredBlocks.push({
+                type: "tool",
+                content: `[${msg.tool_name ?? "tool"}] ${truncated}`,
+              });
+            }
+          }
+        }
+
+        setOutput(restoredBlocks);
+      }
+    }
+
+    setAgent(newAgent);
     setPickerState("hidden");
-  }, [host]);
+  }, [host, resumeSessionId]);
 
   const loadModels = useCallback(async () => {
     setPickerState("loading");
@@ -138,6 +200,18 @@ export default function App({ model, host, yolo }: Props) {
         return;
       }
 
+      // if resuming a session, try to auto-select the session's model
+      if (resumeSessionId) {
+        const session = loadSession(resumeSessionId);
+        if (session) {
+          const sessionModel = loadedModels.find((m) => m.name === session.meta.model);
+          if (sessionModel) {
+            activateModel(sessionModel.name);
+            return;
+          }
+        }
+      }
+
       setModels(loadedModels);
       setSelectedModelIndex(0);
       setPickerState("ready");
@@ -145,7 +219,7 @@ export default function App({ model, host, yolo }: Props) {
       setPickerError(toErrorMessage(err));
       setPickerState("error");
     }
-  }, [activateModel, host]);
+  }, [activateModel, host, resumeSessionId]);
 
   useEffect(() => {
     const updateSize = () => {
@@ -167,6 +241,13 @@ export default function App({ model, host, yolo }: Props) {
     if (model) return;
     void loadModels();
   }, [loadModels, model]);
+
+  useEffect(() => {
+    return () => {
+      if (!agent) return;
+      void agent.dispose();
+    };
+  }, [agent]);
 
   useEffect(() => {
     const nextLineCount = transcriptLines.length;
@@ -324,6 +405,9 @@ export default function App({ model, host, yolo }: Props) {
           setStreaming("");
           streamingRef.current = "";
           setIsRunning(false);
+
+          // auto-save session after each completed turn
+          persistSession(agent);
         },
         onError(error) {
           if (flushTimerRef.current) {
@@ -335,11 +419,16 @@ export default function App({ model, host, yolo }: Props) {
           setStreaming("");
           streamingRef.current = "";
           setIsRunning(false);
+
+          // save session even on error (preserves partial progress)
+          persistSession(agent);
         },
       });
     },
-    [agent, approval, flushStreaming, isRunning, yolo],
+    [agent, approval, flushStreaming, isRunning, persistSession, yolo],
   );
+
+  const sessionLabel = sessionIdRef.current ? ` · session ${sessionIdRef.current}` : "";
 
   const statusLine = !agent
     ? pickerState === "loading"
@@ -361,6 +450,7 @@ export default function App({ model, host, yolo }: Props) {
         <Text bold color="cyan">coral</Text>
         <Text dimColor>{activeModel ? ` · ${activeModel}` : " · pick a model"}</Text>
         {yolo && <Text color="yellow" bold> · yolo</Text>}
+        {sessionLabel && <Text dimColor>{sessionLabel}</Text>}
       </Text>
 
       {agent ? (
