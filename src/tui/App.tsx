@@ -1,457 +1,881 @@
 // src/tui/App.tsx
 // main TUI component w/ model picking, approvals, scrollback, & session persistence
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Text, useApp, useInput, useStdout } from "ink";
-import TextInput from "ink-text-input";
-import { Agent } from "../agent/agent.js";
-import { OllamaClient, type Model } from "../ollama/client.js";
-import { getCwd } from "../cwd.js";
-import { buildModelPickerLines, sortModels } from "./model-picker.js";
-import { buildTranscriptLines, maxScrollOffset, sliceViewport, type OutputBlock } from "./transcript.js";
-import { createSession, saveSession, loadSession } from "../session/store.js";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Box, Text, useApp, useInput, useStdout } from 'ink'
+import wrapAnsi from 'wrap-ansi'
+import { Agent } from '../agent/agent.js'
+import {
+  OllamaClient,
+  type Model,
+  type OllamaMessage,
+} from '../ollama/client.js'
+import { buildModelPickerLines, sortModels } from './model-picker.js'
+import {
+  createShutdownCoordinator,
+  registerSignalHandlers,
+} from './shutdown.js'
+import {
+  buildTranscriptLines,
+  maxScrollOffset,
+  sliceViewport,
+  summarizeToolArgs,
+  type OutputBlock,
+  type ToolCallBlock,
+} from './transcript.js'
+import PromptInput from './prompt-input.js'
+import { CORAL_HEX, OCEAN_HEX } from './theme.js'
+import { toErrorMessage } from '../utils/errors.js'
+import {
+  truncateOutput,
+  type TruncateOutputOptions,
+} from '../utils/truncate-output.js'
+import { useAnimationTimer } from './use-animation-timer.js'
+import { useStreamBuffer } from './use-stream-buffer.js'
+import { useSessionPersistence } from './use-session-persistence.js'
+import { type RunStage } from './run-stage.js'
 
-interface Props {
-  model?: string;
-  host: string;
-  yolo: boolean;
-  resumeSessionId?: string;
+interface Props
+{
+  model?: string
+  host: string
+  think: boolean
+  yolo: boolean
+  resumeSessionId?: string
 }
 
-interface ApprovalPrompt {
-  toolName: string;
-  args: Record<string, unknown>;
-  resolve: (approved: boolean) => void;
+interface ApprovalPrompt
+{
+  toolName: string
+  args: Record<string, unknown>
+  resolve: (approved: boolean) => void
 }
 
-type PickerState = "hidden" | "loading" | "ready" | "error";
-
-const FLUSH_INTERVAL = 32;
-
-function formatApprovalArgs(toolName: string, args: Record<string, unknown>): string {
-  if (toolName === "bash") return String(args.command ?? "");
-  if (toolName === "write_file" || toolName === "edit_file") return String(args.path ?? "");
-  return JSON.stringify(args);
+const FLUSH_INTERVAL = 32
+const SPINNER_INTERVAL = 80
+const SCROLL_LINES = 3
+const TRUNCATED_TOOL_RESULT_OPTIONS: TruncateOutputOptions = {
+  dropEmpty: false,
+  separator: '\n',
+  buildSuffix: (shown, total) => `… (${total - shown} more lines)`,
 }
 
-function toErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+function formatElapsed(ms: number): string
+{
+  if (ms < 60_000)
+  {
+    return `${(ms / 1000).toFixed(1)}s`
+  }
+
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.floor((ms % 60_000) / 1000)
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
 }
 
-function buildApprovalLines(approval: ApprovalPrompt, width: number): string[] {
-  const summary = formatApprovalArgs(approval.toolName, approval.args);
-  const lines = [`Allow ${approval.toolName}`, summary || "(no arguments)"];
-
-  return lines.flatMap((line, index) => {
-    if (!line) return [""];
-
-    const maxWidth = Math.max(width, 16);
-    const wrapped = line.length > maxWidth
-      ? line.match(new RegExp(`.{1,${maxWidth}}`, "g")) ?? [line]
-      : [line];
-
-    return wrapped.map((wrappedLine) => (index === 0 ? wrappedLine : `  ${wrappedLine}`));
-  });
+function describeRunStage(stage: RunStage): string
+{
+  if (stage === 'waiting') return 'waiting for model'
+  if (stage === 'thinking') return 'thinking'
+  if (stage === 'responding') return 'responding'
+  if (stage.startsWith('tool:'))
+  {
+    return `running ${stage.slice(5)}`
+  }
+  return 'ready'
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(Math.max(value, min), max);
+function clamp(value: number, min: number, max: number): number
+{
+  return Math.min(Math.max(value, min), max)
 }
 
-export default function App({ model, host, yolo, resumeSessionId }: Props) {
-  const { exit } = useApp();
-  const { stdout } = useStdout();
-  const terminal = stdout as typeof process.stdout;
+function buildRule(width: number): string
+{
+  return '─'.repeat(Math.max(width, 1))
+}
 
-  const [activeModel, setActiveModel] = useState(model ?? "");
-  const [agent, setAgent] = useState<Agent | null>(() => (model ? new Agent(model, host) : null));
-  const [pickerState, setPickerState] = useState<PickerState>(model ? "hidden" : "loading");
-  const [pickerError, setPickerError] = useState("");
-  const [models, setModels] = useState<Model[]>([]);
-  const [selectedModelIndex, setSelectedModelIndex] = useState(0);
-  const [input, setInput] = useState("");
-  const [output, setOutput] = useState<OutputBlock[]>([]);
-  const [streaming, setStreaming] = useState("");
-  const [isRunning, setIsRunning] = useState(false);
-  const [approval, setApproval] = useState<ApprovalPrompt | null>(null);
-  const [scrollOffset, setScrollOffset] = useState(0);
+function buildLabeledSeparator(width: number, label: string): string
+{
+  const labelStr = ` ${label} `
+  const remaining = Math.max(width - labelStr.length, 2)
+  const left = Math.floor(remaining / 2)
+  const right = remaining - left
+  return `${'─'.repeat(left)}${labelStr}${'─'.repeat(right)}`
+}
+
+function formatApprovalArgs(
+  toolName: string,
+  args: Record<string, unknown>
+): string
+{
+  const summary = summarizeToolArgs(toolName, args)
+  return toolName === 'bash' ? `$ ${summary}` : summary
+}
+
+function truncateToolResult(result: string): string
+{
+  return truncateOutput(result, 30, 'lines', TRUNCATED_TOOL_RESULT_OPTIONS)
+}
+
+function buildRestoredBlocks(messages: OllamaMessage[]): OutputBlock[]
+{
+  const restoredBlocks: OutputBlock[] = []
+
+  for (const msg of messages)
+  {
+    if (msg.role === 'system') continue
+
+    if (msg.role === 'user')
+    {
+      restoredBlocks.push({ type: 'user', content: msg.content })
+      continue
+    }
+
+    if (msg.role === 'assistant')
+    {
+      if (msg.thinking)
+      {
+        restoredBlocks.push({ type: 'thinking', content: msg.thinking })
+      }
+
+      if (msg.content)
+      {
+        restoredBlocks.push({ type: 'assistant', content: msg.content })
+      }
+
+      continue
+    }
+
+    if (msg.role === 'tool' && msg.content)
+    {
+      restoredBlocks.push({
+        type: 'tool_result',
+        toolName: msg.tool_name ?? 'tool',
+        content: truncateToolResult(msg.content),
+      })
+    }
+  }
+
+  return restoredBlocks
+}
+
+// build bordered approval box
+function buildApprovalBox(
+  toolName: string,
+  args: Record<string, unknown>,
+  width: number
+): string[]
+{
+  const innerWidth = Math.max(width - 4, 12)
+  const summary = formatApprovalArgs(toolName, args)
+  const title = `Allow ${toolName}?`
+
+  const topBorder = `╭─${buildLabeledSeparator(innerWidth, 'tool approval')}─╮`
+  const bottomBorder = `╰${buildRule(innerWidth + 2)}╯`
+  const emptyLine = `│ ${' '.repeat(innerWidth)} │`
+
+  const lines: string[] = [topBorder, emptyLine]
+
+  const titlePadded = title + ' '.repeat(Math.max(innerWidth - title.length, 0))
+  lines.push(`│ ${titlePadded} │`)
+
+  const wrapped = wrapAnsi(summary, innerWidth, {
+    hard: true,
+    trim: false,
+    wordWrap: true,
+  })
+  for (const summaryLine of wrapped.split('\n'))
+  {
+    const padded =
+      summaryLine + ' '.repeat(Math.max(innerWidth - summaryLine.length, 0))
+    lines.push(`│ ${padded} │`)
+  }
+
+  lines.push(emptyLine)
+
+  const hint = '(y) approve  (n) reject  (esc) cancel'
+  const hintPadded = hint + ' '.repeat(Math.max(innerWidth - hint.length, 0))
+  lines.push(`│ ${hintPadded} │`)
+
+  lines.push(emptyLine)
+  lines.push(bottomBorder)
+
+  return lines
+}
+
+export default function App({
+  model,
+  host,
+  think,
+  yolo,
+  resumeSessionId,
+}: Props)
+{
+  const { exit } = useApp()
+  const { stdout } = useStdout()
+  const terminal = stdout as typeof process.stdout
+
+  const { getResumeSession, persistSession } = useSessionPersistence(
+    resumeSessionId
+  )
+  const resumeSession = getResumeSession()
+
+  const [activeModel, setActiveModel] = useState(
+    model ?? resumeSession?.meta.model ?? ''
+  )
+  const [agent, setAgent] = useState<Agent | null>(() =>
+  {
+    if (!model) return null
+
+    const nextAgent = new Agent(model, host, undefined, { think })
+    if (resumeSession)
+    {
+      nextAgent.restoreMessages(resumeSession.messages)
+    }
+
+    return nextAgent
+  })
+  const [pickerState, setPickerState] = useState<'hidden' | 'loading' | 'ready' | 'error'>(
+    model ? 'hidden' : 'loading'
+  )
+  const [pickerError, setPickerError] = useState('')
+  const [models, setModels] = useState<Model[]>([])
+  const [selectedModelIndex, setSelectedModelIndex] = useState(0)
+  const [input, setInput] = useState('')
+  const [output, setOutput] = useState<OutputBlock[]>(() =>
+    resumeSession ? buildRestoredBlocks(resumeSession.messages) : []
+  )
+  const [showThinking, setShowThinking] = useState(true)
+  const [runStage, setRunStage] = useState<RunStage>('idle')
+  const [approval, setApproval] = useState<ApprovalPrompt | null>(null)
+  const [scrollOffset, setScrollOffset] = useState(0)
+  const [runElapsed, setRunElapsed] = useState<string | null>(null)
+  const [sessionLabelId, setSessionLabelId] = useState<string | null>(
+    resumeSession?.meta.id ?? resumeSessionId ?? null
+  )
   const [terminalSize, setTerminalSize] = useState({
     columns: terminal.columns ?? 80,
     rows: terminal.rows ?? 24,
-  });
+  })
 
-  // session tracking
-  const sessionIdRef = useRef<string | null>(resumeSessionId ?? null);
+  const {
+    streamBuf,
+    appendText,
+    appendThinking,
+    consumeBufferedBlocks,
+    resetStreamBuffer,
+  } = useStreamBuffer(FLUSH_INTERVAL)
+  const {
+    spinnerTick,
+    waitingElapsed,
+    showWaitingIndicator,
+    startWaiting,
+    stopWaiting,
+    resetAnimation,
+  } = useAnimationTimer(runStage, SPINNER_INTERVAL)
 
-  const streamingRef = useRef("");
-  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const previousLineCountRef = useRef(0);
+  const agentRef = useRef<Agent | null>(agent)
+  const previousLineCountRef = useRef(0)
+  const disposedAgentsRef = useRef(new WeakSet<Agent>())
+  const runStartTimeRef = useRef<number | null>(null)
+  const toolStartTimeRef = useRef<number | null>(null)
+  const maxOffsetRef = useRef(0)
+  const chatViewportHeightRef = useRef(6)
 
-  const transcriptWidth = Math.max(terminalSize.columns - 2, 20);
-  const approvalLines = approval ? buildApprovalLines(approval, transcriptWidth) : [];
+  const isRunning = runStage !== 'idle'
+  const transcriptWidth = Math.max(terminalSize.columns - 2, 20)
+
+  const approvalBoxLines = approval
+    ? buildApprovalBox(approval.toolName, approval.args, transcriptWidth)
+    : []
+  const headerHeight = 2
+  const inputHeight = approval ? 0 : 3
+  const statusHeight = 1
+  const approvalHeight = approval ? approvalBoxLines.length + 1 : 0
   const chatViewportHeight = Math.max(
-    terminalSize.rows - 1 - (approval ? approvalLines.length + 1 : 2),
-    6,
-  );
-  const pickerViewportHeight = Math.max(terminalSize.rows - 2, 6);
-  const transcriptLines = buildTranscriptLines(output, streaming, transcriptWidth);
-  const maxOffset = maxScrollOffset(transcriptLines.length, chatViewportHeight);
-  const visibleTranscript = sliceViewport(transcriptLines, chatViewportHeight, scrollOffset);
+    terminalSize.rows -
+      headerHeight -
+      inputHeight -
+      statusHeight -
+      approvalHeight,
+    6
+  )
+  const pickerViewportHeight = Math.max(
+    terminalSize.rows - headerHeight - statusHeight,
+    6
+  )
+
+  const transcriptLines = useMemo(
+    () =>
+      buildTranscriptLines({
+        blocks: output,
+        streaming: streamBuf.text,
+        width: transcriptWidth,
+        spinnerTick,
+        showWaitingIndicator,
+        waitingElapsed,
+        streamingThinking: streamBuf.thinking,
+        showThinking,
+      }),
+    [
+      output,
+      showThinking,
+      showWaitingIndicator,
+      spinnerTick,
+      streamBuf,
+      transcriptWidth,
+      waitingElapsed,
+    ]
+  )
+  const maxOffset = maxScrollOffset(transcriptLines.length, chatViewportHeight)
+  const visibleTranscript = sliceViewport(
+    transcriptLines,
+    chatViewportHeight,
+    scrollOffset
+  )
   const paddedTranscript = [
-    ...Array(Math.max(chatViewportHeight - visibleTranscript.length, 0)).fill(""),
+    ...Array(Math.max(chatViewportHeight - visibleTranscript.length, 0)).fill(
+      ''
+    ),
     ...visibleTranscript,
-  ];
+  ]
 
-  const pickerLines = pickerState === "ready"
-    ? buildModelPickerLines(models, selectedModelIndex, transcriptWidth, pickerViewportHeight)
-    : pickerState === "loading"
-      ? [
-          "Loading Ollama models…",
-          `Host: ${host}`,
-        ]
-      : [
-          "Failed to load Ollama models",
-          `Host: ${host}`,
-          "",
-          pickerError,
-        ];
+  const pickerLines =
+    pickerState === 'ready'
+      ? buildModelPickerLines(
+          models,
+          selectedModelIndex,
+          transcriptWidth,
+          pickerViewportHeight
+        )
+      : pickerState === 'loading'
+        ? ['Loading Ollama models…', `Host: ${host}`]
+        : ['Failed to load Ollama models', `Host: ${host}`, '', pickerError]
   const visiblePicker = [
-    ...Array(Math.max(pickerViewportHeight - pickerLines.length, 0)).fill(""),
+    ...Array(Math.max(pickerViewportHeight - pickerLines.length, 0)).fill(''),
     ...pickerLines.slice(-pickerViewportHeight),
-  ];
+  ]
 
-  const flushStreaming = useCallback(() => {
-    flushTimerRef.current = null;
-    setStreaming(streamingRef.current);
-  }, []);
+  const messageCount = useMemo(
+    () => output.filter((block) => block.type === 'user').length,
+    [output]
+  )
 
-  // persist session after each agent turn
-  const persistSession = useCallback((agentInstance: Agent) => {
-    try {
-      const messages = agentInstance.getMessages();
-      const modelName = agentInstance.getModel();
-      const cwd = getCwd();
+  const disposeAgent = useCallback(async (agentInstance: Agent | null) =>
+  {
+    if (!agentInstance || disposedAgentsRef.current.has(agentInstance)) return
 
-      if (sessionIdRef.current) {
-        saveSession(sessionIdRef.current, modelName, cwd, messages);
-      } else {
-        const meta = createSession(modelName, cwd, messages);
-        sessionIdRef.current = meta.id;
+    disposedAgentsRef.current.add(agentInstance)
+    await agentInstance.dispose()
+  }, [])
+
+  const activateModel = useCallback(
+    (nextModel: string, restoredSession = resumeSession) =>
+    {
+      setActiveModel(nextModel)
+
+      const nextAgent = new Agent(nextModel, host, undefined, { think })
+      if (restoredSession)
+      {
+        nextAgent.restoreMessages(restoredSession.messages)
+        setOutput(buildRestoredBlocks(restoredSession.messages))
       }
-    } catch {
-      // session save failure is non-fatal — don't interrupt the user
-    }
-  }, []);
-
-  const activateModel = useCallback((nextModel: string) => {
-    setActiveModel(nextModel);
-
-    const newAgent = new Agent(nextModel, host);
-
-    // restore session if resuming
-    if (resumeSessionId) {
-      const session = loadSession(resumeSessionId);
-      if (session) {
-        newAgent.restoreMessages(session.messages);
-
-        // rebuild output blocks from restored messages
-        const restoredBlocks: OutputBlock[] = [];
-        for (const msg of session.messages) {
-          if (msg.role === "system") continue;
-          if (msg.role === "user") {
-            restoredBlocks.push({ type: "user", content: msg.content });
-          } else if (msg.role === "assistant") {
-            if (msg.content) {
-              restoredBlocks.push({ type: "assistant", content: msg.content });
-            }
-          } else if (msg.role === "tool") {
-            if (msg.content) {
-              const maxResultLines = 30;
-              const lines = msg.content.split("\n");
-              const truncated = lines.length > maxResultLines
-                ? `${lines.slice(0, maxResultLines).join("\n")}\n… (${lines.length - maxResultLines} more lines)`
-                : msg.content;
-              restoredBlocks.push({
-                type: "tool",
-                content: `[${msg.tool_name ?? "tool"}] ${truncated}`,
-              });
-            }
-          }
-        }
-
-        setOutput(restoredBlocks);
-      }
-    }
-
-    setAgent(newAgent);
-    setPickerState("hidden");
-  }, [host, resumeSessionId]);
-
-  const loadModels = useCallback(async () => {
-    setPickerState("loading");
-    setPickerError("");
-
-    try {
-      const client = new OllamaClient(host);
-      const loadedModels = sortModels(await client.listModels());
-
-      if (loadedModels.length === 1) {
-        activateModel(loadedModels[0]!.name);
-        return;
+      else
+      {
+        setOutput([])
       }
 
-      // if resuming a session, try to auto-select the session's model
-      if (resumeSessionId) {
-        const session = loadSession(resumeSessionId);
-        if (session) {
-          const sessionModel = loadedModels.find((m) => m.name === session.meta.model);
-          if (sessionModel) {
-            activateModel(sessionModel.name);
-            return;
-          }
+      setAgent(nextAgent)
+      setPickerState('hidden')
+    },
+    [host, resumeSession, think]
+  )
+
+  const loadModels = useCallback(async () =>
+  {
+    setPickerState('loading')
+    setPickerError('')
+
+    try
+    {
+      const client = new OllamaClient(host)
+      const loadedModels = sortModels(await client.listModels())
+
+      if (loadedModels.length === 1)
+      {
+        activateModel(loadedModels[0]!.name, resumeSession)
+        return
+      }
+
+      if (resumeSession)
+      {
+        const sessionModel = loadedModels.find(
+          (loadedModel) => loadedModel.name === resumeSession.meta.model
+        )
+        if (sessionModel)
+        {
+          activateModel(sessionModel.name, resumeSession)
+          return
         }
       }
 
-      setModels(loadedModels);
-      setSelectedModelIndex(0);
-      setPickerState("ready");
-    } catch (err) {
-      setPickerError(toErrorMessage(err));
-      setPickerState("error");
+      setModels(loadedModels)
+      setSelectedModelIndex(0)
+      setPickerState('ready')
     }
-  }, [activateModel, host, resumeSessionId]);
+    catch (err)
+    {
+      setPickerError(toErrorMessage(err))
+      setPickerState('error')
+    }
+  }, [activateModel, host, resumeSession])
 
-  useEffect(() => {
-    const updateSize = () => {
+  useEffect(() =>
+  {
+    maxOffsetRef.current = maxOffset
+  }, [maxOffset])
+
+  useEffect(() =>
+  {
+    chatViewportHeightRef.current = chatViewportHeight
+  }, [chatViewportHeight])
+
+  useEffect(() =>
+  {
+    const updateSize = () =>
+    {
       setTerminalSize({
         columns: terminal.columns ?? 80,
         rows: terminal.rows ?? 24,
-      });
-    };
-
-    updateSize();
-    terminal.on?.("resize", updateSize);
-
-    return () => {
-      terminal.off?.("resize", updateSize);
-    };
-  }, [terminal]);
-
-  useEffect(() => {
-    if (model) return;
-    void loadModels();
-  }, [loadModels, model]);
-
-  useEffect(() => {
-    return () => {
-      if (!agent) return;
-      void agent.dispose();
-    };
-  }, [agent]);
-
-  useEffect(() => {
-    const nextLineCount = transcriptLines.length;
-    const previousLineCount = previousLineCountRef.current;
-
-    if (scrollOffset > 0 && nextLineCount > previousLineCount) {
-      setScrollOffset((current) => current + (nextLineCount - previousLineCount));
+      })
     }
 
-    previousLineCountRef.current = nextLineCount;
-  }, [output, scrollOffset, streaming, transcriptLines.length]);
+    updateSize()
+    terminal.on?.('resize', updateSize)
 
-  useEffect(() => {
-    setScrollOffset((current) => Math.min(current, maxOffset));
-  }, [maxOffset]);
+    return () =>
+    {
+      terminal.off?.('resize', updateSize)
+    }
+  }, [terminal])
 
-  useInput((ch, key) => {
-    if (approval) {
-      if (ch === "y" || ch === "Y") {
-        approval.resolve(true);
-        setApproval(null);
-      } else if (ch === "n" || ch === "N" || key.escape) {
-        approval.resolve(false);
-        setApproval(null);
-      }
-      return;
+  useEffect(() =>
+  {
+    if (model) return
+    queueMicrotask(() =>
+    {
+      void loadModels()
+    })
+  }, [loadModels, model])
+
+  useEffect(() =>
+  {
+    agentRef.current = agent
+  }, [agent])
+
+  useEffect(() =>
+  {
+    const handleShutdown = createShutdownCoordinator(
+      () => disposeAgent(agentRef.current),
+      () => exit()
+    )
+    const onSignal = () =>
+    {
+      void handleShutdown()
     }
 
-    if (!agent) {
-      if (pickerState === "loading") {
-        if (key.escape) exit();
-        return;
-      }
+    return registerSignalHandlers(process, onSignal)
+  }, [disposeAgent, exit])
 
-      if (pickerState === "error") {
-        if (ch === "r" || ch === "R") {
-          void loadModels();
-        } else if (key.escape) {
-          exit();
+  useEffect(() =>
+  {
+    return () =>
+    {
+      void disposeAgent(agent)
+    }
+  }, [agent, disposeAgent])
+
+  useEffect(() =>
+  {
+    const nextLineCount = transcriptLines.length
+    const previousLineCount = previousLineCountRef.current
+
+    if (scrollOffset > 0 && nextLineCount > previousLineCount)
+    {
+      setScrollOffset(
+        (current) => current + (nextLineCount - previousLineCount)
+      )
+    }
+
+    previousLineCountRef.current = nextLineCount
+  }, [output, scrollOffset, streamBuf, transcriptLines.length])
+
+  useEffect(() =>
+  {
+    if (scrollOffset <= maxOffset) return
+
+    queueMicrotask(() =>
+    {
+      setScrollOffset((current) => Math.min(current, maxOffset))
+    })
+  }, [maxOffset, scrollOffset])
+
+  useEffect(() =>
+  {
+    if (runStage === 'idle' || runStartTimeRef.current == null)
+    {
+      queueMicrotask(() =>
+      {
+        setRunElapsed(null)
+      })
+      return
+    }
+
+    const updateRunElapsed = () =>
+    {
+      if (runStartTimeRef.current != null)
+      {
+        setRunElapsed(formatElapsed(Date.now() - runStartTimeRef.current))
+      }
+    }
+
+    updateRunElapsed()
+
+    const timer = setInterval(updateRunElapsed, 250)
+    return () =>
+    {
+      clearInterval(timer)
+    }
+  }, [runStage])
+
+  useInput(
+    (ch, key) =>
+    {
+      if (approval)
+      {
+        if (ch === 'y' || ch === 'Y')
+        {
+          approval.resolve(true)
+          setApproval(null)
         }
-        return;
+        else if (ch === 'n' || ch === 'N' || key.escape)
+        {
+          approval.resolve(false)
+          setApproval(null)
+        }
+
+        return
       }
 
-      if (key.upArrow || ch === "k") {
-        setSelectedModelIndex((current) => clamp(current - 1, 0, models.length - 1));
-      } else if (key.downArrow || ch === "j") {
-        setSelectedModelIndex((current) => clamp(current + 1, 0, models.length - 1));
-      } else if (key.return) {
-        const selected = models[selectedModelIndex];
-        if (selected) activateModel(selected.name);
-      } else if (key.escape) {
-        exit();
+      if (!agent)
+      {
+        if (pickerState === 'loading')
+        {
+          if (key.escape) exit()
+          return
+        }
+
+        if (pickerState === 'error')
+        {
+          if (ch === 'r' || ch === 'R')
+          {
+            void loadModels()
+          }
+          else if (key.escape)
+          {
+            exit()
+          }
+
+          return
+        }
+
+        if (key.upArrow || ch === 'k')
+        {
+          setSelectedModelIndex((current) =>
+            clamp(current - 1, 0, models.length - 1)
+          )
+        }
+        else if (key.downArrow || ch === 'j')
+        {
+          setSelectedModelIndex((current) =>
+            clamp(current + 1, 0, models.length - 1)
+          )
+        }
+        else if (key.return)
+        {
+          const selected = models[selectedModelIndex]
+          if (selected) activateModel(selected.name, resumeSession)
+        }
+        else if (key.escape)
+        {
+          exit()
+        }
       }
-      return;
-    }
-
-    if (key.pageUp) {
-      setScrollOffset((current) => clamp(current + Math.max(chatViewportHeight - 1, 1), 0, maxOffset));
-      return;
-    }
-
-    if (key.pageDown) {
-      setScrollOffset((current) => clamp(current - Math.max(chatViewportHeight - 1, 1), 0, maxOffset));
-      return;
-    }
-
-    if (input.length === 0 && key.upArrow) {
-      setScrollOffset((current) => clamp(current + 1, 0, maxOffset));
-      return;
-    }
-
-    if (input.length === 0 && key.downArrow) {
-      setScrollOffset((current) => clamp(current - 1, 0, maxOffset));
-      return;
-    }
-
-    if (key.escape) {
-      exit();
-    }
-  });
+    },
+    { isActive: !agent || Boolean(approval) }
+  )
 
   const handleSubmit = useCallback(
-    async (value: string) => {
-      if (!agent || !value.trim() || isRunning || approval) return;
+    async (value: string) =>
+    {
+      if (!agent || !value.trim() || runStage !== 'idle' || approval) return
 
-      setInput("");
-      setScrollOffset(0);
-      setOutput((prev) => [...prev, { type: "user", content: value }]);
-      setIsRunning(true);
-      setStreaming("");
-      streamingRef.current = "";
+      const resetRunState = () =>
+      {
+        resetStreamBuffer()
+        resetAnimation()
+        setRunStage('idle')
+        runStartTimeRef.current = null
+      }
+
+      setInput('')
+      setScrollOffset(0)
+      setOutput((prev) => [...prev, { type: 'user', content: value }])
+      setRunStage('waiting')
+      runStartTimeRef.current = Date.now()
+      startWaiting()
+      resetStreamBuffer()
 
       await agent.run(value, {
-        onToken(token) {
-          streamingRef.current += token;
-          if (!flushTimerRef.current) {
-            flushTimerRef.current = setTimeout(flushStreaming, FLUSH_INTERVAL);
-          }
+        onThinking(thinking)
+        {
+          stopWaiting()
+          setRunStage('thinking')
+          appendThinking(thinking)
         },
-        onToolCall(name, args) {
-          if (flushTimerRef.current) {
-            clearTimeout(flushTimerRef.current);
-            flushTimerRef.current = null;
-          }
+        onToken(token)
+        {
+          stopWaiting()
+          setRunStage('responding')
+          appendText(token)
+        },
+        onToolCall(name, args)
+        {
+          stopWaiting()
 
-          const pending = streamingRef.current;
-          streamingRef.current = "";
-          setStreaming("");
+          const pendingBlocks = consumeBufferedBlocks()
+          setRunStage(`tool:${name}`)
+          toolStartTimeRef.current = Date.now()
 
-          setOutput((prev) => {
-            const next = [...prev];
+          setOutput((prev) => [
+            ...prev,
+            ...pendingBlocks,
+            {
+              type: 'tool_call',
+              toolName: name,
+              args,
+            } satisfies ToolCallBlock,
+          ])
+        },
+        onToolApproval(name, args)
+        {
+          if (yolo) return Promise.resolve(true)
 
-            if (pending) {
-              next.push({ type: "assistant", content: pending });
+          return new Promise<boolean>((resolve) =>
+          {
+            setApproval({ toolName: name, args, resolve })
+          })
+        },
+        onToolResult(name, result, error)
+        {
+          const duration = toolStartTimeRef.current
+            ? Date.now() - toolStartTimeRef.current
+            : undefined
+          toolStartTimeRef.current = null
+
+          setRunStage('waiting')
+          startWaiting()
+
+          setOutput((prev) =>
+          {
+            const next = [...prev]
+
+            for (let i = next.length - 1; i >= 0; i--)
+            {
+              const block = next[i]!
+              if (
+                block.type === 'tool_call' &&
+                block.toolName === name &&
+                !block.status
+              )
+              {
+                next[i] = {
+                  ...block,
+                  status: error ? 'error' : 'success',
+                  duration,
+                }
+                break
+              }
             }
 
-            next.push({ type: "tool", content: `[tool] ${name}(${JSON.stringify(args)})` });
-            return next;
-          });
-        },
-        onToolApproval(name, args) {
-          if (yolo) return Promise.resolve(true);
+            if (error)
+            {
+              next.push({
+                type: 'tool_result',
+                toolName: name,
+                content: error,
+                isError: true,
+              })
+            }
+            else if (result)
+            {
+              next.push({
+                type: 'tool_result',
+                toolName: name,
+                content: truncateToolResult(result),
+              })
+            }
 
-          return new Promise<boolean>((resolve) => {
-            setApproval({ toolName: name, args, resolve });
-          });
+            return next
+          })
         },
-        onToolResult(name, result, error) {
-          if (error) {
-            setOutput((prev) => [...prev, { type: "error", content: `[${name} error] ${error}` }]);
-            return;
+        onDone()
+        {
+          const pendingBlocks = consumeBufferedBlocks()
+          setOutput((prev) => [...prev, ...pendingBlocks])
+          resetRunState()
+          const meta = persistSession(agent)
+          if (meta)
+          {
+            setSessionLabelId(meta.id)
           }
-
-          if (!result) return;
-
-          const maxResultLines = 30;
-          const lines = result.split("\n");
-          const truncated = lines.length > maxResultLines
-            ? `${lines.slice(0, maxResultLines).join("\n")}\n… (${lines.length - maxResultLines} more lines)`
-            : result;
-
-          setOutput((prev) => [...prev, { type: "tool", content: `[${name}] ${truncated}` }]);
         },
-        onDone() {
-          if (flushTimerRef.current) {
-            clearTimeout(flushTimerRef.current);
-            flushTimerRef.current = null;
+        onError(error)
+        {
+          const pendingBlocks = consumeBufferedBlocks()
+          setOutput((prev) => [
+            ...prev,
+            ...pendingBlocks,
+            { type: 'error', content: error.message },
+          ])
+          resetRunState()
+          const meta = persistSession(agent)
+          if (meta)
+          {
+            setSessionLabelId(meta.id)
           }
-
-          const final = streamingRef.current;
-          if (final) {
-            setOutput((prev) => [...prev, { type: "assistant", content: final }]);
-          }
-
-          setStreaming("");
-          streamingRef.current = "";
-          setIsRunning(false);
-
-          // auto-save session after each completed turn
-          persistSession(agent);
         },
-        onError(error) {
-          if (flushTimerRef.current) {
-            clearTimeout(flushTimerRef.current);
-            flushTimerRef.current = null;
-          }
-
-          setOutput((prev) => [...prev, { type: "error", content: error.message }]);
-          setStreaming("");
-          streamingRef.current = "";
-          setIsRunning(false);
-
-          // save session even on error (preserves partial progress)
-          persistSession(agent);
-        },
-      });
+      })
     },
-    [agent, approval, flushStreaming, isRunning, persistSession, yolo],
-  );
+    [
+      agent,
+      approval,
+      appendText,
+      appendThinking,
+      consumeBufferedBlocks,
+      persistSession,
+      resetAnimation,
+      resetStreamBuffer,
+      runStage,
+      startWaiting,
+      stopWaiting,
+      yolo,
+    ]
+  )
 
-  const sessionLabel = sessionIdRef.current ? ` · session ${sessionIdRef.current}` : "";
+  const sessionLabel = sessionLabelId ? `session ${sessionLabelId}` : ''
+  const permissionMode = yolo ? 'yolo' : 'ask'
+  const reasoningHint = showThinking
+    ? 'ctrl+t hides reasoning'
+    : 'ctrl+t shows reasoning'
+  const runningLabel = runElapsed
+    ? `${describeRunStage(runStage)} · ${runElapsed} · ${reasoningHint} · ↑↓ wheel pgup/pgdn scroll · esc quits`
+    : `${describeRunStage(runStage)} · ${reasoningHint} · ↑↓ wheel pgup/pgdn scroll · esc quits`
 
   const statusLine = !agent
-    ? pickerState === "loading"
-      ? "Loading models from Ollama…"
-      : pickerState === "error"
-        ? "press r to retry · esc to quit"
+    ? pickerState === 'loading'
+      ? 'loading models from Ollama…'
+      : pickerState === 'error'
+        ? 'press r to retry · esc to quit'
         : `${models.length} models available · enter selects · esc quits`
     : approval
-      ? "press y to approve · n or esc to reject"
+      ? ''
       : scrollOffset > 0
-        ? `scrollback active · ${scrollOffset} lines above live · pgdn returns toward live`
+        ? isRunning
+          ? `scrollback · ${scrollOffset} lines above live · ${describeRunStage(runStage)} · ${runElapsed ?? '0.0s'} · pgdn to return`
+          : `scrollback · ${scrollOffset} lines above live · pgdn to return`
         : isRunning
-          ? "running · ↑↓ or pgup/pgdn scroll · esc quits"
-          : "ready · ↑↓ or pgup/pgdn scroll · esc quits";
+          ? runningLabel
+          : `ready · ${reasoningHint} · ↑↓ wheel pgup/pgdn scroll · esc quits`
+
+  const headerSep = buildRule(transcriptWidth)
+
+  const onPageUp = useCallback(() =>
+  {
+    setScrollOffset((current) =>
+      clamp(
+        current + Math.max(chatViewportHeightRef.current - 1, 1),
+        0,
+        maxOffsetRef.current
+      )
+    )
+  }, [])
+
+  const onPageDown = useCallback(() =>
+  {
+    setScrollOffset((current) =>
+      clamp(
+        current - Math.max(chatViewportHeightRef.current - 1, 1),
+        0,
+        maxOffsetRef.current
+      )
+    )
+  }, [])
+
+  const onScrollUp = useCallback(() =>
+  {
+    setScrollOffset((current) =>
+      clamp(current + SCROLL_LINES, 0, maxOffsetRef.current)
+    )
+  }, [])
+
+  const onScrollDown = useCallback(() =>
+  {
+    setScrollOffset((current) =>
+      clamp(current - SCROLL_LINES, 0, maxOffsetRef.current)
+    )
+  }, [])
+
+  const onToggleThinking = useCallback(() =>
+  {
+    setShowThinking((current) => !current)
+  }, [])
 
   return (
-    <Box flexDirection="column">
-      <Text>
-        <Text bold color="cyan">coral</Text>
-        <Text dimColor>{activeModel ? ` · ${activeModel}` : " · pick a model"}</Text>
-        {yolo && <Text color="yellow" bold> · yolo</Text>}
-        {sessionLabel && <Text dimColor>{sessionLabel}</Text>}
-      </Text>
+    <Box flexDirection="column" height={terminalSize.rows}>
+      <Box>
+        <Text>
+          <Text bold color={CORAL_HEX}>
+            coral
+          </Text>
+          <Text dimColor>{' · '}</Text>
+          <Text color="white">{activeModel || 'pick a model'}</Text>
+          <Text dimColor>{' · '}</Text>
+          <Text
+            color={yolo ? 'yellow' : undefined}
+            bold={yolo}
+            dimColor={!yolo}
+          >
+            {permissionMode}
+          </Text>
+          {sessionLabel && (
+            <>
+              <Text dimColor>{' · '}</Text>
+              <Text dimColor>{sessionLabel}</Text>
+            </>
+          )}
+          {messageCount > 0 && (
+            <>
+              <Text dimColor>{' · '}</Text>
+              <Text dimColor>
+                {messageCount} {messageCount === 1 ? 'message' : 'messages'}
+              </Text>
+            </>
+          )}
+        </Text>
+      </Box>
+
+      <Text dimColor>{headerSep}</Text>
 
       {agent ? (
         <Box flexDirection="column">
@@ -469,8 +893,8 @@ export default function App({ model, host, yolo, resumeSessionId }: Props) {
 
       {agent && approval && (
         <Box flexDirection="column">
-          {approvalLines.map((line, index) => (
-            <Text key={index} color={index === 0 ? "yellow" : undefined}>
+          {approvalBoxLines.map((line, index) => (
+            <Text key={index} color="yellow">
               {line}
             </Text>
           ))}
@@ -478,18 +902,29 @@ export default function App({ model, host, yolo, resumeSessionId }: Props) {
       )}
 
       {agent && !approval && (
-        <Box>
-          <Text bold color="green">{"❯ "}</Text>
-          <TextInput
-            value={input}
-            onChange={setInput}
-            onSubmit={handleSubmit}
-            placeholder={isRunning ? "thinking..." : "ask coral anything"}
-          />
+        <Box flexDirection="column">
+          <Text dimColor>{headerSep}</Text>
+          <Box>
+            <Text bold color={OCEAN_HEX}>
+              {' ❯ '}
+            </Text>
+            <PromptInput
+              value={input}
+              onChange={setInput}
+              onSubmit={handleSubmit}
+              onEscape={exit}
+              onPageUp={onPageUp}
+              onPageDown={onPageDown}
+              onScrollUp={onScrollUp}
+              onScrollDown={onScrollDown}
+              onToggleThinking={onToggleThinking}
+              placeholder={isRunning ? 'thinking...' : 'ask coral anything'}
+            />
+          </Box>
         </Box>
       )}
 
-      <Text dimColor>{statusLine}</Text>
+      <Text dimColor> {statusLine}</Text>
     </Box>
-  );
+  )
 }
