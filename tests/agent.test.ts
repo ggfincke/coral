@@ -1,274 +1,340 @@
 // tests/agent.test.ts
 // regression tests for the agent tool-use loop
 
-import { strict as assert } from "node:assert";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { after, test } from "node:test";
-import { Agent } from "../src/agent/agent.js";
-import type { OllamaMessage } from "../src/ollama/client.js";
+import { strict as assert } from 'node:assert'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after, test } from 'node:test'
+import { Agent } from '../src/agent/agent.js'
+import type { OllamaMessage } from '../src/ollama/client.js'
 
-const tempDirs: string[] = [];
+const tempDirs: string[] = []
 
 // remove temp workspaces created during tests
-after(async () => {
-  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
-});
+after(async () =>
+{
+  await Promise.all(
+    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
+  )
+})
 
-test("Agent accumulates streamed tool calls, preserves thinking, & tags tool results", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "coral-agent-"));
-  tempDirs.push(dir);
+test('Agent accumulates streamed tool calls, preserves thinking, & tags tool results', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-agent-'))
+  tempDirs.push(dir)
 
-  await mkdir(join(dir, "src"));
-  await writeFile(join(dir, "package.json"), "{\n  \"name\": \"fixture\"\n}\n", "utf-8");
-  await writeFile(join(dir, "src", "example.ts"), "export const value = 1;\n", "utf-8");
+  await mkdir(join(dir, 'src'))
+  await writeFile(
+    join(dir, 'package.json'),
+    '{\n  "name": "fixture"\n}\n',
+    'utf-8'
+  )
+  await writeFile(
+    join(dir, 'src', 'example.ts'),
+    'export const value = 1;\n',
+    'utf-8'
+  )
 
-  const agent = new Agent("fake-model", "http://localhost:11434", dir) as Agent & {
+  const agent = new Agent(
+    'fake-model',
+    'http://localhost:11434',
+    dir
+  ) as Agent & {
     client: {
-      stopKeepAlive?: () => void;
-      startKeepAlive: (model: string) => void;
-      unloadModel?: (model?: string) => Promise<void>;
+      stopKeepAlive?: () => void
+      startKeepAlive: (model: string) => void
+      unloadModel?: (model?: string) => Promise<void>
       chatStream: () => AsyncGenerator<{
-        message: OllamaMessage;
-        done: boolean;
-      }>;
-    };
-    messages: OllamaMessage[];
-  };
+        message: OllamaMessage
+        done: boolean
+      }>
+    }
+    messages: OllamaMessage[]
+  }
 
-  agent.client.stopKeepAlive?.();
+  agent.client.stopKeepAlive?.()
 
-  let streamCount = 0;
+  let streamCount = 0
   agent.client = {
-    startKeepAlive() {},
-    async *chatStream() {
-      streamCount += 1;
+    startKeepAlive()
+    {},
+    async *chatStream()
+    {
+      streamCount += 1
 
-      if (streamCount === 1) {
+      if (streamCount === 1)
+      {
         yield {
           message: {
-            role: "assistant",
-            content: "",
-            thinking: "Inspect files. ",
+            role: 'assistant',
+            content: '',
+            thinking: 'Inspect files. ',
             tool_calls: [
               {
-                type: "function",
+                type: 'function',
                 function: {
                   index: 1,
-                  name: "glob",
-                  arguments: { pattern: "src/**/*.ts" },
+                  name: 'glob',
+                  arguments: { pattern: 'src/**/*.ts' },
                 },
               },
             ],
           },
           done: false,
-        };
+        }
 
         yield {
           message: {
-            role: "assistant",
-            content: "",
-            thinking: "Then read package metadata.",
+            role: 'assistant',
+            content: '',
+            thinking: 'Then read package metadata.',
             tool_calls: [
               {
-                type: "function",
+                type: 'function',
                 function: {
                   index: 0,
-                  name: "read_file",
-                  arguments: { path: "package.json" },
+                  name: 'read_file',
+                  arguments: { path: 'package.json' },
                 },
               },
             ],
           },
           done: true,
-        };
+        }
 
-        return;
+        return
       }
 
       yield {
         message: {
-          role: "assistant",
-          content: "done",
+          role: 'assistant',
+          content: 'done',
         },
         done: true,
-      };
+      }
     },
-  };
+  }
 
-  const seenCalls: string[] = [];
-  const seenResults: string[] = [];
+  const seenCalls: string[] = []
+  const seenResults: string[] = []
+  const seenThinking: string[] = []
 
-  await agent.run("inspect the repo", {
-    onToken() {},
-    onToolCall(name) {
-      seenCalls.push(name);
+  await agent.run('inspect the repo', {
+    onThinking(thinking)
+    {
+      seenThinking.push(thinking)
     },
-    onToolResult(name, result, error) {
-      seenResults.push(`${name}:${error ?? result.split("\n")[0]}`);
+    onToken()
+    {},
+    onToolCall(name)
+    {
+      seenCalls.push(name)
     },
-    onToolApproval() {
-      return Promise.resolve(true);
+    onToolResult(name, result, error)
+    {
+      seenResults.push(`${name}:${error ?? result.split('\n')[0]}`)
     },
-    onDone() {},
-    onError(error) {
-      throw error;
+    onToolApproval()
+    {
+      return Promise.resolve(true)
     },
-  });
+    onDone()
+    {},
+    onError(error)
+    {
+      throw error
+    },
+  })
 
-  assert.deepEqual(seenCalls, ["read_file", "glob"]);
-  assert.equal(seenResults.length, 2);
+  assert.deepEqual(seenCalls, ['read_file', 'glob'])
+  assert.equal(seenResults.length, 2)
+  assert.deepEqual(seenThinking, [
+    'Inspect files. ',
+    'Then read package metadata.',
+  ])
 
-  const assistantToolTurn = agent.messages.find((message) => message.tool_calls?.length === 2);
-  assert.ok(assistantToolTurn);
-  assert.equal(assistantToolTurn.thinking, "Inspect files. Then read package metadata.");
+  const assistantToolTurn = agent.messages.find(
+    (message) => message.tool_calls?.length === 2
+  )
+  assert.ok(assistantToolTurn)
+  assert.equal(
+    assistantToolTurn.thinking,
+    'Inspect files. Then read package metadata.'
+  )
   assert.deepEqual(
     assistantToolTurn.tool_calls?.map((call) => call.function.name),
-    ["read_file", "glob"],
-  );
+    ['read_file', 'glob']
+  )
 
-  const toolMessages = agent.messages.filter((message) => message.role === "tool");
-  assert.equal(toolMessages.length, 2);
+  const toolMessages = agent.messages.filter(
+    (message) => message.role === 'tool'
+  )
+  assert.equal(toolMessages.length, 2)
   assert.deepEqual(
     toolMessages.map((message) => message.tool_name),
-    ["read_file", "glob"],
-  );
-});
+    ['read_file', 'glob']
+  )
+})
 
-test("Agent only asks approval for dangerous tools & records rejections as tool results", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "coral-approval-"));
-  tempDirs.push(dir);
+test('Agent only asks approval for dangerous tools & records rejections as tool results', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-approval-'))
+  tempDirs.push(dir)
 
-  await writeFile(join(dir, "note.txt"), "hello from coral\n", "utf-8");
+  await writeFile(join(dir, 'note.txt'), 'hello from coral\n', 'utf-8')
 
-  const agent = new Agent("fake-model", "http://localhost:11434", dir) as Agent & {
+  const agent = new Agent(
+    'fake-model',
+    'http://localhost:11434',
+    dir
+  ) as Agent & {
     client: {
-      stopKeepAlive?: () => void;
-      startKeepAlive: (model: string) => void;
-      unloadModel?: (model?: string) => Promise<void>;
+      stopKeepAlive?: () => void
+      startKeepAlive: (model: string) => void
+      unloadModel?: (model?: string) => Promise<void>
       chatStream: () => AsyncGenerator<{
-        message: OllamaMessage;
-        done: boolean;
-      }>;
-    };
-    messages: OllamaMessage[];
-  };
+        message: OllamaMessage
+        done: boolean
+      }>
+    }
+    messages: OllamaMessage[]
+  }
 
-  agent.client.stopKeepAlive?.();
+  agent.client.stopKeepAlive?.()
 
-  let streamCount = 0;
+  let streamCount = 0
   agent.client = {
-    startKeepAlive() {},
-    async *chatStream() {
-      streamCount += 1;
+    startKeepAlive()
+    {},
+    async *chatStream()
+    {
+      streamCount += 1
 
-      if (streamCount === 1) {
+      if (streamCount === 1)
+      {
         yield {
           message: {
-            role: "assistant",
-            content: "",
+            role: 'assistant',
+            content: '',
             tool_calls: [
               {
-                type: "function",
+                type: 'function',
                 function: {
-                  name: "read_file",
-                  arguments: { path: "note.txt" },
+                  name: 'read_file',
+                  arguments: { path: 'note.txt' },
                 },
               },
               {
-                type: "function",
+                type: 'function',
                 function: {
-                  name: "bash",
-                  arguments: { command: "pwd" },
+                  name: 'bash',
+                  arguments: { command: 'pwd' },
                 },
               },
             ],
           },
           done: true,
-        };
+        }
 
-        return;
+        return
       }
 
       yield {
         message: {
-          role: "assistant",
-          content: "done",
+          role: 'assistant',
+          content: 'done',
         },
         done: true,
-      };
+      }
     },
-  };
+  }
 
-  const approvals: string[] = [];
-  const results: string[] = [];
+  const approvals: string[] = []
+  const results: string[] = []
 
-  await agent.run("inspect the repo", {
-    onToken() {},
-    onToolCall() {},
-    onToolResult(name, result, error) {
-      results.push(`${name}:${error ?? result.split("\n")[0]}`);
+  await agent.run('inspect the repo', {
+    onToken()
+    {},
+    onToolCall()
+    {},
+    onToolResult(name, result, error)
+    {
+      results.push(`${name}:${error ?? result.split('\n')[0]}`)
     },
-    onToolApproval(name) {
-      approvals.push(name);
-      return Promise.resolve(false);
+    onToolApproval(name)
+    {
+      approvals.push(name)
+      return Promise.resolve(false)
     },
-    onDone() {},
-    onError(error) {
-      throw error;
+    onDone()
+    {},
+    onError(error)
+    {
+      throw error
     },
-  });
+  })
 
-  assert.deepEqual(approvals, ["bash"]);
-  assert.ok(results.some((entry) => entry.startsWith("read_file:hello from coral")));
-  assert.ok(results.includes("bash:Tool call rejected by user"));
+  assert.deepEqual(approvals, ['bash'])
+  assert.ok(
+    results.some((entry) => entry.startsWith('read_file:hello from coral'))
+  )
+  assert.ok(results.includes('bash:Tool call rejected by user'))
 
   const bashToolMessage = agent.messages.find(
-    (message) => message.role === "tool" && message.tool_name === "bash",
-  );
-  assert.ok(bashToolMessage);
-  assert.equal(bashToolMessage.content, "Tool call rejected by user");
-});
+    (message) => message.role === 'tool' && message.tool_name === 'bash'
+  )
+  assert.ok(bashToolMessage)
+  assert.equal(bashToolMessage.content, 'Tool call rejected by user')
+})
 
-test("Agent.dispose unloads the active model on shutdown", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "coral-dispose-"));
-  tempDirs.push(dir);
+test('Agent.dispose unloads the active model on shutdown', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-dispose-'))
+  tempDirs.push(dir)
 
-  const unloadedModels: string[] = [];
+  const unloadedModels: string[] = []
 
-  const agent = new Agent("fake-model", "http://localhost:11434", dir) as Agent & {
+  const agent = new Agent(
+    'fake-model',
+    'http://localhost:11434',
+    dir
+  ) as Agent & {
     client: {
-      stopKeepAlive?: () => void;
-      startKeepAlive: (model: string) => void;
-      unloadModel: (model?: string) => Promise<void>;
+      stopKeepAlive?: () => void
+      startKeepAlive: (model: string) => void
+      unloadModel: (model?: string) => Promise<void>
       chatStream: () => AsyncGenerator<{
-        message: OllamaMessage;
-        done: boolean;
-      }>;
-    };
-  };
+        message: OllamaMessage
+        done: boolean
+      }>
+    }
+  }
 
-  agent.client.stopKeepAlive?.();
+  agent.client.stopKeepAlive?.()
   agent.client = {
-    stopKeepAlive() {},
-    startKeepAlive() {},
-    unloadModel(model) {
-      unloadedModels.push(model ?? "");
-      return Promise.resolve();
+    stopKeepAlive()
+    {},
+    startKeepAlive()
+    {},
+    unloadModel(model)
+    {
+      unloadedModels.push(model ?? '')
+      return Promise.resolve()
     },
-    async *chatStream() {
+    async *chatStream()
+    {
       yield {
         message: {
-          role: "assistant",
-          content: "done",
+          role: 'assistant',
+          content: 'done',
         },
         done: true,
-      };
+      }
     },
-  };
+  }
 
-  await agent.dispose();
+  await agent.dispose()
 
-  assert.deepEqual(unloadedModels, ["fake-model"]);
-});
+  assert.deepEqual(unloadedModels, ['fake-model'])
+})
