@@ -4,7 +4,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import wrapAnsi from 'wrap-ansi'
-import { Agent } from '../agent/agent.js'
+import { Agent, type TokenUsage } from '../agent/agent.js'
 import {
   OllamaClient,
   type Model,
@@ -26,6 +26,7 @@ import {
 import PromptInput from './prompt-input.js'
 import { CORAL_HEX, OCEAN_HEX } from './theme.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { dispatchCommand, type CommandContext } from './commands.js'
 import {
   truncateOutput,
   type TruncateOutputOptions,
@@ -70,6 +71,12 @@ function formatElapsed(ms: number): string
   const minutes = Math.floor(ms / 60_000)
   const seconds = Math.floor((ms % 60_000) / 1000)
   return `${minutes}m ${String(seconds).padStart(2, '0')}s`
+}
+
+function formatTokens(n: number): string
+{
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
 }
 
 function describeRunStage(stage: RunStage): string
@@ -215,7 +222,7 @@ export default function App({
   const { stdout } = useStdout()
   const terminal = stdout as typeof process.stdout
 
-  const { getResumeSession, persistSession } = useSessionPersistence(
+  const { sessionIdRef, getResumeSession, persistSession } = useSessionPersistence(
     resumeSessionId
   )
   const resumeSession = getResumeSession()
@@ -253,6 +260,7 @@ export default function App({
   const [sessionLabelId, setSessionLabelId] = useState<string | null>(
     resumeSession?.meta.id ?? resumeSessionId ?? null
   )
+  const [tokenUsage, setTokenUsage] = useState({ prompt: 0, completion: 0 })
   const [terminalSize, setTerminalSize] = useState({
     columns: terminal.columns ?? 80,
     rows: terminal.rows ?? 24,
@@ -279,6 +287,7 @@ export default function App({
   const disposedAgentsRef = useRef(new WeakSet<Agent>())
   const runStartTimeRef = useRef<number | null>(null)
   const toolStartTimeRef = useRef<number | null>(null)
+  const runAbortRef = useRef<AbortController | null>(null)
   const maxOffsetRef = useRef(0)
   const chatViewportHeightRef = useRef(6)
 
@@ -369,6 +378,48 @@ export default function App({
     await agentInstance.dispose()
   }, [])
 
+  // clear transcript, scroll, & session label — used by /clear
+  const clearSession = useCallback(() =>
+  {
+    setOutput([])
+    setScrollOffset(0)
+    setSessionLabelId(null)
+    setTokenUsage({ prompt: 0, completion: 0 })
+    sessionIdRef.current = null
+  }, [sessionIdRef])
+
+  // dispose current agent & reopen the model picker — used by /model
+  // uses loadModelsRef to avoid circular dependency w/ loadModels/activateModel
+  const loadModelsRef = useRef<() => Promise<void>>()
+  const reopenModelPicker = useCallback(() =>
+  {
+    const currentAgent = agentRef.current
+    if (currentAgent)
+    {
+      void disposeAgent(currentAgent)
+    }
+
+    setAgent(null)
+    void loadModelsRef.current?.()
+  }, [disposeAgent])
+
+  // abort the current agent run — called by Ctrl+C & Escape while running
+  const abortRun = useCallback(() =>
+  {
+    const controller = runAbortRef.current
+    if (controller && !controller.signal.aborted)
+    {
+      controller.abort()
+
+      // dismiss any pending approval prompt
+      if (approval)
+      {
+        approval.resolve(false)
+        setApproval(null)
+      }
+    }
+  }, [approval])
+
   const activateModel = useCallback(
     (nextModel: string, restoredSession = resumeSession) =>
     {
@@ -429,6 +480,8 @@ export default function App({
       setPickerState('error')
     }
   }, [activateModel, host, resumeSession])
+
+  loadModelsRef.current = loadModels
 
   useEffect(() =>
   {
@@ -620,12 +673,41 @@ export default function App({
     {
       if (!agent || !value.trim() || runStage !== 'idle' || approval) return
 
+      // intercept slash commands before sending to the agent
+      if (value.trim().startsWith('/'))
+      {
+        setInput('')
+        setScrollOffset(0)
+
+        const cmdCtx: CommandContext = {
+          agent,
+          activeModel,
+          yolo,
+          sessionLabelId,
+          messageCount,
+          pushOutput: (...blocks) =>
+          {
+            setOutput((prev) => [...prev, ...blocks])
+          },
+          clearSession,
+          reopenModelPicker,
+          exitApp: exit,
+        }
+
+        const result = await dispatchCommand(value.trim(), cmdCtx)
+        if (result.handled) return
+      }
+
+      const controller = new AbortController()
+      runAbortRef.current = controller
+
       const resetRunState = () =>
       {
         resetStreamBuffer()
         resetAnimation()
         setRunStage('idle')
         runStartTimeRef.current = null
+        runAbortRef.current = null
       }
 
       setInput('')
@@ -729,10 +811,31 @@ export default function App({
             return next
           })
         },
+        onUsage(usage)
+        {
+          setTokenUsage({
+            prompt: usage.totalPromptTokens,
+            completion: usage.totalCompletionTokens,
+          })
+        },
         onDone()
         {
+          const wasAborted = controller.signal.aborted
           const pendingBlocks = consumeBufferedBlocks()
-          setOutput((prev) => [...prev, ...pendingBlocks])
+
+          if (wasAborted)
+          {
+            setOutput((prev) => [
+              ...prev,
+              ...pendingBlocks,
+              { type: 'system', content: 'Generation interrupted' },
+            ])
+          }
+          else
+          {
+            setOutput((prev) => [...prev, ...pendingBlocks])
+          }
+
           resetRunState()
           const meta = persistSession(agent)
           if (meta)
@@ -755,18 +858,24 @@ export default function App({
             setSessionLabelId(meta.id)
           }
         },
-      })
+      }, controller.signal)
     },
     [
+      activeModel,
       agent,
       approval,
       appendText,
       appendThinking,
+      clearSession,
       consumeBufferedBlocks,
+      exit,
+      messageCount,
       persistSession,
+      reopenModelPicker,
       resetAnimation,
       resetStreamBuffer,
       runStage,
+      sessionLabelId,
       startWaiting,
       stopWaiting,
       yolo,
@@ -779,8 +888,8 @@ export default function App({
     ? 'ctrl+t hides reasoning'
     : 'ctrl+t shows reasoning'
   const runningLabel = runElapsed
-    ? `${describeRunStage(runStage)} · ${runElapsed} · ${reasoningHint} · ↑↓ wheel pgup/pgdn scroll · esc quits`
-    : `${describeRunStage(runStage)} · ${reasoningHint} · ↑↓ wheel pgup/pgdn scroll · esc quits`
+    ? `${describeRunStage(runStage)} · ${runElapsed} · ${reasoningHint} · ctrl+c or esc interrupts`
+    : `${describeRunStage(runStage)} · ${reasoningHint} · ctrl+c or esc interrupts`
 
   const statusLine = !agent
     ? pickerState === 'loading'
@@ -792,11 +901,11 @@ export default function App({
       ? ''
       : scrollOffset > 0
         ? isRunning
-          ? `scrollback · ${scrollOffset} lines above live · ${describeRunStage(runStage)} · ${runElapsed ?? '0.0s'} · pgdn to return`
+          ? `scrollback · ${scrollOffset} lines above live · ${describeRunStage(runStage)} · ${runElapsed ?? '0.0s'} · ctrl+c interrupts · pgdn to return`
           : `scrollback · ${scrollOffset} lines above live · pgdn to return`
         : isRunning
           ? runningLabel
-          : `ready · ${reasoningHint} · ↑↓ wheel pgup/pgdn scroll · esc quits`
+          : `ready · /help for commands · ${reasoningHint} · ↑↓ scroll · esc quits`
 
   const headerSep = buildRule(transcriptWidth)
 
@@ -841,6 +950,32 @@ export default function App({
     setShowThinking((current) => !current)
   }, [])
 
+  // escape while running aborts the turn; escape while idle exits
+  const handleEscape = useCallback(() =>
+  {
+    if (runAbortRef.current && !runAbortRef.current.signal.aborted)
+    {
+      abortRun()
+    }
+    else
+    {
+      exit()
+    }
+  }, [abortRun, exit])
+
+  // Ctrl+C while running aborts the turn; Ctrl+C while idle exits
+  const handleInterrupt = useCallback(() =>
+  {
+    if (runAbortRef.current && !runAbortRef.current.signal.aborted)
+    {
+      abortRun()
+    }
+    else
+    {
+      exit()
+    }
+  }, [abortRun, exit])
+
   return (
     <Box flexDirection="column" height={terminalSize.rows}>
       <Box>
@@ -869,6 +1004,14 @@ export default function App({
               <Text dimColor>{' · '}</Text>
               <Text dimColor>
                 {messageCount} {messageCount === 1 ? 'message' : 'messages'}
+              </Text>
+            </>
+          )}
+          {(tokenUsage.prompt > 0 || tokenUsage.completion > 0) && (
+            <>
+              <Text dimColor>{' · '}</Text>
+              <Text dimColor>
+                {formatTokens(tokenUsage.prompt + tokenUsage.completion)} tokens
               </Text>
             </>
           )}
@@ -912,7 +1055,8 @@ export default function App({
               value={input}
               onChange={setInput}
               onSubmit={handleSubmit}
-              onEscape={exit}
+              onEscape={handleEscape}
+              onInterrupt={handleInterrupt}
               onPageUp={onPageUp}
               onPageDown={onPageDown}
               onScrollUp={onScrollUp}

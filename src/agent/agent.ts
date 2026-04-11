@@ -80,6 +80,48 @@ function mergeToolCalls(
   })
 }
 
+// race a promise against an AbortSignal — rejects w/ AbortError if aborted first
+function raceAbort<T>(
+  promise: Promise<T>,
+  signal?: AbortSignal
+): Promise<T>
+{
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'))
+
+  return new Promise<T>((resolve, reject) =>
+  {
+    const onAbort = () =>
+    {
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true })
+
+    promise.then(
+      (value) =>
+      {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (err) =>
+      {
+        signal.removeEventListener('abort', onAbort)
+        reject(err)
+      }
+    )
+  })
+}
+
+// token usage from Ollama's response metrics
+export interface TokenUsage
+{
+  promptTokens: number
+  completionTokens: number
+  totalPromptTokens: number
+  totalCompletionTokens: number
+}
+
 // callbacks for streaming tokens, tool calls, & completion
 export interface AgentEvents
 {
@@ -92,6 +134,7 @@ export interface AgentEvents
     name: string,
     args: Record<string, unknown>
   ) => Promise<boolean>
+  onUsage?: (usage: TokenUsage) => void
   onDone: () => void
   onError: (error: Error) => void
 }
@@ -111,6 +154,8 @@ export class Agent
   private compactionConfig: CompactionConfig
   private thinkMode: boolean | 'low' | 'medium' | 'high'
   private estimatedTokenCount = 0
+  private totalPromptTokens = 0
+  private totalCompletionTokens = 0
 
   constructor(
     model: string,
@@ -178,6 +223,112 @@ export class Agent
   setCompactionConfig(config: Partial<CompactionConfig>): void
   {
     this.compactionConfig = { ...this.compactionConfig, ...config }
+  }
+
+  // reset conversation history to just the system prompt
+  // returns the number of messages that were cleared
+  clearHistory(): number
+  {
+    const systemMsg = this.messages[0]!
+    const cleared = this.messages.length - 1
+    this.messages = [systemMsg]
+    this.rebuildTokenEstimate()
+    return cleared
+  }
+
+  // force conversation compaction & return before/after token estimates
+  // returns null if compaction was skipped (too few messages or summary failed)
+  async forceCompact(): Promise<{
+    beforeTokens: number
+    afterTokens: number
+    beforeMessages: number
+    afterMessages: number
+  } | null>
+  {
+    const beforeTokens = this.estimatedTokenCount
+    const beforeMessages = this.messages.length
+
+    // need at least a system prompt + a few messages to compact
+    if (this.messages.length < 4) return null
+
+    // split at the compaction boundary — but use a relaxed config
+    // so /compact always works even if auto-compaction wouldn't trigger
+    const relaxedConfig: CompactionConfig = {
+      ...this.compactionConfig,
+      minMessagesForCompaction: 4,
+      minRecentMessages: Math.min(
+        this.compactionConfig.minRecentMessages,
+        Math.max(Math.floor((this.messages.length - 1) / 2), 2)
+      ),
+    }
+
+    const { toSummarize, toKeep } = splitForCompaction(
+      this.messages,
+      relaxedConfig
+    )
+    if (toSummarize.length === 0) return null
+
+    const compactionPrompt = buildCompactionPrompt(toSummarize)
+    let summary = ''
+
+    try
+    {
+      for await (const chunk of this.client.chatStream({
+        model: this.model,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a helpful assistant. Summarize conversations concisely.',
+          },
+          { role: 'user', content: compactionPrompt },
+        ],
+      }))
+      {
+        if (chunk.message.content)
+        {
+          summary += chunk.message.content
+        }
+      }
+    }
+    catch
+    {
+      return null
+    }
+
+    if (!summary.trim()) return null
+
+    const systemMsg = this.messages[0]!
+    this.messages = buildCompactedMessages(systemMsg, summary, toKeep)
+    this.rebuildTokenEstimate()
+
+    return {
+      beforeTokens,
+      afterTokens: this.estimatedTokenCount,
+      beforeMessages,
+      afterMessages: this.messages.length,
+    }
+  }
+
+  // get the estimated token count for the current conversation
+  getEstimatedTokens(): number
+  {
+    return this.estimatedTokenCount
+  }
+
+  // get the message count (excluding system prompt)
+  getMessageCount(): number
+  {
+    return Math.max(this.messages.length - 1, 0)
+  }
+
+  // get accumulated token usage from Ollama
+  getTokenUsage(): { promptTokens: number; completionTokens: number }
+  {
+    return {
+      promptTokens: this.totalPromptTokens,
+      completionTokens: this.totalCompletionTokens,
+    }
   }
 
   // append a message while maintaining the cached token estimate
@@ -260,13 +411,25 @@ export class Agent
   }
 
   // run a user message through the agent loop
-  async run(userMessage: string, events: AgentEvents): Promise<void>
+  // pass an AbortSignal to cancel mid-stream or mid-tool
+  async run(
+    userMessage: string,
+    events: AgentEvents,
+    signal?: AbortSignal
+  ): Promise<void>
   {
     this.pushMessage({ role: 'user', content: userMessage })
 
     // keep going while the model wants to call tools
     while (true)
     {
+      // check for abort before each iteration
+      if (signal?.aborted)
+      {
+        events.onDone()
+        return
+      }
+
       // compact conversation if approaching context limits
       await this.compactIfNeeded()
 
@@ -290,8 +453,10 @@ export class Agent
           messages: this.messages,
           tools: ollamaTools,
           think: this.thinkMode,
-        }))
+        }, signal))
         {
+          if (signal?.aborted) break
+
           if (chunk.message.thinking)
           {
             fullThinking += chunk.message.thinking
@@ -306,11 +471,60 @@ export class Agent
           {
             toolCalls = mergeToolCalls(toolCalls, chunk.message.tool_calls)
           }
+          // capture token usage from the final chunk
+          if (chunk.done)
+          {
+            const promptTokens = chunk.prompt_eval_count ?? 0
+            const completionTokens = chunk.eval_count ?? 0
+            this.totalPromptTokens += promptTokens
+            this.totalCompletionTokens += completionTokens
+            events.onUsage?.({
+              promptTokens,
+              completionTokens,
+              totalPromptTokens: this.totalPromptTokens,
+              totalCompletionTokens: this.totalCompletionTokens,
+            })
+          }
         }
       }
       catch (err)
       {
+        // treat fetch abort as a clean cancellation, not an error
+        if (signal?.aborted)
+        {
+          // record whatever we streamed so far as a partial message
+          if (fullContent || fullThinking)
+          {
+            const partial: OllamaMessage = {
+              role: 'assistant',
+              content: fullContent || '(interrupted)',
+            }
+            if (fullThinking) partial.thinking = fullThinking
+            this.pushMessage(partial)
+          }
+
+          events.onDone()
+          return
+        }
+
         events.onError(toError(err))
+        return
+      }
+
+      // aborted mid-stream — save partial content & stop
+      if (signal?.aborted)
+      {
+        if (fullContent || fullThinking)
+        {
+          const partial: OllamaMessage = {
+            role: 'assistant',
+            content: fullContent || '(interrupted)',
+          }
+          if (fullThinking) partial.thinking = fullThinking
+          this.pushMessage(partial)
+        }
+
+        events.onDone()
         return
       }
 
@@ -338,8 +552,16 @@ export class Agent
 
       // execute tool calls sequentially (approval requires serial flow)
       const toolResults: OllamaMessage[] = []
+      let abortedDuringTools = false
+
       for (const call of toolCalls)
       {
+        if (signal?.aborted)
+        {
+          abortedDuringTools = true
+          break
+        }
+
         const toolName = call.function.name
         const toolArgs = call.function.arguments ?? {}
         events.onToolCall(toolName, toolArgs)
@@ -374,13 +596,23 @@ export class Agent
 
         if (policy === 'require_approval')
         {
+          // race approval against abort signal
           let approved: boolean
           try
           {
-            approved = await events.onToolApproval(toolName, toolArgs)
+            approved = await raceAbort(
+              events.onToolApproval(toolName, toolArgs),
+              signal
+            )
           }
           catch (err)
           {
+            if (signal?.aborted)
+            {
+              abortedDuringTools = true
+              break
+            }
+
             const errorMsg = `Tool approval failed for ${toolName}: ${toError(err).message}`
             events.onToolResult(toolName, '', errorMsg)
             toolResults.push({
@@ -427,7 +659,16 @@ export class Agent
         })
       }
 
-      this.pushMessages(toolResults)
+      if (toolResults.length > 0)
+      {
+        this.pushMessages(toolResults)
+      }
+
+      if (abortedDuringTools)
+      {
+        events.onDone()
+        return
+      }
     }
   }
 }

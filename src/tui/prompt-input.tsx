@@ -21,6 +21,7 @@ export interface PromptInputProps
   onChange: (value: string) => void
   onSubmit: (value: string) => void
   onEscape: () => void
+  onInterrupt: () => void
   onPageUp: () => void
   onPageDown: () => void
   onScrollUp: () => void
@@ -50,6 +51,7 @@ export default function PromptInput({
   onChange,
   onSubmit,
   onEscape,
+  onInterrupt,
   onPageUp,
   onPageDown,
   onScrollUp,
@@ -167,10 +169,14 @@ export default function PromptInput({
         onEscape()
         return
       }
+      if (key.ctrl && input === 'c')
+      {
+        onInterrupt()
+        return
+      }
       if (
         key.upArrow ||
         key.downArrow ||
-        (key.ctrl && input === 'c') ||
         key.tab ||
         (key.shift && key.tab)
       )
@@ -212,6 +218,7 @@ export default function PromptInput({
     [
       onChange,
       onEscape,
+      onInterrupt,
       onPageDown,
       onPageUp,
       onScrollDown,

@@ -144,7 +144,10 @@ export class OllamaClient
   }
 
   // open a chat stream & fall back when think is unsupported
-  private async postChat(request: ChatRequest): Promise<Response>
+  private async postChat(
+    request: ChatRequest,
+    signal?: AbortSignal
+  ): Promise<Response>
   {
     const thinkSupport = this.getThinkSupport(request.model)
     const includeThink =
@@ -155,6 +158,7 @@ export class OllamaClient
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(this.buildChatBody(request, includeThink)),
+      signal,
     })
 
     if (initial.ok)
@@ -183,6 +187,7 @@ export class OllamaClient
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(this.buildChatBody(request, false)),
+      signal,
     })
 
     if (!retry.ok)
@@ -247,9 +252,12 @@ export class OllamaClient
   }
 
   // stream chat completions via ndjson
-  async *chatStream(request: ChatRequest): AsyncGenerator<ChatResponse>
+  async *chatStream(
+    request: ChatRequest,
+    signal?: AbortSignal
+  ): AsyncGenerator<ChatResponse>
   {
-    const res = await this.postChat(request)
+    const res = await this.postChat(request, signal)
     if (!res.body) throw new Error('No response body')
 
     const reader = res.body.getReader()
@@ -257,32 +265,47 @@ export class OllamaClient
     // collect partial-line chunks in an array to avoid O(n²) string concat
     const remainderParts: string[] = []
 
-    while (true)
+    try
     {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      remainderParts.push(decoder.decode(value, { stream: true }))
-      const joined = remainderParts.join('')
-      remainderParts.length = 0
-
-      const lines = joined.split('\n')
-      const tail = lines.pop() ?? ''
-      if (tail) remainderParts.push(tail)
-
-      for (const line of lines)
+      while (true)
       {
-        if (line.trim())
+        if (signal?.aborted)
         {
-          yield JSON.parse(line) as ChatResponse
+          break
+        }
+
+        const { done, value } = await reader.read()
+        if (done) break
+
+        remainderParts.push(decoder.decode(value, { stream: true }))
+        const joined = remainderParts.join('')
+        remainderParts.length = 0
+
+        const lines = joined.split('\n')
+        const tail = lines.pop() ?? ''
+        if (tail) remainderParts.push(tail)
+
+        for (const line of lines)
+        {
+          if (line.trim())
+          {
+            yield JSON.parse(line) as ChatResponse
+          }
+        }
+      }
+
+      if (!signal?.aborted)
+      {
+        const final = remainderParts.join('')
+        if (final.trim())
+        {
+          yield JSON.parse(final) as ChatResponse
         }
       }
     }
-
-    const final = remainderParts.join('')
-    if (final.trim())
+    finally
     {
-      yield JSON.parse(final) as ChatResponse
+      await reader.cancel()
     }
   }
 }

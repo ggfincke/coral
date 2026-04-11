@@ -54,6 +54,13 @@ export interface ErrorBlock
   content: string
 }
 
+// output from slash commands & system messages
+export interface SystemBlock
+{
+  type: 'system'
+  content: string
+}
+
 export type OutputBlock =
   | UserBlock
   | AssistantBlock
@@ -61,6 +68,7 @@ export type OutputBlock =
   | ToolCallBlock
   | ToolResultBlock
   | ErrorBlock
+  | SystemBlock
 
 // braille spinner frames for in-progress tools
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
@@ -197,6 +205,17 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
       lines.push('')
       lines.push(` ${chalk.bold.red('✗')} ${chalk.red('Error')}`)
       lines.push(...wrapLines(chalk.red(block.content), width - 3, '   '))
+      return lines
+    }
+
+    case 'system':
+    {
+      const lines: string[] = []
+      lines.push('')
+      for (const line of block.content.split('\n'))
+      {
+        lines.push(`   ${chalk.dim(line)}`)
+      }
       return lines
     }
   }
