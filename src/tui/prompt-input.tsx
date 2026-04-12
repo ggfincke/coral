@@ -27,6 +27,7 @@ export interface PromptInputProps
   onScrollUp: () => void
   onScrollDown: () => void
   onToggleThinking: () => void
+  onTogglePermissions: () => void
 }
 
 interface CursorState
@@ -43,6 +44,14 @@ export function isThinkingToggleShortcut(
   return key.ctrl && input.toLowerCase() === 't'
 }
 
+export function isPermissionToggleShortcut(
+  input: string,
+  key: CoralKey
+): boolean
+{
+  return key.ctrl && input.toLowerCase() === 'y'
+}
+
 export default function PromptInput({
   value,
   placeholder = '',
@@ -57,6 +66,7 @@ export default function PromptInput({
   onScrollUp,
   onScrollDown,
   onToggleThinking,
+  onTogglePermissions,
 }: PromptInputProps)
 {
   const [cursor, setCursor] = useState<CursorState>({
@@ -164,6 +174,11 @@ export default function PromptInput({
         onToggleThinking()
         return
       }
+      if (isPermissionToggleShortcut(input, key))
+      {
+        onTogglePermissions()
+        return
+      }
       if (key.escape)
       {
         onEscape()
@@ -224,6 +239,7 @@ export default function PromptInput({
       onScrollDown,
       onScrollUp,
       onSubmit,
+      onTogglePermissions,
       onToggleThinking,
       resolvedCursor,
       value,

@@ -5,7 +5,7 @@ import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import { renderMarkdownToAnsi } from './markdown.js'
 import { shimmerText } from './shimmer.js'
-import { coralBold, coral, ocean, oceanBold, sand } from './theme.js'
+import { coralBold, coral, deep, ocean, oceanBold, sand } from './theme.js'
 import { wrapLines } from './wrap.js'
 
 // block types w/ richer data for tool calls & results
@@ -122,6 +122,40 @@ function getCachedBlockLines(
   return lines
 }
 
+// tool-specific label used in the tool call header
+function toolDisplayLabel(toolName: string): string
+{
+  switch (toolName)
+  {
+    case 'bash':
+      return 'Shell'
+    case 'read_file':
+      return 'Read'
+    case 'write_file':
+      return 'Write'
+    case 'edit_file':
+      return 'Edit'
+    case 'grep':
+      return 'Search'
+    case 'glob':
+      return 'Glob'
+    case 'list_files':
+      return 'List'
+    case 'git_status':
+      return 'Git Status'
+    case 'git_diff':
+      return 'Git Diff'
+    case 'git_log':
+      return 'Git Log'
+    default:
+      return toolName
+  }
+}
+
+// border character for tool blocks
+const TOOL_BORDER = chalk.dim('│')
+const TOOL_BORDER_ERROR = chalk.red('│')
+
 // format an in-progress tool call that depends on the current spinner frame
 function formatPendingToolCall(
   block: ToolCallBlock,
@@ -130,9 +164,13 @@ function formatPendingToolCall(
 ): string[]
 {
   const spinner = coral(getSpinnerFrame(spinnerTick))
-  const header =
-    `   ${chalk.dim('⎿')} ${spinner} ${chalk.dim(block.toolName)} ` +
-    chalk.dim(summarizeToolArgs(block.toolName, block.args))
+  const label = toolDisplayLabel(block.toolName)
+  const argSummary = summarizeToolArgs(block.toolName, block.args)
+  const argDisplay = block.toolName === 'bash'
+    ? chalk.dim('$ ') + chalk.white(argSummary)
+    : chalk.dim(argSummary)
+
+  const header = `   ${deep('│')} ${spinner} ${deep(label)} ${argDisplay}`
 
   return wrapLines(header, width)
 }
@@ -172,24 +210,34 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
     case 'thinking':
     {
       const lines: string[] = []
+      const border = chalk.magenta('│')
       lines.push('')
-      lines.push(` ${chalk.bold.magenta('◌')} ${sand('Thinking')}`)
-      lines.push(...wrapLines(chalk.dim(block.content), width - 3, '   '))
+      lines.push(`   ${border} ${chalk.dim.magenta('Thinking')}`)
+      const thinkLines = wrapLines(chalk.dim(block.content), width - 6, '')
+      for (const line of thinkLines)
+      {
+        lines.push(`   ${border} ${line}`)
+      }
       return lines
     }
 
     case 'tool_call':
     {
+      const label = toolDisplayLabel(block.toolName)
       const argSummary = summarizeToolArgs(block.toolName, block.args)
-      const statusMark =
-        block.status === 'success' ? chalk.green('✓') : chalk.red('✗')
+      const isError = block.status === 'error'
+      const statusMark = isError ? chalk.red('✗') : chalk.green('✓')
       const duration =
         block.duration != null
-          ? ` ${chalk.dim(`${(block.duration / 1000).toFixed(1)}s`)}`
+          ? chalk.dim(` ${(block.duration / 1000).toFixed(1)}s`)
           : ''
+      const border = isError ? chalk.red('│') : deep('│')
+      const argDisplay = block.toolName === 'bash'
+        ? chalk.dim('$ ') + chalk.white(argSummary)
+        : chalk.dim(argSummary)
+
       const header =
-        `   ${chalk.dim('⎿')} ${chalk.dim(block.toolName)} ${argSummary} ` +
-        `${statusMark}${duration}`
+        `   ${border} ${statusMark} ${deep(label)} ${argDisplay}${duration}`
       return wrapLines(header, width)
     }
 
@@ -238,7 +286,7 @@ function formatBlock(
   )
 }
 
-// format tool result output w/ └ tree connector on first line
+// format tool result output w/ left-border continuation style
 function formatToolResultLines(
   content: string,
   isError: boolean,
@@ -246,16 +294,13 @@ function formatToolResultLines(
 ): string[]
 {
   const style = isError ? chalk.red : chalk.dim
+  const border = isError ? TOOL_BORDER_ERROR : TOOL_BORDER
   const maxWidth = Math.max(width - 8, 12)
   const contentLines = content.split('\n')
   const result: string[] = []
 
-  for (let i = 0; i < contentLines.length; i++)
+  for (const raw of contentLines)
   {
-    const raw = contentLines[i] ?? ''
-    const prefix = i === 0 ? `     ${chalk.dim('└')} ` : '       '
-
-    // wrap long lines
     if (raw.length > maxWidth)
     {
       const wrapped = wrapAnsi(raw, maxWidth, {
@@ -263,21 +308,14 @@ function formatToolResultLines(
         trim: false,
         wordWrap: true,
       }).split('\n')
-      for (let j = 0; j < wrapped.length; j++)
+      for (const segment of wrapped)
       {
-        if (i === 0 && j === 0)
-        {
-          result.push(`     ${chalk.dim('└')} ${style(wrapped[j])}`)
-        }
-        else
-        {
-          result.push(`       ${style(wrapped[j])}`)
-        }
+        result.push(`   ${border}   ${style(segment)}`)
       }
     }
     else
     {
-      result.push(`${prefix}${style(raw)}`)
+      result.push(`   ${border}   ${style(raw)}`)
     }
   }
 
@@ -331,10 +369,9 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
   }
   else if (streamingThinking)
   {
+    const border = chalk.magenta('│')
     transcript.push('')
-    transcript.push(
-      ` ${chalk.bold.magenta('◌')} ${sand('Thinking hidden · ctrl+t to show')}`
-    )
+    transcript.push(`   ${border} ${chalk.dim.magenta('Thinking')} ${chalk.dim('· ctrl+t to show')}`)
   }
 
   // render streaming assistant text after reasoning

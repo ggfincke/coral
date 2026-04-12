@@ -81,6 +81,12 @@ export interface Model
   modified_at: string
 }
 
+// model info returned by /api/show
+export interface ModelInfo
+{
+  context_length: number
+}
+
 const DEFAULT_KEEP_ALIVE = '10m'
 const THINK_FALLBACK_STATUS = new Set([400, 404, 422])
 type ThinkSupport = 'unknown' | 'supported' | 'unsupported'
@@ -240,6 +246,50 @@ export class OllamaClient
         this.lastModel = null
       }
     }
+  }
+
+  // fetch model details (context window, etc.) from the Ollama instance
+  async showModel(model: string): Promise<ModelInfo>
+  {
+    const res = await fetch(`${this.baseUrl}/api/show`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    })
+    if (!res.ok) throw new Error(`Ollama API error: ${res.status}`)
+
+    const data = (await res.json()) as {
+      model_info?: Record<string, unknown>
+      parameters?: string
+    }
+
+    // extract context length from model_info or parameters
+    let contextLength = 0
+
+    // try model_info first — Ollama returns context_length in various keys
+    if (data.model_info)
+    {
+      for (const [key, val] of Object.entries(data.model_info))
+      {
+        if (key.includes('context_length') && typeof val === 'number')
+        {
+          contextLength = val
+          break
+        }
+      }
+    }
+
+    // fallback: parse from parameters string (e.g., "num_ctx 8192")
+    if (contextLength === 0 && data.parameters)
+    {
+      const match = data.parameters.match(/num_ctx\s+(\d+)/)
+      if (match)
+      {
+        contextLength = parseInt(match[1]!, 10)
+      }
+    }
+
+    return { context_length: contextLength }
   }
 
   // fetch available models from the Ollama instance

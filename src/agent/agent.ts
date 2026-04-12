@@ -156,6 +156,7 @@ export class Agent
   private estimatedTokenCount = 0
   private totalPromptTokens = 0
   private totalCompletionTokens = 0
+  private contextWindowSize = 0
 
   constructor(
     model: string,
@@ -217,6 +218,46 @@ export class Agent
   getModel(): string
   {
     return this.model
+  }
+
+  // switch to a different model in-place — keeps conversation history intact
+  // unloads the old model, rebuilds the system prompt, & starts keep-alive for the new one
+  async switchModel(nextModel: string): Promise<void>
+  {
+    const previousModel = this.model
+
+    // unload the old model & stop its keep-alive
+    this.client.stopKeepAlive()
+    await this.client.unloadModel(previousModel)
+
+    // swap to the new model & reset cached context window
+    this.model = nextModel
+    this.contextWindowSize = 0
+
+    // rebuild the system prompt w/ the new model name
+    const systemContent = buildSystemPrompt({
+      model: nextModel,
+      cwd: getCwd(),
+      tools: allTools,
+    })
+
+    // replace messages[0] (the system prompt) in-place
+    if (this.messages.length > 0 && this.messages[0]!.role === 'system')
+    {
+      const oldTokens = estimateMessageTokens(this.messages[0]!)
+      this.messages[0] = { role: 'system', content: systemContent }
+      const newTokens = estimateMessageTokens(this.messages[0]!)
+      this.estimatedTokenCount += newTokens - oldTokens
+    }
+    else
+    {
+      // shouldn't happen, but handle gracefully
+      this.messages.unshift({ role: 'system', content: systemContent })
+      this.rebuildTokenEstimate()
+    }
+
+    // start keep-alive for the new model
+    this.client.startKeepAlive(nextModel)
   }
 
   // override compaction configuration
@@ -329,6 +370,39 @@ export class Agent
       promptTokens: this.totalPromptTokens,
       completionTokens: this.totalCompletionTokens,
     }
+  }
+
+  // get the cached context window size (0 = unknown)
+  getContextWindowSize(): number
+  {
+    return this.contextWindowSize
+  }
+
+  // fetch the context window size from Ollama & cache it
+  // safe to call multiple times — only fetches once per model
+  async fetchContextWindow(): Promise<number>
+  {
+    if (this.contextWindowSize > 0) return this.contextWindowSize
+
+    try
+    {
+      const info = await this.client.showModel(this.model)
+      if (info.context_length > 0)
+      {
+        this.contextWindowSize = info.context_length
+        // update compaction config w/ actual context window
+        this.compactionConfig = {
+          ...this.compactionConfig,
+          contextWindow: info.context_length,
+        }
+      }
+    }
+    catch
+    {
+      // non-fatal — keep using default (0 = unknown)
+    }
+
+    return this.contextWindowSize
   }
 
   // append a message while maintaining the cached token estimate

@@ -6,6 +6,7 @@ import { execSync } from 'node:child_process'
 import { getCwd } from '../cwd.js'
 import { coral, ocean, sand } from './theme.js'
 import type { Agent } from '../agent/agent.js'
+import { OllamaClient } from '../ollama/client.js'
 import type { OutputBlock, SystemBlock } from './transcript.js'
 
 // context passed to every command — provides access to app state & setters
@@ -13,6 +14,7 @@ export interface CommandContext
 {
   agent: Agent
   activeModel: string
+  host: string
   yolo: boolean
   sessionLabelId: string | null
   messageCount: number
@@ -22,6 +24,10 @@ export interface CommandContext
   clearSession: () => void
   // reopen the model picker
   reopenModelPicker: () => void
+  // switch model in-place (keeps conversation history)
+  switchModel: (modelName: string) => Promise<void>
+  // set the permission mode at runtime
+  setYolo: (yolo: boolean) => void
   // exit the application
   exitApp: () => void
 }
@@ -96,7 +102,7 @@ function systemBlock(content: string): SystemBlock
 
 const helpCommand: Command = {
   name: 'help',
-  description: 'List available commands',
+  description: 'List available commands & keybindings',
   execute(_args, ctx)
   {
     const lines: string[] = [
@@ -111,6 +117,16 @@ const helpCommand: Command = {
         : ''
       lines.push(`  ${ocean(`/${cmd.name}`)}${aliases}  ${chalk.dim(cmd.description)}`)
     }
+
+    lines.push('')
+    lines.push(`${sand('— keybindings')}`)
+    lines.push('')
+    lines.push(`  ${ocean('ctrl+y')}   ${chalk.dim('Toggle permission mode (ask / yolo)')}`)
+    lines.push(`  ${ocean('ctrl+t')}   ${chalk.dim('Toggle thinking/reasoning visibility')}`)
+    lines.push(`  ${ocean('ctrl+c')}   ${chalk.dim('Interrupt generation (or exit when idle)')}`)
+    lines.push(`  ${ocean('esc')}      ${chalk.dim('Interrupt generation (or exit when idle)')}`)
+    lines.push(`  ${ocean('↑↓')}       ${chalk.dim('Scroll transcript when input is empty')}`)
+    lines.push(`  ${ocean('pgup/dn')}  ${chalk.dim('Page through transcript')}`)
 
     lines.push('')
     lines.push(chalk.dim('Type /command to run. Commands are not sent to the model.'))
@@ -254,10 +270,145 @@ const exitCommand: Command = {
 
 const modelCommand: Command = {
   name: 'model',
-  description: 'Switch to a different model',
-  execute(_args, ctx)
+  description: 'Switch to a different model (or open picker w/ no args)',
+  async execute(args, ctx)
   {
-    ctx.reopenModelPicker()
+    // no args — open the interactive model picker
+    if (!args)
+    {
+      ctx.reopenModelPicker()
+      return
+    }
+
+    const requestedModel = args.trim()
+
+    // validate model exists in Ollama
+    ctx.pushOutput(systemBlock(`Looking up model: ${requestedModel}...`))
+
+    let availableModels: string[]
+    try
+    {
+      const client = new OllamaClient(ctx.host)
+      const models = await client.listModels()
+      availableModels = models.map((m) => m.name)
+    }
+    catch
+    {
+      ctx.pushOutput(
+        systemBlock('Failed to fetch models from Ollama — is it running?')
+      )
+      return
+    }
+
+    // try exact match first, then prefix match
+    const exactMatch = availableModels.find(
+      (name) => name === requestedModel
+    )
+    const prefixMatches = exactMatch
+      ? []
+      : availableModels.filter((name) => name.startsWith(requestedModel))
+
+    const resolvedModel = exactMatch ?? (prefixMatches.length === 1 ? prefixMatches[0]! : null)
+
+    if (!resolvedModel)
+    {
+      if (prefixMatches.length > 1)
+      {
+        const matchList = prefixMatches.slice(0, 10).map((n) => `  ${n}`).join('\n')
+        ctx.pushOutput(
+          systemBlock(
+            `Ambiguous model name "${requestedModel}" — multiple matches:\n${matchList}\n\nBe more specific or use /model to open the picker.`
+          )
+        )
+      }
+      else
+      {
+        ctx.pushOutput(
+          systemBlock(
+            `Model "${requestedModel}" not found in Ollama.\n` +
+            `Use ${ocean('/model')} to open the picker, or pull it first.`
+          )
+        )
+      }
+      return
+    }
+
+    // skip if already using this model
+    if (resolvedModel === ctx.activeModel)
+    {
+      ctx.pushOutput(systemBlock(`Already using ${resolvedModel}`))
+      return
+    }
+
+    // switch in-place — preserves conversation history
+    const previousModel = ctx.activeModel
+    try
+    {
+      await ctx.switchModel(resolvedModel)
+      ctx.pushOutput(
+        systemBlock(`Switched model: ${previousModel} → ${resolvedModel}`)
+      )
+    }
+    catch (err)
+    {
+      const msg = err instanceof Error ? err.message : String(err)
+      ctx.pushOutput(
+        systemBlock(`Failed to switch model: ${msg}`)
+      )
+    }
+  },
+}
+
+// ── /permissions ──────────────────────────────────────────────────────
+
+const permissionsCommand: Command = {
+  name: 'permissions',
+  aliases: ['perm', 'perms'],
+  description: 'Show or set permission mode (ask / yolo)',
+  execute(args, ctx)
+  {
+    if (!args)
+    {
+      const current = ctx.yolo ? 'yolo' : 'ask'
+      const description = ctx.yolo
+        ? 'auto-approve all tool calls'
+        : 'prompt before writes & shell commands'
+      ctx.pushOutput(
+        systemBlock(
+          `Permission mode: ${chalk.bold(current)} (${description})\n\n` +
+          `  ${ocean('/permissions ask')}   — prompt before writes & shell commands\n` +
+          `  ${ocean('/permissions yolo')}  — auto-approve all tool calls\n` +
+          `  ${chalk.dim('ctrl+y')}             — quick toggle`
+        )
+      )
+      return
+    }
+
+    const mode = args.trim().toLowerCase()
+
+    if (mode === 'yolo')
+    {
+      ctx.setYolo(true)
+      ctx.pushOutput(
+        systemBlock(`Permission mode → ${chalk.yellow.bold('yolo')} (all tool calls auto-approved)`)
+      )
+    }
+    else if (mode === 'ask')
+    {
+      ctx.setYolo(false)
+      ctx.pushOutput(
+        systemBlock(`Permission mode → ${chalk.bold('ask')} (prompt before writes & shell commands)`)
+      )
+    }
+    else
+    {
+      ctx.pushOutput(
+        systemBlock(
+          `Unknown permission mode: "${mode}"\n` +
+          `Valid modes: ${ocean('ask')}, ${ocean('yolo')}`
+        )
+      )
+    }
   },
 }
 
@@ -352,6 +503,7 @@ const commands: Command[] = [
   compactCommand,
   statusCommand,
   modelCommand,
+  permissionsCommand,
   diffCommand,
   exitCommand,
 ]

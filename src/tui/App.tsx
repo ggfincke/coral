@@ -3,6 +3,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
+import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import { Agent, type TokenUsage } from '../agent/agent.js'
 import {
@@ -25,6 +26,7 @@ import {
 } from './transcript.js'
 import PromptInput from './prompt-input.js'
 import { CORAL_HEX, OCEAN_HEX } from './theme.js'
+import stripAnsi from 'strip-ansi'
 import { toErrorMessage } from '../utils/errors.js'
 import { dispatchCommand, type CommandContext } from './commands.js'
 import {
@@ -94,6 +96,39 @@ function describeRunStage(stage: RunStage): string
 function clamp(value: number, min: number, max: number): number
 {
   return Math.min(Math.max(value, min), max)
+}
+
+// build a token gauge string: "2.1k/8k ctx" or "2.1k tokens"
+function buildTokenGauge(
+  totalTokens: number,
+  contextWindow: number
+): string
+{
+  if (totalTokens === 0 && contextWindow === 0) return ''
+
+  const used = formatTokens(totalTokens)
+
+  if (contextWindow > 0)
+  {
+    const window = formatTokens(contextWindow)
+    const pct = Math.min(Math.round((totalTokens / contextWindow) * 100), 100)
+    return `${used}/${window} ctx (${pct}%)`
+  }
+
+  return `${used} tokens`
+}
+
+// pad a status line so left & right parts are flush to edges
+function buildStatusLine(
+  left: string,
+  right: string,
+  width: number
+): string
+{
+  const leftVisible = stripAnsi(left).length
+  const rightVisible = stripAnsi(right).length
+  const gap = Math.max(width - leftVisible - rightVisible, 1)
+  return left + ' '.repeat(gap) + right
 }
 
 function buildRule(width: number): string
@@ -214,7 +249,7 @@ export default function App({
   model,
   host,
   think,
-  yolo,
+  yolo: initialYolo,
   resumeSessionId,
 }: Props)
 {
@@ -253,6 +288,7 @@ export default function App({
     resumeSession ? buildRestoredBlocks(resumeSession.messages) : []
   )
   const [showThinking, setShowThinking] = useState(true)
+  const [yolo, setYolo] = useState(initialYolo)
   const [runStage, setRunStage] = useState<RunStage>('idle')
   const [approval, setApproval] = useState<ApprovalPrompt | null>(null)
   const [scrollOffset, setScrollOffset] = useState(0)
@@ -261,6 +297,7 @@ export default function App({
     resumeSession?.meta.id ?? resumeSessionId ?? null
   )
   const [tokenUsage, setTokenUsage] = useState({ prompt: 0, completion: 0 })
+  const [contextWindow, setContextWindow] = useState(0)
   const [terminalSize, setTerminalSize] = useState({
     columns: terminal.columns ?? 80,
     rows: terminal.rows ?? 24,
@@ -388,20 +425,23 @@ export default function App({
     sessionIdRef.current = null
   }, [sessionIdRef])
 
-  // dispose current agent & reopen the model picker — used by /model
+  // show the model picker — preserves current agent for in-place switching
   // uses loadModelsRef to avoid circular dependency w/ loadModels/activateModel
   const loadModelsRef = useRef<() => Promise<void>>()
   const reopenModelPicker = useCallback(() =>
   {
-    const currentAgent = agentRef.current
-    if (currentAgent)
-    {
-      void disposeAgent(currentAgent)
-    }
-
-    setAgent(null)
     void loadModelsRef.current?.()
-  }, [disposeAgent])
+  }, [])
+
+  // switch model in-place — keeps conversation history, unloads old model
+  const switchModel = useCallback(async (modelName: string) =>
+  {
+    const currentAgent = agentRef.current
+    if (!currentAgent) return
+
+    await currentAgent.switchModel(modelName)
+    setActiveModel(modelName)
+  }, [])
 
   // abort the current agent run — called by Ctrl+C & Escape while running
   const abortRun = useCallback(() =>
@@ -420,10 +460,41 @@ export default function App({
     }
   }, [approval])
 
+  // fetch context window size from Ollama & update state
+  const fetchContextWindowForAgent = useCallback((agentInstance: Agent) =>
+  {
+    void agentInstance.fetchContextWindow().then((size) =>
+    {
+      if (size > 0) setContextWindow(size)
+    })
+  }, [])
+
   const activateModel = useCallback(
     (nextModel: string, restoredSession = resumeSession) =>
     {
+      const existingAgent = agentRef.current
+
+      // if there's an existing agent, switch in-place to preserve history
+      if (existingAgent && !restoredSession)
+      {
+        void existingAgent.switchModel(nextModel).then(() =>
+        {
+          setContextWindow(0)
+          fetchContextWindowForAgent(existingAgent)
+        })
+        setActiveModel(nextModel)
+        setPickerState('hidden')
+        return
+      }
+
+      // no existing agent (or restoring a session) — create a fresh one
+      if (existingAgent)
+      {
+        void disposeAgent(existingAgent)
+      }
+
       setActiveModel(nextModel)
+      setContextWindow(0)
 
       const nextAgent = new Agent(nextModel, host, undefined, { think })
       if (restoredSession)
@@ -431,15 +502,12 @@ export default function App({
         nextAgent.restoreMessages(restoredSession.messages)
         setOutput(buildRestoredBlocks(restoredSession.messages))
       }
-      else
-      {
-        setOutput([])
-      }
 
       setAgent(nextAgent)
       setPickerState('hidden')
+      fetchContextWindowForAgent(nextAgent)
     },
-    [host, resumeSession, think]
+    [disposeAgent, fetchContextWindowForAgent, host, resumeSession, think]
   )
 
   const loadModels = useCallback(async () =>
@@ -451,27 +519,37 @@ export default function App({
     {
       const client = new OllamaClient(host)
       const loadedModels = sortModels(await client.listModels())
+      const isReopening = Boolean(agentRef.current)
 
-      if (loadedModels.length === 1)
+      // when reopening mid-session, always show the picker — don't auto-select
+      if (!isReopening)
       {
-        activateModel(loadedModels[0]!.name, resumeSession)
-        return
-      }
-
-      if (resumeSession)
-      {
-        const sessionModel = loadedModels.find(
-          (loadedModel) => loadedModel.name === resumeSession.meta.model
-        )
-        if (sessionModel)
+        if (loadedModels.length === 1)
         {
-          activateModel(sessionModel.name, resumeSession)
+          activateModel(loadedModels[0]!.name, resumeSession)
           return
+        }
+
+        if (resumeSession)
+        {
+          const sessionModel = loadedModels.find(
+            (loadedModel) => loadedModel.name === resumeSession.meta.model
+          )
+          if (sessionModel)
+          {
+            activateModel(sessionModel.name, resumeSession)
+            return
+          }
         }
       }
 
+      // pre-select the current model in the picker list
+      const currentModelIndex = isReopening
+        ? loadedModels.findIndex((m) => m.name === agentRef.current?.getModel())
+        : 0
+
       setModels(loadedModels)
-      setSelectedModelIndex(0)
+      setSelectedModelIndex(currentModelIndex >= 0 ? currentModelIndex : 0)
       setPickerState('ready')
     }
     catch (err)
@@ -525,6 +603,15 @@ export default function App({
   {
     agentRef.current = agent
   }, [agent])
+
+  // fetch context window when agent becomes available (including initial mount)
+  useEffect(() =>
+  {
+    if (agent && contextWindow === 0)
+    {
+      fetchContextWindowForAgent(agent)
+    }
+  }, [agent, contextWindow, fetchContextWindowForAgent])
 
   useEffect(() =>
   {
@@ -601,6 +688,8 @@ export default function App({
     }
   }, [runStage])
 
+  const pickerVisible = pickerState !== 'hidden'
+
   useInput(
     (ch, key) =>
     {
@@ -620,11 +709,22 @@ export default function App({
         return
       }
 
-      if (!agent)
+      if (pickerVisible)
       {
         if (pickerState === 'loading')
         {
-          if (key.escape) exit()
+          if (key.escape)
+          {
+            // if there's an agent behind the picker, go back to chat
+            if (agent)
+            {
+              setPickerState('hidden')
+            }
+            else
+            {
+              exit()
+            }
+          }
           return
         }
 
@@ -636,7 +736,14 @@ export default function App({
           }
           else if (key.escape)
           {
-            exit()
+            if (agent)
+            {
+              setPickerState('hidden')
+            }
+            else
+            {
+              exit()
+            }
           }
 
           return
@@ -657,15 +764,26 @@ export default function App({
         else if (key.return)
         {
           const selected = models[selectedModelIndex]
-          if (selected) activateModel(selected.name, resumeSession)
+          if (selected)
+          {
+            // when reopening mid-session, switch in-place (no restore session)
+            activateModel(selected.name, agent ? undefined : resumeSession)
+          }
         }
         else if (key.escape)
         {
-          exit()
+          if (agent)
+          {
+            setPickerState('hidden')
+          }
+          else
+          {
+            exit()
+          }
         }
       }
     },
-    { isActive: !agent || Boolean(approval) }
+    { isActive: pickerVisible || Boolean(approval) }
   )
 
   const handleSubmit = useCallback(
@@ -682,6 +800,7 @@ export default function App({
         const cmdCtx: CommandContext = {
           agent,
           activeModel,
+          host,
           yolo,
           sessionLabelId,
           messageCount,
@@ -691,6 +810,8 @@ export default function App({
           },
           clearSession,
           reopenModelPicker,
+          switchModel,
+          setYolo,
           exitApp: exit,
         }
 
@@ -869,6 +990,7 @@ export default function App({
       clearSession,
       consumeBufferedBlocks,
       exit,
+      host,
       messageCount,
       persistSession,
       reopenModelPicker,
@@ -878,34 +1000,59 @@ export default function App({
       sessionLabelId,
       startWaiting,
       stopWaiting,
+      switchModel,
       yolo,
     ]
   )
 
   const sessionLabel = sessionLabelId ? `session ${sessionLabelId}` : ''
   const permissionMode = yolo ? 'yolo' : 'ask'
-  const reasoningHint = showThinking
-    ? 'ctrl+t hides reasoning'
-    : 'ctrl+t shows reasoning'
-  const runningLabel = runElapsed
-    ? `${describeRunStage(runStage)} · ${runElapsed} · ${reasoningHint} · ctrl+c or esc interrupts`
-    : `${describeRunStage(runStage)} · ${reasoningHint} · ctrl+c or esc interrupts`
+  const totalTokens = tokenUsage.prompt + tokenUsage.completion
+  const tokenGauge = buildTokenGauge(totalTokens, contextWindow)
 
-  const statusLine = !agent
-    ? pickerState === 'loading'
+  const pickerEscHint = agent ? 'esc returns to chat' : 'esc quits'
+  let statusLine: string
+
+  if (pickerVisible)
+  {
+    statusLine = pickerState === 'loading'
       ? 'loading models from Ollama…'
       : pickerState === 'error'
-        ? 'press r to retry · esc to quit'
-        : `${models.length} models available · enter selects · esc quits`
-    : approval
-      ? ''
-      : scrollOffset > 0
-        ? isRunning
-          ? `scrollback · ${scrollOffset} lines above live · ${describeRunStage(runStage)} · ${runElapsed ?? '0.0s'} · ctrl+c interrupts · pgdn to return`
-          : `scrollback · ${scrollOffset} lines above live · pgdn to return`
-        : isRunning
-          ? runningLabel
-          : `ready · /help for commands · ${reasoningHint} · ↑↓ scroll · esc quits`
+        ? `press r to retry · ${pickerEscHint}`
+        : `${models.length} models available · enter selects · ${pickerEscHint}`
+  }
+  else if (!agent || approval)
+  {
+    statusLine = ''
+  }
+  else if (scrollOffset > 0)
+  {
+    const stateLeft = isRunning
+      ? `scrollback · ${describeRunStage(runStage)} · ${runElapsed ?? '0.0s'}`
+      : `scrollback · ${scrollOffset} lines above`
+    const hintRight = isRunning
+      ? 'ctrl+c interrupts · pgdn returns'
+      : 'pgdn returns'
+    statusLine = buildStatusLine(stateLeft, hintRight, transcriptWidth)
+  }
+  else if (isRunning)
+  {
+    const stageStr = runElapsed
+      ? `${describeRunStage(runStage)} · ${runElapsed}`
+      : describeRunStage(runStage)
+    const stateLeft = tokenGauge
+      ? `${stageStr} · ${tokenGauge}`
+      : stageStr
+    statusLine = buildStatusLine(stateLeft, 'ctrl+c interrupts', transcriptWidth)
+  }
+  else
+  {
+    // idle state — show token gauge on left, minimal hints on right
+    const stateLeft = tokenGauge ? tokenGauge : 'ready'
+    const yoloHint = yolo ? chalk.yellow('⚠ yolo') : ''
+    const hints = [yoloHint, '/help', 'esc quits'].filter(Boolean).join(' · ')
+    statusLine = buildStatusLine(stateLeft, hints, transcriptWidth)
+  }
 
   const headerSep = buildRule(transcriptWidth)
 
@@ -950,6 +1097,24 @@ export default function App({
     setShowThinking((current) => !current)
   }, [])
 
+  const onTogglePermissions = useCallback(() =>
+  {
+    setYolo((current) =>
+    {
+      const next = !current
+      setOutput((prev) => [
+        ...prev,
+        {
+          type: 'system' as const,
+          content: next
+            ? 'Permission mode → yolo (all tool calls auto-approved)'
+            : 'Permission mode → ask (prompt before writes & shell commands)',
+        },
+      ])
+      return next
+    })
+  }, [])
+
   // escape while running aborts the turn; escape while idle exits
   const handleEscape = useCallback(() =>
   {
@@ -986,13 +1151,13 @@ export default function App({
           <Text dimColor>{' · '}</Text>
           <Text color="white">{activeModel || 'pick a model'}</Text>
           <Text dimColor>{' · '}</Text>
-          <Text
-            color={yolo ? 'yellow' : undefined}
-            bold={yolo}
-            dimColor={!yolo}
-          >
-            {permissionMode}
-          </Text>
+          {yolo ? (
+            <Text backgroundColor="yellow" color="black" bold>
+              {' YOLO '}
+            </Text>
+          ) : (
+            <Text dimColor>{permissionMode}</Text>
+          )}
           {sessionLabel && (
             <>
               <Text dimColor>{' · '}</Text>
@@ -1007,34 +1172,26 @@ export default function App({
               </Text>
             </>
           )}
-          {(tokenUsage.prompt > 0 || tokenUsage.completion > 0) && (
-            <>
-              <Text dimColor>{' · '}</Text>
-              <Text dimColor>
-                {formatTokens(tokenUsage.prompt + tokenUsage.completion)} tokens
-              </Text>
-            </>
-          )}
         </Text>
       </Box>
 
       <Text dimColor>{headerSep}</Text>
 
-      {agent ? (
-        <Box flexDirection="column">
-          {paddedTranscript.map((line, index) => (
-            <Text key={index}>{line}</Text>
-          ))}
-        </Box>
-      ) : (
+      {pickerVisible ? (
         <Box flexDirection="column">
           {visiblePicker.map((line, index) => (
             <Text key={index}>{line}</Text>
           ))}
         </Box>
-      )}
+      ) : agent ? (
+        <Box flexDirection="column">
+          {paddedTranscript.map((line, index) => (
+            <Text key={index}>{line}</Text>
+          ))}
+        </Box>
+      ) : null}
 
-      {agent && approval && (
+      {!pickerVisible && agent && approval && (
         <Box flexDirection="column">
           {approvalBoxLines.map((line, index) => (
             <Text key={index} color="yellow">
@@ -1044,12 +1201,12 @@ export default function App({
         </Box>
       )}
 
-      {agent && !approval && (
+      {!pickerVisible && agent && !approval && (
         <Box flexDirection="column">
-          <Text dimColor>{headerSep}</Text>
+          <Text dimColor color={yolo ? 'yellow' : undefined}>{headerSep}</Text>
           <Box>
-            <Text bold color={OCEAN_HEX}>
-              {' ❯ '}
+            <Text bold color={yolo ? 'yellow' : OCEAN_HEX}>
+              {yolo ? ' ⚡ ' : ' ❯ '}
             </Text>
             <PromptInput
               value={input}
@@ -1062,6 +1219,7 @@ export default function App({
               onScrollUp={onScrollUp}
               onScrollDown={onScrollDown}
               onToggleThinking={onToggleThinking}
+              onTogglePermissions={onTogglePermissions}
               placeholder={isRunning ? 'thinking...' : 'ask coral anything'}
             />
           </Box>
