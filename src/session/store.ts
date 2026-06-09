@@ -35,6 +35,10 @@ export interface SessionMeta
   title: string
   // total number of messages (excluding system prompt)
   messageCount: number
+  // number of compaction events during this session
+  compactionCount?: number
+  // ISO timestamp of the last successful compaction
+  lastCompactedAt?: string
 }
 
 // cached metadata passed back into saveSession to avoid disk reads
@@ -42,6 +46,8 @@ export interface SessionMetaHint
 {
   createdAt?: string
   title?: string
+  compactionCount?: number
+  lastCompactedAt?: string
 }
 
 // full session on disk
@@ -222,6 +228,8 @@ export function saveSession(
     updatedAt: new Date().toISOString(),
     title: existingMeta.title ?? extractTitle(messages),
     messageCount: nonSystemMessages.length,
+    compactionCount: metaHint?.compactionCount ?? indexedMeta?.compactionCount,
+    lastCompactedAt: metaHint?.lastCompactedAt ?? indexedMeta?.lastCompactedAt,
   }
 
   const file: SessionData = { meta, messages }
@@ -254,4 +262,19 @@ export function getLatestSession(): SessionMeta | null
 export function sessionExists(id: string): boolean
 {
   return existsSync(sessionPath(id))
+}
+
+// rename a session's title
+export function renameSession(id: string, title: string): SessionMeta | null
+{
+  const session = readJsonFile<SessionData>(sessionPath(id))
+  if (!session?.meta) return null
+
+  session.meta.title = title
+  session.meta.updatedAt = new Date().toISOString()
+
+  writeFileSync(sessionPath(id), JSON.stringify(session, null, 2), 'utf-8')
+  upsertSessionIndex(session.meta)
+
+  return session.meta
 }

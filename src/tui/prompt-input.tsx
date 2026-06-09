@@ -1,7 +1,7 @@
 // src/tui/prompt-input.tsx
 // inline prompt input w/ unified keyboard, wheel, & safe text insertion
 
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Text } from 'ink'
 import chalk from 'chalk'
 import {
@@ -28,6 +28,8 @@ export interface PromptInputProps
   onScrollDown: () => void
   onToggleThinking: () => void
   onTogglePermissions: () => void
+  onHistoryUp: () => void
+  onHistoryDown: () => void
 }
 
 interface CursorState
@@ -67,6 +69,8 @@ export default function PromptInput({
   onScrollDown,
   onToggleThinking,
   onTogglePermissions,
+  onHistoryUp,
+  onHistoryDown,
 }: PromptInputProps)
 {
   const [cursor, setCursor] = useState<CursorState>({
@@ -74,6 +78,7 @@ export default function PromptInput({
     cursorWidth: 0,
   })
   const pendingTerminalSequenceRef = useRef('')
+  const lastInternalValueRef = useRef(value)
   const resolvedCursor = useMemo(
     () =>
       focus && showCursor
@@ -87,6 +92,16 @@ export default function PromptInput({
         : cursor,
     [cursor, focus, showCursor, value.length]
   )
+
+  // reset cursor to end when value changes externally (history recall, clear)
+  useEffect(() =>
+  {
+    if (value !== lastInternalValueRef.current)
+    {
+      setCursor({ cursorOffset: value.length, cursorWidth: 0 })
+      lastInternalValueRef.current = value
+    }
+  }, [value])
 
   let renderedValue = value
   let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined
@@ -159,14 +174,14 @@ export default function PromptInput({
         onScrollDown()
         return
       }
-      if (value.length === 0 && key.upArrow)
+      if (key.upArrow)
       {
-        onScrollUp()
+        onHistoryUp()
         return
       }
-      if (value.length === 0 && key.downArrow)
+      if (key.downArrow)
       {
-        onScrollDown()
+        onHistoryDown()
         return
       }
       if (isThinkingToggleShortcut(input, key))
@@ -189,12 +204,7 @@ export default function PromptInput({
         onInterrupt()
         return
       }
-      if (
-        key.upArrow ||
-        key.downArrow ||
-        key.tab ||
-        (key.shift && key.tab)
-      )
+      if (key.tab || (key.shift && key.tab))
       {
         return
       }
@@ -227,12 +237,15 @@ export default function PromptInput({
 
       if (nextState.value !== value)
       {
+        lastInternalValueRef.current = nextState.value
         onChange(nextState.value)
       }
     },
     [
       onChange,
       onEscape,
+      onHistoryDown,
+      onHistoryUp,
       onInterrupt,
       onPageDown,
       onPageUp,

@@ -27,6 +27,7 @@ import {
   listSessions,
   getLatestSession,
   sessionExists,
+  renameSession,
 } from '../src/session/store.js'
 
 test('createSession creates a session & returns metadata', () =>
@@ -193,4 +194,73 @@ test('session with no user messages gets default title', () =>
 
   const meta = createSession('test-model', '/tmp/test', messages)
   assert.equal(meta.title, '(empty session)')
+})
+
+test('renameSession updates title and updatedAt', async () =>
+{
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System' },
+    { role: 'user', content: 'Original title' },
+  ]
+
+  const meta = createSession('test-model', '/tmp/test', messages)
+  const originalUpdatedAt = meta.updatedAt
+
+  // small delay to ensure different timestamp
+  await new Promise((resolve) => setTimeout(resolve, 10))
+
+  const renamed = renameSession(meta.id, 'New title')
+
+  assert.ok(renamed)
+  assert.equal(renamed.id, meta.id)
+  assert.equal(renamed.title, 'New title')
+  assert.equal(renamed.createdAt, meta.createdAt)
+  assert.ok(renamed.updatedAt > originalUpdatedAt)
+})
+
+test('renameSession returns null for nonexistent session', () =>
+{
+  const result = renameSession('nonexistent_abcdef', 'New title')
+  assert.equal(result, null)
+})
+
+test('renameSession updates the session index', () =>
+{
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System' },
+    { role: 'user', content: 'Index test' },
+  ]
+
+  const meta = createSession('test-model', '/tmp/test', messages)
+  renameSession(meta.id, 'Renamed in index')
+
+  const sessions = listSessions()
+  const found = sessions.find((s) => s.id === meta.id)
+
+  assert.ok(found)
+  assert.equal(found.title, 'Renamed in index')
+})
+
+test('renameSession preserves other metadata fields', () =>
+{
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System' },
+    { role: 'user', content: 'Preserve test' },
+    { role: 'assistant', content: 'Response' },
+  ]
+
+  const meta = createSession('test-model', '/tmp/preserve', messages)
+  const renamed = renameSession(meta.id, 'New name')
+
+  assert.ok(renamed)
+  assert.equal(renamed.model, 'test-model')
+  assert.equal(renamed.cwd, '/tmp/preserve')
+  assert.equal(renamed.messageCount, 2)
+  assert.equal(renamed.createdAt, meta.createdAt)
+
+  // verify full session data is intact
+  const loaded = loadSession(meta.id)
+  assert.ok(loaded)
+  assert.equal(loaded.messages.length, 3)
+  assert.equal(loaded.meta.title, 'New name')
 })

@@ -36,6 +36,8 @@ import {
 import { useAnimationTimer } from './use-animation-timer.js'
 import { useStreamBuffer } from './use-stream-buffer.js'
 import { useSessionPersistence } from './use-session-persistence.js'
+import { useInputHistory } from './use-input-history.js'
+import { loadSession, renameSession } from '../session/store.js'
 import { type RunStage } from './run-stage.js'
 
 interface Props
@@ -81,11 +83,31 @@ function formatTokens(n: number): string
   return String(n)
 }
 
+// compute tokens/second from Ollama's nanosecond durations
+// returns 0 when duration is missing, zero, or the token count is zero
+function computeTokensPerSecond(
+  tokens: number,
+  durationNs: number | undefined
+): number
+{
+  if (!tokens || !durationNs || durationNs <= 0) return 0
+  return tokens / (durationNs / 1e9)
+}
+
+// format a throughput value as "45 tok/s" — drops decimals above 100
+function formatTokensPerSecond(tps: number): string
+{
+  if (tps <= 0) return ''
+  if (tps >= 100) return `${Math.round(tps)} tok/s`
+  return `${tps.toFixed(1)} tok/s`
+}
+
 function describeRunStage(stage: RunStage): string
 {
   if (stage === 'waiting') return 'waiting for model'
   if (stage === 'thinking') return 'thinking'
   if (stage === 'responding') return 'responding'
+  if (stage === 'compacting') return 'compacting context'
   if (stage.startsWith('tool:'))
   {
     return `running ${stage.slice(5)}`
@@ -257,7 +279,7 @@ export default function App({
   const { stdout } = useStdout()
   const terminal = stdout as typeof process.stdout
 
-  const { sessionIdRef, getResumeSession, persistSession } = useSessionPersistence(
+  const { sessionIdRef, sessionMetaRef, getResumeSession, persistSession } = useSessionPersistence(
     resumeSessionId
   )
   const resumeSession = getResumeSession()
@@ -296,7 +318,13 @@ export default function App({
   const [sessionLabelId, setSessionLabelId] = useState<string | null>(
     resumeSession?.meta.id ?? resumeSessionId ?? null
   )
-  const [tokenUsage, setTokenUsage] = useState({ prompt: 0, completion: 0 })
+  const [tokenUsage, setTokenUsage] = useState({
+    prompt: 0,
+    completion: 0,
+    // last-turn throughput (tokens / second) — 0 when the server omitted durations
+    lastPrefillTps: 0,
+    lastDecodeTps: 0,
+  })
   const [contextWindow, setContextWindow] = useState(0)
   const [terminalSize, setTerminalSize] = useState({
     columns: terminal.columns ?? 80,
@@ -318,6 +346,12 @@ export default function App({
     stopWaiting,
     resetAnimation,
   } = useAnimationTimer(runStage, SPINNER_INTERVAL)
+  const {
+    navigateUp,
+    navigateDown,
+    addEntry: addHistoryEntry,
+    resetNavigation,
+  } = useInputHistory()
 
   const agentRef = useRef<Agent | null>(agent)
   const previousLineCountRef = useRef(0)
@@ -421,9 +455,80 @@ export default function App({
     setOutput([])
     setScrollOffset(0)
     setSessionLabelId(null)
-    setTokenUsage({ prompt: 0, completion: 0 })
+    setTokenUsage({ prompt: 0, completion: 0, lastPrefillTps: 0, lastDecodeTps: 0 })
     sessionIdRef.current = null
   }, [sessionIdRef])
+
+  // fetch context window size from Ollama & update state
+  const fetchContextWindowForAgent = useCallback((agentInstance: Agent) =>
+  {
+    void agentInstance.fetchContextWindow().then((size) =>
+    {
+      if (size > 0) setContextWindow(size)
+    })
+  }, [])
+
+  // force-save the current session to disk — used by /new & /resume
+  const saveCurrentSession = useCallback((): string | null =>
+  {
+    const currentAgent = agentRef.current
+    if (!currentAgent || currentAgent.getMessageCount() === 0) return null
+    const meta = persistSession(currentAgent)
+    if (meta)
+    {
+      setSessionLabelId(meta.id)
+    }
+    return meta?.id ?? null
+  }, [persistSession])
+
+  // rename the current session's title & update cached meta
+  const renameCurrentSession = useCallback((title: string): boolean =>
+  {
+    if (!sessionIdRef.current) return false
+    const result = renameSession(sessionIdRef.current, title)
+    if (result && sessionMetaRef.current)
+    {
+      sessionMetaRef.current = { ...sessionMetaRef.current, title, updatedAt: result.updatedAt }
+    }
+    return result !== null
+  }, [sessionIdRef, sessionMetaRef])
+
+  // resume a session by ID — disposes current agent, loads & restores target
+  const resumeSessionById = useCallback((sessionId: string): boolean =>
+  {
+    const target = loadSession(sessionId)
+    if (!target) return false
+
+    const currentAgent = agentRef.current
+    if (currentAgent)
+    {
+      void disposeAgent(currentAgent)
+    }
+
+    // rebuild transcript from saved messages
+    setOutput(buildRestoredBlocks(target.messages))
+    setScrollOffset(0)
+    setTokenUsage({ prompt: 0, completion: 0, lastPrefillTps: 0, lastDecodeTps: 0 })
+    setContextWindow(0)
+
+    // create fresh agent w/ restored messages
+    const nextAgent = new Agent(target.meta.model, host, undefined, { think })
+    nextAgent.restoreMessages(target.messages)
+
+    // update session tracking
+    sessionIdRef.current = target.meta.id
+    sessionMetaRef.current = target.meta
+
+    // update React state
+    setAgent(nextAgent)
+    setActiveModel(target.meta.model)
+    setSessionLabelId(target.meta.id)
+
+    // fetch context window for new model
+    fetchContextWindowForAgent(nextAgent)
+
+    return true
+  }, [disposeAgent, fetchContextWindowForAgent, host, sessionIdRef, sessionMetaRef, think])
 
   // show the model picker — preserves current agent for in-place switching
   // uses loadModelsRef to avoid circular dependency w/ loadModels/activateModel
@@ -459,15 +564,6 @@ export default function App({
       }
     }
   }, [approval])
-
-  // fetch context window size from Ollama & update state
-  const fetchContextWindowForAgent = useCallback((agentInstance: Agent) =>
-  {
-    void agentInstance.fetchContextWindow().then((size) =>
-    {
-      if (size > 0) setContextWindow(size)
-    })
-  }, [])
 
   const activateModel = useCallback(
     (nextModel: string, restoredSession = resumeSession) =>
@@ -791,6 +887,9 @@ export default function App({
     {
       if (!agent || !value.trim() || runStage !== 'idle' || approval) return
 
+      // record input in history (all non-empty submissions including slash commands)
+      addHistoryEntry(value.trim(), sessionIdRef.current)
+
       // intercept slash commands before sending to the agent
       if (value.trim().startsWith('/'))
       {
@@ -813,6 +912,9 @@ export default function App({
           switchModel,
           setYolo,
           exitApp: exit,
+          resumeSession: resumeSessionById,
+          saveCurrentSession,
+          renameCurrentSession,
         }
 
         const result = await dispatchCommand(value.trim(), cmdCtx)
@@ -934,10 +1036,51 @@ export default function App({
         },
         onUsage(usage)
         {
-          setTokenUsage({
+          const prefillTps = computeTokensPerSecond(
+            usage.promptTokens,
+            usage.promptEvalDurationNs
+          )
+          const decodeTps = computeTokensPerSecond(
+            usage.completionTokens,
+            usage.evalDurationNs
+          )
+          setTokenUsage((prev) => ({
             prompt: usage.totalPromptTokens,
             completion: usage.totalCompletionTokens,
-          })
+            // keep the previous throughput if the current turn reported nothing
+            // (e.g., a cache-only hit with zero decode tokens)
+            lastPrefillTps: prefillTps > 0 ? prefillTps : prev.lastPrefillTps,
+            lastDecodeTps: decodeTps > 0 ? decodeTps : prev.lastDecodeTps,
+          }))
+        },
+        onCompactionStart()
+        {
+          setRunStage('compacting')
+        },
+        onCompaction(result)
+        {
+          const saved = result.beforeTokens - result.afterTokens
+          let content: string
+
+          if (result.type === 'pruned')
+          {
+            content = `Auto-pruned ${result.prunedResults ?? 0} old tool results (~${formatTokens(saved)} tokens freed)`
+          }
+          else
+          {
+            content = [
+              `Context auto-compacted`,
+              `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
+              `  ~${formatTokens(result.beforeTokens)} -> ~${formatTokens(result.afterTokens)} tokens (~${formatTokens(saved)} freed)`,
+            ].join('\n')
+          }
+
+          setOutput((prev) => [
+            ...prev,
+            { type: 'system', content },
+          ])
+          setRunStage('waiting')
+          startWaiting()
         },
         onDone()
         {
@@ -983,6 +1126,7 @@ export default function App({
     },
     [
       activeModel,
+      addHistoryEntry,
       agent,
       approval,
       appendText,
@@ -993,10 +1137,14 @@ export default function App({
       host,
       messageCount,
       persistSession,
+      renameCurrentSession,
       reopenModelPicker,
       resetAnimation,
       resetStreamBuffer,
+      resumeSessionById,
       runStage,
+      saveCurrentSession,
+      sessionIdRef,
       sessionLabelId,
       startWaiting,
       stopWaiting,
@@ -1009,6 +1157,16 @@ export default function App({
   const permissionMode = yolo ? 'yolo' : 'ask'
   const totalTokens = tokenUsage.prompt + tokenUsage.completion
   const tokenGauge = buildTokenGauge(totalTokens, contextWindow)
+
+  // last-turn throughput — compact "45 tok/s · 210 tok/s prefill" or empty string
+  // decode tok/s is the number the user feels, so it leads
+  const decodeTpsStr = formatTokensPerSecond(tokenUsage.lastDecodeTps)
+  const prefillTpsStr = formatTokensPerSecond(tokenUsage.lastPrefillTps)
+  const perfGauge = decodeTpsStr
+    ? prefillTpsStr
+      ? `${decodeTpsStr} · ${prefillTpsStr} prefill`
+      : decodeTpsStr
+    : ''
 
   const pickerEscHint = agent ? 'esc returns to chat' : 'esc quits'
   let statusLine: string
@@ -1040,15 +1198,17 @@ export default function App({
     const stageStr = runElapsed
       ? `${describeRunStage(runStage)} · ${runElapsed}`
       : describeRunStage(runStage)
-    const stateLeft = tokenGauge
-      ? `${stageStr} · ${tokenGauge}`
-      : stageStr
+    const stateLeft = [stageStr, tokenGauge, perfGauge]
+      .filter(Boolean)
+      .join(' · ')
     statusLine = buildStatusLine(stateLeft, 'ctrl+c interrupts', transcriptWidth)
   }
   else
   {
-    // idle state — show token gauge on left, minimal hints on right
-    const stateLeft = tokenGauge ? tokenGauge : 'ready'
+    // idle state — show token gauge & last-turn throughput on left
+    const stateLeft = [tokenGauge || 'ready', perfGauge]
+      .filter(Boolean)
+      .join(' · ')
     const yoloHint = yolo ? chalk.yellow('⚠ yolo') : ''
     const hints = [yoloHint, '/help', 'esc quits'].filter(Boolean).join(' · ')
     statusLine = buildStatusLine(stateLeft, hints, transcriptWidth)
@@ -1114,6 +1274,31 @@ export default function App({
       return next
     })
   }, [])
+
+  const onHistoryUp = useCallback(() =>
+  {
+    const entry = navigateUp(input)
+    if (entry !== null)
+    {
+      setInput(entry)
+    }
+  }, [input, navigateUp])
+
+  const onHistoryDown = useCallback(() =>
+  {
+    const entry = navigateDown()
+    if (entry !== null)
+    {
+      setInput(entry)
+    }
+  }, [navigateDown])
+
+  // wrap setInput to reset history navigation on manual edits
+  const handleInputChange = useCallback((value: string) =>
+  {
+    resetNavigation()
+    setInput(value)
+  }, [resetNavigation])
 
   // escape while running aborts the turn; escape while idle exits
   const handleEscape = useCallback(() =>
@@ -1210,7 +1395,7 @@ export default function App({
             </Text>
             <PromptInput
               value={input}
-              onChange={setInput}
+              onChange={handleInputChange}
               onSubmit={handleSubmit}
               onEscape={handleEscape}
               onInterrupt={handleInterrupt}
@@ -1220,6 +1405,8 @@ export default function App({
               onScrollDown={onScrollDown}
               onToggleThinking={onToggleThinking}
               onTogglePermissions={onTogglePermissions}
+              onHistoryUp={onHistoryUp}
+              onHistoryDown={onHistoryDown}
               placeholder={isRunning ? 'thinking...' : 'ask coral anything'}
             />
           </Box>

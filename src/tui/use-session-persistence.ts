@@ -15,6 +15,7 @@ import {
 // cache resume metadata in-memory so each turn avoids disk round-trips
 export function useSessionPersistence(resumeSessionId?: string): {
   sessionIdRef: MutableRefObject<string | null>
+  sessionMetaRef: MutableRefObject<SessionMeta | null>
   getResumeSession: () => SessionData | null
   persistSession: (agent: Agent) => SessionMeta | null
 }
@@ -53,8 +54,13 @@ export function useSessionPersistence(resumeSessionId?: string): {
         ? {
             createdAt: sessionMetaRef.current.createdAt,
             title: sessionMetaRef.current.title,
+            compactionCount: agent.getCompactionCount(),
+            lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
           }
-        : undefined
+        : {
+            compactionCount: agent.getCompactionCount(),
+            lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
+          }
 
       const meta = sessionIdRef.current
         ? saveSession(sessionIdRef.current, model, cwd, messages, metaHint)
@@ -73,6 +79,7 @@ export function useSessionPersistence(resumeSessionId?: string): {
 
   return {
     sessionIdRef,
+    sessionMetaRef,
     getResumeSession,
     persistSession,
   }

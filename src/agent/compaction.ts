@@ -1,34 +1,43 @@
 // src/agent/compaction.ts
-// conversation compaction — summarize old turns to stay within context limits
+// two-layer conversation compaction — prune tool results first, then summarize
 
 import type { OllamaMessage } from '../ollama/client.js'
 
 // rough token estimate: ~4 chars per token (conservative for English + code)
 const CHARS_PER_TOKEN = 4
 
-// default context window size (tokens) — conservative for most local models
-const DEFAULT_CONTEXT_WINDOW = 8_192
+// default context window size (tokens) — conservative floor for the model lineup
+const DEFAULT_CONTEXT_WINDOW = 32_768
 
-// reserve this many tokens for the system prompt
-const SYSTEM_PROMPT_RESERVE = 2_048
+// prune old tool results when estimated tokens exceed this fraction of context
+export const PRUNE_THRESHOLD = 0.75
 
-// reserve this many tokens for the model's response
-const RESPONSE_RESERVE = 2_048
+// trigger full summarization when estimated tokens exceed this fraction of context
+export const SUMMARIZE_THRESHOLD = 0.90
 
-// minimum messages to keep verbatim (recent context the model needs)
-const MIN_RECENT_MESSAGES = 10
+// keep this many recent tool results untouched during pruning
+export const PRUNE_PROTECT_COUNT = 6
 
-// don't compact if total messages are below this count
+// stop retrying summarization after this many consecutive failures
+export const MAX_COMPACT_FAILURES = 2
+
+// minimum messages before pruning triggers
+const MIN_MESSAGES_FOR_PRUNING = 10
+
+// minimum messages before summarization triggers
 const MIN_MESSAGES_FOR_COMPACTION = 20
+
+// minimum recent messages to preserve verbatim during summarization
+const MIN_RECENT_MESSAGES = 10
 
 // compaction configuration
 export interface CompactionConfig
 {
-  // model context window size in tokens (default: 8192)
+  // model context window size in tokens (default: 32768)
   contextWindow: number
   // minimum recent messages to preserve verbatim
   minRecentMessages: number
-  // minimum total messages before compaction triggers
+  // minimum total messages before summarization triggers
   minMessagesForCompaction: number
 }
 
@@ -37,6 +46,18 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
   contextWindow: DEFAULT_CONTEXT_WINDOW,
   minRecentMessages: MIN_RECENT_MESSAGES,
   minMessagesForCompaction: MIN_MESSAGES_FOR_COMPACTION,
+}
+
+// result of a compaction operation (pruning or summarization)
+export interface CompactionResult
+{
+  type: 'pruned' | 'summarized'
+  beforeTokens: number
+  afterTokens: number
+  beforeMessages: number
+  afterMessages: number
+  // number of tool results replaced w/ markers (only for type 'pruned')
+  prunedResults?: number
 }
 
 // estimate token count for a message
@@ -66,7 +87,18 @@ export function estimateTotalTokens(messages: OllamaMessage[]): number
   return messages.reduce((sum, msg) => sum + estimateMessageTokens(msg), 0)
 }
 
-// check whether compaction should trigger from a cached token estimate
+// check whether pruning should trigger
+export function shouldPrune(
+  messageCount: number,
+  totalTokens: number,
+  config: CompactionConfig = DEFAULT_COMPACTION_CONFIG
+): boolean
+{
+  if (messageCount < MIN_MESSAGES_FOR_PRUNING) return false
+  return totalTokens > config.contextWindow * PRUNE_THRESHOLD
+}
+
+// check whether summarization should trigger from a cached token estimate
 export function shouldCompactByTotal(
   messageCount: number,
   totalTokens: number,
@@ -74,12 +106,10 @@ export function shouldCompactByTotal(
 ): boolean
 {
   if (messageCount < config.minMessagesForCompaction) return false
-
-  const budget = config.contextWindow - SYSTEM_PROMPT_RESERVE - RESPONSE_RESERVE
-  return totalTokens > budget
+  return totalTokens > config.contextWindow * SUMMARIZE_THRESHOLD
 }
 
-// check whether compaction should trigger
+// check whether summarization should trigger
 export function shouldCompact(
   messages: OllamaMessage[],
   config: CompactionConfig = DEFAULT_COMPACTION_CONFIG
@@ -92,7 +122,93 @@ export function shouldCompact(
   )
 }
 
-// format messages into a readable summary for the model to compress
+// build a prune marker for a tool result being replaced
+export function buildPruneMarker(msg: OllamaMessage): string
+{
+  const toolName = msg.tool_name ?? 'tool'
+  const tokens = estimateMessageTokens(msg)
+
+  // take the first 60 chars of content as a preview
+  const preview = msg.content.length > 60
+    ? msg.content.slice(0, 57) + '…'
+    : msg.content
+
+  return `[tool result pruned — ${toolName}: ${preview}, ~${tokens} tokens]`
+}
+
+// prune old tool results, replacing them w/ compact markers
+// keeps the last `protectCount` tool-role messages untouched
+// returns a new array — does NOT mutate the input
+export function pruneToolResults(
+  messages: OllamaMessage[],
+  protectCount: number = PRUNE_PROTECT_COUNT
+): { prunedMessages: OllamaMessage[]; prunedCount: number; tokensSaved: number }
+{
+  // find all tool-role message indices
+  const toolIndices: number[] = []
+  for (let i = 0; i < messages.length; i++)
+  {
+    if (messages[i]!.role === 'tool') toolIndices.push(i)
+  }
+
+  // determine which indices are protected (the last N by position)
+  const protectedSet = new Set(
+    protectCount > 0 ? toolIndices.slice(-protectCount) : []
+  )
+
+  let prunedCount = 0
+  let tokensSaved = 0
+  const prunedMessages: OllamaMessage[] = []
+
+  for (let i = 0; i < messages.length; i++)
+  {
+    const msg = messages[i]!
+
+    if (msg.role === 'tool' && !protectedSet.has(i))
+    {
+      const marker = buildPruneMarker(msg)
+      const originalTokens = estimateMessageTokens(msg)
+      const prunedMsg: OllamaMessage = {
+        role: 'tool',
+        content: marker,
+        tool_name: msg.tool_name,
+      }
+      const markerTokens = estimateMessageTokens(prunedMsg)
+
+      prunedMessages.push(prunedMsg)
+      prunedCount++
+      tokensSaved += originalTokens - markerTokens
+    }
+    else
+    {
+      prunedMessages.push(msg)
+    }
+  }
+
+  return { prunedMessages, prunedCount, tokensSaved }
+}
+
+// strip thinking blocks from messages before feeding to the summarizer
+// clones messages w/ thinking removed & a note prepended to content
+export function stripThinkingForCompaction(
+  messages: OllamaMessage[]
+): OllamaMessage[]
+{
+  return messages.map((msg) =>
+  {
+    if (!msg.thinking) return msg
+
+    const { thinking: _thinking, ...rest } = msg
+    return {
+      ...rest,
+      content: msg.content
+        ? `[reasoning was used]\n${msg.content}`
+        : '[reasoning was used]',
+    }
+  })
+}
+
+// format messages into a readable transcript for the summarizer
 function formatMessagesForSummary(messages: OllamaMessage[]): string
 {
   const lines: string[] = []
@@ -123,8 +239,8 @@ function formatMessagesForSummary(messages: OllamaMessage[]): string
       {
         // truncate long tool results for the summary
         const content =
-          msg.content.length > 500
-            ? msg.content.slice(0, 497) + '…'
+          msg.content.length > 300
+            ? msg.content.slice(0, 297) + '…'
             : msg.content
         lines.push(`  [${msg.tool_name ?? 'tool'} result] ${content}`)
         break
@@ -135,20 +251,37 @@ function formatMessagesForSummary(messages: OllamaMessage[]): string
   return lines.join('\n')
 }
 
-// build the compaction prompt — asks the model to summarize old conversation
+// build the compaction prompt — structured handoff for the summarizer
 export function buildCompactionPrompt(
   messagesToSummarize: OllamaMessage[]
 ): string
 {
   const formatted = formatMessagesForSummary(messagesToSummarize)
 
-  return `Summarize the following conversation history concisely. Focus on:
-- What the user asked for & what was accomplished
-- Key decisions made & files modified
-- Any important context or constraints mentioned
-- Current state of the work (what's done, what's pending)
+  return `Summarize this conversation into a structured handoff document. Another instance of you will continue the work using only this summary as context.
 
-Keep the summary under 500 words. Write in past tense. Use bullet points for clarity.
+Use this exact format:
+
+## Goal
+What the user is trying to accomplish (1-2 sentences)
+
+## Key Decisions & Constraints
+- Important decisions made during the conversation
+- Constraints or preferences the user specified
+
+## Work Completed
+- Files read, created, or modified (w/ paths)
+- Commands run & their outcomes
+- Problems solved
+
+## Work In Progress / Remaining
+- What still needs to be done
+- Any known blockers or open questions
+
+## Relevant Files
+- List file paths that are central to the current task
+
+Be concise but complete. Omit pleasantries. Focus on facts & state.
 
 Conversation to summarize:
 
@@ -201,21 +334,14 @@ export function buildCompactedMessages(
   recentMessages: OllamaMessage[]
 ): OllamaMessage[]
 {
-  // insert summary as a system-level context message right after the system prompt
+  // insert summary as a handoff context message right after the system prompt
   const summaryMessage: OllamaMessage = {
     role: 'user',
-    content: `[Previous conversation summary — for context only, do not respond to this directly]\n\n${summary}`,
-  }
-
-  // add an assistant acknowledgment so the conversation flow is valid
-  const ackMessage: OllamaMessage = {
-    role: 'assistant',
-    content:
-      'Understood. I have the context from our previous conversation. How can I help you continue?',
+    content: `[Conversation handoff — you are continuing a prior session. Use this context to inform your work, but do not respond to it directly.]\n\n${summary}`,
   }
 
   // filter out system messages from recent (we already have the system prompt)
   const recent = recentMessages.filter((m) => m.role !== 'system')
 
-  return [systemMsg, summaryMessage, ackMessage, ...recent]
+  return [systemMsg, summaryMessage, ...recent]
 }

@@ -7,6 +7,7 @@ import { getCwd } from '../cwd.js'
 import { coral, ocean, sand } from './theme.js'
 import type { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
+import { listSessions, sessionExists } from '../session/store.js'
 import type { OutputBlock, SystemBlock } from './transcript.js'
 
 // context passed to every command — provides access to app state & setters
@@ -30,6 +31,12 @@ export interface CommandContext
   setYolo: (yolo: boolean) => void
   // exit the application
   exitApp: () => void
+  // resume a session by ID — loads agent & transcript from disk
+  resumeSession: (sessionId: string) => boolean
+  // force-save the current session to disk (returns session ID or null)
+  saveCurrentSession: () => string | null
+  // rename the current session's title & update cached meta
+  renameCurrentSession: (title: string) => boolean
 }
 
 // a single slash command
@@ -125,7 +132,7 @@ const helpCommand: Command = {
     lines.push(`  ${ocean('ctrl+t')}   ${chalk.dim('Toggle thinking/reasoning visibility')}`)
     lines.push(`  ${ocean('ctrl+c')}   ${chalk.dim('Interrupt generation (or exit when idle)')}`)
     lines.push(`  ${ocean('esc')}      ${chalk.dim('Interrupt generation (or exit when idle)')}`)
-    lines.push(`  ${ocean('↑↓')}       ${chalk.dim('Scroll transcript when input is empty')}`)
+    lines.push(`  ${ocean('↑↓')}       ${chalk.dim('Navigate input history')}`)
     lines.push(`  ${ocean('pgup/dn')}  ${chalk.dim('Page through transcript')}`)
 
     lines.push('')
@@ -203,6 +210,33 @@ function formatTokenCount(tokens: number): string
 
 // ── /status ────────────────────────────────────────────────────────────
 
+// format a ns duration as "4.2s", "1m 23s", etc.
+function formatDurationNs(ns: number): string
+{
+  const ms = ns / 1e6
+  if (ms < 1000) return `${ms.toFixed(0)}ms`
+  const seconds = ms / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const minutes = Math.floor(seconds / 60)
+  const remSeconds = Math.round(seconds - minutes * 60)
+  return `${minutes}m ${String(remSeconds).padStart(2, '0')}s`
+}
+
+// compute tokens/sec from nanosecond duration — 0 when inputs are invalid
+function tokensPerSecond(tokens: number, durationNs: number): number
+{
+  if (!tokens || !durationNs || durationNs <= 0) return 0
+  return tokens / (durationNs / 1e9)
+}
+
+// format a tok/s number compactly, "" when zero
+function formatThroughput(tps: number): string
+{
+  if (tps <= 0) return ''
+  if (tps >= 100) return `${Math.round(tps)} tok/s`
+  return `${tps.toFixed(1)} tok/s`
+}
+
 const statusCommand: Command = {
   name: 'status',
   description: 'Show model, session, token usage, & working directory',
@@ -215,6 +249,7 @@ const statusCommand: Command = {
     const session = ctx.sessionLabelId ?? '(unsaved)'
     const permissions = ctx.yolo ? 'yolo (auto-approve all)' : 'ask (prompt before writes)'
     const gitBranch = getGitBranch(cwd)
+    const usage = ctx.agent.getTokenUsage()
 
     const lines: string[] = [
       `${coral('Coral')} ${sand('— status')}`,
@@ -224,8 +259,54 @@ const statusCommand: Command = {
       `  Session:      ${chalk.dim(session)}`,
       `  Messages:     ${chalk.dim(String(messages))}`,
       `  Tokens (est): ${chalk.dim(`~${formatTokenCount(tokens)}`)}`,
-      `  CWD:          ${chalk.dim(cwd)}`,
     ]
+
+    // tokens actually seen by Ollama this session (authoritative, not estimated)
+    if (usage.promptTokens > 0 || usage.completionTokens > 0)
+    {
+      lines.push(
+        `  Prompt toks:  ${chalk.dim(formatTokenCount(usage.promptTokens))}`,
+        `  Decode toks:  ${chalk.dim(formatTokenCount(usage.completionTokens))}`
+      )
+    }
+
+    // cumulative throughput — averaged over all turns in the session
+    const avgPrefillTps = tokensPerSecond(
+      usage.promptTokens,
+      usage.promptEvalDurationNs
+    )
+    const avgDecodeTps = tokensPerSecond(
+      usage.completionTokens,
+      usage.evalDurationNs
+    )
+    const prefillStr = formatThroughput(avgPrefillTps)
+    const decodeStr = formatThroughput(avgDecodeTps)
+
+    if (decodeStr)
+    {
+      lines.push(`  Decode speed: ${chalk.dim(`${decodeStr} (avg)`)}`)
+    }
+    if (prefillStr)
+    {
+      lines.push(`  Prefill speed:${chalk.dim(` ${prefillStr} (avg)`)}`)
+    }
+
+    // cumulative time Ollama spent generating this session
+    const totalModelNs = usage.promptEvalDurationNs + usage.evalDurationNs
+    if (totalModelNs > 0)
+    {
+      lines.push(
+        `  Model time:   ${chalk.dim(formatDurationNs(totalModelNs))}`
+      )
+    }
+
+    const compactions = ctx.agent.getCompactionCount()
+    if (compactions > 0)
+    {
+      lines.push(`  Compactions:  ${chalk.dim(String(compactions))}`)
+    }
+
+    lines.push(`  CWD:          ${chalk.dim(cwd)}`)
 
     if (gitBranch)
     {
@@ -494,6 +575,236 @@ function colorizeDiff(raw: string): string
     .join('\n')
 }
 
+// ── /sessions ─────────────────────────────────────────────────────────
+
+const sessionsCommand: Command = {
+  name: 'sessions',
+  aliases: ['ls'],
+  description: 'List recent saved sessions',
+  execute(args, ctx)
+  {
+    const count = args ? parseInt(args, 10) : 10
+    const limit = Number.isFinite(count) && count > 0 ? count : 10
+    const sessions = listSessions().slice(0, limit)
+
+    if (sessions.length === 0)
+    {
+      ctx.pushOutput(systemBlock('No saved sessions.'))
+      return
+    }
+
+    const lines: string[] = [
+      `${coral('Coral')} ${sand('— saved sessions')}`,
+      '',
+    ]
+
+    for (const s of sessions)
+    {
+      const date = new Date(s.updatedAt).toLocaleString()
+      const isCurrent = s.id === ctx.sessionLabelId
+      const marker = isCurrent ? chalk.green(' ●') : '  '
+      lines.push(
+        `${marker} ${ocean(s.id)}  ${chalk.white(s.model)}  ${chalk.dim(date)}  ${chalk.dim(`(${s.messageCount} msgs)`)}`
+      )
+      lines.push(`     ${chalk.dim(s.title)}`)
+    }
+
+    lines.push('')
+    lines.push(chalk.dim(`Resume with ${ocean('/resume <id>')}`))
+
+    ctx.pushOutput(systemBlock(lines.join('\n')))
+  },
+}
+
+// ── /resume ───────────────────────────────────────────────────────────
+
+const resumeCommand: Command = {
+  name: 'resume',
+  description: 'Resume a saved session (no args = latest)',
+  execute(args, ctx)
+  {
+    if (!args)
+    {
+      // resume the most recent session that isn't the current one
+      const sessions = listSessions()
+      const target = sessions.find((s) => s.id !== ctx.sessionLabelId)
+
+      if (!target)
+      {
+        ctx.pushOutput(systemBlock('No other sessions to resume.'))
+        return
+      }
+
+      ctx.saveCurrentSession()
+      const ok = ctx.resumeSession(target.id)
+
+      if (ok)
+      {
+        ctx.pushOutput(
+          systemBlock(`Resumed session ${ocean(target.id)} — ${target.title}`)
+        )
+      }
+      else
+      {
+        ctx.pushOutput(systemBlock('Failed to load session.'))
+      }
+
+      return
+    }
+
+    const requestedId = args.trim()
+
+    // same session guard
+    if (requestedId === ctx.sessionLabelId)
+    {
+      ctx.pushOutput(systemBlock('Already in this session.'))
+      return
+    }
+
+    // exact match
+    if (sessionExists(requestedId))
+    {
+      ctx.saveCurrentSession()
+      const ok = ctx.resumeSession(requestedId)
+
+      if (ok)
+      {
+        const sessions = listSessions()
+        const meta = sessions.find((s) => s.id === requestedId)
+        const title = meta?.title ?? ''
+        ctx.pushOutput(
+          systemBlock(`Resumed session ${ocean(requestedId)}${title ? ` — ${title}` : ''}`)
+        )
+      }
+      else
+      {
+        ctx.pushOutput(systemBlock(`Failed to load session: ${requestedId}`))
+      }
+
+      return
+    }
+
+    // prefix match
+    const sessions = listSessions()
+    const matches = sessions.filter((s) => s.id.startsWith(requestedId))
+
+    if (matches.length === 1)
+    {
+      const match = matches[0]!
+
+      if (match.id === ctx.sessionLabelId)
+      {
+        ctx.pushOutput(systemBlock('Already in this session.'))
+        return
+      }
+
+      ctx.saveCurrentSession()
+      const ok = ctx.resumeSession(match.id)
+
+      if (ok)
+      {
+        ctx.pushOutput(
+          systemBlock(`Resumed session ${ocean(match.id)} — ${match.title}`)
+        )
+      }
+      else
+      {
+        ctx.pushOutput(systemBlock(`Failed to load session: ${match.id}`))
+      }
+
+      return
+    }
+
+    if (matches.length > 1)
+    {
+      const matchList = matches
+        .slice(0, 5)
+        .map((s) => `  ${ocean(s.id)}  ${chalk.dim(s.title)}`)
+        .join('\n')
+      ctx.pushOutput(
+        systemBlock(
+          `Ambiguous session ID "${requestedId}" — multiple matches:\n${matchList}`
+        )
+      )
+      return
+    }
+
+    ctx.pushOutput(
+      systemBlock(
+        `Session not found: ${requestedId}\n` +
+        `Use ${ocean('/sessions')} to see available sessions.`
+      )
+    )
+  },
+}
+
+// ── /rename ───────────────────────────────────────────────────────────
+
+const renameCommand: Command = {
+  name: 'rename',
+  description: 'Rename the current session',
+  execute(args, ctx)
+  {
+    if (!ctx.sessionLabelId)
+    {
+      ctx.pushOutput(
+        systemBlock('No active session to rename. Send a message first.')
+      )
+      return
+    }
+
+    if (!args.trim())
+    {
+      const sessions = listSessions()
+      const current = sessions.find((s) => s.id === ctx.sessionLabelId)
+      const title = current?.title ?? '(unknown)'
+      ctx.pushOutput(
+        systemBlock(
+          `Current session: ${ocean(ctx.sessionLabelId)}\n` +
+          `Title: ${title}\n\n` +
+          `Usage: ${ocean('/rename <new title>')}`
+        )
+      )
+      return
+    }
+
+    const ok = ctx.renameCurrentSession(args.trim())
+
+    if (ok)
+    {
+      ctx.pushOutput(systemBlock(`Session renamed to: ${args.trim()}`))
+    }
+    else
+    {
+      ctx.pushOutput(systemBlock('Failed to rename session.'))
+    }
+  },
+}
+
+// ── /new ──────────────────────────────────────────────────────────────
+
+const newCommand: Command = {
+  name: 'new',
+  description: 'Save current session & start a new conversation',
+  execute(_args, ctx)
+  {
+    const savedId = ctx.saveCurrentSession()
+    const cleared = ctx.agent.clearHistory()
+    ctx.clearSession()
+
+    const parts: string[] = []
+    if (savedId)
+    {
+      parts.push(`Session ${savedId} saved`)
+    }
+    parts.push(
+      `New conversation started (${cleared} ${cleared === 1 ? 'message' : 'messages'} cleared)`
+    )
+
+    ctx.pushOutput(systemBlock(parts.join(' · ')))
+  },
+}
+
 // ── registry ───────────────────────────────────────────────────────────
 
 // all registered commands — order determines /help display order
@@ -505,6 +816,10 @@ const commands: Command[] = [
   modelCommand,
   permissionsCommand,
   diffCommand,
+  sessionsCommand,
+  resumeCommand,
+  renameCommand,
+  newCommand,
   exitCommand,
 ]
 

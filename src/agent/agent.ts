@@ -17,13 +17,20 @@ import {
 import {
   estimateMessageTokens,
   estimateTotalTokens,
+  shouldPrune,
   shouldCompactByTotal,
   splitForCompaction,
   buildCompactionPrompt,
   buildCompactedMessages,
+  pruneToolResults,
+  stripThinkingForCompaction,
+  MAX_COMPACT_FAILURES,
   type CompactionConfig,
+  type CompactionResult,
   DEFAULT_COMPACTION_CONFIG,
 } from './compaction.js'
+
+export type { CompactionResult } from './compaction.js'
 import { toError } from '../utils/errors.js'
 
 // pre-compute Ollama tool format (static after registration)
@@ -114,12 +121,19 @@ function raceAbort<T>(
 }
 
 // token usage from Ollama's response metrics
+// durations are nanoseconds — Ollama's native unit from prompt_eval_duration / eval_duration
 export interface TokenUsage
 {
   promptTokens: number
   completionTokens: number
   totalPromptTokens: number
   totalCompletionTokens: number
+  // last turn — undefined when the server omitted the field
+  promptEvalDurationNs?: number
+  evalDurationNs?: number
+  // cumulative across the whole session
+  totalPromptEvalDurationNs: number
+  totalEvalDurationNs: number
 }
 
 // callbacks for streaming tokens, tool calls, & completion
@@ -135,6 +149,10 @@ export interface AgentEvents
     args: Record<string, unknown>
   ) => Promise<boolean>
   onUsage?: (usage: TokenUsage) => void
+  // fires before a summarization model call starts (so the TUI can show status)
+  onCompactionStart?: () => void
+  // fires after a prune or summarize completes w/ stats
+  onCompaction?: (result: CompactionResult) => void
   onDone: () => void
   onError: (error: Error) => void
 }
@@ -156,7 +174,15 @@ export class Agent
   private estimatedTokenCount = 0
   private totalPromptTokens = 0
   private totalCompletionTokens = 0
+  // cumulative nanoseconds of model time across the session
+  private totalPromptEvalDurationNs = 0
+  private totalEvalDurationNs = 0
   private contextWindowSize = 0
+  private compactFailureCount = 0
+  private compactionCount = 0
+  private lastCompactedAt: string | null = null
+  private onCompactionCallback?: (result: CompactionResult) => void
+  private onCompactionStartCallback?: () => void
 
   constructor(
     model: string,
@@ -277,14 +303,9 @@ export class Agent
     return cleared
   }
 
-  // force conversation compaction & return before/after token estimates
+  // force conversation compaction & return before/after stats
   // returns null if compaction was skipped (too few messages or summary failed)
-  async forceCompact(): Promise<{
-    beforeTokens: number
-    afterTokens: number
-    beforeMessages: number
-    afterMessages: number
-  } | null>
+  async forceCompact(): Promise<CompactionResult | null>
   {
     const beforeTokens = this.estimatedTokenCount
     const beforeMessages = this.messages.length
@@ -309,8 +330,12 @@ export class Agent
     )
     if (toSummarize.length === 0) return null
 
-    const compactionPrompt = buildCompactionPrompt(toSummarize)
+    // strip thinking blocks before feeding to the summarizer
+    const cleaned = stripThinkingForCompaction(toSummarize)
+    const compactionPrompt = buildCompactionPrompt(cleaned)
     let summary = ''
+
+    this.onCompactionStartCallback?.()
 
     try
     {
@@ -320,7 +345,7 @@ export class Agent
           {
             role: 'system',
             content:
-              'You are a helpful assistant. Summarize conversations concisely.',
+              'You are a helpful assistant. Produce a concise structured summary of the conversation.',
           },
           { role: 'user', content: compactionPrompt },
         ],
@@ -343,12 +368,19 @@ export class Agent
     this.messages = buildCompactedMessages(systemMsg, summary, toKeep)
     this.rebuildTokenEstimate()
 
-    return {
+    this.compactionCount++
+    this.lastCompactedAt = new Date().toISOString()
+
+    const result: CompactionResult = {
+      type: 'summarized',
       beforeTokens,
       afterTokens: this.estimatedTokenCount,
       beforeMessages,
       afterMessages: this.messages.length,
     }
+
+    this.onCompactionCallback?.(result)
+    return result
   }
 
   // get the estimated token count for the current conversation
@@ -363,12 +395,20 @@ export class Agent
     return Math.max(this.messages.length - 1, 0)
   }
 
-  // get accumulated token usage from Ollama
-  getTokenUsage(): { promptTokens: number; completionTokens: number }
+  // get accumulated token usage & model time from Ollama
+  // durations are nanoseconds (Ollama's native unit)
+  getTokenUsage(): {
+    promptTokens: number
+    completionTokens: number
+    promptEvalDurationNs: number
+    evalDurationNs: number
+  }
   {
     return {
       promptTokens: this.totalPromptTokens,
       completionTokens: this.totalCompletionTokens,
+      promptEvalDurationNs: this.totalPromptEvalDurationNs,
+      evalDurationNs: this.totalEvalDurationNs,
     }
   }
 
@@ -376,6 +416,18 @@ export class Agent
   getContextWindowSize(): number
   {
     return this.contextWindowSize
+  }
+
+  // get the total number of successful compaction events this session
+  getCompactionCount(): number
+  {
+    return this.compactionCount
+  }
+
+  // get the ISO timestamp of the last successful compaction (null if none)
+  getLastCompactedAt(): string | null
+  {
+    return this.lastCompactedAt
   }
 
   // fetch the context window size from Ollama & cache it
@@ -427,18 +479,54 @@ export class Agent
     this.estimatedTokenCount = estimateTotalTokens(this.messages)
   }
 
-  // compact conversation history if it exceeds the context budget
-  // uses the model itself to summarize old turns
+  // clear compaction callbacks when the run() loop exits
+  private clearCompactionCallbacks(): void
+  {
+    this.onCompactionCallback = undefined
+    this.onCompactionStartCallback = undefined
+  }
+
+  // two-phase compaction: prune tool results first, then summarize if needed
   private async compactIfNeeded(): Promise<void>
   {
-    if (
-      !shouldCompactByTotal(
-        this.messages.length,
-        this.estimatedTokenCount,
-        this.compactionConfig
-      )
-    )
+    // phase 1: prune old tool results (no model call, instant)
+    if (shouldPrune(
+      this.messages.length,
+      this.estimatedTokenCount,
+      this.compactionConfig
+    ))
+    {
+      const beforeTokens = this.estimatedTokenCount
+      const beforeMessages = this.messages.length
+      const { prunedMessages, prunedCount } = pruneToolResults(this.messages)
+
+      if (prunedCount > 0)
+      {
+        this.messages = prunedMessages
+        this.rebuildTokenEstimate()
+        this.compactionCount++
+        this.lastCompactedAt = new Date().toISOString()
+
+        this.onCompactionCallback?.({
+          type: 'pruned',
+          beforeTokens,
+          afterTokens: this.estimatedTokenCount,
+          beforeMessages,
+          afterMessages: this.messages.length,
+          prunedResults: prunedCount,
+        })
+      }
+    }
+
+    // phase 2: full summarization if still over threshold
+    if (!shouldCompactByTotal(
+      this.messages.length,
+      this.estimatedTokenCount,
+      this.compactionConfig
+    ))
+    {
       return
+    }
 
     const { toSummarize, toKeep } = splitForCompaction(
       this.messages,
@@ -446,9 +534,15 @@ export class Agent
     )
     if (toSummarize.length === 0) return
 
-    // ask the model to summarize the old conversation
-    const compactionPrompt = buildCompactionPrompt(toSummarize)
+    const beforeTokens = this.estimatedTokenCount
+    const beforeMessages = this.messages.length
+
+    // strip thinking blocks before feeding to the summarizer
+    const cleaned = stripThinkingForCompaction(toSummarize)
+    const compactionPrompt = buildCompactionPrompt(cleaned)
     let summary = ''
+
+    this.onCompactionStartCallback?.()
 
     try
     {
@@ -458,7 +552,7 @@ export class Agent
           {
             role: 'system',
             content:
-              'You are a helpful assistant. Summarize conversations concisely.',
+              'You are a helpful assistant. Produce a concise structured summary of the conversation.',
           },
           { role: 'user', content: compactionPrompt },
         ],
@@ -472,16 +566,57 @@ export class Agent
     }
     catch
     {
-      // compaction failure is non-fatal — keep using uncompacted history
+      this.compactFailureCount++
+      if (this.compactFailureCount >= MAX_COMPACT_FAILURES)
+      {
+        // circuit breaker: fall back to brute trim
+        const systemMsg = this.messages[0]
+        const recent = this.messages.slice(-(MAX_HISTORY - 1))
+        this.messages = [systemMsg!, ...recent]
+        this.rebuildTokenEstimate()
+        this.compactFailureCount = 0
+
+        this.onCompactionCallback?.({
+          type: 'summarized',
+          beforeTokens,
+          afterTokens: this.estimatedTokenCount,
+          beforeMessages,
+          afterMessages: this.messages.length,
+        })
+      }
       return
     }
 
-    if (!summary.trim()) return
+    if (!summary.trim())
+    {
+      this.compactFailureCount++
+      if (this.compactFailureCount >= MAX_COMPACT_FAILURES)
+      {
+        const systemMsg = this.messages[0]
+        const recent = this.messages.slice(-(MAX_HISTORY - 1))
+        this.messages = [systemMsg!, ...recent]
+        this.rebuildTokenEstimate()
+        this.compactFailureCount = 0
+      }
+      return
+    }
 
-    // rebuild messages w/ summary replacing old turns
+    // success — rebuild messages w/ summary replacing old turns
+    this.compactFailureCount = 0
     const systemMsg = this.messages[0]!
     this.messages = buildCompactedMessages(systemMsg, summary, toKeep)
     this.rebuildTokenEstimate()
+
+    this.compactionCount++
+    this.lastCompactedAt = new Date().toISOString()
+
+    this.onCompactionCallback?.({
+      type: 'summarized',
+      beforeTokens,
+      afterTokens: this.estimatedTokenCount,
+      beforeMessages,
+      afterMessages: this.messages.length,
+    })
   }
 
   // run a user message through the agent loop
@@ -494,12 +629,17 @@ export class Agent
   {
     this.pushMessage({ role: 'user', content: userMessage })
 
+    // store compaction callbacks so compactIfNeeded() can invoke them
+    this.onCompactionCallback = events.onCompaction
+    this.onCompactionStartCallback = events.onCompactionStart
+
     // keep going while the model wants to call tools
     while (true)
     {
       // check for abort before each iteration
       if (signal?.aborted)
       {
+        this.clearCompactionCallbacks()
         events.onDone()
         return
       }
@@ -545,18 +685,32 @@ export class Agent
           {
             toolCalls = mergeToolCalls(toolCalls, chunk.message.tool_calls)
           }
-          // capture token usage from the final chunk
+          // capture token usage & model time from the final chunk
           if (chunk.done)
           {
             const promptTokens = chunk.prompt_eval_count ?? 0
             const completionTokens = chunk.eval_count ?? 0
+            const promptEvalDurationNs = chunk.prompt_eval_duration
+            const evalDurationNs = chunk.eval_duration
             this.totalPromptTokens += promptTokens
             this.totalCompletionTokens += completionTokens
+            if (promptEvalDurationNs && promptEvalDurationNs > 0)
+            {
+              this.totalPromptEvalDurationNs += promptEvalDurationNs
+            }
+            if (evalDurationNs && evalDurationNs > 0)
+            {
+              this.totalEvalDurationNs += evalDurationNs
+            }
             events.onUsage?.({
               promptTokens,
               completionTokens,
               totalPromptTokens: this.totalPromptTokens,
               totalCompletionTokens: this.totalCompletionTokens,
+              promptEvalDurationNs,
+              evalDurationNs,
+              totalPromptEvalDurationNs: this.totalPromptEvalDurationNs,
+              totalEvalDurationNs: this.totalEvalDurationNs,
             })
           }
         }
@@ -577,10 +731,12 @@ export class Agent
             this.pushMessage(partial)
           }
 
+          this.clearCompactionCallbacks()
           events.onDone()
           return
         }
 
+        this.clearCompactionCallbacks()
         events.onError(toError(err))
         return
       }
@@ -598,6 +754,7 @@ export class Agent
           this.pushMessage(partial)
         }
 
+        this.clearCompactionCallbacks()
         events.onDone()
         return
       }
@@ -620,6 +777,7 @@ export class Agent
       // no tool calls means the model is done
       if (toolCalls.length === 0)
       {
+        this.clearCompactionCallbacks()
         events.onDone()
         return
       }
@@ -740,6 +898,7 @@ export class Agent
 
       if (abortedDuringTools)
       {
+        this.clearCompactionCallbacks()
         events.onDone()
         return
       }
