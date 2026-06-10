@@ -3,7 +3,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import type { OllamaMessage } from '../src/ollama/client.js'
+import type { OllamaMessage } from '../src/types/inference.js'
 import {
   estimateTotalTokens,
   shouldCompact,
@@ -346,18 +346,45 @@ test('pruneToolResults replaces old tool results w/ markers', () =>
   const messages: OllamaMessage[] = [
     { role: 'system', content: 'System.' },
     { role: 'user', content: 'Q1' },
-    { role: 'assistant', content: 'A1', tool_calls: [{ function: { name: 'read_file', arguments: { path: 'a.ts' } } }] },
-    { role: 'tool', tool_name: 'read_file', content: 'content of a.ts - '.repeat(20) + 'this is a very long file with lots of code that takes many tokens' },
+    {
+      role: 'assistant',
+      content: 'A1',
+      tool_calls: [
+        { function: { name: 'read_file', arguments: { path: 'a.ts' } } },
+      ],
+    },
+    {
+      role: 'tool',
+      tool_name: 'read_file',
+      content:
+        'content of a.ts - '.repeat(20) +
+        'this is a very long file with lots of code that takes many tokens',
+    },
     { role: 'user', content: 'Q2' },
-    { role: 'assistant', content: 'A2', tool_calls: [{ function: { name: 'read_file', arguments: { path: 'b.ts' } } }] },
+    {
+      role: 'assistant',
+      content: 'A2',
+      tool_calls: [
+        { function: { name: 'read_file', arguments: { path: 'b.ts' } } },
+      ],
+    },
     { role: 'tool', tool_name: 'read_file', content: 'content of b.ts' },
     { role: 'user', content: 'Q3' },
-    { role: 'assistant', content: 'A3', tool_calls: [{ function: { name: 'bash', arguments: { command: 'ls' } } }] },
+    {
+      role: 'assistant',
+      content: 'A3',
+      tool_calls: [
+        { function: { name: 'bash', arguments: { command: 'ls' } } },
+      ],
+    },
     { role: 'tool', tool_name: 'bash', content: 'file1 file2 file3' },
   ]
 
   // protect last 2 tool results — should prune only the first one
-  const { prunedMessages, prunedCount, tokensSaved } = pruneToolResults(messages, 2)
+  const { prunedMessages, prunedCount, tokensSaved } = pruneToolResults(
+    messages,
+    2
+  )
 
   assert.equal(prunedCount, 1)
   assert.ok(tokensSaved > 0)
@@ -378,7 +405,13 @@ test('pruneToolResults does not modify assistant messages', () =>
 {
   const messages: OllamaMessage[] = [
     { role: 'system', content: 'System.' },
-    { role: 'assistant', content: 'Response w/ tool calls', tool_calls: [{ function: { name: 'bash', arguments: { command: 'ls' } } }] },
+    {
+      role: 'assistant',
+      content: 'Response w/ tool calls',
+      tool_calls: [
+        { function: { name: 'bash', arguments: { command: 'ls' } } },
+      ],
+    },
     { role: 'tool', tool_name: 'bash', content: 'output' },
   ]
 

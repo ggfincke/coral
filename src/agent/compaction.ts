@@ -1,7 +1,7 @@
 // src/agent/compaction.ts
 // two-layer conversation compaction — prune tool results first, then summarize
 
-import type { OllamaMessage } from '../ollama/client.js'
+import type { OllamaMessage } from '../types/inference.js'
 
 // rough token estimate: ~4 chars per token (conservative for English + code)
 const CHARS_PER_TOKEN = 4
@@ -13,7 +13,7 @@ const DEFAULT_CONTEXT_WINDOW = 32_768
 export const PRUNE_THRESHOLD = 0.75
 
 // trigger full summarization when estimated tokens exceed this fraction of context
-export const SUMMARIZE_THRESHOLD = 0.90
+export const SUMMARIZE_THRESHOLD = 0.9
 
 // keep this many recent tool results untouched during pruning
 export const PRUNE_PROTECT_COUNT = 6
@@ -48,10 +48,12 @@ export const DEFAULT_COMPACTION_CONFIG: CompactionConfig = {
   minMessagesForCompaction: MIN_MESSAGES_FOR_COMPACTION,
 }
 
-// result of a compaction operation (pruning or summarization)
+// result of a compaction operation
+// 'pruned' = tool results replaced w/ markers, 'summarized' = model summary,
+// 'trimmed' = oldest messages dropped after summarization failed (no summary)
 export interface CompactionResult
 {
-  type: 'pruned' | 'summarized'
+  type: 'pruned' | 'summarized' | 'trimmed'
   beforeTokens: number
   afterTokens: number
   beforeMessages: number
@@ -129,9 +131,8 @@ export function buildPruneMarker(msg: OllamaMessage): string
   const tokens = estimateMessageTokens(msg)
 
   // take the first 60 chars of content as a preview
-  const preview = msg.content.length > 60
-    ? msg.content.slice(0, 57) + '…'
-    : msg.content
+  const preview =
+    msg.content.length > 60 ? msg.content.slice(0, 57) + '…' : msg.content
 
   return `[tool result pruned — ${toolName}: ${preview}, ~${tokens} tokens]`
 }
@@ -142,7 +143,11 @@ export function buildPruneMarker(msg: OllamaMessage): string
 export function pruneToolResults(
   messages: OllamaMessage[],
   protectCount: number = PRUNE_PROTECT_COUNT
-): { prunedMessages: OllamaMessage[]; prunedCount: number; tokensSaved: number }
+): {
+  prunedMessages: OllamaMessage[]
+  prunedCount: number
+  tokensSaved: number
+}
 {
   // find all tool-role message indices
   const toolIndices: number[] = []
@@ -198,7 +203,9 @@ export function stripThinkingForCompaction(
   {
     if (!msg.thinking) return msg
 
-    const { thinking: _thinking, ...rest } = msg
+    const rest = { ...msg }
+    delete rest.thinking
+
     return {
       ...rest,
       content: msg.content

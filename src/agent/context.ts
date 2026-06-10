@@ -4,6 +4,11 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
+import {
+  compareProjectTreeEntries,
+  formatProjectTreeEntryName,
+  shouldIncludeProjectTreeEntry,
+} from '../shared/project-tree.js'
 
 // max bytes to read from any single context file
 const MAX_FILE_BYTES = 8_192
@@ -77,17 +82,15 @@ function buildDirectoryTree(cwd: string, maxDepth = 2): string
     try
     {
       entries = readdirSync(dir, { withFileTypes: true })
-        .filter((e) => !IGNORED_DIRS.has(e.name) && !e.name.startsWith('.'))
-        .sort((a, b) =>
-        {
-          // directories first, then alphabetical
-          if (a.isDirectory() !== b.isDirectory())
-          {
-            return a.isDirectory() ? -1 : 1
-          }
-          return a.name.localeCompare(b.name)
-        })
+        .filter((e) =>
+          shouldIncludeProjectTreeEntry(e.name, IGNORED_DIRS, {
+            includeHidden: false,
+          })
+        )
         .map((e) => ({ name: e.name, isDir: e.isDirectory() }))
+        .sort((a, b) =>
+          compareProjectTreeEntries(a, b, { directoriesFirst: true })
+        )
     }
     catch
     {
@@ -101,8 +104,7 @@ function buildDirectoryTree(cwd: string, maxDepth = 2): string
 
     for (const entry of visible)
     {
-      const suffix = entry.isDir ? '/' : ''
-      lines.push(`${prefix}${entry.name}${suffix}`)
+      lines.push(`${prefix}${formatProjectTreeEntryName(entry)}`)
 
       if (entry.isDir && depth < maxDepth)
       {
