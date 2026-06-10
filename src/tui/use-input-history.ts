@@ -37,21 +37,30 @@ export function useInputHistory(): InputHistoryControls
     entriesRef.current = loadHistory()
   }, [])
 
-  const navigateUp = useCallback((currentInput: string): string | null =>
+  const resetNavigation = useCallback(() =>
   {
-    ensureLoaded()
+    indexRef.current = -1
+    draftRef.current = ''
+  }, [])
 
-    const result = computeNavigateUp(
-      entriesRef.current,
-      indexRef.current,
-      currentInput,
-      draftRef.current
-    )
+  const navigateUp = useCallback(
+    (currentInput: string): string | null =>
+    {
+      ensureLoaded()
 
-    indexRef.current = result.index
-    draftRef.current = result.draft
-    return result.text
-  }, [ensureLoaded])
+      const result = computeNavigateUp(
+        entriesRef.current,
+        indexRef.current,
+        currentInput,
+        draftRef.current
+      )
+
+      indexRef.current = result.index
+      draftRef.current = result.draft
+      return result.text
+    },
+    [ensureLoaded]
+  )
 
   const navigateDown = useCallback((): string | null =>
   {
@@ -67,42 +76,39 @@ export function useInputHistory(): InputHistoryControls
     return result.text
   }, [ensureLoaded])
 
-  const addEntry = useCallback((text: string, sessionId: string | null) =>
-  {
-    ensureLoaded()
-
-    const entries = entriesRef.current
-
-    // deduplicate: skip if identical to most recent entry
-    if (entries.length > 0 && entries[entries.length - 1]!.text === text)
+  const addEntry = useCallback(
+    (text: string, sessionId: string | null) =>
     {
+      ensureLoaded()
+
+      const entries = entriesRef.current
+
+      // deduplicate: skip if identical to most recent entry
+      if (entries.length > 0 && entries[entries.length - 1]!.text === text)
+      {
+        resetNavigation()
+        return
+      }
+
+      const entry: HistoryEntry = {
+        text,
+        timestamp: Date.now(),
+        sessionId,
+      }
+
+      entries.push(entry)
+      appendHistoryEntry(entry)
+
+      // trim if over max
+      if (entries.length > MAX_ENTRIES)
+      {
+        entriesRef.current = entries.slice(-MAX_ENTRIES)
+      }
+
       resetNavigation()
-      return
-    }
-
-    const entry: HistoryEntry = {
-      text,
-      timestamp: Date.now(),
-      sessionId,
-    }
-
-    entries.push(entry)
-    appendHistoryEntry(entry)
-
-    // trim if over max
-    if (entries.length > MAX_ENTRIES)
-    {
-      entriesRef.current = entries.slice(-MAX_ENTRIES)
-    }
-
-    resetNavigation()
-  }, [ensureLoaded])
-
-  const resetNavigation = useCallback(() =>
-  {
-    indexRef.current = -1
-    draftRef.current = ''
-  }, [])
+    },
+    [ensureLoaded, resetNavigation]
+  )
 
   return { navigateUp, navigateDown, addEntry, resetNavigation }
 }

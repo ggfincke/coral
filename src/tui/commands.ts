@@ -2,13 +2,24 @@
 // slash command registry, parser, & dispatcher
 
 import chalk from 'chalk'
-import { execSync } from 'node:child_process'
 import { getCwd } from '../cwd.js'
 import { coral, ocean, sand } from './theme.js'
 import type { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
-import { listSessions, sessionExists } from '../session/store.js'
+import {
+  listSessions,
+  loadSession,
+  sessionExists,
+  type SessionMeta,
+} from '../session/store.js'
 import type { OutputBlock, SystemBlock } from './transcript.js'
+import { runGitCommand } from '../utils/git.js'
+import {
+  computeTokensPerSecond,
+  formatDurationNs,
+  formatTokenCount,
+  formatTokensPerSecond,
+} from './metrics.js'
 
 // context passed to every command — provides access to app state & setters
 export interface CommandContext
@@ -55,6 +66,10 @@ export interface ParsedCommand
   args: string
 }
 
+type ResumeTarget =
+  | { type: 'target'; session: SessionMeta }
+  | { type: 'message'; content: string }
+
 // result of dispatching a command
 export interface DispatchResult
 {
@@ -93,9 +108,7 @@ export function findCommand(
   const lower = name.toLowerCase()
 
   return commands.find(
-    (cmd) =>
-      cmd.name === lower ||
-      cmd.aliases?.some((alias) => alias === lower)
+    (cmd) => cmd.name === lower || cmd.aliases?.some((alias) => alias === lower)
   )
 }
 
@@ -103,6 +116,70 @@ export function findCommand(
 function systemBlock(content: string): SystemBlock
 {
   return { type: 'system', content }
+}
+
+function formatResumedSession(session: SessionMeta): string
+{
+  return `Resumed session ${ocean(session.id)} — ${session.title}`
+}
+
+function resolveResumeTarget(
+  args: string,
+  currentSessionId: string | null
+): ResumeTarget
+{
+  const requestedId = args.trim()
+  const sessions = listSessions()
+
+  // resolve a chosen session to a target, guarding the already-current case
+  const asTarget = (session: SessionMeta): ResumeTarget =>
+    session.id === currentSessionId
+      ? { type: 'message', content: 'Already in this session.' }
+      : { type: 'target', session }
+
+  if (!requestedId)
+  {
+    const latest = sessions.find((session) => session.id !== currentSessionId)
+    return latest
+      ? { type: 'target', session: latest }
+      : { type: 'message', content: 'No other sessions to resume.' }
+  }
+
+  const exact = sessions.find((session) => session.id === requestedId)
+  if (exact) return asTarget(exact)
+
+  // fall back to disk — a session file can exist without an index entry
+  // (e.g. concurrent writers clobbering index.json, or a copied-in session)
+  if (sessionExists(requestedId))
+  {
+    const onDisk = loadSession(requestedId)
+    if (onDisk?.meta) return asTarget(onDisk.meta)
+  }
+
+  const matches = sessions.filter((session) =>
+    session.id.startsWith(requestedId)
+  )
+
+  if (matches.length === 1) return asTarget(matches[0]!)
+
+  if (matches.length > 1)
+  {
+    const matchList = matches
+      .slice(0, 5)
+      .map((session) => `  ${ocean(session.id)}  ${chalk.dim(session.title)}`)
+      .join('\n')
+    return {
+      type: 'message',
+      content: `Ambiguous session ID "${requestedId}" — multiple matches:\n${matchList}`,
+    }
+  }
+
+  return {
+    type: 'message',
+    content:
+      `Session not found: ${requestedId}\n` +
+      `Use ${ocean('/sessions')} to see available sessions.`,
+  }
 }
 
 // ── /help ──────────────────────────────────────────────────────────────
@@ -122,21 +199,33 @@ const helpCommand: Command = {
       const aliases = cmd.aliases?.length
         ? chalk.dim(` (${cmd.aliases.map((a) => `/${a}`).join(', ')})`)
         : ''
-      lines.push(`  ${ocean(`/${cmd.name}`)}${aliases}  ${chalk.dim(cmd.description)}`)
+      lines.push(
+        `  ${ocean(`/${cmd.name}`)}${aliases}  ${chalk.dim(cmd.description)}`
+      )
     }
 
     lines.push('')
     lines.push(`${sand('— keybindings')}`)
     lines.push('')
-    lines.push(`  ${ocean('ctrl+y')}   ${chalk.dim('Toggle permission mode (ask / yolo)')}`)
-    lines.push(`  ${ocean('ctrl+t')}   ${chalk.dim('Toggle thinking/reasoning visibility')}`)
-    lines.push(`  ${ocean('ctrl+c')}   ${chalk.dim('Interrupt generation (or exit when idle)')}`)
-    lines.push(`  ${ocean('esc')}      ${chalk.dim('Interrupt generation (or exit when idle)')}`)
+    lines.push(
+      `  ${ocean('ctrl+y')}   ${chalk.dim('Toggle permission mode (ask / yolo)')}`
+    )
+    lines.push(
+      `  ${ocean('ctrl+t')}   ${chalk.dim('Toggle thinking/reasoning visibility')}`
+    )
+    lines.push(
+      `  ${ocean('ctrl+c')}   ${chalk.dim('Interrupt generation (or exit when idle)')}`
+    )
+    lines.push(
+      `  ${ocean('esc')}      ${chalk.dim('Interrupt generation (or exit when idle)')}`
+    )
     lines.push(`  ${ocean('↑↓')}       ${chalk.dim('Navigate input history')}`)
     lines.push(`  ${ocean('pgup/dn')}  ${chalk.dim('Page through transcript')}`)
 
     lines.push('')
-    lines.push(chalk.dim('Type /command to run. Commands are not sent to the model.'))
+    lines.push(
+      chalk.dim('Type /command to run. Commands are not sent to the model.')
+    )
 
     ctx.pushOutput(systemBlock(lines.join('\n')))
   },
@@ -170,9 +259,7 @@ const compactCommand: Command = {
     const msgCount = ctx.agent.getMessageCount()
     if (msgCount < 4)
     {
-      ctx.pushOutput(
-        systemBlock('Conversation too short to compact')
-      )
+      ctx.pushOutput(systemBlock('Conversation too short to compact'))
       return
     }
 
@@ -182,7 +269,9 @@ const compactCommand: Command = {
 
     if (!result)
     {
-      ctx.pushOutput(systemBlock('Compaction skipped — not enough context to summarize'))
+      ctx.pushOutput(
+        systemBlock('Compaction skipped — not enough context to summarize')
+      )
       return
     }
 
@@ -198,44 +287,7 @@ const compactCommand: Command = {
   },
 }
 
-// format a token count for display (e.g., 1234 -> "1.2k", 567 -> "567")
-function formatTokenCount(tokens: number): string
-{
-  if (tokens >= 1000)
-  {
-    return `${(tokens / 1000).toFixed(1)}k`
-  }
-  return String(tokens)
-}
-
 // ── /status ────────────────────────────────────────────────────────────
-
-// format a ns duration as "4.2s", "1m 23s", etc.
-function formatDurationNs(ns: number): string
-{
-  const ms = ns / 1e6
-  if (ms < 1000) return `${ms.toFixed(0)}ms`
-  const seconds = ms / 1000
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const minutes = Math.floor(seconds / 60)
-  const remSeconds = Math.round(seconds - minutes * 60)
-  return `${minutes}m ${String(remSeconds).padStart(2, '0')}s`
-}
-
-// compute tokens/sec from nanosecond duration — 0 when inputs are invalid
-function tokensPerSecond(tokens: number, durationNs: number): number
-{
-  if (!tokens || !durationNs || durationNs <= 0) return 0
-  return tokens / (durationNs / 1e9)
-}
-
-// format a tok/s number compactly, "" when zero
-function formatThroughput(tps: number): string
-{
-  if (tps <= 0) return ''
-  if (tps >= 100) return `${Math.round(tps)} tok/s`
-  return `${tps.toFixed(1)} tok/s`
-}
 
 const statusCommand: Command = {
   name: 'status',
@@ -247,7 +299,9 @@ const statusCommand: Command = {
     const tokens = ctx.agent.getEstimatedTokens()
     const messages = ctx.agent.getMessageCount()
     const session = ctx.sessionLabelId ?? '(unsaved)'
-    const permissions = ctx.yolo ? 'yolo (auto-approve all)' : 'ask (prompt before writes)'
+    const permissions = ctx.yolo
+      ? 'yolo (auto-approve all)'
+      : 'ask (prompt before writes)'
     const gitBranch = getGitBranch(cwd)
     const usage = ctx.agent.getTokenUsage()
 
@@ -271,16 +325,16 @@ const statusCommand: Command = {
     }
 
     // cumulative throughput — averaged over all turns in the session
-    const avgPrefillTps = tokensPerSecond(
+    const avgPrefillTps = computeTokensPerSecond(
       usage.promptTokens,
       usage.promptEvalDurationNs
     )
-    const avgDecodeTps = tokensPerSecond(
+    const avgDecodeTps = computeTokensPerSecond(
       usage.completionTokens,
       usage.evalDurationNs
     )
-    const prefillStr = formatThroughput(avgPrefillTps)
-    const decodeStr = formatThroughput(avgDecodeTps)
+    const prefillStr = formatTokensPerSecond(avgPrefillTps)
+    const decodeStr = formatTokensPerSecond(avgDecodeTps)
 
     if (decodeStr)
     {
@@ -295,9 +349,7 @@ const statusCommand: Command = {
     const totalModelNs = usage.promptEvalDurationNs + usage.evalDurationNs
     if (totalModelNs > 0)
     {
-      lines.push(
-        `  Model time:   ${chalk.dim(formatDurationNs(totalModelNs))}`
-      )
+      lines.push(`  Model time:   ${chalk.dim(formatDurationNs(totalModelNs))}`)
     }
 
     const compactions = ctx.agent.getCompactionCount()
@@ -320,19 +372,11 @@ const statusCommand: Command = {
 // get the current git branch, or null if not in a repo
 function getGitBranch(cwd: string): string | null
 {
-  try
-  {
-    return execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd,
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 3000,
-    }).trim()
-  }
-  catch
-  {
-    return null
-  }
+  const result = runGitCommand(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, {
+    timeout: 3000,
+  })
+
+  return result.error || !result.output ? null : result.output
 }
 
 // ── /exit ──────────────────────────────────────────────────────────────
@@ -382,20 +426,22 @@ const modelCommand: Command = {
     }
 
     // try exact match first, then prefix match
-    const exactMatch = availableModels.find(
-      (name) => name === requestedModel
-    )
+    const exactMatch = availableModels.find((name) => name === requestedModel)
     const prefixMatches = exactMatch
       ? []
       : availableModels.filter((name) => name.startsWith(requestedModel))
 
-    const resolvedModel = exactMatch ?? (prefixMatches.length === 1 ? prefixMatches[0]! : null)
+    const resolvedModel =
+      exactMatch ?? (prefixMatches.length === 1 ? prefixMatches[0]! : null)
 
     if (!resolvedModel)
     {
       if (prefixMatches.length > 1)
       {
-        const matchList = prefixMatches.slice(0, 10).map((n) => `  ${n}`).join('\n')
+        const matchList = prefixMatches
+          .slice(0, 10)
+          .map((n) => `  ${n}`)
+          .join('\n')
         ctx.pushOutput(
           systemBlock(
             `Ambiguous model name "${requestedModel}" — multiple matches:\n${matchList}\n\nBe more specific or use /model to open the picker.`
@@ -407,7 +453,7 @@ const modelCommand: Command = {
         ctx.pushOutput(
           systemBlock(
             `Model "${requestedModel}" not found in Ollama.\n` +
-            `Use ${ocean('/model')} to open the picker, or pull it first.`
+              `Use ${ocean('/model')} to open the picker, or pull it first.`
           )
         )
       }
@@ -433,9 +479,7 @@ const modelCommand: Command = {
     catch (err)
     {
       const msg = err instanceof Error ? err.message : String(err)
-      ctx.pushOutput(
-        systemBlock(`Failed to switch model: ${msg}`)
-      )
+      ctx.pushOutput(systemBlock(`Failed to switch model: ${msg}`))
     }
   },
 }
@@ -457,9 +501,9 @@ const permissionsCommand: Command = {
       ctx.pushOutput(
         systemBlock(
           `Permission mode: ${chalk.bold(current)} (${description})\n\n` +
-          `  ${ocean('/permissions ask')}   — prompt before writes & shell commands\n` +
-          `  ${ocean('/permissions yolo')}  — auto-approve all tool calls\n` +
-          `  ${chalk.dim('ctrl+y')}             — quick toggle`
+            `  ${ocean('/permissions ask')}   — prompt before writes & shell commands\n` +
+            `  ${ocean('/permissions yolo')}  — auto-approve all tool calls\n` +
+            `  ${chalk.dim('ctrl+y')}             — quick toggle`
         )
       )
       return
@@ -471,14 +515,18 @@ const permissionsCommand: Command = {
     {
       ctx.setYolo(true)
       ctx.pushOutput(
-        systemBlock(`Permission mode → ${chalk.yellow.bold('yolo')} (all tool calls auto-approved)`)
+        systemBlock(
+          `Permission mode → ${chalk.yellow.bold('yolo')} (all tool calls auto-approved)`
+        )
       )
     }
     else if (mode === 'ask')
     {
       ctx.setYolo(false)
       ctx.pushOutput(
-        systemBlock(`Permission mode → ${chalk.bold('ask')} (prompt before writes & shell commands)`)
+        systemBlock(
+          `Permission mode → ${chalk.bold('ask')} (prompt before writes & shell commands)`
+        )
       )
     }
     else
@@ -486,7 +534,7 @@ const permissionsCommand: Command = {
       ctx.pushOutput(
         systemBlock(
           `Unknown permission mode: "${mode}"\n` +
-          `Valid modes: ${ocean('ask')}, ${ocean('yolo')}`
+            `Valid modes: ${ocean('ask')}, ${ocean('yolo')}`
         )
       )
     }
@@ -502,43 +550,24 @@ const diffCommand: Command = {
   {
     const cwd = getCwd()
 
-    let diffOutput: string
-    try
+    const result = runGitCommand(['diff'], cwd, { allowStdoutOnError: true })
+
+    if (result.error)
     {
-      diffOutput = execSync('git diff', {
-        cwd,
-        encoding: 'utf-8',
-        stdio: ['pipe', 'pipe', 'pipe'],
-        timeout: 10_000,
-        maxBuffer: 1024 * 1024,
-      })
-    }
-    catch (err: unknown)
-    {
-      // git diff returns exit code 1 when there are changes in some configs,
-      // but the output is still valid — check if we got stdout
-      const execErr = err as { stdout?: string; status?: number }
-      if (execErr.stdout)
-      {
-        diffOutput = execErr.stdout
-      }
-      else
-      {
-        ctx.pushOutput(
-          systemBlock('Not a git repository, or git is not installed')
-        )
-        return
-      }
+      ctx.pushOutput(
+        systemBlock('Not a git repository, or git is not installed')
+      )
+      return
     }
 
-    if (!diffOutput.trim())
+    if (!result.output.trim())
     {
       ctx.pushOutput(systemBlock('No uncommitted changes'))
       return
     }
 
     // colorize the raw diff output
-    const colorized = colorizeDiff(diffOutput)
+    const colorized = colorizeDiff(result.output)
     ctx.pushOutput(systemBlock(colorized))
   },
 }
@@ -623,118 +652,23 @@ const resumeCommand: Command = {
   description: 'Resume a saved session (no args = latest)',
   execute(args, ctx)
   {
-    if (!args)
+    const target = resolveResumeTarget(args, ctx.sessionLabelId)
+
+    if (target.type === 'message')
     {
-      // resume the most recent session that isn't the current one
-      const sessions = listSessions()
-      const target = sessions.find((s) => s.id !== ctx.sessionLabelId)
-
-      if (!target)
-      {
-        ctx.pushOutput(systemBlock('No other sessions to resume.'))
-        return
-      }
-
-      ctx.saveCurrentSession()
-      const ok = ctx.resumeSession(target.id)
-
-      if (ok)
-      {
-        ctx.pushOutput(
-          systemBlock(`Resumed session ${ocean(target.id)} — ${target.title}`)
-        )
-      }
-      else
-      {
-        ctx.pushOutput(systemBlock('Failed to load session.'))
-      }
-
+      ctx.pushOutput(systemBlock(target.content))
       return
     }
 
-    const requestedId = args.trim()
+    ctx.saveCurrentSession()
 
-    // same session guard
-    if (requestedId === ctx.sessionLabelId)
+    if (ctx.resumeSession(target.session.id))
     {
-      ctx.pushOutput(systemBlock('Already in this session.'))
+      ctx.pushOutput(systemBlock(formatResumedSession(target.session)))
       return
     }
 
-    // exact match
-    if (sessionExists(requestedId))
-    {
-      ctx.saveCurrentSession()
-      const ok = ctx.resumeSession(requestedId)
-
-      if (ok)
-      {
-        const sessions = listSessions()
-        const meta = sessions.find((s) => s.id === requestedId)
-        const title = meta?.title ?? ''
-        ctx.pushOutput(
-          systemBlock(`Resumed session ${ocean(requestedId)}${title ? ` — ${title}` : ''}`)
-        )
-      }
-      else
-      {
-        ctx.pushOutput(systemBlock(`Failed to load session: ${requestedId}`))
-      }
-
-      return
-    }
-
-    // prefix match
-    const sessions = listSessions()
-    const matches = sessions.filter((s) => s.id.startsWith(requestedId))
-
-    if (matches.length === 1)
-    {
-      const match = matches[0]!
-
-      if (match.id === ctx.sessionLabelId)
-      {
-        ctx.pushOutput(systemBlock('Already in this session.'))
-        return
-      }
-
-      ctx.saveCurrentSession()
-      const ok = ctx.resumeSession(match.id)
-
-      if (ok)
-      {
-        ctx.pushOutput(
-          systemBlock(`Resumed session ${ocean(match.id)} — ${match.title}`)
-        )
-      }
-      else
-      {
-        ctx.pushOutput(systemBlock(`Failed to load session: ${match.id}`))
-      }
-
-      return
-    }
-
-    if (matches.length > 1)
-    {
-      const matchList = matches
-        .slice(0, 5)
-        .map((s) => `  ${ocean(s.id)}  ${chalk.dim(s.title)}`)
-        .join('\n')
-      ctx.pushOutput(
-        systemBlock(
-          `Ambiguous session ID "${requestedId}" — multiple matches:\n${matchList}`
-        )
-      )
-      return
-    }
-
-    ctx.pushOutput(
-      systemBlock(
-        `Session not found: ${requestedId}\n` +
-        `Use ${ocean('/sessions')} to see available sessions.`
-      )
-    )
+    ctx.pushOutput(systemBlock(`Failed to load session: ${target.session.id}`))
   },
 }
 
@@ -761,8 +695,8 @@ const renameCommand: Command = {
       ctx.pushOutput(
         systemBlock(
           `Current session: ${ocean(ctx.sessionLabelId)}\n` +
-          `Title: ${title}\n\n` +
-          `Usage: ${ocean('/rename <new title>')}`
+            `Title: ${title}\n\n` +
+            `Usage: ${ocean('/rename <new title>')}`
         )
       )
       return
@@ -845,7 +779,7 @@ export async function dispatchCommand(
     ctx.pushOutput(
       systemBlock(
         `Unknown command: /${parsed.name}\n` +
-        `Type ${ocean('/help')} to see available commands.`
+          `Type ${ocean('/help')} to see available commands.`
       )
     )
     return { handled: true }

@@ -2,9 +2,12 @@
 // format startup model selection for the TUI
 
 import chalk from 'chalk'
-import type { Model } from '../ollama/client.js'
+import type { Model } from '../types/inference.js'
 import { coralBold, coral, ocean } from './theme.js'
 import { wrapLines } from './wrap.js'
+
+// preferred default model — pinned to the top of the picker & pre-selected at startup
+export const DEFAULT_MODEL = 'gemma4:31b-mlx'
 
 function parseModifiedAt(value: string): number
 {
@@ -31,6 +34,11 @@ export function sortModels(models: Model[]): Model[]
 {
   return [...models].sort((left, right) =>
   {
+    // pin the preferred default model to the top
+    const leftDefault = left.name === DEFAULT_MODEL
+    const rightDefault = right.name === DEFAULT_MODEL
+    if (leftDefault !== rightDefault) return leftDefault ? -1 : 1
+
     const dateDiff =
       parseModifiedAt(right.modified_at) - parseModifiedAt(left.modified_at)
     if (dateDiff !== 0) return dateDiff
@@ -78,12 +86,20 @@ export function buildModelPickerLines(
   }
 
   lines.push('')
-  lines.push(...wrapLines(chalk.dim(`Selected: ${selected.name}`), Math.max(width, 16)))
   lines.push(
-    ...wrapLines(chalk.dim(`Size: ${formatSize(selected.size)}`), Math.max(width, 16))
+    ...wrapLines(chalk.dim(`Selected: ${selected.name}`), Math.max(width, 16))
   )
   lines.push(
-    ...wrapLines(chalk.dim(`Modified: ${selected.modified_at}`), Math.max(width, 16))
+    ...wrapLines(
+      chalk.dim(`Size: ${formatSize(selected.size)}`),
+      Math.max(width, 16)
+    )
+  )
+  lines.push(
+    ...wrapLines(
+      chalk.dim(`Modified: ${selected.modified_at}`),
+      Math.max(width, 16)
+    )
   )
 
   if (models.length > visibleCount)

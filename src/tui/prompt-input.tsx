@@ -1,7 +1,7 @@
 // src/tui/prompt-input.tsx
 // inline prompt input w/ unified keyboard, wheel, & safe text insertion
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { Text } from 'ink'
 import chalk from 'chalk'
 import {
@@ -34,6 +34,7 @@ export interface PromptInputProps
 
 interface CursorState
 {
+  value: string
   cursorOffset: number
   cursorWidth: number
 }
@@ -74,34 +75,31 @@ export default function PromptInput({
 }: PromptInputProps)
 {
   const [cursor, setCursor] = useState<CursorState>({
+    value,
     cursorOffset: value.length,
     cursorWidth: 0,
   })
   const pendingTerminalSequenceRef = useRef('')
-  const lastInternalValueRef = useRef(value)
+  // cursor is out of sync w/ the controlled value -> the value changed
+  // externally (history recall, submit clear), so render the cursor at the end
+  const hasExternalValue = value !== cursor.value
   const resolvedCursor = useMemo(
     () =>
       focus && showCursor
         ? {
+            value,
             cursorOffset: Math.min(
-              Math.max(cursor.cursorOffset, 0),
+              Math.max(
+                hasExternalValue ? value.length : cursor.cursorOffset,
+                0
+              ),
               value.length
             ),
             cursorWidth: 0,
           }
         : cursor,
-    [cursor, focus, showCursor, value.length]
+    [cursor, focus, hasExternalValue, showCursor, value]
   )
-
-  // reset cursor to end when value changes externally (history recall, clear)
-  useEffect(() =>
-  {
-    if (value !== lastInternalValueRef.current)
-    {
-      setCursor({ cursorOffset: value.length, cursorWidth: 0 })
-      lastInternalValueRef.current = value
-    }
-  }, [value])
 
   let renderedValue = value
   let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined
@@ -211,6 +209,13 @@ export default function PromptInput({
       if (key.return)
       {
         onSubmit(value)
+        // a real submit clears the field — reset the cursor so a later history
+        // recall of the same text isn't mistaken for the current (now stale)
+        // cursor value & left mid-text; skip empty/whitespace (never submitted)
+        if (value.trim())
+        {
+          setCursor({ value: '', cursorOffset: 0, cursorWidth: 0 })
+        }
         return
       }
       if (isParsedControlFragment(input))
@@ -231,13 +236,13 @@ export default function PromptInput({
       if (!nextState) return
 
       setCursor({
+        value: nextState.value,
         cursorOffset: nextState.cursorOffset,
         cursorWidth: nextState.cursorWidth,
       })
 
       if (nextState.value !== value)
       {
-        lastInternalValueRef.current = nextState.value
         onChange(nextState.value)
       }
     },

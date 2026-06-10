@@ -8,10 +8,8 @@ import {
   mkdirSync,
   existsSync,
 } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { homedir } from 'node:os'
-
-const HISTORY_PATH = join(homedir(), '.coral', 'history.jsonl')
+import { dirname, join } from 'node:path'
+import { getCoralHome } from '../utils/coral-home.js'
 
 // maximum entries kept in the history file
 export const MAX_ENTRIES = 500
@@ -21,6 +19,11 @@ export interface HistoryEntry
   text: string
   timestamp: number
   sessionId: string | null
+}
+
+function historyPath(): string
+{
+  return join(getCoralHome(), 'history.jsonl')
 }
 
 // navigation state for Up/Down arrow recall
@@ -44,12 +47,13 @@ export interface NavigationResult
 // load all entries from disk, skip corrupt lines, trim if needed
 export function loadHistory(): HistoryEntry[]
 {
-  if (!existsSync(HISTORY_PATH)) return []
+  const path = historyPath()
+  if (!existsSync(path)) return []
 
   let raw: string
   try
   {
-    raw = readFileSync(HISTORY_PATH, 'utf-8')
+    raw = readFileSync(path, 'utf-8')
   }
   catch
   {
@@ -65,12 +69,16 @@ export function loadHistory(): HistoryEntry[]
     try
     {
       const parsed = JSON.parse(line) as Record<string, unknown>
-      if (typeof parsed.text === 'string' && typeof parsed.timestamp === 'number')
+      if (
+        typeof parsed.text === 'string' &&
+        typeof parsed.timestamp === 'number'
+      )
       {
         entries.push({
           text: parsed.text,
           timestamp: parsed.timestamp,
-          sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+          sessionId:
+            typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
         })
       }
     }
@@ -91,19 +99,23 @@ export function loadHistory(): HistoryEntry[]
   return entries
 }
 
-// append a single entry to disk
+// append a single entry to disk — O(1), no full-file read
+// the MAX_ENTRIES cap is enforced on load (loadHistory trims & rewrites), so the
+// file may briefly exceed the cap within a long session but never on disk reload
 export function appendHistoryEntry(entry: HistoryEntry): void
 {
-  mkdirSync(dirname(HISTORY_PATH), { recursive: true })
-  appendFileSync(HISTORY_PATH, JSON.stringify(entry) + '\n', 'utf-8')
+  const path = historyPath()
+  mkdirSync(dirname(path), { recursive: true })
+  appendFileSync(path, JSON.stringify(entry) + '\n', 'utf-8')
 }
 
 // rewrite the history file w/ the given entries
 function writeHistoryFile(entries: HistoryEntry[]): void
 {
-  mkdirSync(dirname(HISTORY_PATH), { recursive: true })
+  const path = historyPath()
+  mkdirSync(dirname(path), { recursive: true })
   writeFileSync(
-    HISTORY_PATH,
+    path,
     entries.map((e) => JSON.stringify(e)).join('\n') + '\n',
     'utf-8'
   )

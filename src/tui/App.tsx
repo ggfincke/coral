@@ -4,13 +4,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import chalk from 'chalk'
-import wrapAnsi from 'wrap-ansi'
-import { Agent, type TokenUsage } from '../agent/agent.js'
-import {
-  OllamaClient,
-  type Model,
-  type OllamaMessage,
-} from '../ollama/client.js'
+import { Agent } from '../agent/agent.js'
+import { OllamaClient } from '../ollama/client.js'
+import type { Model } from '../types/inference.js'
 import { buildModelPickerLines, sortModels } from './model-picker.js'
 import {
   createShutdownCoordinator,
@@ -20,25 +16,29 @@ import {
   buildTranscriptLines,
   maxScrollOffset,
   sliceViewport,
-  summarizeToolArgs,
   type OutputBlock,
   type ToolCallBlock,
 } from './transcript.js'
 import PromptInput from './prompt-input.js'
 import { CORAL_HEX, OCEAN_HEX } from './theme.js'
-import stripAnsi from 'strip-ansi'
 import { toErrorMessage } from '../utils/errors.js'
 import { dispatchCommand, type CommandContext } from './commands.js'
-import {
-  truncateOutput,
-  type TruncateOutputOptions,
-} from '../utils/truncate-output.js'
 import { useAnimationTimer } from './use-animation-timer.js'
 import { useStreamBuffer } from './use-stream-buffer.js'
 import { useSessionPersistence } from './use-session-persistence.js'
 import { useInputHistory } from './use-input-history.js'
 import { loadSession, renameSession } from '../session/store.js'
 import { type RunStage } from './run-stage.js'
+import {
+  buildTokenGauge,
+  computeTokensPerSecond,
+  formatElapsed,
+  formatTokenCount,
+  formatTokensPerSecond,
+} from './metrics.js'
+import { buildApprovalBox } from './approval-box.js'
+import { buildRestoredBlocks, truncateToolResult } from './restored-blocks.js'
+import { buildRule, buildStatusLine, describeRunStage } from './status-line.js'
 
 interface Props
 {
@@ -59,212 +59,10 @@ interface ApprovalPrompt
 const FLUSH_INTERVAL = 32
 const SPINNER_INTERVAL = 80
 const SCROLL_LINES = 3
-const TRUNCATED_TOOL_RESULT_OPTIONS: TruncateOutputOptions = {
-  dropEmpty: false,
-  separator: '\n',
-  buildSuffix: (shown, total) => `… (${total - shown} more lines)`,
-}
-
-function formatElapsed(ms: number): string
-{
-  if (ms < 60_000)
-  {
-    return `${(ms / 1000).toFixed(1)}s`
-  }
-
-  const minutes = Math.floor(ms / 60_000)
-  const seconds = Math.floor((ms % 60_000) / 1000)
-  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
-}
-
-function formatTokens(n: number): string
-{
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
-  return String(n)
-}
-
-// compute tokens/second from Ollama's nanosecond durations
-// returns 0 when duration is missing, zero, or the token count is zero
-function computeTokensPerSecond(
-  tokens: number,
-  durationNs: number | undefined
-): number
-{
-  if (!tokens || !durationNs || durationNs <= 0) return 0
-  return tokens / (durationNs / 1e9)
-}
-
-// format a throughput value as "45 tok/s" — drops decimals above 100
-function formatTokensPerSecond(tps: number): string
-{
-  if (tps <= 0) return ''
-  if (tps >= 100) return `${Math.round(tps)} tok/s`
-  return `${tps.toFixed(1)} tok/s`
-}
-
-function describeRunStage(stage: RunStage): string
-{
-  if (stage === 'waiting') return 'waiting for model'
-  if (stage === 'thinking') return 'thinking'
-  if (stage === 'responding') return 'responding'
-  if (stage === 'compacting') return 'compacting context'
-  if (stage.startsWith('tool:'))
-  {
-    return `running ${stage.slice(5)}`
-  }
-  return 'ready'
-}
 
 function clamp(value: number, min: number, max: number): number
 {
   return Math.min(Math.max(value, min), max)
-}
-
-// build a token gauge string: "2.1k/8k ctx" or "2.1k tokens"
-function buildTokenGauge(
-  totalTokens: number,
-  contextWindow: number
-): string
-{
-  if (totalTokens === 0 && contextWindow === 0) return ''
-
-  const used = formatTokens(totalTokens)
-
-  if (contextWindow > 0)
-  {
-    const window = formatTokens(contextWindow)
-    const pct = Math.min(Math.round((totalTokens / contextWindow) * 100), 100)
-    return `${used}/${window} ctx (${pct}%)`
-  }
-
-  return `${used} tokens`
-}
-
-// pad a status line so left & right parts are flush to edges
-function buildStatusLine(
-  left: string,
-  right: string,
-  width: number
-): string
-{
-  const leftVisible = stripAnsi(left).length
-  const rightVisible = stripAnsi(right).length
-  const gap = Math.max(width - leftVisible - rightVisible, 1)
-  return left + ' '.repeat(gap) + right
-}
-
-function buildRule(width: number): string
-{
-  return '─'.repeat(Math.max(width, 1))
-}
-
-function buildLabeledSeparator(width: number, label: string): string
-{
-  const labelStr = ` ${label} `
-  const remaining = Math.max(width - labelStr.length, 2)
-  const left = Math.floor(remaining / 2)
-  const right = remaining - left
-  return `${'─'.repeat(left)}${labelStr}${'─'.repeat(right)}`
-}
-
-function formatApprovalArgs(
-  toolName: string,
-  args: Record<string, unknown>
-): string
-{
-  const summary = summarizeToolArgs(toolName, args)
-  return toolName === 'bash' ? `$ ${summary}` : summary
-}
-
-function truncateToolResult(result: string): string
-{
-  return truncateOutput(result, 30, 'lines', TRUNCATED_TOOL_RESULT_OPTIONS)
-}
-
-function buildRestoredBlocks(messages: OllamaMessage[]): OutputBlock[]
-{
-  const restoredBlocks: OutputBlock[] = []
-
-  for (const msg of messages)
-  {
-    if (msg.role === 'system') continue
-
-    if (msg.role === 'user')
-    {
-      restoredBlocks.push({ type: 'user', content: msg.content })
-      continue
-    }
-
-    if (msg.role === 'assistant')
-    {
-      if (msg.thinking)
-      {
-        restoredBlocks.push({ type: 'thinking', content: msg.thinking })
-      }
-
-      if (msg.content)
-      {
-        restoredBlocks.push({ type: 'assistant', content: msg.content })
-      }
-
-      continue
-    }
-
-    if (msg.role === 'tool' && msg.content)
-    {
-      restoredBlocks.push({
-        type: 'tool_result',
-        toolName: msg.tool_name ?? 'tool',
-        content: truncateToolResult(msg.content),
-      })
-    }
-  }
-
-  return restoredBlocks
-}
-
-// build bordered approval box
-function buildApprovalBox(
-  toolName: string,
-  args: Record<string, unknown>,
-  width: number
-): string[]
-{
-  const innerWidth = Math.max(width - 4, 12)
-  const summary = formatApprovalArgs(toolName, args)
-  const title = `Allow ${toolName}?`
-
-  const topBorder = `╭─${buildLabeledSeparator(innerWidth, 'tool approval')}─╮`
-  const bottomBorder = `╰${buildRule(innerWidth + 2)}╯`
-  const emptyLine = `│ ${' '.repeat(innerWidth)} │`
-
-  const lines: string[] = [topBorder, emptyLine]
-
-  const titlePadded = title + ' '.repeat(Math.max(innerWidth - title.length, 0))
-  lines.push(`│ ${titlePadded} │`)
-
-  const wrapped = wrapAnsi(summary, innerWidth, {
-    hard: true,
-    trim: false,
-    wordWrap: true,
-  })
-  for (const summaryLine of wrapped.split('\n'))
-  {
-    const padded =
-      summaryLine + ' '.repeat(Math.max(innerWidth - summaryLine.length, 0))
-    lines.push(`│ ${padded} │`)
-  }
-
-  lines.push(emptyLine)
-
-  const hint = '(y) approve  (n) reject  (esc) cancel'
-  const hintPadded = hint + ' '.repeat(Math.max(innerWidth - hint.length, 0))
-  lines.push(`│ ${hintPadded} │`)
-
-  lines.push(emptyLine)
-  lines.push(bottomBorder)
-
-  return lines
 }
 
 export default function App({
@@ -279,9 +77,8 @@ export default function App({
   const { stdout } = useStdout()
   const terminal = stdout as typeof process.stdout
 
-  const { sessionIdRef, sessionMetaRef, getResumeSession, persistSession } = useSessionPersistence(
-    resumeSessionId
-  )
+  const { sessionIdRef, sessionMetaRef, getResumeSession, persistSession } =
+    useSessionPersistence(resumeSessionId)
   const resumeSession = getResumeSession()
 
   const [activeModel, setActiveModel] = useState(
@@ -299,9 +96,9 @@ export default function App({
 
     return nextAgent
   })
-  const [pickerState, setPickerState] = useState<'hidden' | 'loading' | 'ready' | 'error'>(
-    model ? 'hidden' : 'loading'
-  )
+  const [pickerState, setPickerState] = useState<
+    'hidden' | 'loading' | 'ready' | 'error'
+  >(model ? 'hidden' : 'loading')
   const [pickerError, setPickerError] = useState('')
   const [models, setModels] = useState<Model[]>([])
   const [selectedModelIndex, setSelectedModelIndex] = useState(0)
@@ -357,8 +154,11 @@ export default function App({
   const previousLineCountRef = useRef(0)
   const disposedAgentsRef = useRef(new WeakSet<Agent>())
   const runStartTimeRef = useRef<number | null>(null)
-  const toolStartTimeRef = useRef<number | null>(null)
+  // per-call start times keyed by callId — parallel batches run several at once
+  const toolStartTimesRef = useRef<Map<number, number>>(new Map())
   const runAbortRef = useRef<AbortController | null>(null)
+  // live permission mode — read at approval time so a mid-run toggle takes effect
+  const yoloRef = useRef(yolo)
   const maxOffsetRef = useRef(0)
   const chatViewportHeightRef = useRef(6)
 
@@ -455,7 +255,12 @@ export default function App({
     setOutput([])
     setScrollOffset(0)
     setSessionLabelId(null)
-    setTokenUsage({ prompt: 0, completion: 0, lastPrefillTps: 0, lastDecodeTps: 0 })
+    setTokenUsage({
+      prompt: 0,
+      completion: 0,
+      lastPrefillTps: 0,
+      lastDecodeTps: 0,
+    })
     sessionIdRef.current = null
   }, [sessionIdRef])
 
@@ -482,53 +287,75 @@ export default function App({
   }, [persistSession])
 
   // rename the current session's title & update cached meta
-  const renameCurrentSession = useCallback((title: string): boolean =>
-  {
-    if (!sessionIdRef.current) return false
-    const result = renameSession(sessionIdRef.current, title)
-    if (result && sessionMetaRef.current)
+  const renameCurrentSession = useCallback(
+    (title: string): boolean =>
     {
-      sessionMetaRef.current = { ...sessionMetaRef.current, title, updatedAt: result.updatedAt }
-    }
-    return result !== null
-  }, [sessionIdRef, sessionMetaRef])
+      if (!sessionIdRef.current) return false
+      const result = renameSession(sessionIdRef.current, title)
+      if (result && sessionMetaRef.current)
+      {
+        sessionMetaRef.current = {
+          ...sessionMetaRef.current,
+          title,
+          updatedAt: result.updatedAt,
+        }
+      }
+      return result !== null
+    },
+    [sessionIdRef, sessionMetaRef]
+  )
 
   // resume a session by ID — disposes current agent, loads & restores target
-  const resumeSessionById = useCallback((sessionId: string): boolean =>
-  {
-    const target = loadSession(sessionId)
-    if (!target) return false
-
-    const currentAgent = agentRef.current
-    if (currentAgent)
+  const resumeSessionById = useCallback(
+    (sessionId: string): boolean =>
     {
-      void disposeAgent(currentAgent)
-    }
+      const target = loadSession(sessionId)
+      if (!target) return false
 
-    // rebuild transcript from saved messages
-    setOutput(buildRestoredBlocks(target.messages))
-    setScrollOffset(0)
-    setTokenUsage({ prompt: 0, completion: 0, lastPrefillTps: 0, lastDecodeTps: 0 })
-    setContextWindow(0)
+      const currentAgent = agentRef.current
+      if (currentAgent)
+      {
+        void disposeAgent(currentAgent)
+      }
 
-    // create fresh agent w/ restored messages
-    const nextAgent = new Agent(target.meta.model, host, undefined, { think })
-    nextAgent.restoreMessages(target.messages)
+      // rebuild transcript from saved messages
+      setOutput(buildRestoredBlocks(target.messages))
+      setScrollOffset(0)
+      setTokenUsage({
+        prompt: 0,
+        completion: 0,
+        lastPrefillTps: 0,
+        lastDecodeTps: 0,
+      })
+      setContextWindow(0)
 
-    // update session tracking
-    sessionIdRef.current = target.meta.id
-    sessionMetaRef.current = target.meta
+      // create fresh agent w/ restored messages
+      const nextAgent = new Agent(target.meta.model, host, undefined, { think })
+      nextAgent.restoreMessages(target.messages)
 
-    // update React state
-    setAgent(nextAgent)
-    setActiveModel(target.meta.model)
-    setSessionLabelId(target.meta.id)
+      // update session tracking
+      sessionIdRef.current = target.meta.id
+      sessionMetaRef.current = target.meta
 
-    // fetch context window for new model
-    fetchContextWindowForAgent(nextAgent)
+      // update React state
+      setAgent(nextAgent)
+      setActiveModel(target.meta.model)
+      setSessionLabelId(target.meta.id)
 
-    return true
-  }, [disposeAgent, fetchContextWindowForAgent, host, sessionIdRef, sessionMetaRef, think])
+      // fetch context window for new model
+      fetchContextWindowForAgent(nextAgent)
+
+      return true
+    },
+    [
+      disposeAgent,
+      fetchContextWindowForAgent,
+      host,
+      sessionIdRef,
+      sessionMetaRef,
+      think,
+    ]
+  )
 
   // show the model picker — preserves current agent for in-place switching
   // uses loadModelsRef to avoid circular dependency w/ loadModels/activateModel
@@ -655,7 +482,10 @@ export default function App({
     }
   }, [activateModel, host, resumeSession])
 
-  loadModelsRef.current = loadModels
+  useEffect(() =>
+  {
+    loadModelsRef.current = loadModels
+  }, [loadModels])
 
   useEffect(() =>
   {
@@ -699,6 +529,11 @@ export default function App({
   {
     agentRef.current = agent
   }, [agent])
+
+  useEffect(() =>
+  {
+    yoloRef.current = yolo
+  }, [yolo])
 
   // fetch context window when agent becomes available (including initial mount)
   useEffect(() =>
@@ -930,6 +765,7 @@ export default function App({
         resetAnimation()
         setRunStage('idle')
         runStartTimeRef.current = null
+        toolStartTimesRef.current.clear()
         runAbortRef.current = null
       }
 
@@ -941,188 +777,198 @@ export default function App({
       startWaiting()
       resetStreamBuffer()
 
-      await agent.run(value, {
-        onThinking(thinking)
+      await agent.run(
+        value,
         {
-          stopWaiting()
-          setRunStage('thinking')
-          appendThinking(thinking)
-        },
-        onToken(token)
-        {
-          stopWaiting()
-          setRunStage('responding')
-          appendText(token)
-        },
-        onToolCall(name, args)
-        {
-          stopWaiting()
-
-          const pendingBlocks = consumeBufferedBlocks()
-          setRunStage(`tool:${name}`)
-          toolStartTimeRef.current = Date.now()
-
-          setOutput((prev) => [
-            ...prev,
-            ...pendingBlocks,
-            {
-              type: 'tool_call',
-              toolName: name,
-              args,
-            } satisfies ToolCallBlock,
-          ])
-        },
-        onToolApproval(name, args)
-        {
-          if (yolo) return Promise.resolve(true)
-
-          return new Promise<boolean>((resolve) =>
+          onThinking(thinking)
           {
-            setApproval({ toolName: name, args, resolve })
-          })
-        },
-        onToolResult(name, result, error)
-        {
-          const duration = toolStartTimeRef.current
-            ? Date.now() - toolStartTimeRef.current
-            : undefined
-          toolStartTimeRef.current = null
-
-          setRunStage('waiting')
-          startWaiting()
-
-          setOutput((prev) =>
+            stopWaiting()
+            setRunStage('thinking')
+            appendThinking(thinking)
+          },
+          onToken(token)
           {
-            const next = [...prev]
-
-            for (let i = next.length - 1; i >= 0; i--)
-            {
-              const block = next[i]!
-              if (
-                block.type === 'tool_call' &&
-                block.toolName === name &&
-                !block.status
-              )
-              {
-                next[i] = {
-                  ...block,
-                  status: error ? 'error' : 'success',
-                  duration,
-                }
-                break
-              }
-            }
-
-            if (error)
-            {
-              next.push({
-                type: 'tool_result',
-                toolName: name,
-                content: error,
-                isError: true,
-              })
-            }
-            else if (result)
-            {
-              next.push({
-                type: 'tool_result',
-                toolName: name,
-                content: truncateToolResult(result),
-              })
-            }
-
-            return next
-          })
-        },
-        onUsage(usage)
-        {
-          const prefillTps = computeTokensPerSecond(
-            usage.promptTokens,
-            usage.promptEvalDurationNs
-          )
-          const decodeTps = computeTokensPerSecond(
-            usage.completionTokens,
-            usage.evalDurationNs
-          )
-          setTokenUsage((prev) => ({
-            prompt: usage.totalPromptTokens,
-            completion: usage.totalCompletionTokens,
-            // keep the previous throughput if the current turn reported nothing
-            // (e.g., a cache-only hit with zero decode tokens)
-            lastPrefillTps: prefillTps > 0 ? prefillTps : prev.lastPrefillTps,
-            lastDecodeTps: decodeTps > 0 ? decodeTps : prev.lastDecodeTps,
-          }))
-        },
-        onCompactionStart()
-        {
-          setRunStage('compacting')
-        },
-        onCompaction(result)
-        {
-          const saved = result.beforeTokens - result.afterTokens
-          let content: string
-
-          if (result.type === 'pruned')
+            stopWaiting()
+            setRunStage('responding')
+            appendText(token)
+          },
+          onToolCall(name, args, callId)
           {
-            content = `Auto-pruned ${result.prunedResults ?? 0} old tool results (~${formatTokens(saved)} tokens freed)`
-          }
-          else
-          {
-            content = [
-              `Context auto-compacted`,
-              `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
-              `  ~${formatTokens(result.beforeTokens)} -> ~${formatTokens(result.afterTokens)} tokens (~${formatTokens(saved)} freed)`,
-            ].join('\n')
-          }
+            stopWaiting()
 
-          setOutput((prev) => [
-            ...prev,
-            { type: 'system', content },
-          ])
-          setRunStage('waiting')
-          startWaiting()
-        },
-        onDone()
-        {
-          const wasAborted = controller.signal.aborted
-          const pendingBlocks = consumeBufferedBlocks()
+            const pendingBlocks = consumeBufferedBlocks()
+            setRunStage(`tool:${name}`)
+            toolStartTimesRef.current.set(callId, Date.now())
 
-          if (wasAborted)
-          {
             setOutput((prev) => [
               ...prev,
               ...pendingBlocks,
-              { type: 'system', content: 'Generation interrupted' },
+              {
+                type: 'tool_call',
+                toolName: name,
+                args,
+                callId,
+              } satisfies ToolCallBlock,
             ])
-          }
-          else
+          },
+          onToolApproval(name, args)
           {
-            setOutput((prev) => [...prev, ...pendingBlocks])
-          }
+            if (yoloRef.current) return Promise.resolve(true)
 
-          resetRunState()
-          const meta = persistSession(agent)
-          if (meta)
+            return new Promise<boolean>((resolve) =>
+            {
+              setApproval({ toolName: name, args, resolve })
+            })
+          },
+          onToolResult(name, result, error, callId)
           {
-            setSessionLabelId(meta.id)
-          }
-        },
-        onError(error)
-        {
-          const pendingBlocks = consumeBufferedBlocks()
-          setOutput((prev) => [
-            ...prev,
-            ...pendingBlocks,
-            { type: 'error', content: error.message },
-          ])
-          resetRunState()
-          const meta = persistSession(agent)
-          if (meta)
+            const startedAt = toolStartTimesRef.current.get(callId)
+            const duration =
+              startedAt != null ? Date.now() - startedAt : undefined
+            toolStartTimesRef.current.delete(callId)
+
+            setRunStage('waiting')
+            startWaiting()
+
+            setOutput((prev) =>
+            {
+              const next = [...prev]
+
+              for (let i = next.length - 1; i >= 0; i--)
+              {
+                const block = next[i]!
+                if (
+                  block.type === 'tool_call' &&
+                  block.callId === callId &&
+                  !block.status
+                )
+                {
+                  next[i] = {
+                    ...block,
+                    status: error ? 'error' : 'success',
+                    duration,
+                  }
+                  break
+                }
+              }
+
+              if (error)
+              {
+                next.push({
+                  type: 'tool_result',
+                  toolName: name,
+                  content: error,
+                  isError: true,
+                })
+              }
+              else if (result)
+              {
+                next.push({
+                  type: 'tool_result',
+                  toolName: name,
+                  content: truncateToolResult(result),
+                })
+              }
+
+              return next
+            })
+          },
+          onUsage(usage)
           {
-            setSessionLabelId(meta.id)
-          }
+            const prefillTps = computeTokensPerSecond(
+              usage.promptTokens,
+              usage.promptEvalDurationNs
+            )
+            const decodeTps = computeTokensPerSecond(
+              usage.completionTokens,
+              usage.evalDurationNs
+            )
+            setTokenUsage((prev) => ({
+              prompt: usage.totalPromptTokens,
+              completion: usage.totalCompletionTokens,
+              // keep the previous throughput if the current turn reported nothing
+              // (e.g., a cache-only hit w/ zero decode tokens)
+              lastPrefillTps: prefillTps > 0 ? prefillTps : prev.lastPrefillTps,
+              lastDecodeTps: decodeTps > 0 ? decodeTps : prev.lastDecodeTps,
+            }))
+          },
+          onCompactionStart()
+          {
+            setRunStage('compacting')
+          },
+          onCompaction(result)
+          {
+            const saved = result.beforeTokens - result.afterTokens
+            let content: string
+
+            if (result.type === 'pruned')
+            {
+              content = `Auto-pruned ${result.prunedResults ?? 0} old tool results (~${formatTokenCount(saved)} tokens freed)`
+            }
+            else if (result.type === 'trimmed')
+            {
+              content = [
+                `Context trimmed to recent history (summarization unavailable)`,
+                `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
+                `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (~${formatTokenCount(saved)} freed)`,
+              ].join('\n')
+            }
+            else
+            {
+              content = [
+                `Context auto-compacted`,
+                `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
+                `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (~${formatTokenCount(saved)} freed)`,
+              ].join('\n')
+            }
+
+            setOutput((prev) => [...prev, { type: 'system', content }])
+            setRunStage('waiting')
+            startWaiting()
+          },
+          onDone()
+          {
+            const wasAborted = controller.signal.aborted
+            const pendingBlocks = consumeBufferedBlocks()
+
+            if (wasAborted)
+            {
+              setOutput((prev) => [
+                ...prev,
+                ...pendingBlocks,
+                { type: 'system', content: 'Generation interrupted' },
+              ])
+            }
+            else
+            {
+              setOutput((prev) => [...prev, ...pendingBlocks])
+            }
+
+            resetRunState()
+            const meta = persistSession(agent)
+            if (meta)
+            {
+              setSessionLabelId(meta.id)
+            }
+          },
+          onError(error)
+          {
+            const pendingBlocks = consumeBufferedBlocks()
+            setOutput((prev) => [
+              ...prev,
+              ...pendingBlocks,
+              { type: 'error', content: error.message },
+            ])
+            resetRunState()
+            const meta = persistSession(agent)
+            if (meta)
+            {
+              setSessionLabelId(meta.id)
+            }
+          },
         },
-      }, controller.signal)
+        controller.signal
+      )
     },
     [
       activeModel,
@@ -1173,11 +1019,12 @@ export default function App({
 
   if (pickerVisible)
   {
-    statusLine = pickerState === 'loading'
-      ? 'loading models from Ollama…'
-      : pickerState === 'error'
-        ? `press r to retry · ${pickerEscHint}`
-        : `${models.length} models available · enter selects · ${pickerEscHint}`
+    statusLine =
+      pickerState === 'loading'
+        ? 'loading models from Ollama…'
+        : pickerState === 'error'
+          ? `press r to retry · ${pickerEscHint}`
+          : `${models.length} models available · enter selects · ${pickerEscHint}`
   }
   else if (!agent || approval)
   {
@@ -1201,7 +1048,11 @@ export default function App({
     const stateLeft = [stageStr, tokenGauge, perfGauge]
       .filter(Boolean)
       .join(' · ')
-    statusLine = buildStatusLine(stateLeft, 'ctrl+c interrupts', transcriptWidth)
+    statusLine = buildStatusLine(
+      stateLeft,
+      'ctrl+c interrupts',
+      transcriptWidth
+    )
   }
   else
   {
@@ -1294,11 +1145,14 @@ export default function App({
   }, [navigateDown])
 
   // wrap setInput to reset history navigation on manual edits
-  const handleInputChange = useCallback((value: string) =>
-  {
-    resetNavigation()
-    setInput(value)
-  }, [resetNavigation])
+  const handleInputChange = useCallback(
+    (value: string) =>
+    {
+      resetNavigation()
+      setInput(value)
+    },
+    [resetNavigation]
+  )
 
   // escape while running aborts the turn; escape while idle exits
   const handleEscape = useCallback(() =>
@@ -1388,7 +1242,9 @@ export default function App({
 
       {!pickerVisible && agent && !approval && (
         <Box flexDirection="column">
-          <Text dimColor color={yolo ? 'yellow' : undefined}>{headerSep}</Text>
+          <Text dimColor color={yolo ? 'yellow' : undefined}>
+            {headerSep}
+          </Text>
           <Box>
             <Text bold color={yolo ? 'yellow' : OCEAN_HEX}>
               {yolo ? ' ⚡ ' : ' ❯ '}
@@ -1407,7 +1263,7 @@ export default function App({
               onTogglePermissions={onTogglePermissions}
               onHistoryUp={onHistoryUp}
               onHistoryDown={onHistoryDown}
-              placeholder={isRunning ? 'thinking...' : 'ask coral anything'}
+              placeholder={isRunning ? '' : 'ask coral anything'}
             />
           </Box>
         </Box>

@@ -4,6 +4,7 @@
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import { renderMarkdownToAnsi } from './markdown.js'
+import { formatElapsed } from './metrics.js'
 import { shimmerText } from './shimmer.js'
 import { coralBold, coral, deep, ocean, oceanBold, sand } from './theme.js'
 import { wrapLines } from './wrap.js'
@@ -34,6 +35,9 @@ export interface ToolCallBlock
   type: 'tool_call'
   toolName: string
   args: Record<string, unknown>
+  // correlates the result back to this call (parallel batches announce many
+  // calls — often same-named — before any resolves)
+  callId?: number
   // set when the tool finishes
   status?: 'success' | 'error'
   duration?: number
@@ -229,7 +233,7 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
       const statusMark = isError ? chalk.red('✗') : chalk.green('✓')
       const duration =
         block.duration != null
-          ? chalk.dim(` ${(block.duration / 1000).toFixed(1)}s`)
+          ? chalk.dim(` ${formatElapsed(block.duration)}`)
           : ''
       const border = isError ? chalk.red('│') : deep('│')
       const argDisplay = block.toolName === 'bash'
