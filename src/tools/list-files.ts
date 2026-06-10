@@ -7,6 +7,10 @@ import { join } from 'node:path'
 import type { Tool, ToolResult } from './tool.js'
 import { resolvePath } from '../cwd.js'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
+import {
+  formatProjectTreeEntryName,
+  shouldIncludeProjectTreeEntry,
+} from '../shared/project-tree.js'
 
 const MAX_ENTRIES = 200
 const DEFAULT_DEPTH = 2
@@ -46,7 +50,7 @@ async function collectEntries(
     }
 
     const filtered = dirents
-      .filter((d) => !IGNORED.has(d.name))
+      .filter((d) => shouldIncludeProjectTreeEntry(d.name, IGNORED))
       .sort((a, b) => a.name.localeCompare(b.name))
 
     for (const dirent of filtered)
@@ -103,10 +107,7 @@ function formatTree(
   for (const entry of entries)
   {
     const indent = INDENT.repeat(entry.depth + 1)
-    let suffix = ''
-    if (entry.isDir) suffix += '/'
-    if (entry.isSymlink) suffix += '@'
-    lines.push(`${indent}${entry.name}${suffix}`)
+    lines.push(`${indent}${formatProjectTreeEntryName(entry)}`)
   }
 
   if (truncated)
@@ -123,6 +124,7 @@ export const listFilesTool: Tool = {
   name: 'list_files',
   description:
     "List directory contents as an indented tree. Directories are marked w/ trailing '/'. Skips .git, node_modules, & other common noise directories.",
+  readOnly: true,
   parameters: {
     type: 'object',
     properties: {

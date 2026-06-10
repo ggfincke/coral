@@ -1,7 +1,7 @@
 // src/tools/tool.ts
 // tool interface & conversion to Ollama format
 
-import type { OllamaTool, JsonSchema } from '../ollama/client.js'
+import type { OllamaTool, JsonSchema } from '../types/inference.js'
 
 // result returned after tool execution
 export interface ToolResult
@@ -16,6 +16,8 @@ export interface Tool
   name: string
   description: string
   parameters: JsonSchema
+  // read-only tools have no side effects — safe to batch & run in parallel
+  readOnly?: boolean
   execute(args: Record<string, unknown>): Promise<ToolResult>
 }
 
