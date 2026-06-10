@@ -427,3 +427,73 @@ test('Agent.dispose unloads the active model on shutdown', async () =>
 
   assert.deepEqual(unloadedModels, ['fake-model'])
 })
+
+test('Agent stops after maxIterations tool-call rounds', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-maxiter-'))
+  tempDirs.push(dir)
+
+  const agent = new Agent('fake-model', 'http://localhost:11434', dir, {
+    maxIterations: 3,
+  }) as Agent & {
+    client: {
+      startKeepAlive: (model: string) => void
+      stopKeepAlive?: () => void
+      chatStream: () => AsyncGenerator<{
+        message: OllamaMessage
+        done: boolean
+      }>
+    }
+  }
+  agent.client.stopKeepAlive?.()
+
+  // a model that always asks for one more (unknown) tool — without the cap the
+  // loop would never terminate
+  let streamCount = 0
+  agent.client = {
+    startKeepAlive()
+    {},
+    async *chatStream()
+    {
+      streamCount += 1
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: { index: 0, name: 'noop', arguments: {} },
+            },
+          ],
+        },
+        done: true,
+      }
+    },
+  }
+
+  let done = false
+  await agent.run('loop forever', {
+    onToken()
+    {},
+    onToolCall()
+    {},
+    onToolResult()
+    {},
+    onToolApproval()
+    {
+      return Promise.resolve(true)
+    },
+    onDone()
+    {
+      done = true
+    },
+    onError(error)
+    {
+      throw error
+    },
+  })
+
+  assert.equal(done, true)
+  assert.equal(streamCount, 3)
+})

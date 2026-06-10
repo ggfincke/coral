@@ -101,6 +101,12 @@ ${toolBlock}
 - When you encounter something unexpected, explain what you found & ask the user how to proceed rather than making assumptions
 - If a task requires changes across multiple files, explain the full plan before starting
 
+## Planning & delegation
+
+- For a multi-step task, call todo_write to lay out the steps, then keep it current: mark one item in_progress as you work it & completed when done. Skip it for simple single-step tasks
+- Use task to delegate a bounded search or research question to a subagent — it explores with its own context (read-only) & returns just the answer, so a wide search doesn't crowd out your own. Give it self-contained instructions & say what to return
+- Don't delegate edits or commands — the subagent is read-only; do those yourself
+
 ## Committing changes
 
 - Only commit when asked; only push when asked

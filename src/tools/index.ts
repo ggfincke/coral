@@ -17,6 +17,8 @@ import {
   gitCommitTool,
   gitPushTool,
 } from './git.js'
+import { taskTool } from './task.js'
+import { todoWriteTool } from './todo.js'
 
 // all available tools
 export const allTools: Tool[] = [
@@ -33,7 +35,13 @@ export const allTools: Tool[] = [
   gitAddTool,
   gitCommitTool,
   gitPushTool,
+  taskTool,
+  todoWriteTool,
 ]
+
+// read-only subset handed to research subagents — no edit, shell, commit, or
+// task tools, so subagents have no side effects & cannot recurse
+export const subagentTools: Tool[] = allTools.filter((t) => t.readOnly === true)
 
 // find a tool by name
 export function getToolByName(name: string): Tool | undefined

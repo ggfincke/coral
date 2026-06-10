@@ -2,13 +2,23 @@
 // conversation loop w/ tool-use cycling
 
 import { OllamaClient } from '../ollama/client.js'
-import type { OllamaMessage, OllamaToolCall } from '../types/inference.js'
+import type {
+  OllamaMessage,
+  OllamaToolCall,
+  OllamaTool,
+} from '../types/inference.js'
 import {
   allTools,
+  subagentTools,
   getToolByName,
   toolToOllamaFormat,
+  type Tool,
   type ToolResult,
 } from '../tools/index.js'
+import {
+  setSubagentRunner,
+  type SubagentResult,
+} from '../tools/subagent.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { setCwd, getCwd } from '../cwd.js'
 import {
@@ -36,11 +46,11 @@ export type { CompactionResult } from './compaction.js'
 import { toError } from '../utils/errors.js'
 import { capToolOutput } from './tool-output.js'
 
-// pre-compute Ollama tool format (static after registration)
-const ollamaTools = allTools.map(toolToOllamaFormat)
-
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
+
+// cap tool-call rounds for a research subagent so it can't loop unbounded
+const SUBAGENT_MAX_ITERATIONS = 24
 
 const COMPACTION_SYSTEM_PROMPT =
   'You are a helpful assistant. Produce a concise structured summary of the conversation.'
@@ -185,6 +195,13 @@ export interface AgentEvents
 interface AgentOptions
 {
   think?: boolean | 'low' | 'medium' | 'high'
+  // restrict the toolset — subagents get a read-only subset; defaults to allTools
+  tools?: Tool[]
+  // cap tool-call rounds (bounds subagent cost); undefined = unlimited
+  maxIterations?: number
+  // main agents register a subagent runner; subagents pass false so they don't
+  // clobber the parent's runner
+  registerSubagent?: boolean
 }
 
 // * Conversation agent w/ tool dispatch
@@ -193,9 +210,14 @@ export class Agent
   private client: OllamaClient
   private messages: OllamaMessage[] = []
   private model: string
+  private baseUrl?: string
   private permissions: ToolPermissions
   private compactionConfig: CompactionConfig
   private thinkMode: boolean | 'low' | 'medium' | 'high'
+  // per-instance toolset & its Ollama format — subagents run a restricted subset
+  private tools: Tool[]
+  private ollamaTools: OllamaTool[]
+  private maxIterations?: number
   private estimatedTokenCount = 0
   private totalPromptTokens = 0
   private totalCompletionTokens = 0
@@ -217,8 +239,12 @@ export class Agent
   )
   {
     this.model = model
+    this.baseUrl = baseUrl
     this.client = new OllamaClient(baseUrl)
     this.thinkMode = options.think ?? true
+    this.tools = options.tools ?? allTools
+    this.ollamaTools = this.tools.map(toolToOllamaFormat)
+    this.maxIterations = options.maxIterations
 
     // set the global working directory — all tools resolve paths against this
     if (cwd) setCwd(cwd)
@@ -233,12 +259,64 @@ export class Agent
     const systemContent = buildSystemPrompt({
       model,
       cwd: getCwd(),
-      tools: allTools,
+      tools: this.tools,
     })
     this.pushMessage({ role: 'system', content: systemContent })
 
+    // expose this agent as the task-tool subagent runner (closes over this.model
+    // so a later switchModel is reflected automatically)
+    if (options.registerSubagent !== false)
+    {
+      setSubagentRunner((prompt, signal) => this.runSubagent(prompt, signal))
+    }
+
     // track the active model so shutdown can unload it
     this.client.startKeepAlive(model)
+  }
+
+  // run a one-shot research subagent w/ a fresh context & read-only toolset,
+  // returning its final text — shares the parent's loaded model, so never dispose
+  private async runSubagent(
+    prompt: string,
+    signal?: AbortSignal
+  ): Promise<SubagentResult>
+  {
+    const sub = new Agent(this.model, this.baseUrl, getCwd(), {
+      think: this.thinkMode,
+      tools: subagentTools,
+      maxIterations: SUBAGENT_MAX_ITERATIONS,
+      registerSubagent: false,
+    })
+
+    let text = ''
+    let toolCount = 0
+    let error: string | undefined
+
+    await sub.run(
+      prompt,
+      {
+        onToken: (token) =>
+        {
+          text += token
+        },
+        onToolCall: () =>
+        {
+          toolCount++
+        },
+        onToolResult: () => {},
+        // subagent tools are all read-only/always_allow, so this never fires;
+        // deny anything unexpected that would otherwise need approval
+        onToolApproval: async () => false,
+        onDone: () => {},
+        onError: (err) =>
+        {
+          error = err.message
+        },
+      },
+      signal
+    )
+
+    return { text: text.trim(), toolCount, error }
   }
 
   // stop client background work & unload the active model
@@ -289,7 +367,7 @@ export class Agent
     const systemContent = buildSystemPrompt({
       model: nextModel,
       cwd: getCwd(),
-      tools: allTools,
+      tools: this.tools,
     })
 
     // replace messages[0] (the system prompt) in-place
@@ -718,10 +796,20 @@ export class Agent
     this.onCompactionStartCallback = events.onCompactionStart
 
     // keep going while the model wants to call tools
+    let iterations = 0
     while (true)
     {
       // check for abort before each iteration
       if (signal?.aborted)
+      {
+        this.clearCompactionCallbacks()
+        events.onDone()
+        return
+      }
+
+      // safety cap on tool-call rounds — bounds subagent cost (unset = unlimited)
+      iterations++
+      if (this.maxIterations !== undefined && iterations > this.maxIterations)
       {
         this.clearCompactionCallbacks()
         events.onDone()
@@ -747,7 +835,7 @@ export class Agent
           {
             model: this.model,
             messages: this.messages,
-            tools: ollamaTools,
+            tools: this.ollamaTools,
             think: this.thinkMode,
           },
           signal

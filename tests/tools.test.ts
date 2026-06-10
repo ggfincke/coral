@@ -18,6 +18,11 @@ import {
   gitCommitTool,
   gitPushTool,
 } from '../src/tools/git.js'
+import { taskTool } from '../src/tools/task.js'
+import { todoWriteTool } from '../src/tools/todo.js'
+import { getTodos, clearTodos } from '../src/tools/todo-store.js'
+import { setSubagentRunner } from '../src/tools/subagent.js'
+import { subagentTools } from '../src/tools/index.js'
 
 const tempDirs: string[] = []
 const originalCwd = process.cwd()
@@ -205,4 +210,120 @@ test('git_push pushes commits to a local remote', { skip: !hasGit }, async () =>
     encoding: 'utf-8',
   })
   assert.match(log.stdout, /init/)
+})
+
+test('task validates input & reports when subagents are unavailable', async () =>
+{
+  setSubagentRunner(null)
+
+  const noPrompt = await taskTool.execute({})
+  assert.match(noPrompt.error ?? '', /non-empty prompt/)
+
+  const noRunner = await taskTool.execute({ prompt: 'explore the repo' })
+  assert.match(noRunner.error ?? '', /unavailable/i)
+})
+
+test('task delegates to the registered subagent runner', async () =>
+{
+  const seen: string[] = []
+  setSubagentRunner(async (prompt) =>
+  {
+    seen.push(prompt)
+    return { text: 'found it in src/foo.ts', toolCount: 2 }
+  })
+
+  const result = await taskTool.execute({ prompt: 'where is foo defined?' })
+  assert.equal(result.error, undefined)
+  assert.match(result.output, /found it in src\/foo\.ts/)
+  assert.deepEqual(seen, ['where is foo defined?'])
+
+  setSubagentRunner(null)
+})
+
+test('task surfaces a subagent error', async () =>
+{
+  setSubagentRunner(async () => ({ text: 'partial', toolCount: 0, error: 'boom' }))
+
+  const result = await taskTool.execute({ prompt: 'do a thing' })
+  assert.match(result.error ?? '', /boom/)
+
+  setSubagentRunner(null)
+})
+
+test('subagentTools exposes only read-only tools (no edit, shell, commit, or task)', () =>
+{
+  const names = subagentTools.map((t) => t.name)
+  assert.ok(names.includes('read_file'))
+  assert.ok(names.includes('grep'))
+
+  const banned = [
+    'write_file',
+    'edit_file',
+    'bash',
+    'git_add',
+    'git_commit',
+    'git_push',
+    'task',
+    'todo_write',
+  ]
+  for (const name of banned)
+  {
+    assert.ok(!names.includes(name), `subagent must not expose ${name}`)
+  }
+
+  assert.ok(subagentTools.every((t) => t.readOnly === true))
+})
+
+test('todo_write validates the list shape & stores nothing on failure', async () =>
+{
+  clearTodos()
+
+  assert.match((await todoWriteTool.execute({})).error ?? '', /todos array/)
+  assert.match(
+    (await todoWriteTool.execute({ todos: [{ content: '', status: 'pending' }] }))
+      .error ?? '',
+    /content/
+  )
+  assert.match(
+    (await todoWriteTool.execute({ todos: [{ content: 'x', status: 'nope' }] }))
+      .error ?? '',
+    /status/
+  )
+  assert.match(
+    (
+      await todoWriteTool.execute({
+        todos: [
+          { content: 'a', status: 'in_progress' },
+          { content: 'b', status: 'in_progress' },
+        ],
+      })
+    ).error ?? '',
+    /one todo/
+  )
+
+  assert.equal(getTodos().length, 0)
+})
+
+test('todo_write stores the list & renders a checklist', async () =>
+{
+  clearTodos()
+
+  const result = await todoWriteTool.execute({
+    todos: [
+      { content: 'read the agent loop', status: 'completed' },
+      { content: 'add the task tool', status: 'in_progress' },
+      { content: 'write tests', status: 'pending' },
+    ],
+  })
+
+  assert.equal(result.error, undefined)
+  assert.match(result.output, /\[x\] read the agent loop/)
+  assert.match(result.output, /\[~\] add the task tool/)
+  assert.match(result.output, /\[ \] write tests/)
+
+  const stored = getTodos()
+  assert.equal(stored.length, 3)
+  assert.equal(stored[1]?.status, 'in_progress')
+
+  clearTodos()
 })
