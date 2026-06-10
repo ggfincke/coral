@@ -116,8 +116,11 @@ export default function App({
     resumeSession?.meta.id ?? resumeSessionId ?? null
   )
   const [tokenUsage, setTokenUsage] = useState({
+    // cumulative session totals (every turn re-prefills the context)
     prompt: 0,
     completion: 0,
+    // current context occupancy — drives the ctx gauge
+    context: 0,
     // last-turn throughput (tokens / second) — 0 when the server omitted durations
     lastPrefillTps: 0,
     lastDecodeTps: 0,
@@ -258,6 +261,7 @@ export default function App({
     setTokenUsage({
       prompt: 0,
       completion: 0,
+      context: 0,
       lastPrefillTps: 0,
       lastDecodeTps: 0,
     })
@@ -324,6 +328,7 @@ export default function App({
       setTokenUsage({
         prompt: 0,
         completion: 0,
+        context: 0,
         lastPrefillTps: 0,
         lastDecodeTps: 0,
       })
@@ -886,6 +891,7 @@ export default function App({
             setTokenUsage((prev) => ({
               prompt: usage.totalPromptTokens,
               completion: usage.totalCompletionTokens,
+              context: usage.contextTokens,
               // keep the previous throughput if the current turn reported nothing
               // (e.g., a cache-only hit w/ zero decode tokens)
               lastPrefillTps: prefillTps > 0 ? prefillTps : prev.lastPrefillTps,
@@ -1001,8 +1007,12 @@ export default function App({
 
   const sessionLabel = sessionLabelId ? `session ${sessionLabelId}` : ''
   const permissionMode = yolo ? 'yolo' : 'ask'
-  const totalTokens = tokenUsage.prompt + tokenUsage.completion
-  const tokenGauge = buildTokenGauge(totalTokens, contextWindow)
+  // ctx gauge reflects current context occupancy, not lifetime throughput
+  const tokenGauge = buildTokenGauge(tokenUsage.context, contextWindow)
+  // cumulative tokens processed this session — distinct from occupancy above
+  const sessionTokens = tokenUsage.prompt + tokenUsage.completion
+  const sessionGauge =
+    sessionTokens > 0 ? `${formatTokenCount(sessionTokens)} tok session` : ''
 
   // last-turn throughput — compact "45 tok/s · 210 tok/s prefill" or empty string
   // decode tok/s is the number the user feels, so it leads
@@ -1056,8 +1066,8 @@ export default function App({
   }
   else
   {
-    // idle state — show token gauge & last-turn throughput on left
-    const stateLeft = [tokenGauge || 'ready', perfGauge]
+    // idle state — show ctx gauge, last-turn throughput, & session total on left
+    const stateLeft = [tokenGauge || 'ready', perfGauge, sessionGauge]
       .filter(Boolean)
       .join(' · ')
     const yoloHint = yolo ? chalk.yellow('⚠ yolo') : ''

@@ -139,6 +139,9 @@ export interface TokenUsage
   completionTokens: number
   totalPromptTokens: number
   totalCompletionTokens: number
+  // current context occupancy (chars/4 of the live message array) — the value
+  // compaction triggers on, unlike the cumulative totals above
+  contextTokens: number
   // last turn — undefined when the server omitted the field
   promptEvalDurationNs?: number
   evalDurationNs?: number
@@ -788,6 +791,7 @@ export class Agent
               completionTokens,
               totalPromptTokens: this.totalPromptTokens,
               totalCompletionTokens: this.totalCompletionTokens,
+              contextTokens: this.estimatedTokenCount,
               promptEvalDurationNs,
               evalDurationNs,
               totalPromptEvalDurationNs: this.totalPromptEvalDurationNs,
