@@ -1,91 +1,22 @@
 // src/ollama/client.ts
 // Ollama REST API client w/ streaming chat
 
-// JSON Schema subset for tool parameters
-export interface JsonSchema
-{
-  type: 'object'
-  properties: Record<
-    string,
-    {
-      type: string
-      description?: string
-      enum?: string[]
-    }
-  >
-  required?: string[]
-}
-
-// chat message
-export interface OllamaMessage
-{
-  role: 'system' | 'user' | 'assistant' | 'tool'
-  content: string
-  thinking?: string
-  tool_name?: string
-  tool_calls?: OllamaToolCall[]
-}
-
-// tool call returned by the model
-export interface OllamaToolCall
-{
-  type?: 'function'
-  function: {
-    index?: number
-    name: string
-    arguments: Record<string, unknown>
-  }
-}
-
-// tool definition sent to the model
-export interface OllamaTool
-{
-  type: 'function'
-  function: {
-    name: string
-    description: string
-    parameters: JsonSchema
-  }
-}
-
-// request payload for /api/chat
-export interface ChatRequest
-{
-  model: string
-  messages: OllamaMessage[]
-  stream?: boolean
-  tools?: OllamaTool[]
-  think?: boolean | 'low' | 'medium' | 'high'
-  keep_alive?: string | number
-}
-
-// response chunk from /api/chat
-export interface ChatResponse
-{
-  message: OllamaMessage
-  done: boolean
-  done_reason?: string
-  total_duration?: number
-  load_duration?: number
-  prompt_eval_count?: number
-  prompt_eval_duration?: number
-  eval_count?: number
-  eval_duration?: number
-}
-
-// model metadata from /api/tags
-export interface Model
-{
-  name: string
-  size: number
-  modified_at: string
-}
-
-// model info returned by /api/show
-export interface ModelInfo
-{
-  context_length: number
-}
+import type {
+  ChatRequest,
+  ChatResponse,
+  Model,
+  ModelInfo,
+} from '../types/inference.js'
+export type {
+  ChatRequest,
+  ChatResponse,
+  JsonSchema,
+  Model,
+  ModelInfo,
+  OllamaMessage,
+  OllamaTool,
+  OllamaToolCall,
+} from '../types/inference.js'
 
 const DEFAULT_KEEP_ALIVE = '10m'
 const THINK_FALLBACK_STATUS = new Set([400, 404, 422])
@@ -149,6 +80,34 @@ export class OllamaClient
     this.thinkSupportByModel.set(model, support)
   }
 
+  // POST a chat body, mapping connection failures to an actionable message —
+  // undici surfaces a dropped socket (server down, OOM, oversized request) as a
+  // bare "fetch failed", so translate it while letting aborts propagate as-is
+  private async chatFetch(
+    body: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<Response>
+  {
+    try
+    {
+      return await fetch(`${this.baseUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      })
+    }
+    catch (err)
+    {
+      if (signal?.aborted) throw err
+      const detail = err instanceof Error ? err.message : String(err)
+      throw new Error(
+        `Cannot reach Ollama at ${this.baseUrl} — the server may be down, or ` +
+          `the request may have exceeded the model's context or memory (${detail})`
+      )
+    }
+  }
+
   // open a chat stream & fall back when think is unsupported
   private async postChat(
     request: ChatRequest,
@@ -160,12 +119,10 @@ export class OllamaClient
       request.think !== undefined &&
       request.think !== false &&
       thinkSupport !== 'unsupported'
-    const initial = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(this.buildChatBody(request, includeThink)),
-      signal,
-    })
+    const initial = await this.chatFetch(
+      this.buildChatBody(request, includeThink),
+      signal
+    )
 
     if (initial.ok)
     {
@@ -189,12 +146,10 @@ export class OllamaClient
 
     this.setThinkSupport(request.model, 'unsupported')
 
-    const retry = await fetch(`${this.baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(this.buildChatBody(request, false)),
-      signal,
-    })
+    const retry = await this.chatFetch(
+      this.buildChatBody(request, false),
+      signal
+    )
 
     if (!retry.ok)
     {

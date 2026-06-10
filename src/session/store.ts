@@ -9,13 +9,10 @@ import {
   existsSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 import { randomBytes } from 'node:crypto'
-import type { OllamaMessage } from '../ollama/client.js'
+import type { OllamaMessage } from '../types/inference.js'
+import { getCoralHome } from '../utils/coral-home.js'
 
-// where sessions live on disk
-const SESSIONS_DIR = join(homedir(), '.coral', 'sessions')
-const SESSION_INDEX_PATH = join(SESSIONS_DIR, 'index.json')
 const SESSION_INDEX_VERSION = 1
 
 // session metadata stored alongside the conversation
@@ -83,13 +80,25 @@ function extractTitle(messages: OllamaMessage[]): string
 // ensure the sessions directory exists
 function ensureDir(): void
 {
-  mkdirSync(SESSIONS_DIR, { recursive: true })
+  mkdirSync(sessionsDir(), { recursive: true })
+}
+
+// get the directory where sessions live
+function sessionsDir(): string
+{
+  return join(getCoralHome(), 'sessions')
+}
+
+// get the compact metadata index path
+function sessionIndexPath(): string
+{
+  return join(sessionsDir(), 'index.json')
 }
 
 // get the file path for a session ID
 function sessionPath(id: string): string
 {
-  return join(SESSIONS_DIR, `${id}.json`)
+  return join(sessionsDir(), `${id}.json`)
 }
 
 // sort sessions newest-first by update time
@@ -119,7 +128,7 @@ function writeSessionIndex(sessions: SessionMeta[]): void
     sessions: sortSessions(sessions),
   }
 
-  writeFileSync(SESSION_INDEX_PATH, JSON.stringify(file, null, 2), 'utf-8')
+  writeFileSync(sessionIndexPath(), JSON.stringify(file, null, 2), 'utf-8')
 }
 
 // scan full session files only as a fallback for missing/corrupt indexes
@@ -128,13 +137,14 @@ function rebuildSessionIndex(): SessionMeta[]
   ensureDir()
 
   const sessions: SessionMeta[] = []
-  const files = readdirSync(SESSIONS_DIR).filter(
+  const dir = sessionsDir()
+  const files = readdirSync(dir).filter(
     (file) => file.endsWith('.json') && file !== 'index.json'
   )
 
   for (const file of files)
   {
-    const session = readJsonFile<SessionData>(join(SESSIONS_DIR, file))
+    const session = readJsonFile<SessionData>(join(dir, file))
     if (session?.meta)
     {
       sessions.push(session.meta)
@@ -150,7 +160,7 @@ function loadSessionIndex(): SessionMeta[]
 {
   ensureDir()
 
-  const index = readJsonFile<SessionIndexFile>(SESSION_INDEX_PATH)
+  const index = readJsonFile<SessionIndexFile>(sessionIndexPath())
   if (
     index?.version === SESSION_INDEX_VERSION &&
     Array.isArray(index.sessions)
@@ -165,9 +175,29 @@ function loadSessionIndex(): SessionMeta[]
 // insert or replace a session entry in the metadata index
 function upsertSessionIndex(meta: SessionMeta): void
 {
-  const sessions = loadSessionIndex().filter((session) => session.id !== meta.id)
+  const sessions = loadSessionIndex().filter(
+    (session) => session.id !== meta.id
+  )
   sessions.push(meta)
   writeSessionIndex(sessions)
+}
+
+// count messages that are part of the conversation history
+function countConversationMessages(messages: OllamaMessage[]): number
+{
+  return messages.filter((m) => m.role !== 'system').length
+}
+
+// write a session file & update the compact metadata index
+function writeSessionData(session: SessionData): void
+{
+  ensureDir()
+  writeFileSync(
+    sessionPath(session.meta.id),
+    JSON.stringify(session, null, 2),
+    'utf-8'
+  )
+  upsertSessionIndex(session.meta)
 }
 
 // create a new session & persist it
@@ -181,8 +211,6 @@ export function createSession(
 
   const id = generateId()
   const now = new Date().toISOString()
-  const nonSystemMessages = messages.filter((m) => m.role !== 'system')
-
   const meta: SessionMeta = {
     id,
     model,
@@ -190,12 +218,10 @@ export function createSession(
     createdAt: now,
     updatedAt: now,
     title: extractTitle(messages),
-    messageCount: nonSystemMessages.length,
+    messageCount: countConversationMessages(messages),
   }
 
-  const file: SessionData = { meta, messages }
-  writeFileSync(sessionPath(id), JSON.stringify(file, null, 2), 'utf-8')
-  upsertSessionIndex(meta)
+  writeSessionData({ meta, messages })
 
   return meta
 }
@@ -219,7 +245,6 @@ export function saveSession(
     createdAt: metaHint?.createdAt ?? indexedMeta?.createdAt,
     title: metaHint?.title ?? indexedMeta?.title,
   }
-  const nonSystemMessages = messages.filter((m) => m.role !== 'system')
   const meta: SessionMeta = {
     id,
     model,
@@ -227,14 +252,12 @@ export function saveSession(
     createdAt: existingMeta.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     title: existingMeta.title ?? extractTitle(messages),
-    messageCount: nonSystemMessages.length,
+    messageCount: countConversationMessages(messages),
     compactionCount: metaHint?.compactionCount ?? indexedMeta?.compactionCount,
     lastCompactedAt: metaHint?.lastCompactedAt ?? indexedMeta?.lastCompactedAt,
   }
 
-  const file: SessionData = { meta, messages }
-  writeFileSync(sessionPath(id), JSON.stringify(file, null, 2), 'utf-8')
-  upsertSessionIndex(meta)
+  writeSessionData({ meta, messages })
 
   return meta
 }
@@ -273,8 +296,7 @@ export function renameSession(id: string, title: string): SessionMeta | null
   session.meta.title = title
   session.meta.updatedAt = new Date().toISOString()
 
-  writeFileSync(sessionPath(id), JSON.stringify(session, null, 2), 'utf-8')
-  upsertSessionIndex(session.meta)
+  writeSessionData(session)
 
   return session.meta
 }
