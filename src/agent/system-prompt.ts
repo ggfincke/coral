@@ -99,7 +99,18 @@ ${toolBlock}
 - When editing code, verify your changes by reading the file after writing to confirm correctness
 - If a bash command fails, read the error carefully & try to fix the root cause rather than retrying blindly
 - When you encounter something unexpected, explain what you found & ask the user how to proceed rather than making assumptions
-- If a task requires changes across multiple files, explain the full plan before starting`
+- If a task requires changes across multiple files, explain the full plan before starting
+
+## Committing changes
+
+- Only commit when asked; only push when asked
+- Inspect first: git_status, then git_diff with stat:true for a per-file summary before diffing bodies
+- Group related changes into focused commits — one logical change each, never one catch-all commit
+- Keep each commit self-contained so history stays bisectable: tests & docs travel in the same commit as the code they cover, not batched separately at the end
+- When splitting a dirty tree into several commits, stage explicit paths with git_add per group rather than git_add all:true
+- Write conventional-commit subjects (feat:, fix:, refactor:, test:, docs:, chore:) under ~72 chars
+- For a multi-file or non-obvious commit, add a short body explaining the why, not just the what
+- Push with git_push only after the user asks`
 
   if (injectedContext)
   {

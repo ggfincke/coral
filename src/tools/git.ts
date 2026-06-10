@@ -236,3 +236,67 @@ export const gitCommitTool: Tool = {
     return { output: result.output || '(commit created)' }
   },
 }
+
+// approval-gated write tool — pushes commits to a remote
+export const gitPushTool: Tool = {
+  name: 'git_push',
+  description:
+    'Push committed changes to a remote. With no args, pushes the current ' +
+    'branch to its upstream. For a branch with no upstream yet, pass remote, ' +
+    'branch, & setUpstream:true.',
+  parameters: {
+    type: 'object',
+    properties: {
+      remote: {
+        type: 'string',
+        description: 'Remote name (e.g. origin) — defaults to the branch upstream',
+      },
+      branch: {
+        type: 'string',
+        description: 'Branch to push — requires remote',
+      },
+      setUpstream: {
+        type: 'boolean',
+        description: 'Set the upstream tracking ref (-u); requires remote & branch',
+      },
+    },
+  },
+  async execute(args): Promise<ToolResult>
+  {
+    const remote = args.remote as string | undefined
+    const branch = args.branch as string | undefined
+    const setUpstream = args.setUpstream as boolean | undefined
+
+    if (remote && isUnsafeRef(remote))
+    {
+      return { output: '', error: `Invalid remote: ${remote}` }
+    }
+    if (branch && isUnsafeRef(branch))
+    {
+      return { output: '', error: `Invalid branch: ${branch}` }
+    }
+    if (branch && !remote)
+    {
+      return { output: '', error: 'git_push branch requires a remote' }
+    }
+    if (setUpstream && (!remote || !branch))
+    {
+      return {
+        output: '',
+        error: 'git_push setUpstream requires remote & branch',
+      }
+    }
+
+    // --porcelain writes the push result to stdout; the human-readable summary
+    // goes to stderr, which execFileSync drops on success
+    const flags = ['push', '--porcelain']
+    if (setUpstream) flags.push('-u')
+    if (remote) flags.push(remote)
+    if (branch) flags.push(branch)
+
+    // pushes hit the network — allow more time than the default git timeout
+    const result = runGitCommand(flags, getCwd(), { timeout: 60_000 })
+    if (result.error) return result
+    return { output: result.output || '(pushed)' }
+  },
+}

@@ -16,6 +16,7 @@ import {
   gitLogTool,
   gitAddTool,
   gitCommitTool,
+  gitPushTool,
 } from '../src/tools/git.js'
 
 const tempDirs: string[] = []
@@ -154,3 +155,54 @@ test(
     assert.match(commit.output, /init commit/)
   }
 )
+
+// the guards reject before git runs, so no repo is needed
+test('git_push rejects option-like remotes & branch without remote', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-gitsec-'))
+  tempDirs.push(dir)
+  setCwd(dir)
+
+  const badRemote = await gitPushTool.execute({ remote: '--exec=evil' })
+  assert.match(badRemote.error ?? '', /Invalid remote/)
+
+  const noRemote = await gitPushTool.execute({ branch: 'main' })
+  assert.match(noRemote.error ?? '', /requires a remote/)
+
+  const noTarget = await gitPushTool.execute({ setUpstream: true })
+  assert.match(noTarget.error ?? '', /setUpstream requires/)
+})
+
+test('git_push pushes commits to a local remote', { skip: !hasGit }, async () =>
+{
+  const bare = await mkdtemp(join(tmpdir(), 'coral-bare-'))
+  tempDirs.push(bare)
+  spawnSync('git', ['init', '--bare', bare])
+
+  const work = await mkdtemp(join(tmpdir(), 'coral-push-'))
+  tempDirs.push(work)
+  spawnSync('git', ['init', work])
+  // force the branch name to main regardless of git version/config defaults
+  spawnSync('git', ['-C', work, 'symbolic-ref', 'HEAD', 'refs/heads/main'])
+  spawnSync('git', ['-C', work, 'config', 'user.email', 'test@coral.dev'])
+  spawnSync('git', ['-C', work, 'config', 'user.name', 'Coral Test'])
+  await writeFile(join(work, 'a.txt'), 'hello\n', 'utf-8')
+  spawnSync('git', ['-C', work, 'add', '-A'])
+  spawnSync('git', ['-C', work, 'commit', '-m', 'init'])
+  spawnSync('git', ['-C', work, 'remote', 'add', 'origin', bare])
+
+  setCwd(work)
+  const res = await gitPushTool.execute({
+    remote: 'origin',
+    branch: 'main',
+    setUpstream: true,
+  })
+  assert.equal(res.error, undefined)
+
+  // the bare remote now holds the pushed commit — query the pushed branch
+  // directly, since the bare HEAD may default to a different branch name
+  const log = spawnSync('git', ['-C', bare, 'log', '--oneline', 'main'], {
+    encoding: 'utf-8',
+  })
+  assert.match(log.stdout, /init/)
+})

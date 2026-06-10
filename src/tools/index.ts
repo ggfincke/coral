@@ -15,6 +15,7 @@ import {
   gitLogTool,
   gitAddTool,
   gitCommitTool,
+  gitPushTool,
 } from './git.js'
 
 // all available tools
@@ -31,6 +32,7 @@ export const allTools: Tool[] = [
   gitLogTool,
   gitAddTool,
   gitCommitTool,
+  gitPushTool,
 ]
 
 // find a tool by name
