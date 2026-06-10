@@ -2,24 +2,38 @@
 // tests for session persistence (save/load/list/resume)
 
 import { strict as assert } from 'node:assert'
-import { rm } from 'node:fs/promises'
-import { after, test } from 'node:test'
-import type { OllamaMessage } from '../src/ollama/client.js'
-
-// override SESSIONS_DIR before importing store — use a temp directory
-// we need to monkey-patch the module's internal path
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after, beforeEach, test } from 'node:test'
+import type { OllamaMessage } from '../src/types/inference.js'
 
 const tempDirs: string[] = []
+const originalCoralHome = process.env.CORAL_HOME
+
+beforeEach(async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-sessions-'))
+  tempDirs.push(dir)
+  process.env.CORAL_HOME = dir
+})
 
 after(async () =>
 {
+  if (originalCoralHome === undefined)
+  {
+    delete process.env.CORAL_HOME
+  }
+  else
+  {
+    process.env.CORAL_HOME = originalCoralHome
+  }
+
   await Promise.all(
     tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
   )
 })
 
-// import the store functions (they use ~/.coral/sessions by default)
-// tests create actual sessions in the real dir — we'll clean up by ID
 import {
   createSession,
   saveSession,

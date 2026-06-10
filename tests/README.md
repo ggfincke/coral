@@ -13,12 +13,14 @@ We focus on testing critical pure-function logic that, if broken, would cause si
 - **System Prompt**: Prompt assembly w/ CWD, tool descriptions, project context
 - **Ollama Client**: Request/response serialization, ndjson stream parsing, error handling
 - **Path Resolution**: CWD-relative path handling across tools
+- **TUI Logic**: Critical prompt editing, keypress parsing, transcript rendering, and session restoration helpers
+- **Persistence**: Session and prompt-history storage, including isolated test homes
 
 We intentionally do not test:
 
 - Every edge case or configuration combination
-- React Ink components or hooks
-- TUI rendering or layout
+- Full React Ink component rendering or layout snapshots
+- Cosmetic-only TUI formatting
 - Ollama model behavior or output quality
 - Utility functions with obvious behavior (single ternary, field projection)
 - CLI arg parsing (commander handles this)
@@ -42,7 +44,7 @@ Before adding a new test, ask:
 
 1. Does this test a critical path that would break core functionality if it failed?
 2. Is this behavior not already covered by existing tests?
-3. Can this be tested as a pure function without DOM or mocking?
+3. Can this be tested as a pure function or narrowly scoped hook/helper?
 4. Would breakage cause significant user impact (broken tool calls, corrupted files, lost conversation state)?
 
 If yes to all four, add the test. Otherwise, consider whether it's truly necessary.

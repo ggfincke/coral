@@ -5,7 +5,11 @@ import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import stripAnsi from 'strip-ansi'
 import { renderMarkdownToAnsi } from '../src/tui/markdown.js'
-import { buildModelPickerLines, sortModels } from '../src/tui/model-picker.js'
+import {
+  buildModelPickerLines,
+  sortModels,
+  DEFAULT_MODEL,
+} from '../src/tui/model-picker.js'
 import {
   buildTranscriptLines,
   maxScrollOffset,
@@ -86,16 +90,16 @@ test('buildTranscriptLines renders speaker labels & viewport slicing', () =>
     'assistant label missing'
   )
   assert.ok(
-    lines.some((line) => line.includes('⎿')),
-    'tool call connector ⎿ missing'
+    lines.some((line) => line.includes('│ ✓ Read')),
+    'tool call status line missing'
   )
   assert.ok(
     lines.some((line) => line.includes('✓')),
     'success indicator ✓ missing'
   )
   assert.ok(
-    lines.some((line) => line.includes('└')),
-    'tool result tree connector └ missing'
+    lines.some((line) => line.includes('│   file contents here')),
+    'tool result content line missing'
   )
   assert.ok(lines.some((line) => line.includes('approval flow exists')))
 
@@ -137,7 +141,7 @@ test('buildTranscriptLines can hide reasoning while preserving a live hint', () 
     )
   )
   assert.ok(hiddenLines.some((line) => line.includes('Ready.')))
-  assert.ok(liveHiddenLines.some((line) => line.includes('Thinking hidden')))
+  assert.ok(liveHiddenLines.some((line) => line.includes('Thinking')))
   assert.ok(liveHiddenLines.some((line) => line.includes('ctrl+t to show')))
 })
 
@@ -171,4 +175,29 @@ test('model picker sorts newest models first & renders selected metadata', () =>
   assert.ok(
     lines.some((line) => line.includes('Modified: 2024-01-01T01:01:00.000Z'))
   )
+})
+
+test('sortModels pins the default model to the top regardless of date', () =>
+{
+  const models = sortModels([
+    {
+      name: 'qwen3.6:35b-a3b-coding-mxfp8',
+      size: 37_000_000_000,
+      modified_at: '2026-06-01T00:00:00.000Z',
+    },
+    {
+      name: DEFAULT_MODEL,
+      size: 20_000_000_000,
+      modified_at: '2025-01-01T00:00:00.000Z',
+    },
+    {
+      name: 'gemma4:latest',
+      size: 9_600_000_000,
+      modified_at: '2026-06-07T00:00:00.000Z',
+    },
+  ])
+
+  // default is pinned first even though it is the oldest by modified date
+  assert.equal(models[0]!.name, DEFAULT_MODEL)
+  assert.equal(models[1]!.name, 'gemma4:latest')
 })

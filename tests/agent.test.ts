@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { Agent } from '../src/agent/agent.js'
-import type { OllamaMessage } from '../src/ollama/client.js'
+import type { OllamaMessage } from '../src/types/inference.js'
 
 const tempDirs: string[] = []
 
@@ -285,7 +285,96 @@ test('Agent only asks approval for dangerous tools & records rejections as tool 
     (message) => message.role === 'tool' && message.tool_name === 'bash'
   )
   assert.ok(bashToolMessage)
-  assert.equal(bashToolMessage.content, 'Tool call rejected by user')
+  assert.equal(bashToolMessage.content, 'Error: Tool call rejected by user')
+})
+
+test('aborting mid-tools records a reply for every announced tool_call', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-abort-'))
+  tempDirs.push(dir)
+  await writeFile(join(dir, 'note.txt'), 'hello\n', 'utf-8')
+
+  const agent = new Agent('fake-model', 'http://localhost:11434', dir) as Agent & {
+    client: {
+      stopKeepAlive?: () => void
+      startKeepAlive: (model: string) => void
+      chatStream: () => AsyncGenerator<{
+        message: OllamaMessage
+        done: boolean
+      }>
+    }
+    messages: OllamaMessage[]
+  }
+
+  agent.client.stopKeepAlive?.()
+  agent.client = {
+    startKeepAlive()
+    {},
+    async *chatStream()
+    {
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: { name: 'read_file', arguments: { path: 'note.txt' } },
+            },
+            {
+              type: 'function',
+              function: { name: 'bash', arguments: { command: 'pwd' } },
+            },
+            {
+              type: 'function',
+              function: { name: 'read_file', arguments: { path: 'note.txt' } },
+            },
+          ],
+        },
+        done: true,
+      }
+    },
+  }
+
+  // abort while the approval-gated bash call is pending, mid-batch
+  const controller = new AbortController()
+
+  await agent.run(
+    'go',
+    {
+      onToken()
+      {},
+      onToolCall()
+      {},
+      onToolResult()
+      {},
+      onToolApproval()
+      {
+        controller.abort()
+        return new Promise<boolean>(() => {})
+      },
+      onDone()
+      {},
+      onError(error)
+      {
+        throw error
+      },
+    },
+    controller.signal
+  )
+
+  // every tool_call in the assistant turn must have exactly one matching reply
+  const assistant = agent.messages.find(
+    (message) => message.role === 'assistant' && message.tool_calls
+  )
+  assert.ok(assistant?.tool_calls)
+  const toolReplies = agent.messages.filter((message) => message.role === 'tool')
+  assert.equal(toolReplies.length, assistant.tool_calls!.length)
+
+  const bashReply = agent.messages.find(
+    (message) => message.role === 'tool' && message.tool_name === 'bash'
+  )
+  assert.match(bashReply?.content ?? '', /interrupted/i)
 })
 
 test('Agent.dispose unloads the active model on shutdown', async () =>

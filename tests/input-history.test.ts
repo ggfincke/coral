@@ -2,10 +2,16 @@
 // tests for input history persistence & navigation state machine
 
 import { strict as assert } from 'node:assert'
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
-import { after, afterEach, test } from 'node:test'
+import { tmpdir } from 'node:os'
+import { after, beforeEach, test } from 'node:test'
 
 import {
   loadHistory,
@@ -15,38 +21,35 @@ import {
   type HistoryEntry,
 } from '../src/tui/input-history.js'
 
-const HISTORY_PATH = join(homedir(), '.coral', 'history.jsonl')
+const tempDirs: string[] = []
+const originalCoralHome = process.env.CORAL_HOME
 
-// save original content & restore after tests
-let originalContent: string | null = null
-let backedUp = false
-
-function ensureBackup(): void
+function historyPath(): string
 {
-  if (backedUp) return
-  backedUp = true
-  if (existsSync(HISTORY_PATH))
-  {
-    originalContent = readFileSync(HISTORY_PATH, 'utf-8')
-  }
+  return join(process.env.CORAL_HOME!, 'history.jsonl')
 }
 
-afterEach(() =>
+beforeEach(() =>
 {
-  // clean up after each test so they don't interfere
-  if (existsSync(HISTORY_PATH))
-  {
-    unlinkSync(HISTORY_PATH)
-  }
+  const dir = mkdtempSync(join(tmpdir(), 'coral-history-'))
+  tempDirs.push(dir)
+  process.env.CORAL_HOME = dir
 })
 
 after(() =>
 {
-  // restore original history file
-  if (originalContent !== null)
+  if (originalCoralHome === undefined)
   {
-    mkdirSync(join(homedir(), '.coral'), { recursive: true })
-    writeFileSync(HISTORY_PATH, originalContent, 'utf-8')
+    delete process.env.CORAL_HOME
+  }
+  else
+  {
+    process.env.CORAL_HOME = originalCoralHome
+  }
+
+  for (const dir of tempDirs)
+  {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
 
@@ -54,17 +57,12 @@ after(() =>
 
 test('loadHistory returns empty array when file does not exist', () =>
 {
-  ensureBackup()
-  if (existsSync(HISTORY_PATH)) unlinkSync(HISTORY_PATH)
-
   const entries = loadHistory()
   assert.deepEqual(entries, [])
 })
 
 test('appendHistoryEntry creates file & writes entry', () =>
 {
-  ensureBackup()
-
   const entry: HistoryEntry = {
     text: 'hello world',
     timestamp: 1000,
@@ -73,7 +71,7 @@ test('appendHistoryEntry creates file & writes entry', () =>
 
   appendHistoryEntry(entry)
 
-  assert.ok(existsSync(HISTORY_PATH))
+  assert.ok(existsSync(historyPath()))
 
   const entries = loadHistory()
   assert.equal(entries.length, 1)
@@ -84,8 +82,6 @@ test('appendHistoryEntry creates file & writes entry', () =>
 
 test('loadHistory reads back multiple entries in order', () =>
 {
-  ensureBackup()
-
   appendHistoryEntry({ text: 'first', timestamp: 1, sessionId: null })
   appendHistoryEntry({ text: 'second', timestamp: 2, sessionId: null })
   appendHistoryEntry({ text: 'third', timestamp: 3, sessionId: null })
@@ -99,17 +95,18 @@ test('loadHistory reads back multiple entries in order', () =>
 
 test('loadHistory skips corrupt JSONL lines', () =>
 {
-  ensureBackup()
-  mkdirSync(join(homedir(), '.coral'), { recursive: true })
+  const path = historyPath()
+  mkdirSync(join(path, '..'), { recursive: true })
 
-  const content = [
-    JSON.stringify({ text: 'good one', timestamp: 1, sessionId: null }),
-    'this is not json',
-    '{"broken": true}',
-    JSON.stringify({ text: 'good two', timestamp: 2, sessionId: null }),
-  ].join('\n') + '\n'
+  const content =
+    [
+      JSON.stringify({ text: 'good one', timestamp: 1, sessionId: null }),
+      'this is not json',
+      '{"broken": true}',
+      JSON.stringify({ text: 'good two', timestamp: 2, sessionId: null }),
+    ].join('\n') + '\n'
 
-  writeFileSync(HISTORY_PATH, content, 'utf-8')
+  writeFileSync(path, content, 'utf-8')
 
   const entries = loadHistory()
   assert.equal(entries.length, 2)
@@ -119,15 +116,33 @@ test('loadHistory skips corrupt JSONL lines', () =>
 
 test('loadHistory handles null sessionId gracefully', () =>
 {
-  ensureBackup()
-  mkdirSync(join(homedir(), '.coral'), { recursive: true })
+  const path = historyPath()
+  mkdirSync(join(path, '..'), { recursive: true })
 
   const content = JSON.stringify({ text: 'test', timestamp: 1 }) + '\n'
-  writeFileSync(HISTORY_PATH, content, 'utf-8')
+  writeFileSync(path, content, 'utf-8')
 
   const entries = loadHistory()
   assert.equal(entries.length, 1)
   assert.equal(entries[0]!.sessionId, null)
+})
+
+test('appendHistoryEntry trims the history file to MAX_ENTRIES', () =>
+{
+  for (let i = 0; i < 505; i++)
+  {
+    appendHistoryEntry({
+      text: `entry ${i}`,
+      timestamp: i,
+      sessionId: null,
+    })
+  }
+
+  const entries = loadHistory()
+
+  assert.equal(entries.length, 500)
+  assert.equal(entries[0]!.text, 'entry 5')
+  assert.equal(entries.at(-1)!.text, 'entry 504')
 })
 
 // ── navigation state machine tests ────────────────────────────────────
@@ -201,7 +216,12 @@ test('full navigation cycle: up to oldest, then down to draft', () =>
   let state = { index: -1, draft: '' }
 
   // navigate up to third (newest)
-  let result = computeNavigateUp(sampleEntries, state.index, 'current', state.draft)
+  let result = computeNavigateUp(
+    sampleEntries,
+    state.index,
+    'current',
+    state.draft
+  )
   assert.equal(result.text, 'third')
   state = { index: result.index, draft: result.draft }
 
@@ -237,7 +257,9 @@ test('full navigation cycle: up to oldest, then down to draft', () =>
 
 test('computeNavigateUp with single entry works correctly', () =>
 {
-  const single: HistoryEntry[] = [{ text: 'only', timestamp: 1, sessionId: null }]
+  const single: HistoryEntry[] = [
+    { text: 'only', timestamp: 1, sessionId: null },
+  ]
 
   const up = computeNavigateUp(single, -1, '', '')
   assert.equal(up.index, 0)
