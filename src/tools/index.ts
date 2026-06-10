@@ -9,7 +9,13 @@ import { grepTool } from './grep.js'
 import { globTool } from './glob.js'
 import { listFilesTool } from './list-files.js'
 import { bashTool } from './bash.js'
-import { gitStatusTool, gitDiffTool, gitLogTool } from './git.js'
+import {
+  gitStatusTool,
+  gitDiffTool,
+  gitLogTool,
+  gitAddTool,
+  gitCommitTool,
+} from './git.js'
 
 // all available tools
 export const allTools: Tool[] = [
@@ -23,6 +29,8 @@ export const allTools: Tool[] = [
   gitStatusTool,
   gitDiffTool,
   gitLogTool,
+  gitAddTool,
+  gitCommitTool,
 ]
 
 // find a tool by name

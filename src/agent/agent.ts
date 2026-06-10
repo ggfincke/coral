@@ -2,11 +2,13 @@
 // conversation loop w/ tool-use cycling
 
 import { OllamaClient } from '../ollama/client.js'
-import type {
-  OllamaMessage,
-  OllamaToolCall,
-} from '../ollama/client.js'
-import { allTools, getToolByName, toolToOllamaFormat } from '../tools/index.js'
+import type { OllamaMessage, OllamaToolCall } from '../types/inference.js'
+import {
+  allTools,
+  getToolByName,
+  toolToOllamaFormat,
+  type ToolResult,
+} from '../tools/index.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { setCwd, getCwd } from '../cwd.js'
 import {
@@ -32,12 +34,23 @@ import {
 
 export type { CompactionResult } from './compaction.js'
 import { toError } from '../utils/errors.js'
+import { capToolOutput } from './tool-output.js'
 
 // pre-compute Ollama tool format (static after registration)
 const ollamaTools = allTools.map(toolToOllamaFormat)
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
+
+const COMPACTION_SYSTEM_PROMPT =
+  'You are a helpful assistant. Produce a concise structured summary of the conversation.'
+
+interface ToolInvocation
+{
+  id: number
+  name: string
+  args: Record<string, unknown>
+}
 
 // merge streamed tool call chunks into a stable ordered list
 function mergeToolCalls(
@@ -88,13 +101,11 @@ function mergeToolCalls(
 }
 
 // race a promise against an AbortSignal — rejects w/ AbortError if aborted first
-function raceAbort<T>(
-  promise: Promise<T>,
-  signal?: AbortSignal
-): Promise<T>
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
 {
   if (!signal) return promise
-  if (signal.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'))
+  if (signal.aborted)
+    return Promise.reject(new DOMException('Aborted', 'AbortError'))
 
   return new Promise<T>((resolve, reject) =>
   {
@@ -141,8 +152,19 @@ export interface AgentEvents
 {
   onToken: (token: string) => void
   onThinking?: (thinking: string) => void
-  onToolCall: (name: string, args: Record<string, unknown>) => void
-  onToolResult: (name: string, result: string, error?: string) => void
+  // callId correlates a result back to its call — required for parallel batches
+  // where several calls (often same-named) are announced before any resolve
+  onToolCall: (
+    name: string,
+    args: Record<string, unknown>,
+    callId: number
+  ) => void
+  onToolResult: (
+    name: string,
+    result: string,
+    error: string | undefined,
+    callId: number
+  ) => void
   // return true to approve, false to reject — only called for write/edit/bash
   onToolApproval: (
     name: string,
@@ -330,57 +352,15 @@ export class Agent
     )
     if (toSummarize.length === 0) return null
 
-    // strip thinking blocks before feeding to the summarizer
-    const cleaned = stripThinkingForCompaction(toSummarize)
-    const compactionPrompt = buildCompactionPrompt(cleaned)
-    let summary = ''
+    const summary = await this.buildCompactionSummary(toSummarize)
+    if (summary === null) return null
 
-    this.onCompactionStartCallback?.()
-
-    try
-    {
-      for await (const chunk of this.client.chatStream({
-        model: this.model,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a helpful assistant. Produce a concise structured summary of the conversation.',
-          },
-          { role: 'user', content: compactionPrompt },
-        ],
-      }))
-      {
-        if (chunk.message.content)
-        {
-          summary += chunk.message.content
-        }
-      }
-    }
-    catch
-    {
-      return null
-    }
-
-    if (!summary.trim()) return null
-
-    const systemMsg = this.messages[0]!
-    this.messages = buildCompactedMessages(systemMsg, summary, toKeep)
-    this.rebuildTokenEstimate()
-
-    this.compactionCount++
-    this.lastCompactedAt = new Date().toISOString()
-
-    const result: CompactionResult = {
-      type: 'summarized',
+    return this.applyCompactedSummary(
+      summary,
+      toKeep,
       beforeTokens,
-      afterTokens: this.estimatedTokenCount,
-      beforeMessages,
-      afterMessages: this.messages.length,
-    }
-
-    this.onCompactionCallback?.(result)
-    return result
+      beforeMessages
+    )
   }
 
   // get the estimated token count for the current conversation
@@ -486,15 +466,184 @@ export class Agent
     this.onCompactionStartCallback = undefined
   }
 
+  // build a model-generated summary for older messages
+  // returns null when the model call fails or yields an empty summary
+  private async buildCompactionSummary(
+    messagesToSummarize: OllamaMessage[]
+  ): Promise<string | null>
+  {
+    const cleaned = stripThinkingForCompaction(messagesToSummarize)
+    const compactionPrompt = buildCompactionPrompt(cleaned)
+    let summary = ''
+
+    this.onCompactionStartCallback?.()
+
+    try
+    {
+      for await (const chunk of this.client.chatStream({
+        model: this.model,
+        messages: [
+          {
+            role: 'system',
+            content: COMPACTION_SYSTEM_PROMPT,
+          },
+          { role: 'user', content: compactionPrompt },
+        ],
+      }))
+      {
+        if (chunk.message.content)
+        {
+          summary += chunk.message.content
+        }
+      }
+    }
+    catch
+    {
+      return null
+    }
+
+    if (!summary.trim()) return null
+
+    return summary
+  }
+
+  // replace compacted messages w/ a summary turn & report stats
+  private applyCompactedSummary(
+    summary: string,
+    toKeep: OllamaMessage[],
+    beforeTokens: number,
+    beforeMessages: number
+  ): CompactionResult
+  {
+    const systemMsg = this.messages[0]!
+    this.messages = buildCompactedMessages(systemMsg, summary, toKeep)
+    this.rebuildTokenEstimate()
+
+    this.compactionCount++
+    this.lastCompactedAt = new Date().toISOString()
+
+    const result: CompactionResult = {
+      type: 'summarized',
+      beforeTokens,
+      afterTokens: this.estimatedTokenCount,
+      beforeMessages,
+      afterMessages: this.messages.length,
+    }
+
+    this.onCompactionCallback?.(result)
+    return result
+  }
+
+  // trim to recent history while keeping the system prompt once
+  private trimHistoryToMax(): void
+  {
+    const systemMsg = this.messages[0]!
+    const recent = this.messages.slice(1).slice(-(MAX_HISTORY - 1))
+    this.messages = [systemMsg, ...recent]
+    this.rebuildTokenEstimate()
+  }
+
+  // count failed summarization attempts & fall back to trimming
+  // reports the trim honestly as 'trimmed' (not a fake summarization)
+  private recordCompactionFailure(
+    beforeTokens: number,
+    beforeMessages: number
+  ): void
+  {
+    this.compactFailureCount++
+    if (this.compactFailureCount < MAX_COMPACT_FAILURES) return
+
+    this.trimHistoryToMax()
+    this.compactFailureCount = 0
+
+    // only report when the trim actually dropped messages
+    if (this.messages.length === beforeMessages) return
+
+    this.onCompactionCallback?.({
+      type: 'trimmed',
+      beforeTokens,
+      afterTokens: this.estimatedTokenCount,
+      beforeMessages,
+      afterMessages: this.messages.length,
+    })
+  }
+
+  // identify read-only, approval-free tools that can run out of order internally
+  // derives parallel-safety from the tool's readOnly flag (not a separate list)
+  // while keeping the live policy check so approval-gated tools still serialize
+  private canRunToolInParallel(toolName: string): boolean
+  {
+    return (
+      getToolByName(toolName)?.readOnly === true &&
+      getToolPolicy(this.permissions, toolName) === 'always_allow'
+    )
+  }
+
+  // execute a registered tool & convert thrown errors to tool results
+  private async executeTool(
+    toolName: string,
+    toolArgs: Record<string, unknown>
+  ): Promise<ToolResult>
+  {
+    const tool = getToolByName(toolName)
+
+    if (!tool)
+    {
+      return {
+        output: '',
+        error: `Unknown tool: ${toolName}`,
+      }
+    }
+
+    try
+    {
+      return await tool.execute(toolArgs)
+    }
+    catch (err)
+    {
+      return {
+        output: '',
+        error: `Tool execution failed for ${toolName}: ${toError(err).message}`,
+      }
+    }
+  }
+
+  // format a tool message for the next model turn — execution errors, policy
+  // denials, approval rejections, & interruptions all use the 'Error: ' prefix
+  // so the model sees one consistent failure shape
+  private buildToolMessage(
+    toolName: string,
+    output: string,
+    error?: string
+  ): OllamaMessage
+  {
+    // bound output so a single huge result can't overflow the window or stall
+    // the server during prefill (errors stay short, so cap output only)
+    const capped = capToolOutput(output)
+    const content = error
+      ? capped
+        ? `Error: ${error}\n${capped}`
+        : `Error: ${error}`
+      : capped
+
+    return {
+      role: 'tool',
+      tool_name: toolName,
+      content,
+    }
+  }
+
   // two-phase compaction: prune tool results first, then summarize if needed
   private async compactIfNeeded(): Promise<void>
   {
     // phase 1: prune old tool results (no model call, instant)
-    if (shouldPrune(
-      this.messages.length,
-      this.estimatedTokenCount,
-      this.compactionConfig
-    ))
+    if (
+      shouldPrune(
+        this.messages.length,
+        this.estimatedTokenCount,
+        this.compactionConfig
+      )
+    )
     {
       const beforeTokens = this.estimatedTokenCount
       const beforeMessages = this.messages.length
@@ -519,11 +668,13 @@ export class Agent
     }
 
     // phase 2: full summarization if still over threshold
-    if (!shouldCompactByTotal(
-      this.messages.length,
-      this.estimatedTokenCount,
-      this.compactionConfig
-    ))
+    if (
+      !shouldCompactByTotal(
+        this.messages.length,
+        this.estimatedTokenCount,
+        this.compactionConfig
+      )
+    )
     {
       return
     }
@@ -537,86 +688,16 @@ export class Agent
     const beforeTokens = this.estimatedTokenCount
     const beforeMessages = this.messages.length
 
-    // strip thinking blocks before feeding to the summarizer
-    const cleaned = stripThinkingForCompaction(toSummarize)
-    const compactionPrompt = buildCompactionPrompt(cleaned)
-    let summary = ''
+    const summary = await this.buildCompactionSummary(toSummarize)
 
-    this.onCompactionStartCallback?.()
-
-    try
+    if (summary === null)
     {
-      for await (const chunk of this.client.chatStream({
-        model: this.model,
-        messages: [
-          {
-            role: 'system',
-            content:
-              'You are a helpful assistant. Produce a concise structured summary of the conversation.',
-          },
-          { role: 'user', content: compactionPrompt },
-        ],
-      }))
-      {
-        if (chunk.message.content)
-        {
-          summary += chunk.message.content
-        }
-      }
-    }
-    catch
-    {
-      this.compactFailureCount++
-      if (this.compactFailureCount >= MAX_COMPACT_FAILURES)
-      {
-        // circuit breaker: fall back to brute trim
-        const systemMsg = this.messages[0]
-        const recent = this.messages.slice(-(MAX_HISTORY - 1))
-        this.messages = [systemMsg!, ...recent]
-        this.rebuildTokenEstimate()
-        this.compactFailureCount = 0
-
-        this.onCompactionCallback?.({
-          type: 'summarized',
-          beforeTokens,
-          afterTokens: this.estimatedTokenCount,
-          beforeMessages,
-          afterMessages: this.messages.length,
-        })
-      }
+      this.recordCompactionFailure(beforeTokens, beforeMessages)
       return
     }
 
-    if (!summary.trim())
-    {
-      this.compactFailureCount++
-      if (this.compactFailureCount >= MAX_COMPACT_FAILURES)
-      {
-        const systemMsg = this.messages[0]
-        const recent = this.messages.slice(-(MAX_HISTORY - 1))
-        this.messages = [systemMsg!, ...recent]
-        this.rebuildTokenEstimate()
-        this.compactFailureCount = 0
-      }
-      return
-    }
-
-    // success — rebuild messages w/ summary replacing old turns
     this.compactFailureCount = 0
-    const systemMsg = this.messages[0]!
-    this.messages = buildCompactedMessages(systemMsg, summary, toKeep)
-    this.rebuildTokenEstimate()
-
-    this.compactionCount++
-    this.lastCompactedAt = new Date().toISOString()
-
-    this.onCompactionCallback?.({
-      type: 'summarized',
-      beforeTokens,
-      afterTokens: this.estimatedTokenCount,
-      beforeMessages,
-      afterMessages: this.messages.length,
-    })
+    this.applyCompactedSummary(summary, toKeep, beforeTokens, beforeMessages)
   }
 
   // run a user message through the agent loop
@@ -650,10 +731,7 @@ export class Agent
       // trim history if it grows too large, preserving system prompt
       if (this.messages.length > MAX_HISTORY)
       {
-        const systemMsg = this.messages[0]
-        const recent = this.messages.slice(-(MAX_HISTORY - 1))
-        this.messages = [systemMsg, ...recent]
-        this.rebuildTokenEstimate()
+        this.trimHistoryToMax()
       }
 
       let fullContent = ''
@@ -662,12 +740,15 @@ export class Agent
 
       try
       {
-        for await (const chunk of this.client.chatStream({
-          model: this.model,
-          messages: this.messages,
-          tools: ollamaTools,
-          think: this.thinkMode,
-        }, signal))
+        for await (const chunk of this.client.chatStream(
+          {
+            model: this.model,
+            messages: this.messages,
+            tools: ollamaTools,
+            think: this.thinkMode,
+          },
+          signal
+        ))
         {
           if (signal?.aborted) break
 
@@ -782,11 +863,13 @@ export class Agent
         return
       }
 
-      // execute tool calls sequentially (approval requires serial flow)
+      // run read-only tools in parallel batches & keep approval flow serial
+      // each call's index is its callId — correlates the result to its UI block
       const toolResults: OllamaMessage[] = []
       let abortedDuringTools = false
+      let toolIndex = 0
 
-      for (const call of toolCalls)
+      while (toolIndex < toolCalls.length)
       {
         if (signal?.aborted)
         {
@@ -794,20 +877,77 @@ export class Agent
           break
         }
 
+        const nextToolName = toolCalls[toolIndex]!.function.name
+
+        if (this.canRunToolInParallel(nextToolName))
+        {
+          // collect a run of consecutive parallel-safe calls, each w/ a stable id
+          const batch: ToolInvocation[] = []
+
+          while (toolIndex < toolCalls.length)
+          {
+            const candidate = toolCalls[toolIndex]!
+            if (!this.canRunToolInParallel(candidate.function.name)) break
+
+            batch.push({
+              id: toolIndex,
+              name: candidate.function.name,
+              args: candidate.function.arguments ?? {},
+            })
+            toolIndex++
+          }
+
+          for (const item of batch)
+          {
+            events.onToolCall(item.name, item.args, item.id)
+          }
+
+          // read-only tools are side-effect-free & quick — let the batch finish
+          // so every announced call records a result (no dangling tool_calls on
+          // abort); the post-loop check stops the run afterward
+          let results: ToolResult[]
+          try
+          {
+            results = await Promise.all(
+              batch.map((item) => this.executeTool(item.name, item.args))
+            )
+          }
+          catch (err)
+          {
+            const errorMsg = `Parallel tool execution failed: ${toError(err).message}`
+            for (const item of batch)
+            {
+              events.onToolResult(item.name, '', errorMsg, item.id)
+              toolResults.push(this.buildToolMessage(item.name, '', errorMsg))
+            }
+            continue
+          }
+
+          for (const [index, result] of results.entries())
+          {
+            const item = batch[index]!
+            events.onToolResult(item.name, result.output, result.error, item.id)
+            toolResults.push(
+              this.buildToolMessage(item.name, result.output, result.error)
+            )
+          }
+
+          continue
+        }
+
+        const callId = toolIndex
+        const call = toolCalls[toolIndex]!
+        toolIndex++
         const toolName = call.function.name
         const toolArgs = call.function.arguments ?? {}
-        events.onToolCall(toolName, toolArgs)
+        events.onToolCall(toolName, toolArgs, callId)
 
         const tool = getToolByName(toolName)
         if (!tool)
         {
           const errorMsg = `Unknown tool: ${toolName}`
-          events.onToolResult(toolName, '', errorMsg)
-          toolResults.push({
-            role: 'tool',
-            tool_name: toolName,
-            content: errorMsg,
-          })
+          events.onToolResult(toolName, '', errorMsg, callId)
+          toolResults.push(this.buildToolMessage(toolName, '', errorMsg))
           continue
         }
 
@@ -817,12 +957,8 @@ export class Agent
         if (policy === 'always_deny')
         {
           const deniedMsg = `Tool ${toolName} is denied by permission policy`
-          events.onToolResult(toolName, '', deniedMsg)
-          toolResults.push({
-            role: 'tool',
-            tool_name: toolName,
-            content: deniedMsg,
-          })
+          events.onToolResult(toolName, '', deniedMsg, callId)
+          toolResults.push(this.buildToolMessage(toolName, '', deniedMsg))
           continue
         }
 
@@ -839,56 +975,53 @@ export class Agent
           }
           catch (err)
           {
+            // record a result for the announced call so history stays consistent
+            const errorMsg = signal?.aborted
+              ? 'Tool call interrupted'
+              : `Tool approval failed for ${toolName}: ${toError(err).message}`
+            events.onToolResult(toolName, '', errorMsg, callId)
+            toolResults.push(this.buildToolMessage(toolName, '', errorMsg))
+
             if (signal?.aborted)
             {
               abortedDuringTools = true
               break
             }
-
-            const errorMsg = `Tool approval failed for ${toolName}: ${toError(err).message}`
-            events.onToolResult(toolName, '', errorMsg)
-            toolResults.push({
-              role: 'tool',
-              tool_name: toolName,
-              content: errorMsg,
-            })
             continue
           }
 
           if (!approved)
           {
             const rejectedMsg = `Tool call rejected by user`
-            events.onToolResult(toolName, '', rejectedMsg)
-            toolResults.push({
-              role: 'tool',
-              tool_name: toolName,
-              content: rejectedMsg,
-            })
+            events.onToolResult(toolName, '', rejectedMsg, callId)
+            toolResults.push(this.buildToolMessage(toolName, '', rejectedMsg))
             continue
           }
         }
 
-        let result
-        try
-        {
-          result = await tool.execute(toolArgs)
-        }
-        catch (err)
-        {
-          result = {
-            output: '',
-            error: `Tool execution failed for ${toolName}: ${toError(err).message}`,
-          }
-        }
+        const result = await this.executeTool(toolName, toolArgs)
+        events.onToolResult(toolName, result.output, result.error, callId)
+        toolResults.push(
+          this.buildToolMessage(toolName, result.output, result.error)
+        )
+      }
 
-        events.onToolResult(toolName, result.output, result.error)
-        toolResults.push({
-          role: 'tool',
-          tool_name: toolName,
-          content: result.error
-            ? `Error: ${result.error}\n${result.output}`
-            : result.output,
-        })
+      // abort left later tool_calls unprocessed — record interrupted replies so
+      // the persisted assistant message never has tool_calls w/o matching turns
+      if (abortedDuringTools)
+      {
+        while (toolIndex < toolCalls.length)
+        {
+          const pending = toolCalls[toolIndex]!
+          toolResults.push(
+            this.buildToolMessage(
+              pending.function.name,
+              '',
+              'Tool call interrupted'
+            )
+          )
+          toolIndex++
+        }
       }
 
       if (toolResults.length > 0)
