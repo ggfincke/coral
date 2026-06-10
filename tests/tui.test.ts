@@ -16,6 +16,7 @@ import {
   sliceViewport,
   type OutputBlock,
 } from '../src/tui/transcript.js'
+import { buildTodoPanel } from '../src/tui/todo-panel.js'
 
 test('renderMarkdownToAnsi formats headings, links, lists, & code blocks', () =>
 {
@@ -200,4 +201,26 @@ test('sortModels pins the default model to the top regardless of date', () =>
   // default is pinned first even though it is the oldest by modified date
   assert.equal(models[0]!.name, DEFAULT_MODEL)
   assert.equal(models[1]!.name, 'gemma4:latest')
+})
+
+test('buildTodoPanel returns [] when empty & a padded bordered panel otherwise', () =>
+{
+  assert.deepEqual(buildTodoPanel([], 40), [])
+
+  const lines = buildTodoPanel(
+    [
+      { content: 'first', status: 'completed' },
+      { content: 'second', status: 'in_progress' },
+    ],
+    40
+  )
+
+  assert.ok(lines.length >= 4)
+  assert.match(lines[0]!, /tasks 1\/2/)
+  assert.ok(lines.some((line) => line.includes('first')))
+  assert.ok(lines.some((line) => line.includes('second')))
+
+  // every line is padded to the same width so the box stays aligned
+  const widths = new Set(lines.map((line) => line.length))
+  assert.equal(widths.size, 1)
 })

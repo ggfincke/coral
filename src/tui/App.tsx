@@ -3,7 +3,6 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
-import chalk from 'chalk'
 import { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
 import type { Model } from '../types/inference.js'
@@ -20,7 +19,7 @@ import {
   type ToolCallBlock,
 } from './transcript.js'
 import PromptInput from './prompt-input.js'
-import { CORAL_HEX, OCEAN_HEX } from './theme.js'
+import { getThemeGeneration, inkColor, style } from './theme.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { dispatchCommand, type CommandContext } from './commands.js'
 import { useAnimationTimer } from './use-animation-timer.js'
@@ -39,6 +38,13 @@ import {
 import { buildApprovalBox } from './approval-box.js'
 import { buildRestoredBlocks, truncateToolResult } from './restored-blocks.js'
 import { buildRule, buildStatusLine, describeRunStage } from './status-line.js'
+import { buildTodoPanel } from './todo-panel.js'
+import {
+  getTodos,
+  clearTodos,
+  onTodosChanged,
+  type TodoItem,
+} from '../tools/todo-store.js'
 
 interface Props
 {
@@ -108,6 +114,8 @@ export default function App({
   )
   const [showThinking, setShowThinking] = useState(true)
   const [yolo, setYolo] = useState(initialYolo)
+  // mirrors the module-level theme generation so theme switches re-render
+  const [themeGeneration, setThemeGeneration] = useState(getThemeGeneration)
   const [runStage, setRunStage] = useState<RunStage>('idle')
   const [approval, setApproval] = useState<ApprovalPrompt | null>(null)
   const [scrollOffset, setScrollOffset] = useState(0)
@@ -126,6 +134,8 @@ export default function App({
     lastDecodeTps: 0,
   })
   const [contextWindow, setContextWindow] = useState(0)
+  // live task list mirrored from the todo tool's in-memory store
+  const [todos, setTodos] = useState<TodoItem[]>(() => getTodos())
   const [terminalSize, setTerminalSize] = useState({
     columns: terminal.columns ?? 80,
     rows: terminal.rows ?? 24,
@@ -171,16 +181,19 @@ export default function App({
   const approvalBoxLines = approval
     ? buildApprovalBox(approval.toolName, approval.args, transcriptWidth)
     : []
+  const todoPanelLines = buildTodoPanel(todos, transcriptWidth)
   const headerHeight = 2
   const inputHeight = approval ? 0 : 3
   const statusHeight = 1
   const approvalHeight = approval ? approvalBoxLines.length + 1 : 0
+  const todoHeight = todoPanelLines.length
   const chatViewportHeight = Math.max(
     terminalSize.rows -
       headerHeight -
       inputHeight -
       statusHeight -
-      approvalHeight,
+      approvalHeight -
+      todoHeight,
     6
   )
   const pickerViewportHeight = Math.max(
@@ -199,6 +212,7 @@ export default function App({
         waitingElapsed,
         streamingThinking: streamBuf.thinking,
         showThinking,
+        themeGeneration,
       }),
     [
       output,
@@ -206,6 +220,7 @@ export default function App({
       showWaitingIndicator,
       spinnerTick,
       streamBuf,
+      themeGeneration,
       transcriptWidth,
       waitingElapsed,
     ]
@@ -265,6 +280,8 @@ export default function App({
       lastPrefillTps: 0,
       lastDecodeTps: 0,
     })
+    // task list is session-scoped & not persisted — drop it w/ the conversation
+    clearTodos()
     sessionIdRef.current = null
   }, [sessionIdRef])
 
@@ -333,6 +350,8 @@ export default function App({
         lastDecodeTps: 0,
       })
       setContextWindow(0)
+      // todos aren't persisted — clear the prior session's list on resume
+      clearTodos()
 
       // create fresh agent w/ restored messages
       const nextAgent = new Agent(target.meta.model, host, undefined, { think })
@@ -501,6 +520,14 @@ export default function App({
   {
     chatViewportHeightRef.current = chatViewportHeight
   }, [chatViewportHeight])
+
+  // mirror the todo store into local state for the panel; detach on unmount
+  // (initial state already seeded from getTodos() via useState)
+  useEffect(() =>
+  {
+    onTodosChanged(setTodos)
+    return () => onTodosChanged(null)
+  }, [])
 
   useEffect(() =>
   {
@@ -755,6 +782,7 @@ export default function App({
           resumeSession: resumeSessionById,
           saveCurrentSession,
           renameCurrentSession,
+          notifyThemeChanged: () => setThemeGeneration(getThemeGeneration()),
         }
 
         const result = await dispatchCommand(value.trim(), cmdCtx)
@@ -1070,7 +1098,7 @@ export default function App({
     const stateLeft = [tokenGauge || 'ready', perfGauge, sessionGauge]
       .filter(Boolean)
       .join(' · ')
-    const yoloHint = yolo ? chalk.yellow('⚠ yolo') : ''
+    const yoloHint = yolo ? style('warning')('⚠ yolo') : ''
     const hints = [yoloHint, '/help', 'esc quits'].filter(Boolean).join(' · ')
     statusLine = buildStatusLine(stateLeft, hints, transcriptWidth)
   }
@@ -1194,14 +1222,14 @@ export default function App({
     <Box flexDirection="column" height={terminalSize.rows}>
       <Box>
         <Text>
-          <Text bold color={CORAL_HEX}>
+          <Text bold color={inkColor('primary')}>
             coral
           </Text>
           <Text dimColor>{' · '}</Text>
           <Text color="white">{activeModel || 'pick a model'}</Text>
           <Text dimColor>{' · '}</Text>
           {yolo ? (
-            <Text backgroundColor="yellow" color="black" bold>
+            <Text backgroundColor={inkColor('warning')} color="black" bold>
               {' YOLO '}
             </Text>
           ) : (
@@ -1240,10 +1268,20 @@ export default function App({
         </Box>
       ) : null}
 
+      {!pickerVisible && agent && todoPanelLines.length > 0 && (
+        <Box flexDirection="column">
+          {todoPanelLines.map((line, index) => (
+            <Text key={index} dimColor>
+              {line}
+            </Text>
+          ))}
+        </Box>
+      )}
+
       {!pickerVisible && agent && approval && (
         <Box flexDirection="column">
           {approvalBoxLines.map((line, index) => (
-            <Text key={index} color="yellow">
+            <Text key={index} color={inkColor('warning')}>
               {line}
             </Text>
           ))}
@@ -1252,11 +1290,11 @@ export default function App({
 
       {!pickerVisible && agent && !approval && (
         <Box flexDirection="column">
-          <Text dimColor color={yolo ? 'yellow' : undefined}>
+          <Text dimColor color={yolo ? inkColor('warning') : undefined}>
             {headerSep}
           </Text>
           <Box>
-            <Text bold color={yolo ? 'yellow' : OCEAN_HEX}>
+            <Text bold color={yolo ? inkColor('warning') : inkColor('user')}>
               {yolo ? ' ⚡ ' : ' ❯ '}
             </Text>
             <PromptInput
