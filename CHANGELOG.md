@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+
+## [0.10.0] - 2026-06-11
+
 ### Added
 
 - **GitHub PR workflow & CI:** add Actions coverage for clean install, audit,
@@ -31,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and commit-workflow prompt guidance (`1a2d10f`, `b2c60a8`).
 - **Shared project utilities:** add reusable project-tree, Coral home, and git
   helpers for tool and session features (`f410517`).
+- **Repository setup:** initial project infrastructure and CI configuration (`1e4817e`).
+
 
 ### Changed
 
@@ -246,6 +251,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
+[0.10.0]: https://github.com/user/coral/compare/be8b243...1e4817e
 [0.9.0]: https://github.com/user/coral/compare/34766ce...be8b243
 [0.8.0]: https://github.com/user/coral/compare/845d6f9...34766ce
 [0.7.0]: https://github.com/user/coral/compare/5d929ab...845d6f9
