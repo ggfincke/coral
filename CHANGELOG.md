@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tool-call reliability layer:** recover tool calls emitted as text content
+  (the most common local-model failure), canonicalize hallucinated tool-name
+  variants (`Read_File` -> `read_file`), nudge fully empty turns (capped at 2
+  per run), validate & coerce tool args against each tool's JSON schema before
+  execution w/ model-friendly retry errors, & surface repair/nudge/validation
+  counters in `/status`.
+- `format` field on `ChatRequest` for tool-free structured-output calls.
+  Never combined w/ `tools` — Ollama silently drops tool calls when both are
+  set (ollama/ollama#8095), so constrained decoding of tool calls is not
+  viable upstream.
+
+### Changed
+
+- Tool dispatch now resolves tools from the agent's own toolset instead of the
+  global registry, so restricted toolsets (e.g. read-only subagents) can no
+  longer reach tools outside their subset.t
 
 ## [0.10.0] - 2026-06-11
 
@@ -35,7 +53,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shared project utilities:** add reusable project-tree, Coral home, and git
   helpers for tool and session features (`f410517`).
 - **Repository setup:** initial project infrastructure and CI configuration (`1e4817e`).
-
 
 ### Changed
 
