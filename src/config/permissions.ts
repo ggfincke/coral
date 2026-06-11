@@ -33,6 +33,8 @@ const DEFAULT_TOOL_POLICIES: ToolPermissions = {
   git_add: 'require_approval',
   git_commit: 'require_approval',
   git_push: 'require_approval',
+  task: 'always_allow',
+  todo_write: 'always_allow',
   write_file: 'require_approval',
   edit_file: 'require_approval',
   bash: 'require_approval',
