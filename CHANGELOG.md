@@ -1,9 +1,50 @@
 # Changelog
 
 All notable changes to Coral are documented in this file.
-  
+
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- **GitHub PR workflow & CI:** add Actions coverage for clean install, audit,
+  lint, formatting, changelog validation, typecheck, tests, & build.
+- **Repo automation templates:** add Dependabot config, PR checklist, bug report
+  template, & feature request template.
+- **Changelog gate:** add `npm run check:changelog` plus an `npm version`
+  guard so releases require a matching changelog entry.
+- **Slash command control surface:** add abort support, slash commands, git
+  tools, token tracking, in-place model switching, permission toggles, & context
+  gauge polish (`394f0ce`, `254801c`).
+- **Input history & two-phase compaction:** add prompt history navigation,
+  richer session restoration, & safer conversation compaction controls
+  (`92aa2b1`, `a29a863`).
+- **Parallel agent execution:** run safe tool calls in parallel & normalize tool
+  output handling in the agent loop (`809d352`).
+- **Research subagents & todos:** add read-only task delegation and structured
+  task tracking with a TUI todo panel (`a5fc925`, `50caa78`).
+- **Dynamic TUI themes:** add a theme system, built-in theme palette, and
+  persisted theme preferences (`1865677`, `0c5555d`).
+- **Git commit workflow support:** add `git_push`, richer git tool definitions,
+  and commit-workflow prompt guidance (`1a2d10f`, `b2c60a8`).
+- **Shared project utilities:** add reusable project-tree, Coral home, and git
+  helpers for tool and session features (`f410517`).
+
+### Changed
+
+- Refactored the TUI into smaller command, transcript, input-history, approval,
+  metrics, status-line, and restoration modules (`438cdf4`).
+- Moved shared inference types and updated the Ollama client/session store
+  boundary for the newer agent loop (`9e4122f`).
+- Updated the test suite and test philosophy docs to match the current core,
+  tool, session, TUI, theme, and compaction behavior (`0de32d7`).
+
+### Fixed
+
+- Allow safe agent planning tools by default so planning helpers do not trip the
+  approval policy (`68fceac`).
 
 ## [0.9.0] - 2026-04-05
 

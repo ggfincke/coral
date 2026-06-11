@@ -1,0 +1,78 @@
+name: Bug Report
+description: Report a bug with Coral
+title: '[Bug]: '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill out the sections below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug.
+      placeholder: What happened? What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this?
+      placeholder: |
+        1. Run coral with ...
+        2. Ask it to ...
+        3. See error ...
+    validations:
+      required: true
+
+  - type: input
+    id: coral-version
+    attributes:
+      label: Coral Version
+      placeholder: 'e.g., 0.9.0'
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node.js Version
+      placeholder: 'e.g., 22.12.0'
+    validations:
+      required: true
+
+  - type: input
+    id: ollama-version
+    attributes:
+      label: Ollama Version
+      placeholder: 'e.g., 0.12.0'
+    validations:
+      required: false
+
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: 'e.g., gemma4:31b-mlx'
+    validations:
+      required: false
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating System
+      placeholder: 'e.g., macOS 15.3, Windows 11, Ubuntu 24.04'
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Logs, screenshots, or terminal output that demonstrates the issue.
+    validations:
+      required: false
