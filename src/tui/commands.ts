@@ -375,6 +375,21 @@ const statusCommand: Command = {
       lines.push(`  Compactions:  ${chalk.dim(String(compactions))}`)
     }
 
+    // reliability-layer counters — only shown once something needed repair
+    const reliability = ctx.agent.getReliabilityStats()
+    const repairs = reliability.repairedToolCalls + reliability.nameRepairs
+    if (
+      repairs + reliability.stallNudges + reliability.validationFailures >
+      0
+    )
+    {
+      lines.push(
+        `  Repairs:      ${chalk.dim(
+          `${repairs} tool-call, ${reliability.stallNudges} nudge, ${reliability.validationFailures} invalid-args`
+        )}`
+      )
+    }
+
     lines.push(`  CWD:          ${chalk.dim(cwd)}`)
 
     if (gitBranch)
