@@ -7,11 +7,14 @@ import { render } from 'ink'
 import { Command } from 'commander'
 import { createRequire } from 'node:module'
 import App from '../tui/App.js'
+import { loadPrefs } from '../config/prefs.js'
 import {
   listSessions,
   getLatestSession,
   sessionExists,
 } from '../session/store.js'
+import { setTheme } from '../tui/theme.js'
+import { findTheme, THEMES } from '../tui/themes.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../../package.json') as { version: string }
@@ -27,6 +30,7 @@ const program = new Command()
   .option('--resume', 'resume the most recent session')
   .option('--session <id>', 'resume a specific session by ID')
   .option('--sessions', 'list saved sessions & exit')
+  .option('--theme <name>', 'color theme (see /theme for the list)')
   .parse(process.argv)
 
 const opts = program.opts<{
@@ -37,7 +41,31 @@ const opts = program.opts<{
   resume: boolean
   session?: string
   sessions: boolean
+  theme?: string
 }>()
+
+// resolve theme: --theme flag > saved prefs > default
+if (opts.theme)
+{
+  const theme = findTheme(opts.theme)
+  if (!theme)
+  {
+    console.error(`Unknown theme: ${opts.theme}`)
+    console.error(`Available themes: ${THEMES.map((t) => t.name).join(', ')}`)
+    process.exit(1)
+  }
+  setTheme(theme)
+}
+else
+{
+  const saved = loadPrefs().theme
+  if (saved)
+  {
+    const theme = findTheme(saved)
+    if (theme) setTheme(theme)
+    else console.error(`Ignoring unknown theme in prefs.json: ${saved}`)
+  }
+}
 
 // handle --sessions: list & exit
 if (opts.sessions)
