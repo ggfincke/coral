@@ -383,7 +383,7 @@ export default function App({
 
   // show the model picker — preserves current agent for in-place switching
   // uses loadModelsRef to avoid circular dependency w/ loadModels/activateModel
-  const loadModelsRef = useRef<() => Promise<void>>()
+  const loadModelsRef = useRef<(() => Promise<void>) | undefined>(undefined)
   const reopenModelPicker = useCallback(() =>
   {
     void loadModelsRef.current?.()

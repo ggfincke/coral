@@ -1,6 +1,7 @@
 // src/tui/use-coral-input.ts
 // parse keyboard & wheel input from Ink's shared event stream
 
+import type { EventEmitter } from 'node:events'
 import { useEffect, useRef } from 'react'
 import { useStdin } from 'ink'
 import { parseKeypress, nonAlphanumericKeys } from './keypress.js'
@@ -59,6 +60,13 @@ interface TokenizedChunk
 {
   tokens: string[]
   pending: string
+}
+
+interface CoralStdinContext
+{
+  setRawMode: (value: boolean) => void
+  internal_exitOnCtrlC: boolean
+  internal_eventEmitter: EventEmitter
 }
 
 export function buildKey(overrides: Partial<CoralKey> = {}): CoralKey
@@ -270,7 +278,8 @@ export function useCoralInput(
   options: UseCoralInputOptions = {}
 ): void
 {
-  const { setRawMode, internal_exitOnCtrlC, internal_eventEmitter } = useStdin()
+  const { setRawMode, internal_exitOnCtrlC, internal_eventEmitter } =
+    useStdin() as unknown as CoralStdinContext
   const { isActive = true, enableMouseTracking = false } = options
   const pendingRef = useRef('')
   const handlerRef = useRef(handler)
