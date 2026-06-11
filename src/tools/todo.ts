@@ -69,7 +69,10 @@ export const todoWriteTool: Tool = {
           error: 'each todo needs a non-empty content string',
         }
       }
-      if (typeof status !== 'string' || !VALID_STATUS.has(status as TodoStatus))
+      if (
+        typeof status !== 'string' ||
+        !VALID_STATUS.has(status as TodoStatus)
+      )
       {
         return {
           output: '',

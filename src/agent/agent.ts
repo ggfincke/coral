@@ -15,10 +15,7 @@ import {
   type Tool,
   type ToolResult,
 } from '../tools/index.js'
-import {
-  setSubagentRunner,
-  type SubagentResult,
-} from '../tools/subagent.js'
+import { setSubagentRunner, type SubagentResult } from '../tools/subagent.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { setCwd, getCwd } from '../cwd.js'
 import {
@@ -303,11 +300,13 @@ export class Agent
         {
           toolCount++
         },
-        onToolResult: () => {},
+        onToolResult: () =>
+        {},
         // subagent tools are all read-only/always_allow, so this never fires;
         // deny anything unexpected that would otherwise need approval
         onToolApproval: async () => false,
-        onDone: () => {},
+        onDone: () =>
+        {},
         onError: (err) =>
         {
           error = err.message

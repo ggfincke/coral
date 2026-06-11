@@ -22,7 +22,9 @@ export const COMMON_IGNORED_PROJECT_ENTRIES = new Set([
 ])
 
 // clone the shared set so call sites can extend safely
-export function createIgnoredEntrySet(extra: Iterable<string> = []): Set<string>
+export function createIgnoredEntrySet(
+  extra: Iterable<string> = []
+): Set<string>
 {
   return new Set([...COMMON_IGNORED_PROJECT_ENTRIES, ...extra])
 }

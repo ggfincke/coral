@@ -139,27 +139,23 @@ test('git_commit rejects an empty message', async () =>
   assert.match(result.error ?? '', /non-empty message/)
 })
 
-test(
-  'git_add & git_commit create a commit',
-  { skip: !hasGit },
-  async () =>
-  {
-    const dir = await mkdtemp(join(tmpdir(), 'coral-gitcommit-'))
-    tempDirs.push(dir)
-    spawnSync('git', ['init'], { cwd: dir })
-    spawnSync('git', ['config', 'user.email', 'test@coral.dev'], { cwd: dir })
-    spawnSync('git', ['config', 'user.name', 'Coral Test'], { cwd: dir })
-    await writeFile(join(dir, 'a.txt'), 'hello\n', 'utf-8')
+test('git_add & git_commit create a commit', { skip: !hasGit }, async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-gitcommit-'))
+  tempDirs.push(dir)
+  spawnSync('git', ['init'], { cwd: dir })
+  spawnSync('git', ['config', 'user.email', 'test@coral.dev'], { cwd: dir })
+  spawnSync('git', ['config', 'user.name', 'Coral Test'], { cwd: dir })
+  await writeFile(join(dir, 'a.txt'), 'hello\n', 'utf-8')
 
-    setCwd(dir)
-    const add = await gitAddTool.execute({ all: true })
-    assert.equal(add.error, undefined)
+  setCwd(dir)
+  const add = await gitAddTool.execute({ all: true })
+  assert.equal(add.error, undefined)
 
-    const commit = await gitCommitTool.execute({ message: 'init commit' })
-    assert.equal(commit.error, undefined)
-    assert.match(commit.output, /init commit/)
-  }
-)
+  const commit = await gitCommitTool.execute({ message: 'init commit' })
+  assert.equal(commit.error, undefined)
+  assert.match(commit.output, /init commit/)
+})
 
 // the guards reject before git runs, so no repo is needed
 test('git_push rejects option-like remotes & branch without remote', async () =>
@@ -178,39 +174,43 @@ test('git_push rejects option-like remotes & branch without remote', async () =>
   assert.match(noTarget.error ?? '', /setUpstream requires/)
 })
 
-test('git_push pushes commits to a local remote', { skip: !hasGit }, async () =>
-{
-  const bare = await mkdtemp(join(tmpdir(), 'coral-bare-'))
-  tempDirs.push(bare)
-  spawnSync('git', ['init', '--bare', bare])
+test(
+  'git_push pushes commits to a local remote',
+  { skip: !hasGit },
+  async () =>
+  {
+    const bare = await mkdtemp(join(tmpdir(), 'coral-bare-'))
+    tempDirs.push(bare)
+    spawnSync('git', ['init', '--bare', bare])
 
-  const work = await mkdtemp(join(tmpdir(), 'coral-push-'))
-  tempDirs.push(work)
-  spawnSync('git', ['init', work])
-  // force the branch name to main regardless of git version/config defaults
-  spawnSync('git', ['-C', work, 'symbolic-ref', 'HEAD', 'refs/heads/main'])
-  spawnSync('git', ['-C', work, 'config', 'user.email', 'test@coral.dev'])
-  spawnSync('git', ['-C', work, 'config', 'user.name', 'Coral Test'])
-  await writeFile(join(work, 'a.txt'), 'hello\n', 'utf-8')
-  spawnSync('git', ['-C', work, 'add', '-A'])
-  spawnSync('git', ['-C', work, 'commit', '-m', 'init'])
-  spawnSync('git', ['-C', work, 'remote', 'add', 'origin', bare])
+    const work = await mkdtemp(join(tmpdir(), 'coral-push-'))
+    tempDirs.push(work)
+    spawnSync('git', ['init', work])
+    // force the branch name to main regardless of git version/config defaults
+    spawnSync('git', ['-C', work, 'symbolic-ref', 'HEAD', 'refs/heads/main'])
+    spawnSync('git', ['-C', work, 'config', 'user.email', 'test@coral.dev'])
+    spawnSync('git', ['-C', work, 'config', 'user.name', 'Coral Test'])
+    await writeFile(join(work, 'a.txt'), 'hello\n', 'utf-8')
+    spawnSync('git', ['-C', work, 'add', '-A'])
+    spawnSync('git', ['-C', work, 'commit', '-m', 'init'])
+    spawnSync('git', ['-C', work, 'remote', 'add', 'origin', bare])
 
-  setCwd(work)
-  const res = await gitPushTool.execute({
-    remote: 'origin',
-    branch: 'main',
-    setUpstream: true,
-  })
-  assert.equal(res.error, undefined)
+    setCwd(work)
+    const res = await gitPushTool.execute({
+      remote: 'origin',
+      branch: 'main',
+      setUpstream: true,
+    })
+    assert.equal(res.error, undefined)
 
-  // the bare remote now holds the pushed commit — query the pushed branch
-  // directly, since the bare HEAD may default to a different branch name
-  const log = spawnSync('git', ['-C', bare, 'log', '--oneline', 'main'], {
-    encoding: 'utf-8',
-  })
-  assert.match(log.stdout, /init/)
-})
+    // the bare remote now holds the pushed commit — query the pushed branch
+    // directly, since the bare HEAD may default to a different branch name
+    const log = spawnSync('git', ['-C', bare, 'log', '--oneline', 'main'], {
+      encoding: 'utf-8',
+    })
+    assert.match(log.stdout, /init/)
+  }
+)
 
 test('task validates input & reports when subagents are unavailable', async () =>
 {
@@ -242,7 +242,11 @@ test('task delegates to the registered subagent runner', async () =>
 
 test('task surfaces a subagent error', async () =>
 {
-  setSubagentRunner(async () => ({ text: 'partial', toolCount: 0, error: 'boom' }))
+  setSubagentRunner(async () => ({
+    text: 'partial',
+    toolCount: 0,
+    error: 'boom',
+  }))
 
   const result = await taskTool.execute({ prompt: 'do a thing' })
   assert.match(result.error ?? '', /boom/)
@@ -280,8 +284,11 @@ test('todo_write validates the list shape & stores nothing on failure', async ()
 
   assert.match((await todoWriteTool.execute({})).error ?? '', /todos array/)
   assert.match(
-    (await todoWriteTool.execute({ todos: [{ content: '', status: 'pending' }] }))
-      .error ?? '',
+    (
+      await todoWriteTool.execute({
+        todos: [{ content: '', status: 'pending' }],
+      })
+    ).error ?? '',
     /content/
   )
   assert.match(

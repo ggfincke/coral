@@ -4,11 +4,7 @@
 import wrapAnsi from 'wrap-ansi'
 
 // wrap text to width while preserving an optional prefix indent
-export function wrapLines(
-  text: string,
-  width: number,
-  indent = ''
-): string[]
+export function wrapLines(text: string, width: number, indent = ''): string[]
 {
   const visibleWidth = Math.max(width - indent.length, 12)
 

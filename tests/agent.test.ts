@@ -294,7 +294,11 @@ test('aborting mid-tools records a reply for every announced tool_call', async (
   tempDirs.push(dir)
   await writeFile(join(dir, 'note.txt'), 'hello\n', 'utf-8')
 
-  const agent = new Agent('fake-model', 'http://localhost:11434', dir) as Agent & {
+  const agent = new Agent(
+    'fake-model',
+    'http://localhost:11434',
+    dir
+  ) as Agent & {
     client: {
       stopKeepAlive?: () => void
       startKeepAlive: (model: string) => void
@@ -351,7 +355,8 @@ test('aborting mid-tools records a reply for every announced tool_call', async (
       onToolApproval()
       {
         controller.abort()
-        return new Promise<boolean>(() => {})
+        return new Promise<boolean>(() =>
+        {})
       },
       onDone()
       {},
@@ -368,7 +373,9 @@ test('aborting mid-tools records a reply for every announced tool_call', async (
     (message) => message.role === 'assistant' && message.tool_calls
   )
   assert.ok(assistant?.tool_calls)
-  const toolReplies = agent.messages.filter((message) => message.role === 'tool')
+  const toolReplies = agent.messages.filter(
+    (message) => message.role === 'tool'
+  )
   assert.equal(toolReplies.length, assistant.tool_calls!.length)
 
   const bashReply = agent.messages.find(

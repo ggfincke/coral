@@ -13,9 +13,7 @@ const SGR_MOUSE_PREFIX_RE = new RegExp(`^${ESC}\\[<\\d+;\\d+;\\d+[Mm]`)
 const SGR_MOUSE_FRAGMENT_RE = new RegExp(`^${ESC}\\[<[0-9;]*$`)
 const BRACKETED_PASTE_PACKET_RE = new RegExp(`^${ESC}\\[(?:200|201)~$`)
 const BRACKETED_PASTE_PREFIX_RE = new RegExp(`^${ESC}\\[(?:200|201)~`)
-const BRACKETED_PASTE_FRAGMENT_RE = new RegExp(
-  `^${ESC}\\[(?:2|20|200|201)?$`
-)
+const BRACKETED_PASTE_FRAGMENT_RE = new RegExp(`^${ESC}\\[(?:2|20|200|201)?$`)
 const FOCUS_PACKET_RE = new RegExp(`^${ESC}\\[[IO]$`)
 const FOCUS_PREFIX_RE = new RegExp(`^${ESC}\\[[IO]`)
 const FOCUS_FRAGMENT_RE = new RegExp(`^${ESC}\\[$`)

@@ -8,14 +8,17 @@
   },
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "dev": "tsx src/cli/main.tsx",
     "start": "node dist/cli/main.js",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:watch": "node --import tsx --test --watch tests/*.test.ts",
     "lint": "eslint .",
     "lint:fix": "eslint --fix .",
+    "check:changelog": "node scripts/check-changelog.mjs",
     "format": "prettier --write . && eslint --fix .",
-    "format:check": "prettier --check . && eslint ."
+    "format:check": "prettier --check . && eslint .",
+    "version": "npm run check:changelog && git add CHANGELOG.md"
   },
   "prettier": {
     "plugins": [
