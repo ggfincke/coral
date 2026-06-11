@@ -54,6 +54,9 @@ export interface ChatRequest
   tools?: OllamaTool[]
   think?: boolean | 'low' | 'medium' | 'high'
   keep_alive?: string | number
+  // ! constrains content only & silently empties tool_calls when combined
+  // ! w/ tools (ollama#8095) — never set on tool-bearing requests
+  format?: 'json' | Record<string, unknown>
 }
 
 export interface ChatResponse
