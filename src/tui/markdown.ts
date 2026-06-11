@@ -5,16 +5,7 @@ import chalk from 'chalk'
 import { highlight, supportsLanguage } from 'cli-highlight'
 import { lexer, type Token, type Tokens } from 'marked'
 import stripAnsi from 'strip-ansi'
-import { coralBold, pinkBold, ocean, oceanBold, deep, deepBold } from './theme.js'
-
-const HEADING_STYLES = [
-  coralBold,
-  oceanBold,
-  pinkBold,
-  deepBold,
-  chalk.bold.whiteBright,
-  chalk.bold.whiteBright,
-]
+import { codeSpanStyle, headingStyle, style } from './theme.js'
 
 function padAnsiEnd(value: string, width: number): string
 {
@@ -82,12 +73,12 @@ function renderInline(tokens: Token[] | undefined): string
         output += chalk.strikethrough(renderInline(token.tokens))
         break
       case 'codespan':
-        output += deep.bgRgb(30, 40, 50)(` ${token.text} `)
+        output += codeSpanStyle()(` ${token.text} `)
         break
       case 'link':
       {
         const label = renderInline(token.tokens) || token.href
-        const renderedLabel = ocean.underline(label)
+        const renderedLabel = style('user').underline(label)
         output +=
           label === token.href
             ? renderedLabel
@@ -95,7 +86,7 @@ function renderInline(tokens: Token[] | undefined): string
         break
       }
       case 'image':
-        output += chalk.magenta(`[image: ${token.text || token.href}]`)
+        output += style('accent')(`[image: ${token.text || token.href}]`)
         break
       case 'br':
         output += '\n'
@@ -187,8 +178,7 @@ function renderBlock(token: Token, indent: number): string[]
     case 'heading':
     {
       const text = renderInline(token.tokens)
-      const style = HEADING_STYLES[token.depth - 1] ?? chalk.bold.whiteBright
-      const heading = pad + style(text)
+      const heading = pad + headingStyle(token.depth)(text)
 
       if (token.depth <= 2)
       {

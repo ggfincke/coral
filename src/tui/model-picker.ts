@@ -3,7 +3,7 @@
 
 import chalk from 'chalk'
 import type { Model } from '../types/inference.js'
-import { coralBold, coral, ocean } from './theme.js'
+import { style } from './theme.js'
 import { wrapLines } from './wrap.js'
 
 // preferred default model — pinned to the top of the picker & pre-selected at startup
@@ -56,7 +56,7 @@ export function buildModelPickerLines(
   if (models.length === 0)
   {
     return [
-      chalk.bold.red('No Ollama models found'),
+      style('error').bold('No Ollama models found'),
       chalk.dim('Pull a model or pass --model explicitly.'),
     ]
   }
@@ -72,7 +72,7 @@ export function buildModelPickerLines(
   const end = Math.min(start + visibleCount, models.length)
   const selected = models[Math.min(selectedIndex, models.length - 1)]!
   const lines: string[] = [
-    coralBold('Select an Ollama model'),
+    style('primary').bold('Select an Ollama model'),
     chalk.dim('enter selects · ↑↓ or j/k moves · esc quits'),
     '',
   ]
@@ -80,8 +80,10 @@ export function buildModelPickerLines(
   for (let index = start; index < end; index += 1)
   {
     const model = models[index]!
-    const prefix = index === selectedIndex ? coral('›') : chalk.dim(' ')
-    const name = index === selectedIndex ? ocean(model.name) : model.name
+    const prefix =
+      index === selectedIndex ? style('primary')('›') : chalk.dim(' ')
+    const name =
+      index === selectedIndex ? style('user')(model.name) : model.name
     lines.push(...wrapLines(`${prefix} ${name}`, Math.max(width, 16)))
   }
 

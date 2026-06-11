@@ -6,7 +6,7 @@ import wrapAnsi from 'wrap-ansi'
 import { renderMarkdownToAnsi } from './markdown.js'
 import { formatElapsed } from './metrics.js'
 import { shimmerText } from './shimmer.js'
-import { coralBold, coral, deep, ocean, oceanBold, sand } from './theme.js'
+import { getThemeGeneration, style } from './theme.js'
 import { wrapLines } from './wrap.js'
 
 // block types w/ richer data for tool calls & results
@@ -76,7 +76,17 @@ export type OutputBlock =
 
 // braille spinner frames for in-progress tools
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-const FINALIZED_BLOCK_CACHE = new WeakMap<OutputBlock, Map<number, string[]>>()
+
+// cached lines are only valid for the theme generation they were styled under
+interface CachedLines
+{
+  generation: number
+  lines: string[]
+}
+const FINALIZED_BLOCK_CACHE = new WeakMap<
+  OutputBlock,
+  Map<number, CachedLines>
+>()
 
 export function getSpinnerFrame(tick: number): string
 {
@@ -109,18 +119,20 @@ export function summarizeToolArgs(
 function getCachedBlockLines(
   block: OutputBlock,
   width: number,
+  generation: number,
   render: () => string[]
 ): string[]
 {
   const widthCache = FINALIZED_BLOCK_CACHE.get(block)
-  if (widthCache?.has(width))
+  const cached = widthCache?.get(width)
+  if (cached && cached.generation === generation)
   {
-    return widthCache.get(width)!
+    return cached.lines
   }
 
   const lines = render()
-  const nextWidthCache = widthCache ?? new Map<number, string[]>()
-  nextWidthCache.set(width, lines)
+  const nextWidthCache = widthCache ?? new Map<number, CachedLines>()
+  nextWidthCache.set(width, { generation, lines })
   FINALIZED_BLOCK_CACHE.set(block, nextWidthCache)
 
   return lines
@@ -156,10 +168,6 @@ function toolDisplayLabel(toolName: string): string
   }
 }
 
-// border character for tool blocks
-const TOOL_BORDER = chalk.dim('│')
-const TOOL_BORDER_ERROR = chalk.red('│')
-
 // format an in-progress tool call that depends on the current spinner frame
 function formatPendingToolCall(
   block: ToolCallBlock,
@@ -167,14 +175,15 @@ function formatPendingToolCall(
   spinnerTick: number
 ): string[]
 {
-  const spinner = coral(getSpinnerFrame(spinnerTick))
+  const spinner = style('primary')(getSpinnerFrame(spinnerTick))
   const label = toolDisplayLabel(block.toolName)
   const argSummary = summarizeToolArgs(block.toolName, block.args)
-  const argDisplay = block.toolName === 'bash'
-    ? chalk.dim('$ ') + chalk.white(argSummary)
-    : chalk.dim(argSummary)
+  const argDisplay =
+    block.toolName === 'bash'
+      ? chalk.dim('$ ') + chalk.white(argSummary)
+      : chalk.dim(argSummary)
 
-  const header = `   ${deep('│')} ${spinner} ${deep(label)} ${argDisplay}`
+  const header = `   ${style('code')('│')} ${spinner} ${style('code')(label)} ${argDisplay}`
 
   return wrapLines(header, width)
 }
@@ -194,10 +203,12 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
       const contentLines = block.content.split('\n')
       const lines: string[] = []
       lines.push('')
-      lines.push(` ${oceanBold('›')} ${ocean(contentLines[0] ?? '')}`)
+      lines.push(
+        ` ${style('user').bold('›')} ${style('user')(contentLines[0] ?? '')}`
+      )
       for (let i = 1; i < contentLines.length; i++)
       {
-        lines.push(`   ${ocean(contentLines[i]!)}`)
+        lines.push(`   ${style('user')(contentLines[i]!)}`)
       }
       return lines
     }
@@ -206,17 +217,19 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
     {
       const lines: string[] = []
       lines.push('')
-      lines.push(` ${coralBold('●')} ${sand('Coral')}`)
-      lines.push(...wrapLines(renderMarkdownToAnsi(block.content), width - 3, '   '))
+      lines.push(` ${style('primary').bold('●')} ${style('muted')('Coral')}`)
+      lines.push(
+        ...wrapLines(renderMarkdownToAnsi(block.content), width - 3, '   ')
+      )
       return lines
     }
 
     case 'thinking':
     {
       const lines: string[] = []
-      const border = chalk.magenta('│')
+      const border = style('thinking')('│')
       lines.push('')
-      lines.push(`   ${border} ${chalk.dim.magenta('Thinking')}`)
+      lines.push(`   ${border} ${style('thinking').dim('Thinking')}`)
       const thinkLines = wrapLines(chalk.dim(block.content), width - 6, '')
       for (const line of thinkLines)
       {
@@ -230,18 +243,18 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
       const label = toolDisplayLabel(block.toolName)
       const argSummary = summarizeToolArgs(block.toolName, block.args)
       const isError = block.status === 'error'
-      const statusMark = isError ? chalk.red('✗') : chalk.green('✓')
+      const statusMark = isError ? style('error')('✗') : style('success')('✓')
       const duration =
         block.duration != null
           ? chalk.dim(` ${formatElapsed(block.duration)}`)
           : ''
-      const border = isError ? chalk.red('│') : deep('│')
-      const argDisplay = block.toolName === 'bash'
-        ? chalk.dim('$ ') + chalk.white(argSummary)
-        : chalk.dim(argSummary)
+      const border = isError ? style('error')('│') : style('code')('│')
+      const argDisplay =
+        block.toolName === 'bash'
+          ? chalk.dim('$ ') + chalk.white(argSummary)
+          : chalk.dim(argSummary)
 
-      const header =
-        `   ${border} ${statusMark} ${deep(label)} ${argDisplay}${duration}`
+      const header = `   ${border} ${statusMark} ${style('code')(label)} ${argDisplay}${duration}`
       return wrapLines(header, width)
     }
 
@@ -255,8 +268,8 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
     {
       const lines: string[] = []
       lines.push('')
-      lines.push(` ${chalk.bold.red('✗')} ${chalk.red('Error')}`)
-      lines.push(...wrapLines(chalk.red(block.content), width - 3, '   '))
+      lines.push(` ${style('error').bold('✗')} ${style('error')('Error')}`)
+      lines.push(...wrapLines(style('error')(block.content), width - 3, '   '))
       return lines
     }
 
@@ -273,11 +286,12 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
   }
 }
 
-// format a block while caching finalized content by block identity & width
+// format a block while caching finalized content by identity, width, & theme
 function formatBlock(
   block: OutputBlock,
   width: number,
-  spinnerTick: number
+  spinnerTick: number,
+  themeGeneration: number
 ): string[]
 {
   if (block.type === 'tool_call' && !block.status)
@@ -285,7 +299,7 @@ function formatBlock(
     return formatPendingToolCall(block, width, spinnerTick)
   }
 
-  return getCachedBlockLines(block, width, () =>
+  return getCachedBlockLines(block, width, themeGeneration, () =>
     formatFinalizedBlock(block, width)
   )
 }
@@ -297,8 +311,8 @@ function formatToolResultLines(
   width: number
 ): string[]
 {
-  const style = isError ? chalk.red : chalk.dim
-  const border = isError ? TOOL_BORDER_ERROR : TOOL_BORDER
+  const textStyle = isError ? style('error') : chalk.dim
+  const border = isError ? style('error')('│') : chalk.dim('│')
   const maxWidth = Math.max(width - 8, 12)
   const contentLines = content.split('\n')
   const result: string[] = []
@@ -314,12 +328,12 @@ function formatToolResultLines(
       }).split('\n')
       for (const segment of wrapped)
       {
-        result.push(`   ${border}   ${style(segment)}`)
+        result.push(`   ${border}   ${textStyle(segment)}`)
       }
     }
     else
     {
-      result.push(`   ${border}   ${style(raw)}`)
+      result.push(`   ${border}   ${textStyle(raw)}`)
     }
   }
 
@@ -336,6 +350,8 @@ export interface TranscriptOptions
   waitingElapsed?: number
   streamingThinking?: string
   showThinking?: boolean
+  // memoization input: callers re-render when the active theme changes
+  themeGeneration?: number
 }
 
 export function buildTranscriptLines(opts: TranscriptOptions): string[]
@@ -349,6 +365,7 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
     waitingElapsed = 0,
     streamingThinking = '',
     showThinking = true,
+    themeGeneration = getThemeGeneration(),
   } = opts
   const transcript: string[] = []
 
@@ -358,7 +375,7 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
     {
       continue
     }
-    transcript.push(...formatBlock(block, width, spinnerTick))
+    transcript.push(...formatBlock(block, width, spinnerTick, themeGeneration))
   }
 
   if (showThinking && streamingThinking)
@@ -367,22 +384,25 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
       ...formatBlock(
         { type: 'thinking', content: streamingThinking },
         width,
-        spinnerTick
+        spinnerTick,
+        themeGeneration
       )
     )
   }
   else if (streamingThinking)
   {
-    const border = chalk.magenta('│')
+    const border = style('thinking')('│')
     transcript.push('')
-    transcript.push(`   ${border} ${chalk.dim.magenta('Thinking')} ${chalk.dim('· ctrl+t to show')}`)
+    transcript.push(
+      `   ${border} ${style('thinking').dim('Thinking')} ${chalk.dim('· ctrl+t to show')}`
+    )
   }
 
   // render streaming assistant text after reasoning
   if (streaming)
   {
     transcript.push('')
-    transcript.push(` ${coralBold('●')} ${sand('Coral')}`)
+    transcript.push(` ${style('primary').bold('●')} ${style('muted')('Coral')}`)
     transcript.push(
       ...wrapLines(renderMarkdownToAnsi(streaming), width - 3, '   ')
     )
@@ -391,7 +411,7 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
   {
     transcript.push('')
     transcript.push(
-      ` ${coralBold('●')} ${shimmerText('thinking...', waitingElapsed)}`
+      ` ${style('primary').bold('●')} ${shimmerText('thinking...', waitingElapsed)}`
     )
   }
 

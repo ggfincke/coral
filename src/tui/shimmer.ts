@@ -2,11 +2,7 @@
 // cosine-falloff shimmer animation for terminal text
 
 import chalk from 'chalk'
-import { SAND, CORAL } from './theme.js'
-
-// shimmer sweeps from sand (dim neutral) to coral (warm pink-orange)
-const BASE_COLOR = SAND
-const HIGHLIGHT_COLOR = CORAL
+import { roleRgb, style } from './theme.js'
 
 // shimmer band half-width in characters
 const BAND_HALF_WIDTH = 5
@@ -24,6 +20,13 @@ function lerp(a: number, b: number, t: number): number
 // elapsed is in milliseconds
 export function shimmerText(text: string, elapsed: number): string
 {
+  // sweep from muted (dim neutral) to primary (highlight)
+  const base = roleRgb('muted')
+  const highlight = roleRgb('primary')
+
+  // ansi-based themes have no rgb endpoints to interpolate -> render static
+  if (!base || !highlight) return style('muted')(text)
+
   const chars = [...text]
   const period = chars.length + PADDING * 2
   const pos = (((elapsed / 1000) % CYCLE_SECONDS) / CYCLE_SECONDS) * period
@@ -52,9 +55,9 @@ export function shimmerText(text: string, elapsed: number): string
     // clamp & scale down slightly so base color is always visible
     const intensity = Math.min(t, 1.0) * 0.9
 
-    const r = lerp(BASE_COLOR.r, HIGHLIGHT_COLOR.r, intensity)
-    const g = lerp(BASE_COLOR.g, HIGHLIGHT_COLOR.g, intensity)
-    const b = lerp(BASE_COLOR.b, HIGHLIGHT_COLOR.b, intensity)
+    const r = lerp(base.r, highlight.r, intensity)
+    const g = lerp(base.g, highlight.g, intensity)
+    const b = lerp(base.b, highlight.b, intensity)
 
     result += chalk.rgb(r, g, b)(ch)
   }

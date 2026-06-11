@@ -3,7 +3,15 @@
 
 import chalk from 'chalk'
 import { getCwd } from '../cwd.js'
-import { coral, ocean, sand } from './theme.js'
+import { savePrefs } from '../config/prefs.js'
+import {
+  getTheme,
+  setTheme,
+  style,
+  type Role,
+  type RoleColor,
+} from './theme.js'
+import { findTheme, THEMES } from './themes.js'
 import type { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
 import {
@@ -48,6 +56,8 @@ export interface CommandContext
   saveCurrentSession: () => string | null
   // rename the current session's title & update cached meta
   renameCurrentSession: (title: string) => boolean
+  // re-render the TUI after a theme switch (busts styled-line caches)
+  notifyThemeChanged: () => void
 }
 
 // a single slash command
@@ -120,7 +130,7 @@ function systemBlock(content: string): SystemBlock
 
 function formatResumedSession(session: SessionMeta): string
 {
-  return `Resumed session ${ocean(session.id)} — ${session.title}`
+  return `Resumed session ${style('user')(session.id)} — ${session.title}`
 }
 
 function resolveResumeTarget(
@@ -166,7 +176,10 @@ function resolveResumeTarget(
   {
     const matchList = matches
       .slice(0, 5)
-      .map((session) => `  ${ocean(session.id)}  ${chalk.dim(session.title)}`)
+      .map(
+        (session) =>
+          `  ${style('user')(session.id)}  ${chalk.dim(session.title)}`
+      )
       .join('\n')
     return {
       type: 'message',
@@ -178,7 +191,7 @@ function resolveResumeTarget(
     type: 'message',
     content:
       `Session not found: ${requestedId}\n` +
-      `Use ${ocean('/sessions')} to see available sessions.`,
+      `Use ${style('user')('/sessions')} to see available sessions.`,
   }
 }
 
@@ -190,7 +203,7 @@ const helpCommand: Command = {
   execute(_args, ctx)
   {
     const lines: string[] = [
-      `${coral('Coral')} ${sand('— available commands')}`,
+      `${style('primary')('Coral')} ${style('muted')('— available commands')}`,
       '',
     ]
 
@@ -200,27 +213,31 @@ const helpCommand: Command = {
         ? chalk.dim(` (${cmd.aliases.map((a) => `/${a}`).join(', ')})`)
         : ''
       lines.push(
-        `  ${ocean(`/${cmd.name}`)}${aliases}  ${chalk.dim(cmd.description)}`
+        `  ${style('user')(`/${cmd.name}`)}${aliases}  ${chalk.dim(cmd.description)}`
       )
     }
 
     lines.push('')
-    lines.push(`${sand('— keybindings')}`)
+    lines.push(`${style('muted')('— keybindings')}`)
     lines.push('')
     lines.push(
-      `  ${ocean('ctrl+y')}   ${chalk.dim('Toggle permission mode (ask / yolo)')}`
+      `  ${style('user')('ctrl+y')}   ${chalk.dim('Toggle permission mode (ask / yolo)')}`
     )
     lines.push(
-      `  ${ocean('ctrl+t')}   ${chalk.dim('Toggle thinking/reasoning visibility')}`
+      `  ${style('user')('ctrl+t')}   ${chalk.dim('Toggle thinking/reasoning visibility')}`
     )
     lines.push(
-      `  ${ocean('ctrl+c')}   ${chalk.dim('Interrupt generation (or exit when idle)')}`
+      `  ${style('user')('ctrl+c')}   ${chalk.dim('Interrupt generation (or exit when idle)')}`
     )
     lines.push(
-      `  ${ocean('esc')}      ${chalk.dim('Interrupt generation (or exit when idle)')}`
+      `  ${style('user')('esc')}      ${chalk.dim('Interrupt generation (or exit when idle)')}`
     )
-    lines.push(`  ${ocean('↑↓')}       ${chalk.dim('Navigate input history')}`)
-    lines.push(`  ${ocean('pgup/dn')}  ${chalk.dim('Page through transcript')}`)
+    lines.push(
+      `  ${style('user')('↑↓')}       ${chalk.dim('Navigate input history')}`
+    )
+    lines.push(
+      `  ${style('user')('pgup/dn')}  ${chalk.dim('Page through transcript')}`
+    )
 
     lines.push('')
     lines.push(
@@ -306,10 +323,10 @@ const statusCommand: Command = {
     const usage = ctx.agent.getTokenUsage()
 
     const lines: string[] = [
-      `${coral('Coral')} ${sand('— status')}`,
+      `${style('primary')('Coral')} ${style('muted')('— status')}`,
       '',
       `  Model:        ${chalk.white(model)}`,
-      `  Permissions:  ${ctx.yolo ? chalk.yellow(permissions) : chalk.dim(permissions)}`,
+      `  Permissions:  ${ctx.yolo ? style('warning')(permissions) : chalk.dim(permissions)}`,
       `  Session:      ${chalk.dim(session)}`,
       `  Messages:     ${chalk.dim(String(messages))}`,
       `  Tokens (est): ${chalk.dim(`~${formatTokenCount(tokens)}`)}`,
@@ -453,7 +470,7 @@ const modelCommand: Command = {
         ctx.pushOutput(
           systemBlock(
             `Model "${requestedModel}" not found in Ollama.\n` +
-              `Use ${ocean('/model')} to open the picker, or pull it first.`
+              `Use ${style('user')('/model')} to open the picker, or pull it first.`
           )
         )
       }
@@ -501,8 +518,8 @@ const permissionsCommand: Command = {
       ctx.pushOutput(
         systemBlock(
           `Permission mode: ${chalk.bold(current)} (${description})\n\n` +
-            `  ${ocean('/permissions ask')}   — prompt before writes & shell commands\n` +
-            `  ${ocean('/permissions yolo')}  — auto-approve all tool calls\n` +
+            `  ${style('user')('/permissions ask')}   — prompt before writes & shell commands\n` +
+            `  ${style('user')('/permissions yolo')}  — auto-approve all tool calls\n` +
             `  ${chalk.dim('ctrl+y')}             — quick toggle`
         )
       )
@@ -516,7 +533,7 @@ const permissionsCommand: Command = {
       ctx.setYolo(true)
       ctx.pushOutput(
         systemBlock(
-          `Permission mode → ${chalk.yellow.bold('yolo')} (all tool calls auto-approved)`
+          `Permission mode → ${style('warning').bold('yolo')} (all tool calls auto-approved)`
         )
       )
     }
@@ -534,10 +551,79 @@ const permissionsCommand: Command = {
       ctx.pushOutput(
         systemBlock(
           `Unknown permission mode: "${mode}"\n` +
-            `Valid modes: ${ocean('ask')}, ${ocean('yolo')}`
+            `Valid modes: ${style('user')('ask')}, ${style('user')('yolo')}`
         )
       )
     }
+  },
+}
+
+// ── /theme ─────────────────────────────────────────────────────────────
+
+// colored swatch dot rendered in a specific theme's own palette
+function swatch(color: RoleColor): string
+{
+  return 'ansi' in color
+    ? chalk[color.ansi]('●')
+    : chalk.rgb(color.r, color.g, color.b)('●')
+}
+
+const SWATCH_ROLES: Role[] = ['primary', 'accent', 'user', 'code', 'muted']
+
+function formatThemeList(): string
+{
+  const current = getTheme()
+  const maxName = Math.max(...THEMES.map((theme) => theme.name.length))
+  const lines: string[] = [
+    `${style('primary')('Coral')} ${style('muted')('— themes')}`,
+    '',
+  ]
+
+  for (const theme of THEMES)
+  {
+    const dots = SWATCH_ROLES.map((role) => swatch(theme.roles[role])).join(' ')
+    const marker = theme === current ? style('primary')('›') : ' '
+    lines.push(
+      `${marker} ${dots}  ${theme.name.padEnd(maxName)}  ${chalk.dim(theme.description)}`
+    )
+  }
+
+  lines.push('')
+  lines.push(chalk.dim(`Switch with ${style('user')('/theme <name>')}`))
+  return lines.join('\n')
+}
+
+const themeCommand: Command = {
+  name: 'theme',
+  description: 'Show or switch the color theme',
+  execute(args, ctx)
+  {
+    if (!args)
+    {
+      ctx.pushOutput(systemBlock(formatThemeList()))
+      return
+    }
+
+    const theme = findTheme(args)
+
+    if (!theme)
+    {
+      ctx.pushOutput(
+        systemBlock(`Unknown theme: "${args.trim()}"\n\n${formatThemeList()}`)
+      )
+      return
+    }
+
+    if (theme === getTheme())
+    {
+      ctx.pushOutput(systemBlock(`Already using ${theme.label}`))
+      return
+    }
+
+    setTheme(theme)
+    savePrefs({ theme: theme.name })
+    ctx.notifyThemeChanged()
+    ctx.pushOutput(systemBlock(`Theme → ${theme.label} (saved to prefs)`))
   },
 }
 
@@ -585,15 +671,15 @@ function colorizeDiff(raw: string): string
       }
       if (line.startsWith('+'))
       {
-        return chalk.green(line)
+        return style('success')(line)
       }
       if (line.startsWith('-'))
       {
-        return chalk.red(line)
+        return style('error')(line)
       }
       if (line.startsWith('@@'))
       {
-        return chalk.cyan(line)
+        return style('code')(line)
       }
       if (line.startsWith('diff '))
       {
@@ -623,7 +709,7 @@ const sessionsCommand: Command = {
     }
 
     const lines: string[] = [
-      `${coral('Coral')} ${sand('— saved sessions')}`,
+      `${style('primary')('Coral')} ${style('muted')('— saved sessions')}`,
       '',
     ]
 
@@ -631,15 +717,15 @@ const sessionsCommand: Command = {
     {
       const date = new Date(s.updatedAt).toLocaleString()
       const isCurrent = s.id === ctx.sessionLabelId
-      const marker = isCurrent ? chalk.green(' ●') : '  '
+      const marker = isCurrent ? style('success')(' ●') : '  '
       lines.push(
-        `${marker} ${ocean(s.id)}  ${chalk.white(s.model)}  ${chalk.dim(date)}  ${chalk.dim(`(${s.messageCount} msgs)`)}`
+        `${marker} ${style('user')(s.id)}  ${chalk.white(s.model)}  ${chalk.dim(date)}  ${chalk.dim(`(${s.messageCount} msgs)`)}`
       )
       lines.push(`     ${chalk.dim(s.title)}`)
     }
 
     lines.push('')
-    lines.push(chalk.dim(`Resume with ${ocean('/resume <id>')}`))
+    lines.push(chalk.dim(`Resume with ${style('user')('/resume <id>')}`))
 
     ctx.pushOutput(systemBlock(lines.join('\n')))
   },
@@ -694,9 +780,9 @@ const renameCommand: Command = {
       const title = current?.title ?? '(unknown)'
       ctx.pushOutput(
         systemBlock(
-          `Current session: ${ocean(ctx.sessionLabelId)}\n` +
+          `Current session: ${style('user')(ctx.sessionLabelId)}\n` +
             `Title: ${title}\n\n` +
-            `Usage: ${ocean('/rename <new title>')}`
+            `Usage: ${style('user')('/rename <new title>')}`
         )
       )
       return
@@ -749,6 +835,7 @@ const commands: Command[] = [
   statusCommand,
   modelCommand,
   permissionsCommand,
+  themeCommand,
   diffCommand,
   sessionsCommand,
   resumeCommand,
@@ -779,7 +866,7 @@ export async function dispatchCommand(
     ctx.pushOutput(
       systemBlock(
         `Unknown command: /${parsed.name}\n` +
-          `Type ${ocean('/help')} to see available commands.`
+          `Type ${style('user')('/help')} to see available commands.`
       )
     )
     return { handled: true }
