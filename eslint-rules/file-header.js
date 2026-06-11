@@ -56,10 +56,7 @@ const rule = {
         const relativePath = filename.slice(srcIndex)
 
         // check if first comment exists & is on line 1
-        if (
-          !firstComment ||
-          ![1, 2].includes(firstComment.loc.start.line)
-        )
+        if (!firstComment || ![1, 2].includes(firstComment.loc.start.line))
         {
           context.report({
             node,

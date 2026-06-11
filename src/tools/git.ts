@@ -249,7 +249,8 @@ export const gitPushTool: Tool = {
     properties: {
       remote: {
         type: 'string',
-        description: 'Remote name (e.g. origin) — defaults to the branch upstream',
+        description:
+          'Remote name (e.g. origin) — defaults to the branch upstream',
       },
       branch: {
         type: 'string',
@@ -257,7 +258,8 @@ export const gitPushTool: Tool = {
       },
       setUpstream: {
         type: 'boolean',
-        description: 'Set the upstream tracking ref (-u); requires remote & branch',
+        description:
+          'Set the upstream tracking ref (-u); requires remote & branch',
       },
     },
   },
