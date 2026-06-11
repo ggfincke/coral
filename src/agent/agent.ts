@@ -10,7 +10,6 @@ import type {
 import {
   allTools,
   subagentTools,
-  getToolByName,
   toolToOllamaFormat,
   type Tool,
   type ToolResult,
@@ -42,6 +41,13 @@ import {
 export type { CompactionResult } from './compaction.js'
 import { toError } from '../utils/errors.js'
 import { capToolOutput } from './tool-output.js'
+import {
+  parseToolCallsFromContent,
+  STALL_NUDGE_MESSAGE,
+  MAX_STALL_NUDGES,
+  normalizeToolName,
+} from './repair.js'
+import { validateToolArgs } from './tool-validation.js'
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
@@ -138,6 +144,16 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
   })
 }
 
+// reliability-layer counters — how often the agent had to compensate for the
+// model botching a tool call (per-model telemetry for /status)
+export interface ReliabilityStats
+{
+  repairedToolCalls: number
+  nameRepairs: number
+  stallNudges: number
+  validationFailures: number
+}
+
 // token usage from Ollama's response metrics
 // durations are nanoseconds — Ollama's native unit from prompt_eval_duration / eval_duration
 export interface TokenUsage
@@ -225,6 +241,12 @@ export class Agent
   private compactFailureCount = 0
   private compactionCount = 0
   private lastCompactedAt: string | null = null
+  private reliabilityStats: ReliabilityStats = {
+    repairedToolCalls: 0,
+    nameRepairs: 0,
+    stallNudges: 0,
+    validationFailures: 0,
+  }
   private onCompactionCallback?: (result: CompactionResult) => void
   private onCompactionStartCallback?: () => void
 
@@ -490,6 +512,12 @@ export class Agent
     return this.lastCompactedAt
   }
 
+  // get reliability-layer counters for this session
+  getReliabilityStats(): ReliabilityStats
+  {
+    return { ...this.reliabilityStats }
+  }
+
   // fetch the context window size from Ollama & cache it
   // safe to call multiple times — only fetches once per model
   async fetchContextWindow(): Promise<number>
@@ -648,13 +676,42 @@ export class Agent
     })
   }
 
+  // look up a tool in this agent's own toolset — scoping lookup here (not the
+  // global registry) keeps subagents from reaching tools outside their subset
+  private getOwnTool(name: string): Tool | undefined
+  {
+    return this.tools.find((t) => t.name === name)
+  }
+
+  // canonicalize hallucinated name variants (Read_File -> read_file) in place
+  // so history, dispatch, & the UI all see the registered name
+  private repairToolNames(toolCalls: OllamaToolCall[]): void
+  {
+    for (const call of toolCalls)
+    {
+      const name = call.function.name
+      if (this.getOwnTool(name)) continue
+
+      const normalized = normalizeToolName(name)
+      const match = this.tools.find(
+        (t) => normalizeToolName(t.name) === normalized
+      )
+
+      if (match)
+      {
+        call.function.name = match.name
+        this.reliabilityStats.nameRepairs++
+      }
+    }
+  }
+
   // identify read-only, approval-free tools that can run out of order internally
   // derives parallel-safety from the tool's readOnly flag (not a separate list)
   // while keeping the live policy check so approval-gated tools still serialize
   private canRunToolInParallel(toolName: string): boolean
   {
     return (
-      getToolByName(toolName)?.readOnly === true &&
+      this.getOwnTool(toolName)?.readOnly === true &&
       getToolPolicy(this.permissions, toolName) === 'always_allow'
     )
   }
@@ -665,7 +722,7 @@ export class Agent
     toolArgs: Record<string, unknown>
   ): Promise<ToolResult>
   {
-    const tool = getToolByName(toolName)
+    const tool = this.getOwnTool(toolName)
 
     if (!tool)
     {
@@ -675,9 +732,18 @@ export class Agent
       }
     }
 
+    // schema-check & coerce args before executing — a friendly error here lets
+    // the model retry w/ fixed args instead of hitting a runtime failure
+    const validation = validateToolArgs(tool, toolArgs)
+    if (!validation.ok)
+    {
+      this.reliabilityStats.validationFailures++
+      return { output: '', error: validation.error }
+    }
+
     try
     {
-      return await tool.execute(toolArgs)
+      return await tool.execute(validation.args)
     }
     catch (err)
     {
@@ -796,6 +862,7 @@ export class Agent
 
     // keep going while the model wants to call tools
     let iterations = 0
+    let stallNudges = 0
     while (true)
     {
       // check for abort before each iteration
@@ -931,7 +998,27 @@ export class Agent
         return
       }
 
-      // record assistant message
+      // repair pass: recover tool calls the model emitted as text content —
+      // the most common local-model failure mode (call-shaped JSON, no call)
+      if (toolCalls.length === 0 && fullContent.trim())
+      {
+        const repaired = parseToolCallsFromContent(
+          fullContent,
+          this.tools.map((t) => t.name)
+        )
+
+        if (repaired)
+        {
+          toolCalls = repaired
+          this.reliabilityStats.repairedToolCalls += repaired.length
+        }
+      }
+
+      // fix hallucinated tool-name variants before the calls reach history
+      this.repairToolNames(toolCalls)
+
+      // record assistant message — after repair, so history carries the
+      // recovered tool_calls instead of raw JSON the model would re-see
       const assistantMessage: OllamaMessage = {
         role: 'assistant',
         content: fullContent,
@@ -949,6 +1036,20 @@ export class Agent
       // no tool calls means the model is done
       if (toolCalls.length === 0)
       {
+        // stall nudge: a fully empty turn (no content, no thinking) is a
+        // dead end, not an answer — prod the model, bounded by the cap
+        if (
+          !fullContent.trim() &&
+          !fullThinking.trim() &&
+          stallNudges < MAX_STALL_NUDGES
+        )
+        {
+          stallNudges++
+          this.reliabilityStats.stallNudges++
+          this.pushMessage({ role: 'user', content: STALL_NUDGE_MESSAGE })
+          continue
+        }
+
         this.clearCompactionCallbacks()
         events.onDone()
         return
@@ -1033,7 +1134,7 @@ export class Agent
         const toolArgs = call.function.arguments ?? {}
         events.onToolCall(toolName, toolArgs, callId)
 
-        const tool = getToolByName(toolName)
+        const tool = this.getOwnTool(toolName)
         if (!tool)
         {
           const errorMsg = `Unknown tool: ${toolName}`
