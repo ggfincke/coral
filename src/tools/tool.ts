@@ -8,6 +8,8 @@ export interface ToolResult
 {
   output: string
   error?: string
+  // unified diff of a file change — TUI display only, never sent to the model
+  diff?: string
 }
 
 // tool definition w/ schema & execute handler
