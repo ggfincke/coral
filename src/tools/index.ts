@@ -9,6 +9,7 @@ import { grepTool } from './grep.js'
 import { globTool } from './glob.js'
 import { listFilesTool } from './list-files.js'
 import { bashTool } from './bash.js'
+import { searchCodeTool } from './search-code.js'
 import {
   gitStatusTool,
   gitDiffTool,
@@ -28,6 +29,7 @@ export const allTools: Tool[] = [
   grepTool,
   globTool,
   listFilesTool,
+  searchCodeTool,
   bashTool,
   gitStatusTool,
   gitDiffTool,

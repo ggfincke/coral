@@ -35,6 +35,7 @@ test('resolvePermissions returns sensible defaults when no config files exist', 
   assert.equal(perms.git_status, 'always_allow')
   assert.equal(perms.git_diff, 'always_allow')
   assert.equal(perms.git_log, 'always_allow')
+  assert.equal(perms.search_code, 'always_allow')
   assert.equal(perms.write_file, 'require_approval')
   assert.equal(perms.edit_file, 'require_approval')
   assert.equal(perms.bash, 'require_approval')

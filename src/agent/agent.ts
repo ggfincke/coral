@@ -15,6 +15,7 @@ import {
   type ToolResult,
 } from '../tools/index.js'
 import { setSubagentRunner, type SubagentResult } from '../tools/subagent.js'
+import { setOllamaHost } from '../ollama/host.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { setCwd, getCwd } from '../cwd.js'
 import {
@@ -260,6 +261,7 @@ export class Agent
   {
     this.model = model
     this.baseUrl = baseUrl
+    setOllamaHost(baseUrl)
     this.client = new OllamaClient(baseUrl)
     this.thinkMode = options.think ?? true
     this.tools = options.tools ?? allTools

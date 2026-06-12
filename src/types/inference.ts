@@ -72,6 +72,15 @@ export interface ChatResponse
   eval_duration?: number
 }
 
+export interface EmbedResponse
+{
+  model?: string
+  embeddings: number[][]
+  total_duration?: number
+  load_duration?: number
+  prompt_eval_count?: number
+}
+
 export interface Model
 {
   name: string

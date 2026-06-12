@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Semantic code search MVP:** add a read-only `search_code` tool backed by
+  local Ollama embeddings, deterministic source chunking, & a SQLite project
+  index under Coral local state. The MVP lazily indexes the current project on
+  first use, respects Coral's ignored-entry policy, defaults to
+  `nomic-embed-text`, and exposes clean embedder/index-store seams for later
+  vector extensions or alternate providers.
 - **Tool-call reliability layer:** recover tool calls emitted as text content
   (the most common local-model failure), canonicalize hallucinated tool-name
   variants (`Read_File` -> `read_file`), nudge fully empty turns (capped at 2
