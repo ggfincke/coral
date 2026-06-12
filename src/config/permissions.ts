@@ -19,6 +19,9 @@ export interface CoralConfig
 {
   // per-tool permission policies
   permissions?: ToolPermissions
+  retrieval?: {
+    embeddingModel?: string
+  }
 }
 
 // default policies when no config is present
@@ -30,6 +33,7 @@ const DEFAULT_TOOL_POLICIES: ToolPermissions = {
   git_status: 'always_allow',
   git_diff: 'always_allow',
   git_log: 'always_allow',
+  search_code: 'always_allow',
   git_add: 'require_approval',
   git_commit: 'require_approval',
   git_push: 'require_approval',

@@ -104,6 +104,7 @@ ${toolBlock}
 ## Planning & delegation
 
 - For a multi-step task, call todo_write to lay out the steps, then keep it current: mark one item in_progress as you work it & completed when done. Skip it for simple single-step tasks
+- Use search_code when you need to find conceptually related code but don't know exact names yet; follow up with read_file before editing
 - Use task to delegate a bounded search or research question to a subagent — it explores with its own context (read-only) & returns just the answer, so a wide search doesn't crowd out your own. Give it self-contained instructions & say what to return
 - Don't delegate edits or commands — the subagent is read-only; do those yourself
 
