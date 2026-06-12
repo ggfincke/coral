@@ -184,6 +184,7 @@ test('subagentTools exposes only read-only tools', () =>
 
   assert.ok(names.includes('read_file'))
   assert.ok(names.includes('grep'))
+  assert.ok(names.includes('search_code'))
   for (const name of [
     'write_file',
     'edit_file',
