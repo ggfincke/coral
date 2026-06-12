@@ -667,42 +667,9 @@ const diffCommand: Command = {
       return
     }
 
-    // colorize the raw diff output
-    const colorized = colorizeDiff(result.output)
-    ctx.pushOutput(systemBlock(colorized))
+    // diff blocks render w/ gutter & theme colors in the transcript
+    ctx.pushOutput({ type: 'diff', unified: result.output })
   },
-}
-
-// apply basic git-diff coloring to raw diff output
-function colorizeDiff(raw: string): string
-{
-  return raw
-    .split('\n')
-    .map((line) =>
-    {
-      if (line.startsWith('+++') || line.startsWith('---'))
-      {
-        return chalk.bold(line)
-      }
-      if (line.startsWith('+'))
-      {
-        return style('success')(line)
-      }
-      if (line.startsWith('-'))
-      {
-        return style('error')(line)
-      }
-      if (line.startsWith('@@'))
-      {
-        return style('code')(line)
-      }
-      if (line.startsWith('diff '))
-      {
-        return chalk.bold.white(line)
-      }
-      return chalk.dim(line)
-    })
-    .join('\n')
 }
 
 // ── /sessions ─────────────────────────────────────────────────────────

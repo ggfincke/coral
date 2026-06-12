@@ -3,6 +3,7 @@
 
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
+import { renderUnifiedDiff } from './diff.js'
 import { renderMarkdownToAnsi } from './markdown.js'
 import { formatElapsed } from './metrics.js'
 import { shimmerText } from './shimmer.js'
@@ -52,6 +53,13 @@ export interface ToolResultBlock
   isError?: boolean
 }
 
+// colored unified diff — from edit/write tools or /diff
+export interface DiffBlock
+{
+  type: 'diff'
+  unified: string
+}
+
 export interface ErrorBlock
 {
   type: 'error'
@@ -71,6 +79,7 @@ export type OutputBlock =
   | ThinkingBlock
   | ToolCallBlock
   | ToolResultBlock
+  | DiffBlock
   | ErrorBlock
   | SystemBlock
 
@@ -262,6 +271,13 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
     {
       if (!block.content) return []
       return formatToolResultLines(block.content, block.isError ?? false, width)
+    }
+
+    case 'diff':
+    {
+      const border = chalk.dim('│')
+      const rendered = renderUnifiedDiff(block.unified, Math.max(width - 8, 12))
+      return rendered.map((line) => `   ${border}   ${line}`)
     }
 
     case 'error':

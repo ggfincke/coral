@@ -1,9 +1,16 @@
 // src/tui/approval-box.ts
 // bordered tool approval prompt formatting
 
+import chalk from 'chalk'
+import stripAnsi from 'strip-ansi'
 import wrapAnsi from 'wrap-ansi'
+import { renderUnifiedDiff } from './diff.js'
 import { summarizeToolArgs } from './transcript.js'
 import { buildLabeledSeparator, buildRule } from './status-line.js'
+import { style } from './theme.js'
+
+// cap the change preview so large edits don't swallow the screen
+const MAX_PREVIEW_LINES = 20
 
 export function formatApprovalArgs(
   toolName: string,
@@ -14,24 +21,32 @@ export function formatApprovalArgs(
   return toolName === 'bash' ? `$ ${summary}` : summary
 }
 
+// lines come back fully styled — render w/o an outer Ink color prop so the
+// embedded diff colors survive
 export function buildApprovalBox(
   toolName: string,
   args: Record<string, unknown>,
-  width: number
+  width: number,
+  diff?: string
 ): string[]
 {
+  const warn = style('warning')
   const innerWidth = Math.max(width - 4, 12)
   const summary = formatApprovalArgs(toolName, args)
   const title = `Allow ${toolName}?`
 
-  const topBorder = `╭─${buildLabeledSeparator(innerWidth, 'tool approval')}─╮`
-  const bottomBorder = `╰${buildRule(innerWidth + 2)}╯`
-  const emptyLine = `│ ${' '.repeat(innerWidth)} │`
+  // pad by visible length — styled content carries ANSI codes
+  const row = (content: string): string =>
+  {
+    const fill = ' '.repeat(Math.max(innerWidth - stripAnsi(content).length, 0))
+    return `${warn('│')} ${content}${fill} ${warn('│')}`
+  }
 
-  const lines: string[] = [topBorder, emptyLine]
-
-  const titlePadded = title + ' '.repeat(Math.max(innerWidth - title.length, 0))
-  lines.push(`│ ${titlePadded} │`)
+  const lines: string[] = [
+    warn(`╭─${buildLabeledSeparator(innerWidth, 'tool approval')}─╮`),
+    row(''),
+    row(warn(title)),
+  ]
 
   const wrapped = wrapAnsi(summary, innerWidth, {
     hard: true,
@@ -40,19 +55,29 @@ export function buildApprovalBox(
   })
   for (const summaryLine of wrapped.split('\n'))
   {
-    const padded =
-      summaryLine + ' '.repeat(Math.max(innerWidth - summaryLine.length, 0))
-    lines.push(`│ ${padded} │`)
+    lines.push(row(warn(summaryLine)))
   }
 
-  lines.push(emptyLine)
+  if (diff)
+  {
+    lines.push(row(''))
+    const rendered = renderUnifiedDiff(diff, innerWidth)
+    for (const diffLine of rendered.slice(0, MAX_PREVIEW_LINES))
+    {
+      lines.push(row(diffLine))
+    }
+    if (rendered.length > MAX_PREVIEW_LINES)
+    {
+      lines.push(
+        row(chalk.dim(`… +${rendered.length - MAX_PREVIEW_LINES} more lines`))
+      )
+    }
+  }
 
-  const hint = '(y) approve  (n) reject  (esc) cancel'
-  const hintPadded = hint + ' '.repeat(Math.max(innerWidth - hint.length, 0))
-  lines.push(`│ ${hintPadded} │`)
-
-  lines.push(emptyLine)
-  lines.push(bottomBorder)
+  lines.push(row(''))
+  lines.push(row(warn('(y) approve  (n) reject  (esc) cancel')))
+  lines.push(row(''))
+  lines.push(warn(`╰${buildRule(innerWidth + 2)}╯`))
 
   return lines
 }

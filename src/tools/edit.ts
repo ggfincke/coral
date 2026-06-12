@@ -5,6 +5,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Tool, ToolResult } from './tool.js'
 import { readFileGuarded } from './file-utils.js'
 import { resolvePath } from '../cwd.js'
+import { computeDiff } from '../utils/diff.js'
 
 // count non-overlapping occurrences of a substring
 function countOccurrences(haystack: string, needle: string): number
@@ -93,6 +94,7 @@ export const editTool: Tool = {
     const replaced = replaceAll ? count : 1
     return {
       output: `Edited ${path}: replaced ${replaced} occurrence${replaced > 1 ? 's' : ''} (${oldString.length} chars → ${newString.length} chars)`,
+      diff: computeDiff(content, updated) ?? undefined,
     }
   },
 }
