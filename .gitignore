@@ -7,3 +7,11 @@ __pycache__/
 .env
 CLAUDE.md
 AGENTS.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
