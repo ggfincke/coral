@@ -189,7 +189,8 @@ export interface AgentEvents
     name: string,
     result: string,
     error: string | undefined,
-    callId: number
+    callId: number,
+    diff?: string
   ) => void
   // return true to approve, false to reject — only called for write/edit/bash
   onToolApproval: (
@@ -1118,7 +1119,13 @@ export class Agent
           for (const [index, result] of results.entries())
           {
             const item = batch[index]!
-            events.onToolResult(item.name, result.output, result.error, item.id)
+            events.onToolResult(
+              item.name,
+              result.output,
+              result.error,
+              item.id,
+              result.diff
+            )
             toolResults.push(
               this.buildToolMessage(item.name, result.output, result.error)
             )
@@ -1192,7 +1199,13 @@ export class Agent
         }
 
         const result = await this.executeTool(toolName, toolArgs)
-        events.onToolResult(toolName, result.output, result.error, callId)
+        events.onToolResult(
+          toolName,
+          result.output,
+          result.error,
+          callId,
+          result.diff
+        )
         toolResults.push(
           this.buildToolMessage(toolName, result.output, result.error)
         )
