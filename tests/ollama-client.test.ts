@@ -353,3 +353,55 @@ test('unloadModel sends keep_alive 0 for immediate shutdown', async () =>
     globalThis.fetch = originalFetch
   }
 })
+
+test('embed posts batched input to Ollama embed endpoint', async () =>
+{
+  const originalFetch = globalThis.fetch
+  const requests: { url: string; body: unknown }[] = []
+
+  globalThis.fetch = (async (input, init) =>
+  {
+    requests.push({
+      url: String(input),
+      body: JSON.parse(String(init?.body ?? '{}')),
+    })
+
+    return new Response(
+      JSON.stringify({
+        embeddings: [
+          [1, 0],
+          [0, 1],
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://ollama.test')
+    const embeddings = await client.embed('nomic-embed-text', [
+      'auth flow',
+      'render button',
+    ])
+
+    assert.deepEqual(embeddings, [
+      [1, 0],
+      [0, 1],
+    ])
+    assert.deepEqual(requests, [
+      {
+        url: 'http://ollama.test/api/embed',
+        body: {
+          model: 'nomic-embed-text',
+          input: ['auth flow', 'render button'],
+          keep_alive: '10m',
+        },
+      },
+    ])
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})

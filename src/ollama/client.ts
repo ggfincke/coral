@@ -4,12 +4,15 @@
 import type {
   ChatRequest,
   ChatResponse,
+  EmbedResponse,
   Model,
   ModelInfo,
 } from '../types/inference.js'
+import { DEFAULT_OLLAMA_HOST } from './host.js'
 export type {
   ChatRequest,
   ChatResponse,
+  EmbedResponse,
   JsonSchema,
   Model,
   ModelInfo,
@@ -35,7 +38,7 @@ export class OllamaClient
   private lastModel: string | null = null
   private thinkSupportByModel = new Map<string, ThinkSupport>()
 
-  constructor(private baseUrl = 'http://localhost:11434')
+  constructor(private baseUrl = DEFAULT_OLLAMA_HOST)
   {}
 
   // decide whether the server rejected the think field specifically
@@ -254,6 +257,37 @@ export class OllamaClient
     if (!res.ok) throw new Error(`Ollama API error: ${res.status}`)
     const data = (await res.json()) as { models: Model[] }
     return data.models
+  }
+
+  // generate embeddings through Ollama's /api/embed endpoint
+  async embed(
+    model: string,
+    input: string[],
+    signal?: AbortSignal
+  ): Promise<number[][]>
+  {
+    if (input.length === 0) return []
+
+    const res = await fetch(`${this.baseUrl}/api/embed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        input,
+        keep_alive: DEFAULT_KEEP_ALIVE,
+      }),
+      signal,
+    })
+
+    if (!res.ok) throwApiError(res.status, await res.text())
+
+    const data = (await res.json()) as EmbedResponse
+    if (!Array.isArray(data.embeddings))
+    {
+      throw new Error('Ollama embed response did not include embeddings')
+    }
+
+    return data.embeddings
   }
 
   // stream chat completions via ndjson
