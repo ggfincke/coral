@@ -19,12 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Never combined w/ `tools` — Ollama silently drops tool calls when both are
   set (ollama/ollama#8095), so constrained decoding of tool calls is not
   viable upstream.
+- **Diff display for file edits:** after `write_file`/`edit_file`, the
+  transcript shows a colored unified diff (line-number gutter, 3 context
+  lines, large diffs truncated w/ a summary marker) instead of the plain
+  result line, & the approval box renders the exact pending change before
+  authorization. New `diff` (jsdiff) dependency for diff generation.
 
 ### Changed
 
 - Tool dispatch now resolves tools from the agent's own toolset instead of the
   global registry, so restricted toolsets (e.g. read-only subagents) can no
-  longer reach tools outside their subset.t
+  longer reach tools outside their subset.
+
+### Fixed
+
+- `/diff` output now renders w/ proper git-diff coloring & a line-number
+  gutter — its colors were previously clobbered by the system block's dim
+  styling.
 
 ## [0.10.0] - 2026-06-11
 
