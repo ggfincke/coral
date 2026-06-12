@@ -1,6 +1,9 @@
 node_modules/
 dist/
 *.tsbuildinfo
+.venv/
+__pycache__/
+.pytest_cache/
 .env
 CLAUDE.md
 AGENTS.md

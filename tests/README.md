@@ -28,8 +28,11 @@ We intentionally do not test:
 ## Running Tests
 
 ```bash
-# run all tests
+# run Node tests
 npm test
+
+# run Python dev-tool checks
+npm run check:dev-tools
 
 # run in watch mode
 npm run test:watch
