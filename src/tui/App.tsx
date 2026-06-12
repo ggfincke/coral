@@ -15,12 +15,14 @@ import {
   buildTranscriptLines,
   maxScrollOffset,
   sliceViewport,
+  type DiffBlock,
   type OutputBlock,
   type ToolCallBlock,
 } from './transcript.js'
 import PromptInput from './prompt-input.js'
 import { getThemeGeneration, inkColor, style } from './theme.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { previewToolDiff } from '../utils/diff.js'
 import { dispatchCommand, type CommandContext } from './commands.js'
 import { useAnimationTimer } from './use-animation-timer.js'
 import { useStreamBuffer } from './use-stream-buffer.js'
@@ -59,6 +61,8 @@ interface ApprovalPrompt
 {
   toolName: string
   args: Record<string, unknown>
+  // pre-computed change preview — rendered inside the approval box
+  diff?: string
   resolve: (approved: boolean) => void
 }
 
@@ -179,7 +183,12 @@ export default function App({
   const transcriptWidth = Math.max(terminalSize.columns - 2, 20)
 
   const approvalBoxLines = approval
-    ? buildApprovalBox(approval.toolName, approval.args, transcriptWidth)
+    ? buildApprovalBox(
+        approval.toolName,
+        approval.args,
+        transcriptWidth,
+        approval.diff
+      )
     : []
   const todoPanelLines = buildTodoPanel(todos, transcriptWidth)
   const headerHeight = 2
@@ -844,16 +853,19 @@ export default function App({
               } satisfies ToolCallBlock,
             ])
           },
-          onToolApproval(name, args)
+          async onToolApproval(name, args)
           {
-            if (yoloRef.current) return Promise.resolve(true)
+            if (yoloRef.current) return true
+
+            // compute the change preview before showing the box (best-effort)
+            const diff = (await previewToolDiff(name, args)) ?? undefined
 
             return new Promise<boolean>((resolve) =>
             {
-              setApproval({ toolName: name, args, resolve })
+              setApproval({ toolName: name, args, diff, resolve })
             })
           },
-          onToolResult(name, result, error, callId)
+          onToolResult(name, result, error, callId, diff)
           {
             const startedAt = toolStartTimesRef.current.get(callId)
             const duration =
@@ -893,6 +905,11 @@ export default function App({
                   content: error,
                   isError: true,
                 })
+              }
+              else if (diff)
+              {
+                // the diff says it all — skip the redundant summary line
+                next.push({ type: 'diff', unified: diff } satisfies DiffBlock)
               }
               else if (result)
               {
@@ -1281,9 +1298,8 @@ export default function App({
       {!pickerVisible && agent && approval && (
         <Box flexDirection="column">
           {approvalBoxLines.map((line, index) => (
-            <Text key={index} color={inkColor('warning')}>
-              {line}
-            </Text>
+            // lines are pre-styled — an outer color prop would clobber the diff
+            <Text key={index}>{line}</Text>
           ))}
         </Box>
       )}
