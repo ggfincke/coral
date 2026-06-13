@@ -22,6 +22,10 @@ export interface CoralConfig
   retrieval?: {
     embeddingModel?: string
   }
+  context?: {
+    // ceiling for the pinned num_ctx (tokens)
+    maxNumCtx?: number
+  }
 }
 
 // default policies when no config is present

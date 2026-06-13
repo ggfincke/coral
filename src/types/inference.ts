@@ -54,6 +54,9 @@ export interface ChatRequest
   tools?: OllamaTool[]
   think?: boolean | 'low' | 'medium' | 'high'
   keep_alive?: string | number
+  // pinned context window — sent as options.num_ctx; held constant per session
+  // so Ollama doesn't reload the runner & wipe the KV cache between turns
+  num_ctx?: number
   // ! constrains content only & silently empties tool_calls when combined
   // ! w/ tools (ollama#8095) — never set on tool-bearing requests
   format?: 'json' | Record<string, unknown>

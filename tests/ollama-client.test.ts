@@ -65,6 +65,42 @@ test('chatStream defaults keep_alive to 10m', async () =>
   }
 })
 
+test('chatStream nests num_ctx under options and drops it from top level', async () =>
+{
+  const originalFetch = globalThis.fetch
+  const requests: Record<string, unknown>[] = []
+
+  globalThis.fetch = (async (_input, init) =>
+  {
+    requests.push(JSON.parse(String(init?.body ?? '{}')))
+
+    return buildNdjsonResponse([
+      { message: { role: 'assistant', content: 'done' }, done: true },
+    ])
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://localhost:11434')
+
+    for await (const _chunk of client.chatStream({
+      model: 'fake-model',
+      messages: [{ role: 'user', content: 'hello' }],
+      num_ctx: 32_768,
+    }))
+    {
+      void _chunk
+    }
+
+    assert.deepEqual(requests[0]!.options, { num_ctx: 32_768 })
+    assert.equal('num_ctx' in requests[0]!, false)
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})
+
 test('chatStream sends think when requested', async () =>
 {
   const originalFetch = globalThis.fetch

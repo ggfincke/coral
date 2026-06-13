@@ -21,6 +21,14 @@ export const PRUNE_PROTECT_COUNT = 6
 // stop retrying summarization after this many consecutive failures
 export const MAX_COMPACT_FAILURES = 2
 
+// stable content prefix of a frozen summary block — used to both build the block
+// & detect it on session restore. keep in sync w/ buildCompactedMessages
+export const FROZEN_SUMMARY_MARKER = '[Conversation handoff'
+
+// consolidate the accumulated frozen summaries into one once they exceed this —
+// bounds prefix growth at the cost of a single cold prefill
+export const MAX_FROZEN_SUMMARIES = 4
+
 // minimum messages before pruning triggers
 const MIN_MESSAGES_FOR_PRUNING = 10
 
@@ -138,20 +146,22 @@ export function buildPruneMarker(msg: OllamaMessage): string
 }
 
 // prune old tool results, replacing them w/ compact markers
-// keeps the last `protectCount` tool-role messages untouched
+// keeps the last `protectCount` tool-role messages untouched & never touches
+// messages before `startIndex` (the frozen prefix), so their KV cache survives
 // returns a new array — does NOT mutate the input
 export function pruneToolResults(
   messages: OllamaMessage[],
-  protectCount: number = PRUNE_PROTECT_COUNT
+  protectCount: number = PRUNE_PROTECT_COUNT,
+  startIndex = 0
 ): {
   prunedMessages: OllamaMessage[]
   prunedCount: number
   tokensSaved: number
 }
 {
-  // find all tool-role message indices
+  // find tool-role message indices at or after the frozen prefix
   const toolIndices: number[] = []
-  for (let i = 0; i < messages.length; i++)
+  for (let i = startIndex; i < messages.length; i++)
   {
     if (messages[i]!.role === 'tool') toolIndices.push(i)
   }
@@ -169,7 +179,7 @@ export function pruneToolResults(
   {
     const msg = messages[i]!
 
-    if (msg.role === 'tool' && !protectedSet.has(i))
+    if (msg.role === 'tool' && i >= startIndex && !protectedSet.has(i))
     {
       const marker = buildPruneMarker(msg)
       const originalTokens = estimateMessageTokens(msg)
@@ -295,60 +305,84 @@ Conversation to summarize:
 ${formatted}`
 }
 
-// split messages into "old" (to summarize) & "recent" (to keep verbatim)
-// always preserves system prompt at index 0
+// count the frozen-prefix length: the system prompt plus any contiguous frozen
+// summary blocks that follow it. used to recover the boundary on session restore
+export function countFrozenPrefix(messages: OllamaMessage[]): number
+{
+  if (messages.length === 0) return 0
+
+  let count = 1
+  for (let i = 1; i < messages.length; i++)
+  {
+    const msg = messages[i]!
+    if (msg.role === 'user' && msg.content.startsWith(FROZEN_SUMMARY_MARKER))
+    {
+      count++
+    }
+    else
+    {
+      break
+    }
+  }
+
+  return count
+}
+
+// split the live region (messages after the frozen prefix) into "old" (to
+// summarize) & "recent" (to keep verbatim) — never touches the frozen prefix,
+// so its KV cache survives the rebuild
 export function splitForCompaction(
   messages: OllamaMessage[],
-  config: CompactionConfig = DEFAULT_COMPACTION_CONFIG
+  config: CompactionConfig = DEFAULT_COMPACTION_CONFIG,
+  frozenPrefixLength = 1
 ): { toSummarize: OllamaMessage[]; toKeep: OllamaMessage[] }
 {
-  // system prompt is always first & always kept
-  const systemMsg = messages[0]
-  const rest = messages.slice(1)
+  const live = messages.slice(frozenPrefixLength)
 
-  if (rest.length <= config.minRecentMessages)
+  if (live.length <= config.minRecentMessages)
   {
-    return { toSummarize: [], toKeep: messages }
+    return { toSummarize: [], toKeep: live }
   }
 
   // find a clean split point — try to split at a user message boundary
   // so we don't break mid-turn (assistant + tool calls + tool results)
-  const splitTarget = rest.length - config.minRecentMessages
+  const splitTarget = live.length - config.minRecentMessages
 
   // walk forward from the target to find a user message (start of a turn)
   let splitIndex = splitTarget
-  while (splitIndex < rest.length && rest[splitIndex]?.role !== 'user')
+  while (splitIndex < live.length && live[splitIndex]?.role !== 'user')
   {
     splitIndex++
   }
 
   // if we couldn't find a user message boundary, fall back to the target
-  if (splitIndex >= rest.length)
+  if (splitIndex >= live.length)
   {
     splitIndex = splitTarget
   }
 
-  const toSummarize = rest.slice(0, splitIndex)
-  const toKeep = [systemMsg!, ...rest.slice(splitIndex)]
-
-  return { toSummarize, toKeep }
+  return {
+    toSummarize: live.slice(0, splitIndex),
+    toKeep: live.slice(splitIndex),
+  }
 }
 
-// create the compacted message array — replaces old messages w/ a summary
+// build the compacted array: the frozen prefix stays byte-identical, the new
+// summary is appended as another frozen block, then the kept live tail follows.
+// keeping the prefix stable lets llama.cpp reuse its KV cache through it
 export function buildCompactedMessages(
-  systemMsg: OllamaMessage,
+  frozenPrefix: OllamaMessage[],
   summary: string,
-  recentMessages: OllamaMessage[]
+  toKeep: OllamaMessage[]
 ): OllamaMessage[]
 {
-  // insert summary as a handoff context message right after the system prompt
   const summaryMessage: OllamaMessage = {
     role: 'user',
-    content: `[Conversation handoff — you are continuing a prior session. Use this context to inform your work, but do not respond to it directly.]\n\n${summary}`,
+    content: `${FROZEN_SUMMARY_MARKER} — you are continuing a prior session. Use this context to inform your work, but do not respond to it directly.]\n\n${summary}`,
   }
 
-  // filter out system messages from recent (we already have the system prompt)
-  const recent = recentMessages.filter((m) => m.role !== 'system')
+  // filter out system messages from the kept tail — the prefix holds the system
+  const recent = toKeep.filter((m) => m.role !== 'system')
 
-  return [systemMsg, summaryMessage, ...recent]
+  return [...frozenPrefix, summaryMessage, ...recent]
 }
