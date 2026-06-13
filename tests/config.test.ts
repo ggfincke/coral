@@ -69,6 +69,42 @@ test('project-level .coral.json overrides defaults', async () =>
   assert.equal(perms.grep, 'always_allow')
 })
 
+test('always_deny policy is respected', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-config-'))
+  tempDirs.push(dir)
+
+  const config = { permissions: { bash: 'always_deny' } }
+  await writeFile(join(dir, '.coral.json'), JSON.stringify(config), 'utf-8')
+
+  const perms = resolvePermissions(dir)
+
+  assert.equal(getToolPolicy(perms, 'bash'), 'always_deny')
+})
+
+test('invalid permission values are stripped, valid siblings kept', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-config-'))
+  tempDirs.push(dir)
+
+  const config = {
+    permissions: {
+      bash: 'nonsense',
+      read_file: 42,
+      write_file: 'always_deny',
+    },
+  }
+  await writeFile(join(dir, '.coral.json'), JSON.stringify(config), 'utf-8')
+
+  const perms = resolvePermissions(dir)
+
+  // invalid values fall back to defaults
+  assert.equal(perms.bash, 'require_approval')
+  assert.equal(perms.read_file, 'always_allow')
+  // valid sibling override is still applied
+  assert.equal(perms.write_file, 'always_deny')
+})
+
 test('corrupt .coral.json is handled gracefully', async () =>
 {
   const dir = await mkdtemp(join(tmpdir(), 'coral-config-'))

@@ -3,7 +3,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { computeDiff } from '../src/utils/diff.js'
+import { applyEdit, computeDiff } from '../src/utils/diff.js'
 
 test('generates unified diffs for the major shapes', () =>
 {
@@ -36,4 +36,58 @@ test('generates unified diffs for the major shapes', () =>
   assert.ok(truncated)
   assert.ok(truncated.split('\n').length < 250)
   assert.match(truncated, /… \+\d+ more changed lines$/)
+})
+
+// shared by editTool.execute & the approval preview — a regression here either
+// corrupts a file or desyncs the preview from execution
+test('applyEdit covers the substitution outcomes', () =>
+{
+  // empty old_string -> rejected before any scan
+  assert.deepEqual(applyEdit('abc', '', 'x', false), {
+    ok: false,
+    reason: 'empty',
+    count: 0,
+  })
+
+  // old === new -> rejected as identical
+  assert.deepEqual(applyEdit('abc', 'a', 'a', false), {
+    ok: false,
+    reason: 'identical',
+    count: 0,
+  })
+
+  // old_string absent -> not_found
+  assert.deepEqual(applyEdit('abc', 'z', 'y', false), {
+    ok: false,
+    reason: 'not_found',
+    count: 0,
+  })
+
+  // multiple matches w/o replaceAll -> rejected, count surfaced for the error
+  assert.deepEqual(applyEdit('a.a.a', 'a', 'b', false), {
+    ok: false,
+    reason: 'multiple',
+    count: 3,
+  })
+
+  // single match -> replaced once
+  assert.deepEqual(applyEdit('foo bar', 'bar', 'baz', false), {
+    ok: true,
+    after: 'foo baz',
+    count: 1,
+  })
+
+  // multiple matches w/ replaceAll -> every occurrence replaced, count reported
+  assert.deepEqual(applyEdit('a.a.a', 'a', 'b', true), {
+    ok: true,
+    after: 'b.b.b',
+    count: 3,
+  })
+
+  // single match w/ replaceAll -> count stays 1
+  assert.deepEqual(applyEdit('foo bar', 'bar', 'baz', true), {
+    ok: true,
+    after: 'foo baz',
+    count: 1,
+  })
 })
