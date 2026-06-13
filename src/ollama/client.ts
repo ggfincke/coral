@@ -57,8 +57,10 @@ export class OllamaClient
     includeThink: boolean
   ): Record<string, unknown>
   {
+    // num_ctx is a top-level convenience field — Ollama expects it under options
+    const { num_ctx, ...rest } = request
     const body: Record<string, unknown> = {
-      ...request,
+      ...rest,
       keep_alive: request.keep_alive ?? DEFAULT_KEEP_ALIVE,
       stream: true,
     }
@@ -66,6 +68,11 @@ export class OllamaClient
     if (!includeThink)
     {
       delete body.think
+    }
+
+    if (typeof num_ctx === 'number' && num_ctx > 0)
+    {
+      body.options = { num_ctx }
     }
 
     return body
