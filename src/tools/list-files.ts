@@ -6,6 +6,7 @@ import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { Tool, ToolResult } from './tool.js'
 import { resolvePath } from '../cwd.js'
+import { clamp } from '../utils/clamp.js'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
 import {
   formatProjectTreeEntryName,
@@ -144,7 +145,7 @@ export const listFilesTool: Tool = {
   {
     const path = resolvePath((args.path as string) ?? '.')
     const rawDepth = (args.depth as number) ?? DEFAULT_DEPTH
-    const depth = Math.max(1, Math.min(MAX_DEPTH, Math.floor(rawDepth)))
+    const depth = clamp(Math.floor(rawDepth), 1, MAX_DEPTH)
 
     // verify the path is a directory
     try

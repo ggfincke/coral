@@ -43,7 +43,7 @@ import {
 import { resolveContextConfig } from '../config/context.js'
 
 export type { CompactionResult } from './compaction.js'
-import { toError } from '../utils/errors.js'
+import { toError, toErrorMessage } from '../utils/errors.js'
 import { capToolOutput } from './tool-output.js'
 import {
   parseToolCallsFromContent,
@@ -832,7 +832,7 @@ export class Agent
     {
       return {
         output: '',
-        error: `Tool execution failed for ${toolName}: ${toError(err).message}`,
+        error: `Tool execution failed for ${toolName}: ${toErrorMessage(err)}`,
       }
     }
   }
@@ -1191,7 +1191,7 @@ export class Agent
           }
           catch (err)
           {
-            const errorMsg = `Parallel tool execution failed: ${toError(err).message}`
+            const errorMsg = `Parallel tool execution failed: ${toErrorMessage(err)}`
             for (const item of batch)
             {
               events.onToolResult(item.name, '', errorMsg, item.id)
@@ -1261,7 +1261,7 @@ export class Agent
             // record a result for the announced call so history stays consistent
             const errorMsg = signal?.aborted
               ? 'Tool call interrupted'
-              : `Tool approval failed for ${toolName}: ${toError(err).message}`
+              : `Tool approval failed for ${toolName}: ${toErrorMessage(err)}`
             events.onToolResult(toolName, '', errorMsg, callId)
             toolResults.push(this.buildToolMessage(toolName, '', errorMsg))
 

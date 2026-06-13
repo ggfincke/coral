@@ -9,6 +9,7 @@ import type {
   ModelInfo,
 } from '../types/inference.js'
 import { DEFAULT_OLLAMA_HOST } from './host.js'
+import { toErrorMessage } from '../utils/errors.js'
 export type {
   ChatRequest,
   ChatResponse,
@@ -113,7 +114,7 @@ export class OllamaClient
     catch (err)
     {
       if (signal?.aborted) throw err
-      const detail = err instanceof Error ? err.message : String(err)
+      const detail = toErrorMessage(err)
       throw new Error(
         `Cannot reach Ollama at ${this.baseUrl} — the server may be down, or ` +
           `the request may have exceeded the model's context or memory (${detail})`

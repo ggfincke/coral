@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
+import { clamp } from '../utils/clamp.js'
 import type { Model } from '../types/inference.js'
 import { buildModelPickerLines, sortModels } from './model-picker.js'
 import {
@@ -36,6 +37,7 @@ import {
   formatElapsed,
   formatTokenCount,
   formatTokensPerSecond,
+  pluralizeMessages,
 } from './metrics.js'
 import { buildApprovalBox } from './approval-box.js'
 import { buildRestoredBlocks, truncateToolResult } from './restored-blocks.js'
@@ -69,11 +71,6 @@ interface ApprovalPrompt
 const FLUSH_INTERVAL = 32
 const SPINNER_INTERVAL = 80
 const SCROLL_LINES = 3
-
-function clamp(value: number, min: number, max: number): number
-{
-  return Math.min(Math.max(value, min), max)
-}
 
 // zeroed token-usage state — initial value & reset target
 const EMPTY_TOKEN_USAGE = {
@@ -778,8 +775,7 @@ export default function App({
           notifyThemeChanged: () => setThemeGeneration(getThemeGeneration()),
         }
 
-        const result = await dispatchCommand(value.trim(), cmdCtx)
-        if (result.handled) return
+        if (await dispatchCommand(value.trim(), cmdCtx)) return
       }
 
       const controller = new AbortController()
@@ -1225,9 +1221,7 @@ export default function App({
           {messageCount > 0 && (
             <>
               <Text dimColor>{' · '}</Text>
-              <Text dimColor>
-                {messageCount} {messageCount === 1 ? 'message' : 'messages'}
-              </Text>
+              <Text dimColor>{pluralizeMessages(messageCount)}</Text>
             </>
           )}
         </Text>

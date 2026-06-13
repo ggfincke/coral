@@ -1,9 +1,10 @@
 // src/config/prefs.ts
 // user preferences persisted to ~/.coral/prefs.json
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getCoralHome } from '../utils/coral-home.js'
+import { writeJsonFile } from '../utils/json.js'
 
 export interface Prefs
 {
@@ -33,7 +34,6 @@ export function loadPrefs(): Prefs
 export function savePrefs(patch: Partial<Prefs>): Prefs
 {
   const next = { ...loadPrefs(), ...patch }
-  mkdirSync(getCoralHome(), { recursive: true })
-  writeFileSync(prefsPath(), JSON.stringify(next, null, 2), 'utf-8')
+  writeJsonFile(prefsPath(), next)
   return next
 }

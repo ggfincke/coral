@@ -1,9 +1,10 @@
 // src/config/permissions.ts
 // per-tool permission policies loaded from .coral.json
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { homedir } from 'node:os'
+import { isPlainObject } from '../utils/guards.js'
 
 // permission level for a given tool
 export type PermissionPolicy =
@@ -48,24 +49,38 @@ const DEFAULT_TOOL_POLICIES: ToolPermissions = {
   bash: 'require_approval',
 }
 
+// parse-once cache for .coral.json, keyed on path + mtime so live edits
+// (e.g. between search_code calls) are still picked up without re-parsing
+const configCache = new Map<string, { mtimeMs: number; config: CoralConfig }>()
+
 // load & parse a single .coral.json file (returns empty config on missing/invalid)
 function loadConfigFile(path: string): CoralConfig
 {
+  let mtimeMs: number
   try
   {
-    const raw = readFileSync(path, 'utf-8')
-    const parsed = JSON.parse(raw)
+    mtimeMs = statSync(path).mtimeMs
+  }
+  catch
+  {
+    return {}
+  }
 
-    if (
-      typeof parsed !== 'object' ||
-      parsed === null ||
-      Array.isArray(parsed)
-    )
-    {
-      return {}
-    }
+  const cached = configCache.get(path)
+  if (cached && cached.mtimeMs === mtimeMs) return cached.config
 
-    return parsed as CoralConfig
+  const config = parseConfigFile(path)
+  configCache.set(path, { mtimeMs, config })
+  return config
+}
+
+// read & parse a config file body (empty config on read/parse failure)
+function parseConfigFile(path: string): CoralConfig
+{
+  try
+  {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8'))
+    return isPlainObject(parsed) ? (parsed as CoralConfig) : {}
   }
   catch
   {
@@ -86,14 +101,14 @@ function isValidPolicy(value: unknown): value is PermissionPolicy
 // sanitize permissions object — strip invalid entries
 function sanitizePermissions(raw: unknown): ToolPermissions
 {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw))
+  if (!isPlainObject(raw))
   {
     return {}
   }
 
   const result: ToolPermissions = {}
 
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>))
+  for (const [key, value] of Object.entries(raw))
   {
     if (isValidPolicy(value))
     {
@@ -102,15 +117,6 @@ function sanitizePermissions(raw: unknown): ToolPermissions
   }
 
   return result
-}
-
-// merge two permission maps — later values override earlier ones
-function mergePermissions(
-  base: ToolPermissions,
-  override: ToolPermissions
-): ToolPermissions
-{
-  return { ...base, ...override }
 }
 
 // resolve the effective permission config by loading:
@@ -125,10 +131,7 @@ export function resolvePermissions(cwd: string): ToolPermissions
   const userPerms = sanitizePermissions(userConfig.permissions)
   const projectPerms = sanitizePermissions(projectConfig.permissions)
 
-  return mergePermissions(
-    mergePermissions(DEFAULT_TOOL_POLICIES, userPerms),
-    projectPerms
-  )
+  return { ...DEFAULT_TOOL_POLICIES, ...userPerms, ...projectPerms }
 }
 
 // get the policy for a specific tool — falls back to require_approval for unknown tools

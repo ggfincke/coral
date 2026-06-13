@@ -25,8 +25,7 @@ export interface FileError
 
 // read a file w/ size guard to prevent loading huge files into memory
 export async function readFileGuarded(
-  rawPath: string,
-  maxBytes = MAX_READ_FILE_BYTES
+  rawPath: string
 ): Promise<FileContent | FileError>
 {
   const path = resolvePath(rawPath)
@@ -44,10 +43,10 @@ export async function readFileGuarded(
     }
   }
 
-  if (size > maxBytes)
+  if (size > MAX_READ_FILE_BYTES)
   {
     const sizeMB = (size / BYTES_PER_MB).toFixed(1)
-    const maxMB = (maxBytes / BYTES_PER_MB).toFixed(1)
+    const maxMB = (MAX_READ_FILE_BYTES / BYTES_PER_MB).toFixed(1)
     return {
       ok: false,
       result: {

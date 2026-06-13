@@ -2,6 +2,7 @@
 // apply readline-style edits for Coral's inline prompt
 
 import type { CoralKey } from './use-coral-input.js'
+import { clamp } from '../utils/clamp.js'
 
 const WORD_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' })
 
@@ -33,7 +34,7 @@ interface WordBoundary
 
 function clampCursorOffset(offset: number, value: string): number
 {
-  return Math.min(Math.max(offset, 0), value.length)
+  return clamp(offset, 0, value.length)
 }
 
 function getWordBoundaries(value: string): WordBoundary[]

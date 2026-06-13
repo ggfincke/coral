@@ -10,6 +10,7 @@ import { DEFAULT_LIMIT, ProjectIndexer } from '../retrieval/indexer.js'
 import { OllamaEmbedder } from '../retrieval/ollama-embedder.js'
 import { SqliteIndexStore } from '../retrieval/sqlite-store.js'
 import type { SearchHit } from '../retrieval/types.js'
+import { toErrorMessage } from '../utils/errors.js'
 
 const MAX_SNIPPET_LINES = 12
 const MAX_SNIPPET_CHARS = 1_200
@@ -94,7 +95,7 @@ export const searchCodeTool: Tool = {
     }
     catch (err)
     {
-      const message = err instanceof Error ? err.message : String(err)
+      const message = toErrorMessage(err)
       return {
         output: '',
         error:

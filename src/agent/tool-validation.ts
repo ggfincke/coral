@@ -3,6 +3,7 @@
 
 import type { Tool } from '../tools/index.js'
 import { tryParseJson } from '../utils/json.js'
+import { isPlainObject } from '../utils/guards.js'
 
 export type ValidationResult =
   | { ok: true; args: Record<string, unknown> }
@@ -128,11 +129,7 @@ function coerceValue(
     }
 
     case 'object':
-      if (
-        typeof value === 'object' &&
-        value !== null &&
-        !Array.isArray(value)
-      )
+      if (isPlainObject(value))
       {
         return { ok: true, value }
       }

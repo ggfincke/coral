@@ -1,17 +1,12 @@
 // src/session/store.ts
 // session persistence — save & resume conversations to/from disk
 
-import {
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  readdirSync,
-  existsSync,
-} from 'node:fs'
+import { readFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { OllamaMessage } from '../types/inference.js'
 import { getCoralHome } from '../utils/coral-home.js'
+import { writeJsonFile } from '../utils/json.js'
 
 // ! keep in sync w/ coral_dev_tools/session_analysis.py SESSION_INDEX_VERSION
 const SESSION_INDEX_VERSION = 1
@@ -129,7 +124,7 @@ function writeSessionIndex(sessions: SessionMeta[]): void
     sessions: sortSessions(sessions),
   }
 
-  writeFileSync(sessionIndexPath(), JSON.stringify(file, null, 2), 'utf-8')
+  writeJsonFile(sessionIndexPath(), file)
 }
 
 // scan full session files only as a fallback for missing/corrupt indexes
@@ -193,11 +188,7 @@ function countConversationMessages(messages: OllamaMessage[]): number
 function writeSessionData(session: SessionData): void
 {
   ensureDir()
-  writeFileSync(
-    sessionPath(session.meta.id),
-    JSON.stringify(session, null, 2),
-    'utf-8'
-  )
+  writeJsonFile(sessionPath(session.meta.id), session)
   upsertSessionIndex(session.meta)
 }
 
