@@ -64,6 +64,38 @@ export function computeDiff(before: string, after: string): string | null
   return lines.join('\n')
 }
 
+// edit_file's pure mutation: validates preconditions & computes the post-edit
+// string. shared by editTool.execute & the approval preview so they can't drift
+export type ApplyEditResult =
+  | { ok: true; after: string; count: number }
+  | {
+      ok: false
+      reason: 'empty' | 'identical' | 'not_found' | 'multiple'
+      count: number
+    }
+
+export function applyEdit(
+  before: string,
+  oldString: string,
+  newString: string,
+  replaceAll: boolean
+): ApplyEditResult
+{
+  if (!oldString) return { ok: false, reason: 'empty', count: 0 }
+  if (oldString === newString)
+  {
+    return { ok: false, reason: 'identical', count: 0 }
+  }
+  // non-overlapping occurrence count
+  const count = before.split(oldString).length - 1
+  if (count === 0) return { ok: false, reason: 'not_found', count }
+  if (count > 1 && !replaceAll) return { ok: false, reason: 'multiple', count }
+  const after = replaceAll
+    ? before.replaceAll(oldString, newString)
+    : before.replace(oldString, newString)
+  return { ok: true, after, count }
+}
+
 // best-effort pre-execution diff for the approval box — mirrors what
 // write_file/edit_file would do w/o touching disk; null means no preview
 export async function previewToolDiff(
@@ -84,17 +116,14 @@ export async function previewToolDiff(
     {
       const path = resolvePath(String(args.path ?? ''))
       const before = await readFile(path, 'utf-8').catch(() => null)
-      const oldString = String(args.old_string ?? '')
-      if (before === null || !oldString || !before.includes(oldString))
-      {
-        return null
-      }
-
-      const newString = String(args.new_string ?? '')
-      const after = args.replace_all
-        ? before.replaceAll(oldString, newString)
-        : before.replace(oldString, newString)
-      return computeDiff(before, after)
+      if (before === null) return null
+      const result = applyEdit(
+        before,
+        String(args.old_string ?? ''),
+        String(args.new_string ?? ''),
+        Boolean(args.replace_all)
+      )
+      return result.ok ? computeDiff(before, result.after) : null
     }
   }
   catch

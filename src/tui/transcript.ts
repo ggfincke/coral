@@ -8,7 +8,7 @@ import { renderMarkdownToAnsi } from './markdown.js'
 import { formatElapsed } from './metrics.js'
 import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from './theme.js'
-import { wrapLines } from './wrap.js'
+import { SOFT_WRAP_OPTIONS, wrapLines } from './wrap.js'
 
 // block types w/ richer data for tool calls & results
 
@@ -338,11 +338,7 @@ function formatToolResultLines(
   {
     if (raw.length > maxWidth)
     {
-      const wrapped = wrapAnsi(raw, maxWidth, {
-        hard: false,
-        trim: false,
-        wordWrap: true,
-      }).split('\n')
+      const wrapped = wrapAnsi(raw, maxWidth, SOFT_WRAP_OPTIONS).split('\n')
       for (const segment of wrapped)
       {
         result.push(`   ${border}   ${textStyle(segment)}`)

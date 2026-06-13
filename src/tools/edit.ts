@@ -5,7 +5,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Tool, ToolResult } from './tool.js'
 import { readFileGuarded } from './file-utils.js'
 import { resolvePath } from '../cwd.js'
-import { computeDiff } from '../utils/diff.js'
+import { applyEdit, computeDiff } from '../utils/diff.js'
 
 export const editTool: Tool = {
   name: 'edit_file',
@@ -51,24 +51,19 @@ export const editTool: Tool = {
     if (!readResult.ok) return readResult.result
     const content = readResult.content
 
-    // non-overlapping occurrence count — oldString is guaranteed non-empty above
-    const count = content.split(oldString).length - 1
-
-    if (count === 0)
+    const result = applyEdit(content, oldString, newString, replaceAll)
+    if (!result.ok)
     {
-      return { output: '', error: `old_string not found in ${path}` }
-    }
-    if (count > 1 && !replaceAll)
-    {
+      if (result.reason === 'not_found')
+      {
+        return { output: '', error: `old_string not found in ${path}` }
+      }
       return {
         output: '',
-        error: `Found ${count} matches in ${path} — provide more context to uniquely identify the target, or set replace_all to true`,
+        error: `Found ${result.count} matches in ${path} — provide more context to uniquely identify the target, or set replace_all to true`,
       }
     }
-
-    const updated = replaceAll
-      ? content.replaceAll(oldString, newString)
-      : content.replace(oldString, newString)
+    const updated = result.after
 
     try
     {
@@ -79,7 +74,7 @@ export const editTool: Tool = {
       return { output: '', error: `Failed to write ${path}: ${err}` }
     }
 
-    const replaced = replaceAll ? count : 1
+    const replaced = replaceAll ? result.count : 1
     return {
       output: `Edited ${path}: replaced ${replaced} occurrence${replaced > 1 ? 's' : ''} (${oldString.length} chars → ${newString.length} chars)`,
       diff: computeDiff(content, updated) ?? undefined,
