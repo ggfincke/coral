@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Cache-friendly compaction:** compaction now keeps a byte-stable prefix
+  (system prompt + append-only frozen summary blocks) and only ever summarizes,
+  prunes, or trims the live tail, so llama.cpp reuses its KV cache through the
+  prefix instead of re-prefilling the whole context after every compaction.
+  Frozen summaries are appended, not re-summarized turn to turn, so there's no
+  per-compaction summary-of-summary drift; only when they exceed a cap do they
+  consolidate into a single block (and `/compact` always consolidates). Adds a
+  `tests/scripts/bench-compaction.ts` harness
+  (`npm run bench:compaction -- <model>`) that measures prefix reuse on a live
+  model and flags SWA/MLX models where reuse is currently a no-op.
+- **Pinned `num_ctx`:** the resolved context window is now sent as
+  `options.num_ctx` on every request and held constant per session (inherited by
+  subagents), so Ollama never reloads the runner mid-session — and the window is
+  capped (default 32K, override via `.coral.json` `context.maxNumCtx` or
+  `CORAL_NUM_CTX`) so compaction thresholds match what the server actually
+  allocates instead of the model's architectural maximum.
 - **Semantic code search MVP:** add a read-only `search_code` tool backed by
   local Ollama embeddings, deterministic source chunking, & a SQLite project
   index under Coral local state. The MVP lazily indexes the current project on
