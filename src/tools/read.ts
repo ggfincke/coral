@@ -8,6 +8,7 @@ export const readTool: Tool = {
   name: 'read_file',
   description: 'Read the contents of a file at the given path.',
   readOnly: true,
+  display: { label: 'Read', summarize: (args) => String(args.path ?? '') },
   parameters: {
     type: 'object',
     properties: {

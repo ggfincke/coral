@@ -127,6 +127,7 @@ export const listFilesTool: Tool = {
   description:
     "List directory contents as an indented tree. Directories are marked w/ trailing '/'. Skips .git, node_modules, & other common noise directories.",
   readOnly: true,
+  display: { label: 'List', summarize: (args) => String(args.path ?? '.') },
   parameters: {
     type: 'object',
     properties: {

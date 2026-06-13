@@ -9,6 +9,7 @@ import { formatElapsed } from './metrics.js'
 import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from './theme.js'
 import { SOFT_WRAP_OPTIONS, wrapLines } from './wrap.js'
+import { allTools } from '../tools/index.js'
 
 // block types w/ richer data for tool calls & results
 
@@ -102,25 +103,18 @@ function getSpinnerFrame(tick: number): string
   return SPINNER_FRAMES[tick % SPINNER_FRAMES.length]!
 }
 
-// format tool call args into a short summary
+// tool registry keyed by name for O(1) presentation lookups
+const TOOLS_BY_NAME = new Map(allTools.map((tool) => [tool.name, tool]))
+
+// format tool call args into a short summary, sourced from the tool's own
+// display metadata; unknown tools fall back to compact JSON
 export function summarizeToolArgs(
   toolName: string,
   args: Record<string, unknown>
 ): string
 {
-  if (toolName === 'bash') return String(args.command ?? '')
-  if (toolName === 'read_file') return String(args.path ?? '')
-  if (toolName === 'write_file') return String(args.path ?? '')
-  if (toolName === 'edit_file') return String(args.path ?? '')
-  if (toolName === 'grep')
-  {
-    const pattern = String(args.pattern ?? '')
-    const path = args.path ? ` ${args.path}` : ''
-    return `${pattern}${path}`
-  }
-  if (toolName === 'glob') return String(args.pattern ?? '')
-  if (toolName === 'list_files') return String(args.path ?? '.')
-  // fallback: compact JSON
+  const summarize = TOOLS_BY_NAME.get(toolName)?.display?.summarize
+  if (summarize) return summarize(args)
   const json = JSON.stringify(args)
   return json.length > 60 ? `${json.slice(0, 57)}...` : json
 }
@@ -147,34 +141,10 @@ function getCachedBlockLines(
   return lines
 }
 
-// tool-specific label used in the tool call header
+// tool-specific label used in the tool call header; unknown tools show the name
 function toolDisplayLabel(toolName: string): string
 {
-  switch (toolName)
-  {
-    case 'bash':
-      return 'Shell'
-    case 'read_file':
-      return 'Read'
-    case 'write_file':
-      return 'Write'
-    case 'edit_file':
-      return 'Edit'
-    case 'grep':
-      return 'Search'
-    case 'glob':
-      return 'Glob'
-    case 'list_files':
-      return 'List'
-    case 'git_status':
-      return 'Git Status'
-    case 'git_diff':
-      return 'Git Diff'
-    case 'git_log':
-      return 'Git Log'
-    default:
-      return toolName
-  }
+  return TOOLS_BY_NAME.get(toolName)?.display?.label ?? toolName
 }
 
 // format an in-progress tool call that depends on the current spinner frame

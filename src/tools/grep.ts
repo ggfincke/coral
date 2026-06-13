@@ -13,6 +13,15 @@ export const grepTool: Tool = {
   description:
     'Search file contents by regex pattern. Returns matching lines w/ file paths & line numbers. Requires ripgrep (rg) to be installed.',
   readOnly: true,
+  display: {
+    label: 'Search',
+    summarize: (args) =>
+    {
+      const pattern = String(args.pattern ?? '')
+      const path = args.path ? ` ${String(args.path)}` : ''
+      return `${pattern}${path}`
+    },
+  },
   parameters: {
     type: 'object',
     properties: {

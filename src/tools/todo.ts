@@ -31,6 +31,14 @@ export const todoWriteTool: Tool = {
     'each call — it replaces the previous one. Keep exactly one item ' +
     'in_progress while you work it & mark it completed when done. Skip this ' +
     'for simple single-step tasks.',
+  display: {
+    label: 'Todo',
+    summarize: (args) =>
+    {
+      const n = Array.isArray(args.todos) ? args.todos.length : 0
+      return `${n} item${n === 1 ? '' : 's'}`
+    },
+  },
   parameters: {
     type: 'object',
     properties: {

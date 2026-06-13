@@ -56,6 +56,10 @@ export const searchCodeTool: Tool = {
   description:
     'Semantically search the current project for code related to a natural-language query. Returns ranked file chunks with line ranges.',
   readOnly: true,
+  display: {
+    label: 'Search Code',
+    summarize: (args) => String(args.query ?? ''),
+  },
   parameters: {
     type: 'object',
     properties: {

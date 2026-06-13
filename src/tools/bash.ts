@@ -11,6 +11,7 @@ const DEFAULT_TIMEOUT = 30_000
 export const bashTool: Tool = {
   name: 'bash',
   description: 'Execute a bash command and return its output.',
+  display: { label: 'Shell', summarize: (args) => String(args.command ?? '') },
   parameters: {
     type: 'object',
     properties: {

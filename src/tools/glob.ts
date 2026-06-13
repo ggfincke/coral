@@ -13,6 +13,7 @@ export const globTool: Tool = {
   description:
     'Find files by name/path glob pattern. Returns matching file paths sorted by modification time (newest first). Requires ripgrep (rg) to be installed.',
   readOnly: true,
+  display: { label: 'Glob', summarize: (args) => String(args.pattern ?? '') },
   parameters: {
     type: 'object',
     properties: {

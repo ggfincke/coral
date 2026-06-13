@@ -30,6 +30,7 @@ export const gitStatusTool: Tool = {
   description:
     'Show the working tree status (staged, unstaged, & untracked files).',
   readOnly: true,
+  display: { label: 'Git Status', summarize: () => '' },
   parameters: {
     type: 'object',
     properties: {
@@ -54,6 +55,11 @@ export const gitDiffTool: Tool = {
     'working tree, pass stat:true first for a per-file summary, then diff a ' +
     'specific path for detail.',
   readOnly: true,
+  display: {
+    label: 'Git Diff',
+    summarize: (args) =>
+      [args.ref, args.path].filter(Boolean).map(String).join(' '),
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -104,6 +110,11 @@ export const gitLogTool: Tool = {
   name: 'git_log',
   description: 'Show recent commit history.',
   readOnly: true,
+  display: {
+    label: 'Git Log',
+    summarize: (args) =>
+      [args.ref, args.path].filter(Boolean).map(String).join(' '),
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -160,6 +171,14 @@ export const gitAddTool: Tool = {
   description:
     'Stage files for commit. Pass specific paths, or all:true to stage every ' +
     'change (tracked & untracked).',
+  display: {
+    label: 'Git Add',
+    summarize: (args) =>
+    {
+      if (args.all) return 'all'
+      return Array.isArray(args.paths) ? args.paths.join(', ') : ''
+    },
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -210,6 +229,10 @@ export const gitCommitTool: Tool = {
   description:
     'Create a commit from staged changes with the given message. Stage files ' +
     'with git_add first.',
+  display: {
+    label: 'Git Commit',
+    summarize: (args) => String(args.message ?? ''),
+  },
   parameters: {
     type: 'object',
     properties: {
@@ -243,6 +266,11 @@ export const gitPushTool: Tool = {
     'Push committed changes to a remote. With no args, pushes the current ' +
     'branch to its upstream. For a branch with no upstream yet, pass remote, ' +
     'branch, & setUpstream:true.',
+  display: {
+    label: 'Git Push',
+    summarize: (args) =>
+      [args.remote, args.branch].filter(Boolean).map(String).join(' '),
+  },
   parameters: {
     type: 'object',
     properties: {

@@ -10,6 +10,7 @@ import { computeDiff } from '../utils/diff.js'
 export const writeTool: Tool = {
   name: 'write_file',
   description: 'Write content to a file, creating directories as needed.',
+  display: { label: 'Write', summarize: (args) => String(args.path ?? '') },
   parameters: {
     type: 'object',
     properties: {

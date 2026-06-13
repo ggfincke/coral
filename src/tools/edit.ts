@@ -11,6 +11,7 @@ export const editTool: Tool = {
   name: 'edit_file',
   description:
     'Make surgical edits to a file by replacing exact string matches. Fails if old_string is not found or matches multiple times (unless replace_all is true).',
+  display: { label: 'Edit', summarize: (args) => String(args.path ?? '') },
   parameters: {
     type: 'object',
     properties: {
