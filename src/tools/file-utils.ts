@@ -5,8 +5,9 @@ import { readFile, stat } from 'node:fs/promises'
 import type { ToolResult } from './tool.js'
 import { resolvePath } from '../cwd.js'
 
+const BYTES_PER_MB = 1_048_576
 // cap reads at 1 MB so large files don't blow up context
-const MAX_FILE_BYTES = 1_048_576
+const MAX_READ_FILE_BYTES = BYTES_PER_MB
 
 // success result from readFileGuarded
 export interface FileContent
@@ -25,7 +26,7 @@ export interface FileError
 // read a file w/ size guard to prevent loading huge files into memory
 export async function readFileGuarded(
   rawPath: string,
-  maxBytes = MAX_FILE_BYTES
+  maxBytes = MAX_READ_FILE_BYTES
 ): Promise<FileContent | FileError>
 {
   const path = resolvePath(rawPath)
@@ -45,8 +46,8 @@ export async function readFileGuarded(
 
   if (size > maxBytes)
   {
-    const sizeMB = (size / 1_048_576).toFixed(1)
-    const maxMB = (maxBytes / 1_048_576).toFixed(1)
+    const sizeMB = (size / BYTES_PER_MB).toFixed(1)
+    const maxMB = (maxBytes / BYTES_PER_MB).toFixed(1)
     return {
       ok: false,
       result: {

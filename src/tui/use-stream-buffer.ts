@@ -90,29 +90,27 @@ export function useStreamBuffer(flushInterval: number): {
     [scheduleFlush]
   )
 
-  const consumeBufferedBlocks = useCallback((): OutputBlock[] =>
+  const clearBuffers = useCallback(() =>
   {
     clearFlushTimer()
+    streamTextRef.current = ''
+    streamThinkingRef.current = ''
+    setStreamBuf({ text: '', thinking: '' })
+  }, [clearFlushTimer])
 
+  const consumeBufferedBlocks = useCallback((): OutputBlock[] =>
+  {
     const blocks = buildBufferedOutputBlocks({
       text: streamTextRef.current,
       thinking: streamThinkingRef.current,
     })
 
-    streamTextRef.current = ''
-    streamThinkingRef.current = ''
-    setStreamBuf({ text: '', thinking: '' })
+    clearBuffers()
 
     return blocks
-  }, [clearFlushTimer])
+  }, [clearBuffers])
 
-  const resetStreamBuffer = useCallback(() =>
-  {
-    clearFlushTimer()
-    streamTextRef.current = ''
-    streamThinkingRef.current = ''
-    setStreamBuf({ text: '', thinking: '' })
-  }, [clearFlushTimer])
+  const resetStreamBuffer = clearBuffers
 
   return {
     streamBuf,

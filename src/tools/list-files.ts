@@ -14,6 +14,7 @@ import {
 
 const MAX_ENTRIES = 200
 const DEFAULT_DEPTH = 2
+const MAX_DEPTH = 5
 const INDENT = '  '
 
 // directories to always skip
@@ -134,7 +135,7 @@ export const listFilesTool: Tool = {
       },
       depth: {
         type: 'number',
-        description: 'Max recursion depth (default: 2, max: 5)',
+        description: `Max recursion depth (default: ${DEFAULT_DEPTH}, max: ${MAX_DEPTH})`,
       },
     },
     required: [],
@@ -143,7 +144,7 @@ export const listFilesTool: Tool = {
   {
     const path = resolvePath((args.path as string) ?? '.')
     const rawDepth = (args.depth as number) ?? DEFAULT_DEPTH
-    const depth = Math.max(1, Math.min(5, Math.floor(rawDepth)))
+    const depth = Math.max(1, Math.min(MAX_DEPTH, Math.floor(rawDepth)))
 
     // verify the path is a directory
     try

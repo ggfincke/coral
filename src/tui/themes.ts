@@ -3,6 +3,14 @@
 
 import type { Theme } from './theme.js'
 
+// all built-in themes share one heading-role mapping
+const DEFAULT_HEADINGS: Theme['headings'] = [
+  'primary',
+  'user',
+  'accent',
+  'code',
+]
+
 const CORAL_REEF: Theme = {
   name: 'coral-reef',
   label: 'Coral Reef',
@@ -19,7 +27,7 @@ const CORAL_REEF: Theme = {
     thinking: { r: 215, g: 130, b: 200 },
     codeBg: { r: 30, g: 40, b: 50 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
 const DEEP_SEA: Theme = {
@@ -38,7 +46,7 @@ const DEEP_SEA: Theme = {
     thinking: { r: 150, g: 130, b: 220 },
     codeBg: { r: 16, g: 28, b: 44 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
 const SUNSET_TIDE: Theme = {
@@ -57,7 +65,7 @@ const SUNSET_TIDE: Theme = {
     thinking: { r: 240, g: 120, b: 170 },
     codeBg: { r: 45, g: 28, b: 24 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
 const KELP_FOREST: Theme = {
@@ -76,7 +84,7 @@ const KELP_FOREST: Theme = {
     thinking: { r: 170, g: 160, b: 200 },
     codeBg: { r: 24, g: 38, b: 30 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
 const TIDE_POOL: Theme = {
@@ -95,7 +103,7 @@ const TIDE_POOL: Theme = {
     thinking: { r: 190, g: 150, b: 220 },
     codeBg: { r: 36, g: 36, b: 46 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
 const ADAPTIVE: Theme = {
@@ -114,7 +122,7 @@ const ADAPTIVE: Theme = {
     thinking: { ansi: 'magenta' },
     codeBg: { ansi: 'blackBright' },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
 export const THEMES: readonly Theme[] = [

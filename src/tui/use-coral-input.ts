@@ -18,6 +18,15 @@ const BRACKETED_PASTE_FRAGMENT_RE = new RegExp(`^${ESC}\\[(?:2|20|200|201)?$`)
 const FOCUS_PACKET_RE = new RegExp(`^${ESC}\\[[IO]$`)
 const FOCUS_PREFIX_RE = new RegExp(`^${ESC}\\[[IO]`)
 const FOCUS_FRAGMENT_RE = new RegExp(`^${ESC}\\[$`)
+// fixed control-sequence anchors — mirrored by the *_PREFIX_RE / *_PACKET_RE /
+// *_FRAGMENT_RE regexes above; add new control types in both places
+const CONTROL_PREFIXES = [
+  '\x1b[<',
+  '\x1b[200~',
+  '\x1b[201~',
+  '\x1b[I',
+  '\x1b[O',
+]
 const WHEEL_UP = 0x40
 const WHEEL_DOWN = 0x41
 const WHEEL_MASK = 0x43
@@ -144,13 +153,9 @@ function isIgnoredControlPacket(input: string): boolean
 
 function findNextControlIndex(input: string): number
 {
-  const indexes = [
-    input.indexOf('\x1b[<'),
-    input.indexOf('\x1b[200~'),
-    input.indexOf('\x1b[201~'),
-    input.indexOf('\x1b[I'),
-    input.indexOf('\x1b[O'),
-  ].filter((index) => index >= 0)
+  const indexes = CONTROL_PREFIXES.map((p) => input.indexOf(p)).filter(
+    (index) => index >= 0
+  )
 
   return indexes.length > 0 ? Math.min(...indexes) : -1
 }

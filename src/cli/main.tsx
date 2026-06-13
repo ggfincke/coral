@@ -14,6 +14,7 @@ import {
 } from '../session/store.js'
 import { setTheme } from '../tui/theme.js'
 import { findTheme, THEMES } from '../tui/themes.js'
+import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../../package.json') as { version: string }
@@ -23,7 +24,7 @@ const program = new Command()
   .description('A CLI/TUI coding agent for Ollama')
   .version(version)
   .option('-m, --model <model>', 'Ollama model to use')
-  .option('--host <url>', 'Ollama host URL', 'http://localhost:11434')
+  .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
   .option('--no-think', 'disable streamed reasoning requests')
   .option('--yolo', 'skip all tool approval prompts (auto-accept everything)')
   .option('--resume', 'resume the most recent session')

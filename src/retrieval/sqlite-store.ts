@@ -103,9 +103,15 @@ export class SqliteIndexStore implements IndexStore
     `)
   }
 
+  // current timestamp for row created_at/updated_at columns
+  private now(): string
+  {
+    return new Date().toISOString()
+  }
+
   ensureProject(cwd: string): number
   {
-    const now = new Date().toISOString()
+    const now = this.now()
     const row = this.db
       .prepare(
         `
@@ -177,14 +183,14 @@ export class SqliteIndexStore implements IndexStore
         WHERE project_id = ? AND path = ?
       `
       )
-      .run(size, mtimeMs, new Date().toISOString(), projectId, path)
+      .run(size, mtimeMs, this.now(), projectId, path)
   }
 
   upsertFile(projectId: number, file: IndexedFile, model: string): void
   {
     const write = this.db.transaction(() =>
     {
-      const now = new Date().toISOString()
+      const now = this.now()
       const fileRow = this.db
         .prepare(
           `

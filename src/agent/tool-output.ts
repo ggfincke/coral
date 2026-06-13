@@ -1,9 +1,11 @@
 // src/agent/tool-output.ts
 // bound tool output before it enters the model context
 
-// ~25k tokens at ~4 chars/token — keeps one huge tool result (e.g. a full
-// `git diff` of a lockfile) from overflowing the window or stalling prefill
-export const MAX_TOOL_OUTPUT_CHARS = 100_000
+import { CHARS_PER_TOKEN } from './compaction.js'
+
+// ~25k tokens — one huge tool result (e.g. a full `git diff` of a lockfile)
+// would otherwise overflow the window or stall prefill
+export const MAX_TOOL_OUTPUT_CHARS = 25_000 * CHARS_PER_TOKEN
 
 // cap oversized tool output, keeping the head & noting how much was dropped
 export function capToolOutput(output: string): string

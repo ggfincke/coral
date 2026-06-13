@@ -2,6 +2,7 @@
 // recover tool calls emitted as text & nudge stalled turns
 
 import type { OllamaToolCall } from '../types/inference.js'
+import { tryParseJson } from '../utils/json.js'
 
 // injected when a turn ends w/ no tool call, no content, & no thinking
 export const STALL_NUDGE_MESSAGE =
@@ -83,18 +84,6 @@ function extractTrailingJson(content: string): string | null
   }
 
   return null
-}
-
-function tryParseJson(text: string): unknown
-{
-  try
-  {
-    return JSON.parse(text)
-  }
-  catch
-  {
-    return undefined
-  }
 }
 
 // accept {name, arguments}, {function: {...}}, {tool_calls: [...]}, & arrays

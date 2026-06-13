@@ -306,11 +306,7 @@ export class Agent
     }
 
     // inject system prompt as first message
-    const systemContent = buildSystemPrompt({
-      model,
-      cwd: getCwd(),
-      tools: this.tools,
-    })
+    const systemContent = this.buildSystemContent(model)
     this.pushMessage({ role: 'system', content: systemContent })
 
     // expose this agent as the task-tool subagent runner (closes over this.model
@@ -419,11 +415,7 @@ export class Agent
     this.numCtx = 0
 
     // rebuild the system prompt w/ the new model name
-    const systemContent = buildSystemPrompt({
-      model: nextModel,
-      cwd: getCwd(),
-      tools: this.tools,
-    })
+    const systemContent = this.buildSystemContent(nextModel)
 
     // replace messages[0] (the system prompt) in-place
     if (this.messages.length > 0 && this.messages[0]!.role === 'system')
@@ -624,6 +616,34 @@ export class Agent
   {
     this.onCompactionCallback = undefined
     this.onCompactionStartCallback = undefined
+  }
+
+  // build the system prompt for a model — same wiring at construct & switch
+  private buildSystemContent(model: string): string
+  {
+    return buildSystemPrompt({ model, cwd: getCwd(), tools: this.tools })
+  }
+
+  // clean run() exit: drop compaction callbacks & signal completion
+  private finishRun(events: AgentEvents): void
+  {
+    this.clearCompactionCallbacks()
+    events.onDone()
+  }
+
+  // on abort, record whatever streamed so far as a partial assistant message
+  private recordPartialOnAbort(
+    fullContent: string,
+    fullThinking: string
+  ): void
+  {
+    if (!fullContent && !fullThinking) return
+    const partial: OllamaMessage = {
+      role: 'assistant',
+      content: fullContent || '(interrupted)',
+    }
+    if (fullThinking) partial.thinking = fullThinking
+    this.pushMessage(partial)
   }
 
   // build a model-generated summary for older messages
@@ -955,8 +975,7 @@ export class Agent
       // check for abort before each iteration
       if (signal?.aborted)
       {
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.finishRun(events)
         return
       }
 
@@ -964,8 +983,7 @@ export class Agent
       iterations++
       if (this.maxIterations !== undefined && iterations > this.maxIterations)
       {
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.finishRun(events)
         return
       }
 
@@ -1048,18 +1066,8 @@ export class Agent
         if (signal?.aborted)
         {
           // record whatever we streamed so far as a partial message
-          if (fullContent || fullThinking)
-          {
-            const partial: OllamaMessage = {
-              role: 'assistant',
-              content: fullContent || '(interrupted)',
-            }
-            if (fullThinking) partial.thinking = fullThinking
-            this.pushMessage(partial)
-          }
-
-          this.clearCompactionCallbacks()
-          events.onDone()
+          this.recordPartialOnAbort(fullContent, fullThinking)
+          this.finishRun(events)
           return
         }
 
@@ -1071,18 +1079,8 @@ export class Agent
       // aborted mid-stream — save partial content & stop
       if (signal?.aborted)
       {
-        if (fullContent || fullThinking)
-        {
-          const partial: OllamaMessage = {
-            role: 'assistant',
-            content: fullContent || '(interrupted)',
-          }
-          if (fullThinking) partial.thinking = fullThinking
-          this.pushMessage(partial)
-        }
-
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.recordPartialOnAbort(fullContent, fullThinking)
+        this.finishRun(events)
         return
       }
 
@@ -1138,8 +1136,7 @@ export class Agent
           continue
         }
 
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.finishRun(events)
         return
       }
 
@@ -1323,8 +1320,7 @@ export class Agent
 
       if (abortedDuringTools)
       {
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.finishRun(events)
         return
       }
     }

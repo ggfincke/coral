@@ -13,6 +13,7 @@ import { randomBytes } from 'node:crypto'
 import type { OllamaMessage } from '../types/inference.js'
 import { getCoralHome } from '../utils/coral-home.js'
 
+// ! keep in sync w/ coral_dev_tools/session_analysis.py SESSION_INDEX_VERSION
 const SESSION_INDEX_VERSION = 1
 
 // session metadata stored alongside the conversation
@@ -237,6 +238,7 @@ export function saveSession(
 {
   ensureDir()
 
+  const now = new Date().toISOString()
   const indexedMeta =
     metaHint?.createdAt && metaHint?.title
       ? undefined
@@ -245,9 +247,8 @@ export function saveSession(
     id,
     model,
     cwd,
-    createdAt:
-      metaHint?.createdAt ?? indexedMeta?.createdAt ?? new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    createdAt: metaHint?.createdAt ?? indexedMeta?.createdAt ?? now,
+    updatedAt: now,
     title: metaHint?.title ?? indexedMeta?.title ?? extractTitle(messages),
     messageCount: countConversationMessages(messages),
     compactionCount: metaHint?.compactionCount ?? indexedMeta?.compactionCount,

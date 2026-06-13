@@ -75,6 +75,18 @@ function clamp(value: number, min: number, max: number): number
   return Math.min(Math.max(value, min), max)
 }
 
+// zeroed token-usage state — initial value & reset target
+const EMPTY_TOKEN_USAGE = {
+  // cumulative session totals (every turn re-prefills the context)
+  prompt: 0,
+  completion: 0,
+  // current context occupancy — drives the ctx gauge
+  context: 0,
+  // last-turn throughput (tokens / second) — 0 when the server omitted durations
+  lastPrefillTps: 0,
+  lastDecodeTps: 0,
+}
+
 export default function App({
   model,
   host,
@@ -127,16 +139,7 @@ export default function App({
   const [sessionLabelId, setSessionLabelId] = useState<string | null>(
     resumeSession?.meta.id ?? resumeSessionId ?? null
   )
-  const [tokenUsage, setTokenUsage] = useState({
-    // cumulative session totals (every turn re-prefills the context)
-    prompt: 0,
-    completion: 0,
-    // current context occupancy — drives the ctx gauge
-    context: 0,
-    // last-turn throughput (tokens / second) — 0 when the server omitted durations
-    lastPrefillTps: 0,
-    lastDecodeTps: 0,
-  })
+  const [tokenUsage, setTokenUsage] = useState(EMPTY_TOKEN_USAGE)
   const [contextWindow, setContextWindow] = useState(0)
   // live task list mirrored from the todo tool's in-memory store
   const [todos, setTodos] = useState<TodoItem[]>(() => getTodos())
@@ -282,13 +285,7 @@ export default function App({
     setOutput([])
     setScrollOffset(0)
     setSessionLabelId(null)
-    setTokenUsage({
-      prompt: 0,
-      completion: 0,
-      context: 0,
-      lastPrefillTps: 0,
-      lastDecodeTps: 0,
-    })
+    setTokenUsage(EMPTY_TOKEN_USAGE)
     // task list is session-scoped & not persisted — drop it w/ the conversation
     clearTodos()
     sessionIdRef.current = null
@@ -351,13 +348,7 @@ export default function App({
       // rebuild transcript from saved messages
       setOutput(buildRestoredBlocks(target.messages))
       setScrollOffset(0)
-      setTokenUsage({
-        prompt: 0,
-        completion: 0,
-        context: 0,
-        lastPrefillTps: 0,
-        lastDecodeTps: 0,
-      })
+      setTokenUsage(EMPTY_TOKEN_USAGE)
       setContextWindow(0)
       // todos aren't persisted — clear the prior session's list on resume
       clearTodos()
@@ -409,21 +400,26 @@ export default function App({
   }, [])
 
   // abort the current agent run — called by Ctrl+C & Escape while running
+  // resolve a pending tool approval & clear the prompt
+  const resolveApproval = useCallback(
+    (approved: boolean) =>
+    {
+      approval?.resolve(approved)
+      setApproval(null)
+    },
+    [approval]
+  )
+
   const abortRun = useCallback(() =>
   {
     const controller = runAbortRef.current
     if (controller && !controller.signal.aborted)
     {
       controller.abort()
-
       // dismiss any pending approval prompt
-      if (approval)
-      {
-        approval.resolve(false)
-        setApproval(null)
-      }
+      resolveApproval(false)
     }
-  }, [approval])
+  }, [resolveApproval])
 
   const activateModel = useCallback(
     (nextModel: string, restoredSession = resumeSession) =>
@@ -669,13 +665,11 @@ export default function App({
       {
         if (ch === 'y' || ch === 'Y')
         {
-          approval.resolve(true)
-          setApproval(null)
+          resolveApproval(true)
         }
         else if (ch === 'n' || ch === 'N' || key.escape)
         {
-          approval.resolve(false)
-          setApproval(null)
+          resolveApproval(false)
         }
 
         return
@@ -799,6 +793,13 @@ export default function App({
         runStartTimeRef.current = null
         toolStartTimesRef.current.clear()
         runAbortRef.current = null
+      }
+
+      // persist the session & cache its id as the active label
+      const persistAndLabel = (a: Agent) =>
+      {
+        const meta = persistSession(a)
+        if (meta) setSessionLabelId(meta.id)
       }
 
       setInput('')
@@ -946,18 +947,14 @@ export default function App({
             {
               content = `Auto-pruned ${result.prunedResults ?? 0} old tool results (~${formatTokenCount(saved)} tokens freed)`
             }
-            else if (result.type === 'trimmed')
-            {
-              content = [
-                `Context trimmed to recent history (summarization unavailable)`,
-                `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
-                `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (~${formatTokenCount(saved)} freed)`,
-              ].join('\n')
-            }
             else
             {
+              const header =
+                result.type === 'trimmed'
+                  ? 'Context trimmed to recent history (summarization unavailable)'
+                  : 'Context auto-compacted'
               content = [
-                `Context auto-compacted`,
+                header,
                 `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
                 `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (~${formatTokenCount(saved)} freed)`,
               ].join('\n')
@@ -986,11 +983,7 @@ export default function App({
             }
 
             resetRunState()
-            const meta = persistSession(agent)
-            if (meta)
-            {
-              setSessionLabelId(meta.id)
-            }
+            persistAndLabel(agent)
           },
           onError(error)
           {
@@ -1001,11 +994,7 @@ export default function App({
               { type: 'error', content: error.message },
             ])
             resetRunState()
-            const meta = persistSession(agent)
-            if (meta)
-            {
-              setSessionLabelId(meta.id)
-            }
+            persistAndLabel(agent)
           },
         },
         controller.signal

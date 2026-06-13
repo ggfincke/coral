@@ -1,7 +1,8 @@
 // src/tools/todo-store.ts
 // in-memory task list shared between the todo tool & the TUI
 
-export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+export const TODO_STATUSES = ['pending', 'in_progress', 'completed'] as const
+export type TodoStatus = (typeof TODO_STATUSES)[number]
 
 export interface TodoItem
 {

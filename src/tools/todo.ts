@@ -2,13 +2,14 @@
 // maintain a structured task list for multi-step work
 
 import type { Tool, ToolResult } from './tool.js'
-import { setTodos, type TodoItem, type TodoStatus } from './todo-store.js'
+import {
+  setTodos,
+  TODO_STATUSES,
+  type TodoItem,
+  type TodoStatus,
+} from './todo-store.js'
 
-const VALID_STATUS = new Set<TodoStatus>([
-  'pending',
-  'in_progress',
-  'completed',
-])
+const VALID_STATUS = new Set<TodoStatus>(TODO_STATUSES)
 
 const STATUS_MARK: Record<TodoStatus, string> = {
   pending: '[ ]',

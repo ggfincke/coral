@@ -12,16 +12,17 @@ function isUnsafeRef(ref: string): boolean
   return ref.startsWith('-')
 }
 
-// run a git command, applying the '(no output)' display placeholder for empties
+// run a git command, applying a display placeholder when output is empty
 function runGit(
   args: string[],
   cwd: string,
+  placeholder = '(no output)',
   options?: GitCommandOptions
 ): ToolResult
 {
   const result = runGitCommand(args, cwd, options)
   if (result.error) return result
-  return { output: result.output || '(no output)' }
+  return { output: result.output || placeholder }
 }
 
 export const gitStatusTool: Tool = {
@@ -95,7 +96,7 @@ export const gitDiffTool: Tool = {
     if (path) flags.push('--', path)
 
     // git diff can exit 1 w/ valid output in some configs — trust stdout here
-    return runGit(flags, getCwd(), { allowStdoutOnError: true })
+    return runGit(flags, getCwd(), '(no output)', { allowStdoutOnError: true })
   },
 }
 
@@ -229,11 +230,9 @@ export const gitCommitTool: Tool = {
 
     // git prints its summary (or "nothing to commit") to stdout, exiting 1 in
     // the latter case — surface that text rather than a generic exit error
-    const result = runGitCommand(['commit', '-m', message], getCwd(), {
+    return runGit(['commit', '-m', message], getCwd(), '(commit created)', {
       allowStdoutOnError: true,
     })
-    if (result.error) return result
-    return { output: result.output || '(commit created)' }
   },
 }
 
@@ -297,8 +296,6 @@ export const gitPushTool: Tool = {
     if (branch) flags.push(branch)
 
     // pushes hit the network — allow more time than the default git timeout
-    const result = runGitCommand(flags, getCwd(), { timeout: 60_000 })
-    if (result.error) return result
-    return { output: result.output || '(pushed)' }
+    return runGit(flags, getCwd(), '(pushed)', { timeout: 60_000 })
   },
 }

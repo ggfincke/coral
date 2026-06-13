@@ -2,6 +2,7 @@
 // validate & coerce tool args against the tool's JSON schema pre-dispatch
 
 import type { Tool } from '../tools/index.js'
+import { tryParseJson } from '../utils/json.js'
 
 export type ValidationResult =
   | { ok: true; args: Record<string, unknown> }
@@ -110,7 +111,7 @@ function coerceValue(
 
     case 'array':
     {
-      const arr = typeof value === 'string' ? tryParseJsonArray(value) : value
+      const arr = typeof value === 'string' ? tryParseJson(value) : value
       if (!Array.isArray(arr)) return { ok: false }
       if (itemType)
       {
@@ -140,18 +141,6 @@ function coerceValue(
     default:
       // unknown schema type — pass through rather than block the call
       return { ok: true, value }
-  }
-}
-
-function tryParseJsonArray(text: string): unknown
-{
-  try
-  {
-    return JSON.parse(text)
-  }
-  catch
-  {
-    return undefined
   }
 }
 

@@ -7,6 +7,10 @@ import type { ToolResult } from './tool.js'
 const RG_TIMEOUT = 15_000
 const RG_MAX_BUFFER = 5 * 1024 * 1024
 
+// no-match sentinels — callers pass these in & compare output against them
+export const NO_MATCHES_MESSAGE = 'No matches found.'
+export const NO_MATCHING_FILES_MESSAGE = 'No matching files found.'
+
 // execute ripgrep w/ shared error handling
 export function execRipgrep(
   args: string[],

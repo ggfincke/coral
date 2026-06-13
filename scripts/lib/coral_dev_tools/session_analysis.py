@@ -10,10 +10,14 @@ from typing import Any
 import hashlib
 import json
 
+from .report_render import render_counter, render_counter_md
+
 
 JsonObject = dict[str, Any]
 
+# ! keep in sync w/ src/agent/compaction.ts CHARS_PER_TOKEN
 CHARS_PER_TOKEN = 4
+# ! keep in sync w/ src/session/store.ts SESSION_INDEX_VERSION
 SESSION_INDEX_VERSION = 1
 RISKY_TOOLS = {"bash", "write_file", "edit_file"}
 
@@ -516,16 +520,6 @@ def plural(count: int, noun: str) -> str:
     return f"{count} {noun}{suffix}"
 
 
-def render_counter(title: str, counter: Counter[str], limit: int) -> list[str]:
-    lines = [title]
-    if not counter:
-        lines.append("  (none)")
-        return lines
-    for name, count in counter.most_common(limit):
-        lines.append(f"  {name}: {count}")
-    return lines
-
-
 def render_sessions(sessions: list[SessionMetrics], limit: int) -> list[str]:
     lines = ["Recent sessions"]
     if not sessions:
@@ -596,18 +590,27 @@ def render_issues(issues: list[Issue], limit: int) -> list[str]:
     return lines
 
 
+def report_totals(report: AnalysisReport) -> tuple[int, int, int, int]:
+    return (
+        sum(session.message_count for session in report.sessions),
+        sum(session.tool_calls for session in report.sessions),
+        sum(session.compaction_count for session in report.sessions),
+        sum(session.estimated_tokens for session in report.sessions),
+    )
+
+
 def render_text(
     report: AnalysisReport,
     *,
     top: int = 8,
     show_prompts: bool = False,
 ) -> str:
-    total_messages = sum(session.message_count for session in report.sessions)
-    total_tool_calls = sum(session.tool_calls for session in report.sessions)
-    total_compactions = sum(session.compaction_count for session in report.sessions)
-    total_estimated_tokens = sum(
-        session.estimated_tokens for session in report.sessions
-    )
+    (
+        total_messages,
+        total_tool_calls,
+        total_compactions,
+        total_estimated_tokens,
+    ) = report_totals(report)
 
     lines = [
         "Coral session analysis",
@@ -653,29 +656,18 @@ def markdown_table(rows: list[tuple[str, str]]) -> list[str]:
     return lines
 
 
-def render_counter_md(title: str, counter: Counter[str], limit: int) -> list[str]:
-    lines = [f"## {title}", ""]
-    if not counter:
-        return [*lines, "_None._"]
-    lines.extend(["| Name | Count |", "|---|---:|"])
-    lines.extend(
-        f"| `{name}` | {count} |" for name, count in counter.most_common(limit)
-    )
-    return lines
-
-
 def render_markdown(
     report: AnalysisReport,
     *,
     top: int = 8,
     show_prompts: bool = False,
 ) -> str:
-    total_messages = sum(session.message_count for session in report.sessions)
-    total_tool_calls = sum(session.tool_calls for session in report.sessions)
-    total_compactions = sum(session.compaction_count for session in report.sessions)
-    total_estimated_tokens = sum(
-        session.estimated_tokens for session in report.sessions
-    )
+    (
+        total_messages,
+        total_tool_calls,
+        total_compactions,
+        total_estimated_tokens,
+    ) = report_totals(report)
 
     lines = [
         "# Coral Session Analysis",

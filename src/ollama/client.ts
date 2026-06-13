@@ -22,6 +22,7 @@ export type {
 } from '../types/inference.js'
 
 const DEFAULT_KEEP_ALIVE = '10m'
+const JSON_HEADERS = { 'Content-Type': 'application/json' } as const
 const THINK_FALLBACK_STATUS = new Set([400, 404, 422])
 type ThinkSupport = 'unknown' | 'supported' | 'unsupported'
 
@@ -104,7 +105,7 @@ export class OllamaClient
     {
       return await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify(body),
         signal,
       })
@@ -186,7 +187,7 @@ export class OllamaClient
     {
       await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify({
           model,
           messages: [],
@@ -214,10 +215,10 @@ export class OllamaClient
   {
     const res = await fetch(`${this.baseUrl}/api/show`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ model }),
     })
-    if (!res.ok) throw new Error(`Ollama API error: ${res.status}`)
+    if (!res.ok) throwApiError(res.status, '')
 
     const data = (await res.json()) as {
       model_info?: Record<string, unknown>
@@ -257,7 +258,7 @@ export class OllamaClient
   async listModels(): Promise<Model[]>
   {
     const res = await fetch(`${this.baseUrl}/api/tags`)
-    if (!res.ok) throw new Error(`Ollama API error: ${res.status}`)
+    if (!res.ok) throwApiError(res.status, '')
     const data = (await res.json()) as { models: Model[] }
     return data.models
   }
@@ -273,7 +274,7 @@ export class OllamaClient
 
     const res = await fetch(`${this.baseUrl}/api/embed`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({
         model,
         input,
