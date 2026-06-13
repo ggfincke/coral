@@ -188,6 +188,10 @@ export class SqliteIndexStore implements IndexStore
 
   upsertFile(projectId: number, file: IndexedFile, model: string): void
   {
+    // a chunk-less file has no place in the index; never write an orphan
+    // files row (the indexer also filters empties before calling here)
+    if (file.chunks.length === 0) return
+
     const write = this.db.transaction(() =>
     {
       const now = this.now()
