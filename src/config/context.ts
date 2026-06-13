@@ -6,7 +6,7 @@ import { loadProjectConfig } from './permissions.js'
 // default ceiling for the pinned num_ctx — caps KV-cache memory while still
 // giving large models a workable window. raise via .coral.json or CORAL_NUM_CTX
 // on big-RAM hosts to use more of a 128K-capable model's window
-export const DEFAULT_MAX_NUM_CTX = 32_768
+const DEFAULT_MAX_NUM_CTX = 32_768
 
 export interface ContextConfig
 {

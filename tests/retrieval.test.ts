@@ -46,25 +46,22 @@ test('chunkText creates overlapping line-based chunks', () =>
   const content = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join(
     '\n'
   )
-  const chunks = chunkText(content, 'src/example.ts')
+  const chunks = chunkText(content)
 
   assert.equal(chunks.length, 2)
   assert.deepEqual(
     chunks.map((chunk) => ({
-      path: chunk.path,
       startLine: chunk.startLine,
       endLine: chunk.endLine,
       chunkerVersion: chunk.chunkerVersion,
     })),
     [
       {
-        path: 'src/example.ts',
         startLine: 1,
         endLine: 80,
         chunkerVersion: CHUNKER_VERSION,
       },
       {
-        path: 'src/example.ts',
         startLine: 71,
         endLine: 100,
         chunkerVersion: CHUNKER_VERSION,

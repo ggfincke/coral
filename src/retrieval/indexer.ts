@@ -83,7 +83,7 @@ export class ProjectIndexer
         continue
       }
 
-      const chunks = chunkText(source.content, source.path)
+      const chunks = chunkText(source.content)
       if (chunks.length === 0)
       {
         this.store.deleteFile(projectId, source.path)

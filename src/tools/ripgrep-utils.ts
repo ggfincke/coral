@@ -4,8 +4,8 @@
 import { execFile } from 'node:child_process'
 import type { ToolResult } from './tool.js'
 
-export const RG_TIMEOUT = 15_000
-export const RG_MAX_BUFFER = 5 * 1024 * 1024
+const RG_TIMEOUT = 15_000
+const RG_MAX_BUFFER = 5 * 1024 * 1024
 
 // execute ripgrep w/ shared error handling
 export function execRipgrep(

@@ -97,7 +97,7 @@ const FINALIZED_BLOCK_CACHE = new WeakMap<
   Map<number, CachedLines>
 >()
 
-export function getSpinnerFrame(tick: number): string
+function getSpinnerFrame(tick: number): string
 {
   return SPINNER_FRAMES[tick % SPINNER_FRAMES.length]!
 }
@@ -200,11 +200,6 @@ function formatPendingToolCall(
 // format a finalized output block into styled terminal lines
 function formatFinalizedBlock(block: OutputBlock, width: number): string[]
 {
-  if (block.type === 'tool_call' && !block.status)
-  {
-    return formatPendingToolCall(block, width, 0)
-  }
-
   switch (block.type)
   {
     case 'user':

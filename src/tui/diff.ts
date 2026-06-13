@@ -55,6 +55,8 @@ export function renderUnifiedDiff(unified: string, width: number): string[]
   const gutterCols = numWidth * 2 + 1
   const contentWidth = Math.max(width - gutterCols - 1, 8)
   const blankNum = ' '.repeat(numWidth)
+  // pad a line number into the gutter column
+  const num = (n: number) => String(n).padStart(numWidth)
 
   let oldLine = 0
   let newLine = 0
@@ -82,18 +84,18 @@ export function renderUnifiedDiff(unified: string, width: number): string[]
 
     if (raw.startsWith('+'))
     {
-      gutter = `${blankNum} ${String(newLine++).padStart(numWidth)}`
+      gutter = `${blankNum} ${num(newLine++)}`
       colorize = style('success')
     }
     else if (raw.startsWith('-'))
     {
-      gutter = `${String(oldLine++).padStart(numWidth)} ${blankNum}`
+      gutter = `${num(oldLine++)} ${blankNum}`
       colorize = style('error')
     }
     else if (raw.startsWith(' ') || raw === '')
     {
-      gutter = `${String(oldLine++).padStart(numWidth)} ${String(newLine++).padStart(numWidth)}`
-      colorize = (text) => chalk.dim(text)
+      gutter = `${num(oldLine++)} ${num(newLine++)}`
+      colorize = chalk.dim
     }
     else
     {

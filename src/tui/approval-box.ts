@@ -12,7 +12,7 @@ import { style } from './theme.js'
 // cap the change preview so large edits don't swallow the screen
 const MAX_PREVIEW_LINES = 20
 
-export function formatApprovalArgs(
+function formatApprovalArgs(
   toolName: string,
   args: Record<string, unknown>
 ): string

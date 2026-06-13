@@ -57,6 +57,8 @@ export class OllamaClient
     includeThink: boolean
   ): Record<string, unknown>
   {
+    // ! never add a `format` field to tool-bearing requests — it silently
+    // ! empties tool_calls (ollama#8095)
     // num_ctx is a top-level convenience field — Ollama expects it under options
     const { num_ctx, ...rest } = request
     const body: Record<string, unknown> = {
@@ -173,12 +175,6 @@ export class OllamaClient
   startKeepAlive(model: string): void
   {
     this.lastModel = model
-  }
-
-  // keep API compatibility w/ existing call sites
-  stopKeepAlive(): void
-  {
-    // no-op
   }
 
   // unload a tracked model immediately

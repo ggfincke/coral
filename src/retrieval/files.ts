@@ -50,7 +50,6 @@ async function readSourceFile(
 
   return {
     path: fileStat.path,
-    absolutePath,
     size: fileStat.size,
     mtimeMs: fileStat.mtimeMs,
     sha256: createHash('sha256').update(buffer).digest('hex'),

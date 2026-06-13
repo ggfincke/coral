@@ -2,7 +2,6 @@
 // src/cli/main.tsx
 // CLI entry point — parse args & render TUI
 
-import React from 'react'
 import { render } from 'ink'
 import { Command } from 'commander'
 import { createRequire } from 'node:module'

@@ -1,7 +1,7 @@
 // src/tui/App.tsx
 // main TUI component w/ model picking, approvals, scrollback, & session persistence
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
@@ -683,19 +683,24 @@ export default function App({
 
       if (pickerVisible)
       {
+        // if there's an agent behind the picker, go back to chat; else exit
+        const escapePicker = () =>
+        {
+          if (agent)
+          {
+            setPickerState('hidden')
+          }
+          else
+          {
+            exit()
+          }
+        }
+
         if (pickerState === 'loading')
         {
           if (key.escape)
           {
-            // if there's an agent behind the picker, go back to chat
-            if (agent)
-            {
-              setPickerState('hidden')
-            }
-            else
-            {
-              exit()
-            }
+            escapePicker()
           }
           return
         }
@@ -708,14 +713,7 @@ export default function App({
           }
           else if (key.escape)
           {
-            if (agent)
-            {
-              setPickerState('hidden')
-            }
-            else
-            {
-              exit()
-            }
+            escapePicker()
           }
 
           return
@@ -744,14 +742,7 @@ export default function App({
         }
         else if (key.escape)
         {
-          if (agent)
-          {
-            setPickerState('hidden')
-          }
-          else
-          {
-            exit()
-          }
+          escapePicker()
         }
       }
     },
@@ -778,7 +769,6 @@ export default function App({
           host,
           yolo,
           sessionLabelId,
-          messageCount,
           pushOutput: (...blocks) =>
           {
             setOutput((prev) => [...prev, ...blocks])
@@ -1032,7 +1022,6 @@ export default function App({
       consumeBufferedBlocks,
       exit,
       host,
-      messageCount,
       persistSession,
       renameCurrentSession,
       reopenModelPicker,
@@ -1051,7 +1040,6 @@ export default function App({
   )
 
   const sessionLabel = sessionLabelId ? `session ${sessionLabelId}` : ''
-  const permissionMode = yolo ? 'yolo' : 'ask'
   // ctx gauge reflects current context occupancy, not lifetime throughput
   const tokenGauge = buildTokenGauge(tokenUsage.context, contextWindow)
   // cumulative tokens processed this session — distinct from occupancy above
@@ -1209,21 +1197,8 @@ export default function App({
     [resetNavigation]
   )
 
-  // escape while running aborts the turn; escape while idle exits
-  const handleEscape = useCallback(() =>
-  {
-    if (runAbortRef.current && !runAbortRef.current.signal.aborted)
-    {
-      abortRun()
-    }
-    else
-    {
-      exit()
-    }
-  }, [abortRun, exit])
-
-  // Ctrl+C while running aborts the turn; Ctrl+C while idle exits
-  const handleInterrupt = useCallback(() =>
+  // escape or Ctrl+C aborts a running turn; when idle it exits
+  const abortOrExit = useCallback(() =>
   {
     if (runAbortRef.current && !runAbortRef.current.signal.aborted)
     {
@@ -1250,7 +1225,7 @@ export default function App({
               {' YOLO '}
             </Text>
           ) : (
-            <Text dimColor>{permissionMode}</Text>
+            <Text dimColor>ask</Text>
           )}
           {sessionLabel && (
             <>
@@ -1317,8 +1292,8 @@ export default function App({
               value={input}
               onChange={handleInputChange}
               onSubmit={handleSubmit}
-              onEscape={handleEscape}
-              onInterrupt={handleInterrupt}
+              onEscape={abortOrExit}
+              onInterrupt={abortOrExit}
               onPageUp={onPageUp}
               onPageDown={onPageDown}
               onScrollUp={onScrollUp}

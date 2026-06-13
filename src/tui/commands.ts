@@ -37,7 +37,6 @@ export interface CommandContext
   host: string
   yolo: boolean
   sessionLabelId: string | null
-  messageCount: number
   // push blocks into the transcript
   pushOutput: (...blocks: OutputBlock[]) => void
   // clear the transcript & reset conversation state
@@ -61,7 +60,7 @@ export interface CommandContext
 }
 
 // a single slash command
-export interface Command
+interface Command
 {
   name: string
   aliases?: string[]
@@ -70,7 +69,7 @@ export interface Command
 }
 
 // result of parsing a slash command from input
-export interface ParsedCommand
+interface ParsedCommand
 {
   name: string
   args: string
@@ -89,7 +88,7 @@ export interface DispatchResult
 
 // parse a slash command from user input
 // returns null if input doesn't start w/ /
-export function parseCommand(input: string): ParsedCommand | null
+function parseCommand(input: string): ParsedCommand | null
 {
   const trimmed = input.trim()
   if (!trimmed.startsWith('/')) return null
@@ -110,10 +109,7 @@ export function parseCommand(input: string): ParsedCommand | null
 }
 
 // find a command by name or alias
-export function findCommand(
-  name: string,
-  commands: Command[]
-): Command | undefined
+function findCommand(name: string, commands: Command[]): Command | undefined
 {
   const lower = name.toLowerCase()
 
@@ -825,12 +821,6 @@ const commands: Command[] = [
   newCommand,
   exitCommand,
 ]
-
-// get the full list of registered commands
-export function getCommands(): Command[]
-{
-  return commands
-}
 
 // dispatch a slash command from user input
 // returns { handled: true } if input was a command, false otherwise

@@ -182,8 +182,6 @@ export class SqliteIndexStore implements IndexStore
 
   upsertFile(projectId: number, file: IndexedFile, model: string): void
   {
-    if (file.chunks.length === 0) return
-
     const write = this.db.transaction(() =>
     {
       const now = new Date().toISOString()

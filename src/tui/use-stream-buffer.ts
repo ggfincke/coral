@@ -11,7 +11,7 @@ export interface StreamBuffer
 }
 
 // convert buffered stream content into finalized transcript blocks
-export function buildBufferedOutputBlocks(buffer: StreamBuffer): OutputBlock[]
+function buildBufferedOutputBlocks(buffer: StreamBuffer): OutputBlock[]
 {
   const blocks: OutputBlock[] = []
 

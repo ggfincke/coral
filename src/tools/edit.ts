@@ -7,19 +7,6 @@ import { readFileGuarded } from './file-utils.js'
 import { resolvePath } from '../cwd.js'
 import { computeDiff } from '../utils/diff.js'
 
-// count non-overlapping occurrences of a substring
-function countOccurrences(haystack: string, needle: string): number
-{
-  let count = 0
-  let pos = 0
-  while ((pos = haystack.indexOf(needle, pos)) !== -1)
-  {
-    count++
-    pos += needle.length
-  }
-  return count
-}
-
 export const editTool: Tool = {
   name: 'edit_file',
   description:
@@ -64,7 +51,8 @@ export const editTool: Tool = {
     if (!readResult.ok) return readResult.result
     const content = readResult.content
 
-    const count = countOccurrences(content, oldString)
+    // non-overlapping occurrence count — oldString is guaranteed non-empty above
+    const count = content.split(oldString).length - 1
 
     if (count === 0)
     {

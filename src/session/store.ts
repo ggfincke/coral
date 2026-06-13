@@ -241,17 +241,14 @@ export function saveSession(
     metaHint?.createdAt && metaHint?.title
       ? undefined
       : loadSessionIndex().find((session) => session.id === id)
-  const existingMeta = {
-    createdAt: metaHint?.createdAt ?? indexedMeta?.createdAt,
-    title: metaHint?.title ?? indexedMeta?.title,
-  }
   const meta: SessionMeta = {
     id,
     model,
     cwd,
-    createdAt: existingMeta.createdAt ?? new Date().toISOString(),
+    createdAt:
+      metaHint?.createdAt ?? indexedMeta?.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    title: existingMeta.title ?? extractTitle(messages),
+    title: metaHint?.title ?? indexedMeta?.title ?? extractTitle(messages),
     messageCount: countConversationMessages(messages),
     compactionCount: metaHint?.compactionCount ?? indexedMeta?.compactionCount,
     lastCompactedAt: metaHint?.lastCompactedAt ?? indexedMeta?.lastCompactedAt,

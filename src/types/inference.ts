@@ -50,25 +50,18 @@ export interface ChatRequest
 {
   model: string
   messages: OllamaMessage[]
-  stream?: boolean
   tools?: OllamaTool[]
   think?: boolean | 'low' | 'medium' | 'high'
   keep_alive?: string | number
   // pinned context window — sent as options.num_ctx; held constant per session
   // so Ollama doesn't reload the runner & wipe the KV cache between turns
   num_ctx?: number
-  // ! constrains content only & silently empties tool_calls when combined
-  // ! w/ tools (ollama#8095) — never set on tool-bearing requests
-  format?: 'json' | Record<string, unknown>
 }
 
 export interface ChatResponse
 {
   message: OllamaMessage
   done: boolean
-  done_reason?: string
-  total_duration?: number
-  load_duration?: number
   prompt_eval_count?: number
   prompt_eval_duration?: number
   eval_count?: number
@@ -77,11 +70,7 @@ export interface ChatResponse
 
 export interface EmbedResponse
 {
-  model?: string
   embeddings: number[][]
-  total_duration?: number
-  load_duration?: number
-  prompt_eval_count?: number
 }
 
 export interface Model

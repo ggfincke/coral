@@ -238,6 +238,8 @@ export class Agent
   // per-instance toolset & its Ollama format — subagents run a restricted subset
   private tools: Tool[]
   private ollamaTools: OllamaTool[]
+  // name -> tool for O(1) lookup; the toolset is fixed for the agent's lifetime
+  private toolsByName: Map<string, Tool>
   private maxIterations?: number
   private estimatedTokenCount = 0
   // number of leading messages that stay byte-stable across compaction — the
@@ -282,6 +284,7 @@ export class Agent
     this.thinkMode = options.think ?? true
     this.tools = options.tools ?? allTools
     this.ollamaTools = this.tools.map(toolToOllamaFormat)
+    this.toolsByName = new Map(this.tools.map((t) => [t.name, t]))
     this.maxIterations = options.maxIterations
 
     // set the global working directory — all tools resolve paths against this
@@ -372,7 +375,6 @@ export class Agent
   // stop client background work & unload the active model
   async dispose(): Promise<void>
   {
-    this.client.stopKeepAlive()
     await this.client.unloadModel(this.model)
   }
 
@@ -407,8 +409,7 @@ export class Agent
   {
     const previousModel = this.model
 
-    // unload the old model & stop its keep-alive
-    this.client.stopKeepAlive()
+    // unload the old model
     await this.client.unloadModel(previousModel)
 
     // swap to the new model & reset cached context window + pinned num_ctx
@@ -530,12 +531,6 @@ export class Agent
       promptEvalDurationNs: this.totalPromptEvalDurationNs,
       evalDurationNs: this.totalEvalDurationNs,
     }
-  }
-
-  // get the cached context window size (0 = unknown)
-  getContextWindowSize(): number
-  {
-    return this.contextWindowSize
   }
 
   // get the total number of successful compaction events this session
@@ -748,7 +743,7 @@ export class Agent
   // global registry) keeps subagents from reaching tools outside their subset
   private getOwnTool(name: string): Tool | undefined
   {
-    return this.tools.find((t) => t.name === name)
+    return this.toolsByName.get(name)
   }
 
   // canonicalize hallucinated name variants (Read_File -> read_file) in place

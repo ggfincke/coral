@@ -3,7 +3,7 @@
 
 import type { Theme } from './theme.js'
 
-export const CORAL_REEF: Theme = {
+const CORAL_REEF: Theme = {
   name: 'coral-reef',
   label: 'Coral Reef',
   description: 'warm coral & ocean teal (default)',
@@ -22,7 +22,7 @@ export const CORAL_REEF: Theme = {
   headings: ['primary', 'user', 'accent', 'code'],
 }
 
-export const DEEP_SEA: Theme = {
+const DEEP_SEA: Theme = {
   name: 'deep-sea',
   label: 'Deep Sea',
   description: 'bioluminescent cyan & violet for dark terminals',
@@ -41,7 +41,7 @@ export const DEEP_SEA: Theme = {
   headings: ['primary', 'user', 'accent', 'code'],
 }
 
-export const SUNSET_TIDE: Theme = {
+const SUNSET_TIDE: Theme = {
   name: 'sunset-tide',
   label: 'Sunset Tide',
   description: 'warm coral, pink & amber',
@@ -60,7 +60,7 @@ export const SUNSET_TIDE: Theme = {
   headings: ['primary', 'user', 'accent', 'code'],
 }
 
-export const KELP_FOREST: Theme = {
+const KELP_FOREST: Theme = {
   name: 'kelp-forest',
   label: 'Kelp Forest',
   description: 'greens, teals & earthy sand',
@@ -79,7 +79,7 @@ export const KELP_FOREST: Theme = {
   headings: ['primary', 'user', 'accent', 'code'],
 }
 
-export const TIDE_POOL: Theme = {
+const TIDE_POOL: Theme = {
   name: 'tide-pool',
   label: 'Tide Pool',
   description: 'soft pastel pinks, teals & lavender',
@@ -98,7 +98,7 @@ export const TIDE_POOL: Theme = {
   headings: ['primary', 'user', 'accent', 'code'],
 }
 
-export const ADAPTIVE: Theme = {
+const ADAPTIVE: Theme = {
   name: 'adaptive',
   label: 'Adaptive',
   description: "inherits your terminal's ANSI palette",

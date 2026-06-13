@@ -110,14 +110,14 @@ export function isParsedControlSequence(input: string): boolean
   )
 }
 
+// a partial/incomplete SGR-mouse sequence — callers test this BEFORE
+// isParsedControlSequence (which subsumes this regex) to buffer vs discard
 export function isParsedControlFragment(input: string): boolean
 {
   return PARSED_MOUSE_FRAGMENT_RE.test(input)
 }
 
-export function parseMouseWheelPacket(
-  input: string
-): 'up' | 'down' | 'other' | null
+function parseMouseWheelPacket(input: string): 'up' | 'down' | 'other' | null
 {
   const match = input.match(SGR_MOUSE_PACKET_RE)
   if (!match) return null
@@ -155,10 +155,7 @@ function findNextControlIndex(input: string): number
   return indexes.length > 0 ? Math.min(...indexes) : -1
 }
 
-export function tokenizeTerminalChunk(
-  input: string,
-  pending = ''
-): TokenizedChunk
+function tokenizeTerminalChunk(input: string, pending = ''): TokenizedChunk
 {
   const tokens: string[] = []
   let remaining = pending + input

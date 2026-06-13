@@ -511,12 +511,6 @@ def analyze_coral_home(
     )
 
 
-def ranked(counter: Counter[str], limit: int) -> list[tuple[str, int]]:
-    if limit <= 0:
-        return []
-    return counter.most_common(limit)
-
-
 def plural(count: int, noun: str) -> str:
     suffix = "" if count == 1 else "s"
     return f"{count} {noun}{suffix}"
@@ -527,7 +521,7 @@ def render_counter(title: str, counter: Counter[str], limit: int) -> list[str]:
     if not counter:
         lines.append("  (none)")
         return lines
-    for name, count in ranked(counter, limit):
+    for name, count in counter.most_common(limit):
         lines.append(f"  {name}: {count}")
     return lines
 
@@ -664,7 +658,9 @@ def render_counter_md(title: str, counter: Counter[str], limit: int) -> list[str
     if not counter:
         return [*lines, "_None._"]
     lines.extend(["| Name | Count |", "|---|---:|"])
-    lines.extend(f"| `{name}` | {count} |" for name, count in ranked(counter, limit))
+    lines.extend(
+        f"| `{name}` | {count} |" for name, count in counter.most_common(limit)
+    )
     return lines
 
 
@@ -755,12 +751,14 @@ def render_markdown(
 
     lines.extend(["", "## Integrity Checks", ""])
     if report.issues:
+        issue_limit = max(top, 1)
         lines.extend(["| Severity | Issue |", "|---|---|"])
-        for issue in report.issues[: max(top, 1)]:
+        for issue in report.issues[:issue_limit]:
             message = issue.message.replace("|", "\\|")
             lines.append(f"| {issue.severity} | {message} |")
-        if len(report.issues) > top:
-            lines.append(f"| info | {len(report.issues) - top} more issues hidden |")
+        if len(report.issues) > issue_limit:
+            hidden = len(report.issues) - issue_limit
+            lines.append(f"| info | {hidden} more issues hidden |")
     else:
         lines.append("_OK._")
 
