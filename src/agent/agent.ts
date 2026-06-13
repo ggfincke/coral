@@ -33,11 +33,14 @@ import {
   buildCompactedMessages,
   pruneToolResults,
   stripThinkingForCompaction,
+  countFrozenPrefix,
   MAX_COMPACT_FAILURES,
+  MAX_FROZEN_SUMMARIES,
   type CompactionConfig,
   type CompactionResult,
   DEFAULT_COMPACTION_CONFIG,
 } from './compaction.js'
+import { resolveContextConfig } from '../config/context.js'
 
 export type { CompactionResult } from './compaction.js'
 import { toError } from '../utils/errors.js'
@@ -217,6 +220,9 @@ interface AgentOptions
   // main agents register a subagent runner; subagents pass false so they don't
   // clobber the parent's runner
   registerSubagent?: boolean
+  // pinned num_ctx inherited from a parent agent — subagents must use the same
+  // value so they don't trigger an Ollama runner reload that wipes the KV cache
+  numCtx?: number
 }
 
 // * Conversation agent w/ tool dispatch
@@ -234,6 +240,16 @@ export class Agent
   private ollamaTools: OllamaTool[]
   private maxIterations?: number
   private estimatedTokenCount = 0
+  // number of leading messages that stay byte-stable across compaction — the
+  // system prompt plus accumulated frozen summary blocks. only the live tail
+  // after this boundary is ever summarized, pruned, or trimmed
+  private frozenPrefixLength = 1
+  // pinned context window sent as options.num_ctx — held constant per session so
+  // Ollama never reloads the runner & busts the KV cache (0 = not yet resolved)
+  private numCtx = 0
+  // in-flight context-window resolution — dedups concurrent callers (the TUI &
+  // run()) onto a single /api/show; cleared on settle so failures can retry
+  private contextWindowPromise?: Promise<number>
   private totalPromptTokens = 0
   private totalCompletionTokens = 0
   // cumulative nanoseconds of model time across the session
@@ -277,6 +293,15 @@ export class Agent
     // compaction defaults — can be overridden via setCompactionConfig()
     this.compactionConfig = { ...DEFAULT_COMPACTION_CONFIG }
 
+    // inherit a parent's pinned context window (subagents) so all requests to
+    // the shared model use the same num_ctx & the KV cache survives
+    if (options.numCtx && options.numCtx > 0)
+    {
+      this.numCtx = options.numCtx
+      this.contextWindowSize = options.numCtx
+      this.compactionConfig.contextWindow = options.numCtx
+    }
+
     // inject system prompt as first message
     const systemContent = buildSystemPrompt({
       model,
@@ -308,6 +333,7 @@ export class Agent
       tools: subagentTools,
       maxIterations: SUBAGENT_MAX_ITERATIONS,
       registerSubagent: false,
+      numCtx: this.numCtx,
     })
 
     let text = ''
@@ -358,6 +384,8 @@ export class Agent
     const currentSystem = this.messages[0]
     const nonSystem = savedMessages.filter((m) => m.role !== 'system')
     this.messages = [currentSystem!, ...nonSystem]
+    // recover the frozen-prefix boundary from the leading summary blocks
+    this.frozenPrefixLength = countFrozenPrefix(this.messages)
     this.rebuildTokenEstimate()
   }
 
@@ -383,9 +411,11 @@ export class Agent
     this.client.stopKeepAlive()
     await this.client.unloadModel(previousModel)
 
-    // swap to the new model & reset cached context window
+    // swap to the new model & reset cached context window + pinned num_ctx
+    // (a different model means a different runner, so the KV cache is cold anyway)
     this.model = nextModel
     this.contextWindowSize = 0
+    this.numCtx = 0
 
     // rebuild the system prompt w/ the new model name
     const systemContent = buildSystemPrompt({
@@ -426,6 +456,7 @@ export class Agent
     const systemMsg = this.messages[0]!
     const cleared = this.messages.length - 1
     this.messages = [systemMsg]
+    this.frozenPrefixLength = 1
     this.rebuildTokenEstimate()
     return cleared
   }
@@ -451,9 +482,12 @@ export class Agent
       ),
     }
 
+    // explicit /compact consolidates everything (including prior frozen
+    // summaries) into a single block — splits from the system prompt only
     const { toSummarize, toKeep } = splitForCompaction(
       this.messages,
-      relaxedConfig
+      relaxedConfig,
+      1
     )
     if (toSummarize.length === 0) return null
 
@@ -462,6 +496,7 @@ export class Agent
 
     return this.applyCompactedSummary(
       summary,
+      [this.messages[0]!],
       toKeep,
       beforeTokens,
       beforeMessages
@@ -521,22 +556,41 @@ export class Agent
     return { ...this.reliabilityStats }
   }
 
-  // fetch the context window size from Ollama & cache it
-  // safe to call multiple times — only fetches once per model
+  // fetch the model's context window from Ollama, cap it to a sane ceiling, &
+  // pin it as num_ctx for the session. safe to call multiple times — only the
+  // first resolution does work. capping keeps KV-cache memory bounded & makes
+  // the compaction thresholds match what the server actually allocates
   async fetchContextWindow(): Promise<number>
   {
     if (this.contextWindowSize > 0) return this.contextWindowSize
 
+    // share one in-flight request; clear the memo on settle so a transient
+    // failure (numCtx still 0) retries on the next call instead of sticking
+    this.contextWindowPromise ??= this.resolveContextWindow().finally(() =>
+    {
+      this.contextWindowPromise = undefined
+    })
+
+    return this.contextWindowPromise
+  }
+
+  // resolve the context window once: cap it, pin it as num_ctx, & align the
+  // compaction thresholds to the window the server actually allocates
+  private async resolveContextWindow(): Promise<number>
+  {
     try
     {
       const info = await this.client.showModel(this.model)
       if (info.context_length > 0)
       {
-        this.contextWindowSize = info.context_length
-        // update compaction config w/ actual context window
+        const cap = resolveContextConfig(getCwd()).maxNumCtx
+        const pinned = Math.min(info.context_length, cap)
+
+        this.contextWindowSize = pinned
+        this.numCtx = pinned
         this.compactionConfig = {
           ...this.compactionConfig,
-          contextWindow: info.context_length,
+          contextWindow: pinned,
         }
       }
     }
@@ -600,6 +654,7 @@ export class Agent
           },
           { role: 'user', content: compactionPrompt },
         ],
+        num_ctx: this.numCtx || undefined,
       }))
       {
         if (chunk.message.content)
@@ -618,16 +673,19 @@ export class Agent
     return summary
   }
 
-  // replace compacted messages w/ a summary turn & report stats
+  // append the summary as a new frozen block after the stable prefix & report
+  // stats. the frozen prefix (system + prior summaries) stays byte-identical so
+  // the model's KV cache is reused through it on the next turn
   private applyCompactedSummary(
     summary: string,
+    frozenPrefix: OllamaMessage[],
     toKeep: OllamaMessage[],
     beforeTokens: number,
     beforeMessages: number
   ): CompactionResult
   {
-    const systemMsg = this.messages[0]!
-    this.messages = buildCompactedMessages(systemMsg, summary, toKeep)
+    this.messages = buildCompactedMessages(frozenPrefix, summary, toKeep)
+    this.frozenPrefixLength = frozenPrefix.length + 1
     this.rebuildTokenEstimate()
 
     this.compactionCount++
@@ -645,12 +703,19 @@ export class Agent
     return result
   }
 
-  // trim to recent history while keeping the system prompt once
+  // trim to recent history while keeping the frozen prefix (system + summaries)
+  // intact — only the live tail is dropped, so the cached prefix survives
   private trimHistoryToMax(): void
   {
-    const systemMsg = this.messages[0]!
-    const recent = this.messages.slice(1).slice(-(MAX_HISTORY - 1))
-    this.messages = [systemMsg, ...recent]
+    const frozen = this.messages.slice(0, this.frozenPrefixLength)
+    const liveBudget = Math.max(MAX_HISTORY - this.frozenPrefixLength, 0)
+    // guard: slice(-0) returns the whole array, so an empty budget must short
+    // out explicitly rather than keeping the entire live tail
+    const recent =
+      liveBudget === 0
+        ? []
+        : this.messages.slice(this.frozenPrefixLength).slice(-liveBudget)
+    this.messages = [...frozen, ...recent]
     this.rebuildTokenEstimate()
   }
 
@@ -796,7 +861,12 @@ export class Agent
     {
       const beforeTokens = this.estimatedTokenCount
       const beforeMessages = this.messages.length
-      const { prunedMessages, prunedCount } = pruneToolResults(this.messages)
+      // protect the frozen prefix — only prune tool results in the live tail
+      const { prunedMessages, prunedCount } = pruneToolResults(
+        this.messages,
+        undefined,
+        this.frozenPrefixLength
+      )
 
       if (prunedCount > 0)
       {
@@ -828,12 +898,19 @@ export class Agent
       return
     }
 
+    // append a new frozen summary block by default; once they accumulate past
+    // the cap, consolidate everything (from the system prompt) into one block
+    const consolidate = this.frozenPrefixLength - 1 >= MAX_FROZEN_SUMMARIES
+    const splitFrom = consolidate ? 1 : this.frozenPrefixLength
+
     const { toSummarize, toKeep } = splitForCompaction(
       this.messages,
-      this.compactionConfig
+      this.compactionConfig,
+      splitFrom
     )
     if (toSummarize.length === 0) return
 
+    const frozenPrefix = this.messages.slice(0, splitFrom)
     const beforeTokens = this.estimatedTokenCount
     const beforeMessages = this.messages.length
 
@@ -846,7 +923,13 @@ export class Agent
     }
 
     this.compactFailureCount = 0
-    this.applyCompactedSummary(summary, toKeep, beforeTokens, beforeMessages)
+    this.applyCompactedSummary(
+      summary,
+      frozenPrefix,
+      toKeep,
+      beforeTokens,
+      beforeMessages
+    )
   }
 
   // run a user message through the agent loop
@@ -857,6 +940,12 @@ export class Agent
     signal?: AbortSignal
   ): Promise<void>
   {
+    // resolve the num_ctx pin before the first request so every turn (incl. the
+    // first) hits the runner w/ the same num_ctx — otherwise turn 1 loads at
+    // the Modelfile default & turn 2 reloads, wiping the KV cache. no-op once
+    // resolved & instant for subagents (they inherit a pinned window)
+    await this.fetchContextWindow()
+
     this.pushMessage({ role: 'user', content: userMessage })
 
     // store compaction callbacks so compactIfNeeded() can invoke them
@@ -906,6 +995,7 @@ export class Agent
             messages: this.messages,
             tools: this.ollamaTools,
             think: this.thinkMode,
+            num_ctx: this.numCtx || undefined,
           },
           signal
         ))
