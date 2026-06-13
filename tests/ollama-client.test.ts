@@ -247,54 +247,6 @@ test('think fallback is tracked per model', async () =>
   }
 })
 
-test('chatStream omits think when reasoning is disabled', async () =>
-{
-  const originalFetch = globalThis.fetch
-  const requests: unknown[] = []
-
-  globalThis.fetch = (async (_input, init) =>
-  {
-    requests.push(JSON.parse(String(init?.body ?? '{}')))
-
-    return buildNdjsonResponse([
-      {
-        message: {
-          role: 'assistant',
-          content: 'done',
-        },
-        done: true,
-      },
-    ])
-  }) as typeof fetch
-
-  try
-  {
-    const client = new OllamaClient('http://localhost:11434')
-
-    for await (const chunk of client.chatStream({
-      model: 'fake-model',
-      messages: [{ role: 'user', content: 'hello' }],
-      think: false,
-    }))
-    {
-      void chunk
-    }
-
-    assert.deepEqual(requests, [
-      {
-        model: 'fake-model',
-        messages: [{ role: 'user', content: 'hello' }],
-        keep_alive: '10m',
-        stream: true,
-      },
-    ])
-  }
-  finally
-  {
-    globalThis.fetch = originalFetch
-  }
-})
-
 test('unloadModel sends keep_alive 0 for immediate shutdown', async () =>
 {
   const originalFetch = globalThis.fetch

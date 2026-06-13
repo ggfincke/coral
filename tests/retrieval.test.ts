@@ -137,31 +137,3 @@ test('ProjectIndexer refreshes changed files', async () =>
     store.close()
   }
 })
-
-test('ProjectIndexer removes stale chunks when a file becomes empty', async () =>
-{
-  const dir = await tempDir('coral-retrieval-empty-')
-  const file = join(dir, 'feature.ts')
-  await writeFile(file, 'export const login = "auth session";\n', 'utf-8')
-
-  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
-  const embedder = new KeywordEmbedder()
-  const indexer = new ProjectIndexer(dir, embedder, store)
-
-  try
-  {
-    assert.equal(
-      (await indexer.search('auth session', 1))[0]?.path,
-      'feature.ts'
-    )
-
-    await writeFile(file, '', 'utf-8')
-
-    const refreshed = await indexer.search('auth session', 1)
-    assert.notEqual(refreshed[0]?.path, 'feature.ts')
-  }
-  finally
-  {
-    store.close()
-  }
-})

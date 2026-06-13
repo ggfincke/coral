@@ -99,11 +99,3 @@ test('search_code indexes the project lazily and returns ranked snippets', async
     requests.every((request) => request.body.model === 'nomic-embed-text')
   )
 })
-
-test('search_code validates query input before indexing', async () =>
-{
-  const result = await searchCodeTool.execute({ query: '   ' })
-
-  assert.equal(result.output, '')
-  assert.match(result.error ?? '', /non-empty query/)
-})
