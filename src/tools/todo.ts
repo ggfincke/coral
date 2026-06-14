@@ -2,13 +2,14 @@
 // maintain a structured task list for multi-step work
 
 import type { Tool, ToolResult } from './tool.js'
-import { setTodos, type TodoItem, type TodoStatus } from './todo-store.js'
+import {
+  setTodos,
+  TODO_STATUSES,
+  type TodoItem,
+  type TodoStatus,
+} from './todo-store.js'
 
-const VALID_STATUS = new Set<TodoStatus>([
-  'pending',
-  'in_progress',
-  'completed',
-])
+const VALID_STATUS = new Set<TodoStatus>(TODO_STATUSES)
 
 const STATUS_MARK: Record<TodoStatus, string> = {
   pending: '[ ]',
@@ -30,6 +31,14 @@ export const todoWriteTool: Tool = {
     'each call — it replaces the previous one. Keep exactly one item ' +
     'in_progress while you work it & mark it completed when done. Skip this ' +
     'for simple single-step tasks.',
+  display: {
+    label: 'Todo',
+    summarize: (args) =>
+    {
+      const n = Array.isArray(args.todos) ? args.todos.length : 0
+      return `${n} item${n === 1 ? '' : 's'}`
+    },
+  },
   parameters: {
     type: 'object',
     properties: {

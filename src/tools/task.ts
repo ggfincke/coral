@@ -12,6 +12,10 @@ export const taskTool: Tool = {
     'edit, run shell, or commit. Use it to explore the codebase or answer a ' +
     'bounded question without spending your own context on the search. Returns ' +
     "the subagent's final report.",
+  display: {
+    label: 'Task',
+    summarize: (args) => String(args.description ?? ''),
+  },
   parameters: {
     type: 'object',
     properties: {

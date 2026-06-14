@@ -61,6 +61,7 @@ export function buildModelPickerLines(
     ]
   }
 
+  const wrapWidth = Math.max(width, 16)
   const visibleCount = Math.max(height - 6, 3)
   const start = Math.max(
     0,
@@ -84,24 +85,16 @@ export function buildModelPickerLines(
       index === selectedIndex ? style('primary')('›') : chalk.dim(' ')
     const name =
       index === selectedIndex ? style('user')(model.name) : model.name
-    lines.push(...wrapLines(`${prefix} ${name}`, Math.max(width, 16)))
+    lines.push(...wrapLines(`${prefix} ${name}`, wrapWidth))
   }
 
   lines.push('')
+  lines.push(...wrapLines(chalk.dim(`Selected: ${selected.name}`), wrapWidth))
   lines.push(
-    ...wrapLines(chalk.dim(`Selected: ${selected.name}`), Math.max(width, 16))
+    ...wrapLines(chalk.dim(`Size: ${formatSize(selected.size)}`), wrapWidth)
   )
   lines.push(
-    ...wrapLines(
-      chalk.dim(`Size: ${formatSize(selected.size)}`),
-      Math.max(width, 16)
-    )
-  )
-  lines.push(
-    ...wrapLines(
-      chalk.dim(`Modified: ${selected.modified_at}`),
-      Math.max(width, 16)
-    )
+    ...wrapLines(chalk.dim(`Modified: ${selected.modified_at}`), wrapWidth)
   )
 
   if (models.length > visibleCount)

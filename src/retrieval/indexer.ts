@@ -5,6 +5,7 @@ import { chunkText } from './chunker.js'
 import { collectIndexableFiles } from './files.js'
 import type { Embedder, IndexedFile, IndexStore, SearchHit } from './types.js'
 import { CHUNKER_VERSION } from './types.js'
+import { clamp } from '../utils/clamp.js'
 
 export const DEFAULT_LIMIT = 5
 const MAX_LIMIT = 20
@@ -13,7 +14,7 @@ const EMBED_BATCH_SIZE = 16
 function clampLimit(limit: number | undefined): number
 {
   if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_LIMIT
-  return Math.max(1, Math.min(Math.floor(limit), MAX_LIMIT))
+  return clamp(Math.floor(limit), 1, MAX_LIMIT)
 }
 
 async function embedInBatches(
@@ -83,7 +84,7 @@ export class ProjectIndexer
         continue
       }
 
-      const chunks = chunkText(source.content, source.path)
+      const chunks = chunkText(source.content)
       if (chunks.length === 0)
       {
         this.store.deleteFile(projectId, source.path)

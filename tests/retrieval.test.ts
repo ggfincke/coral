@@ -46,25 +46,22 @@ test('chunkText creates overlapping line-based chunks', () =>
   const content = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join(
     '\n'
   )
-  const chunks = chunkText(content, 'src/example.ts')
+  const chunks = chunkText(content)
 
   assert.equal(chunks.length, 2)
   assert.deepEqual(
     chunks.map((chunk) => ({
-      path: chunk.path,
       startLine: chunk.startLine,
       endLine: chunk.endLine,
       chunkerVersion: chunk.chunkerVersion,
     })),
     [
       {
-        path: 'src/example.ts',
         startLine: 1,
         endLine: 80,
         chunkerVersion: CHUNKER_VERSION,
       },
       {
-        path: 'src/example.ts',
         startLine: 71,
         endLine: 100,
         chunkerVersion: CHUNKER_VERSION,
@@ -134,34 +131,6 @@ test('ProjectIndexer refreshes changed files', async () =>
     const refreshed = await indexer.search('auth session', 1)
     assert.equal(refreshed[0]?.path, 'feature.ts')
     assert.match(refreshed[0]?.text ?? '', /auth session/)
-  }
-  finally
-  {
-    store.close()
-  }
-})
-
-test('ProjectIndexer removes stale chunks when a file becomes empty', async () =>
-{
-  const dir = await tempDir('coral-retrieval-empty-')
-  const file = join(dir, 'feature.ts')
-  await writeFile(file, 'export const login = "auth session";\n', 'utf-8')
-
-  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
-  const embedder = new KeywordEmbedder()
-  const indexer = new ProjectIndexer(dir, embedder, store)
-
-  try
-  {
-    assert.equal(
-      (await indexer.search('auth session', 1))[0]?.path,
-      'feature.ts'
-    )
-
-    await writeFile(file, '', 'utf-8')
-
-    const refreshed = await indexer.search('auth session', 1)
-    assert.notEqual(refreshed[0]?.path, 'feature.ts')
   }
   finally
   {

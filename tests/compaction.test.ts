@@ -5,7 +5,6 @@ import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import type { OllamaMessage } from '../src/types/inference.js'
 import {
-  shouldCompact,
   splitForCompaction,
   buildCompactionPrompt,
   buildCompactedMessages,
@@ -34,18 +33,6 @@ function buildConversation(turns: number): OllamaMessage[]
 
   return messages
 }
-
-test('shouldCompact triggers when the conversation exceeds budget', () =>
-{
-  const messages = buildConversation(30)
-  const config: CompactionConfig = {
-    contextWindow: 2_000,
-    minRecentMessages: 5,
-    minMessagesForCompaction: 10,
-  }
-
-  assert.equal(shouldCompact(messages, config), true)
-})
 
 test('splitForCompaction splits the live region and never touches the prefix', () =>
 {
@@ -258,13 +245,9 @@ test('pruneToolResults removes old large tool results but keeps recent ones', ()
     { role: 'tool', tool_name: 'bash', content: 'recent output' },
   ]
 
-  const { prunedMessages, prunedCount, tokensSaved } = pruneToolResults(
-    messages,
-    1
-  )
+  const { prunedMessages, prunedCount } = pruneToolResults(messages, 1)
 
   assert.equal(prunedCount, 1)
-  assert.ok(tokensSaved > 0)
   assert.match(prunedMessages[1]!.content, /tool result pruned/)
   assert.equal(prunedMessages[3]!.content, 'recent output')
 })

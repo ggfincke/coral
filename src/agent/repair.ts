@@ -2,6 +2,8 @@
 // recover tool calls emitted as text & nudge stalled turns
 
 import type { OllamaToolCall } from '../types/inference.js'
+import { tryParseJson } from '../utils/json.js'
+import { isPlainObject } from '../utils/guards.js'
 
 // injected when a turn ends w/ no tool call, no content, & no thinking
 export const STALL_NUDGE_MESSAGE =
@@ -85,18 +87,6 @@ function extractTrailingJson(content: string): string | null
   return null
 }
 
-function tryParseJson(text: string): unknown
-{
-  try
-  {
-    return JSON.parse(text)
-  }
-  catch
-  {
-    return undefined
-  }
-}
-
 // accept {name, arguments}, {function: {...}}, {tool_calls: [...]}, & arrays
 function normalizeCalls(
   value: unknown,
@@ -140,9 +130,4 @@ function coerceArguments(value: unknown): Record<string, unknown> | null
   }
 
   return null
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown>
-{
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

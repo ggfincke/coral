@@ -29,7 +29,6 @@ interface FakeChunk
 type TestAgent = Agent & {
   client: {
     startKeepAlive: (model: string) => void
-    stopKeepAlive?: () => void
     chatStream: () => AsyncGenerator<FakeChunk>
   }
   messages: OllamaMessage[]
@@ -51,8 +50,6 @@ async function makeAgent(
     dir,
     options
   ) as TestAgent
-
-  agent.client.stopKeepAlive?.()
 
   let streamCount = 0
   agent.client = {

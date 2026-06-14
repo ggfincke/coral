@@ -11,7 +11,7 @@ import {
 } from '../shared/project-tree.js'
 
 // max bytes to read from any single context file
-const MAX_FILE_BYTES = 8_192
+const MAX_CONTEXT_FILE_BYTES = 8_192
 
 // max total chars across all injected context (rough token budget: chars/4 ≈ tokens)
 const MAX_TOTAL_CHARS = 16_384
@@ -49,7 +49,7 @@ interface ContextFile
   content: string
 }
 
-// read a file up to MAX_FILE_BYTES, returning null if missing/unreadable
+// read a file up to MAX_CONTEXT_FILE_BYTES, returning null if missing/unreadable
 function readContextFile(path: string): string | null
 {
   try
@@ -57,9 +57,9 @@ function readContextFile(path: string): string | null
     const content = readFileSync(path, 'utf-8')
     if (!content) return null
 
-    if (content.length > MAX_FILE_BYTES)
+    if (content.length > MAX_CONTEXT_FILE_BYTES)
     {
-      return content.slice(0, MAX_FILE_BYTES) + '\n… (truncated)'
+      return content.slice(0, MAX_CONTEXT_FILE_BYTES) + '\n… (truncated)'
     }
     return content
   }

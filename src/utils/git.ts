@@ -2,6 +2,7 @@
 // shared git command execution helpers
 
 import { execFileSync } from 'node:child_process'
+import { DEFAULT_CHILD_PROCESS_MAX_BUFFER } from './process.js'
 
 export interface GitCommandResult
 {
@@ -19,7 +20,6 @@ export interface GitCommandOptions
 }
 
 const DEFAULT_GIT_TIMEOUT = 10_000
-const DEFAULT_GIT_MAX_BUFFER = 1024 * 1024
 
 // returns trimmed raw output (empty string when git produced none) — the
 // display placeholder for empties belongs to the calling tool/display layer
@@ -31,7 +31,7 @@ export function runGitCommand(
 {
   const {
     timeout = DEFAULT_GIT_TIMEOUT,
-    maxBuffer = DEFAULT_GIT_MAX_BUFFER,
+    maxBuffer = DEFAULT_CHILD_PROCESS_MAX_BUFFER,
     allowStdoutOnError = false,
   } = options
 

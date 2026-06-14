@@ -8,7 +8,8 @@ import { renderMarkdownToAnsi } from './markdown.js'
 import { formatElapsed } from './metrics.js'
 import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from './theme.js'
-import { wrapLines } from './wrap.js'
+import { SOFT_WRAP_OPTIONS, wrapLines } from './wrap.js'
+import { allTools } from '../tools/index.js'
 
 // block types w/ richer data for tool calls & results
 
@@ -97,30 +98,23 @@ const FINALIZED_BLOCK_CACHE = new WeakMap<
   Map<number, CachedLines>
 >()
 
-export function getSpinnerFrame(tick: number): string
+function getSpinnerFrame(tick: number): string
 {
   return SPINNER_FRAMES[tick % SPINNER_FRAMES.length]!
 }
 
-// format tool call args into a short summary
+// tool registry keyed by name for O(1) presentation lookups
+const TOOLS_BY_NAME = new Map(allTools.map((tool) => [tool.name, tool]))
+
+// format tool call args into a short summary, sourced from the tool's own
+// display metadata; unknown tools fall back to compact JSON
 export function summarizeToolArgs(
   toolName: string,
   args: Record<string, unknown>
 ): string
 {
-  if (toolName === 'bash') return String(args.command ?? '')
-  if (toolName === 'read_file') return String(args.path ?? '')
-  if (toolName === 'write_file') return String(args.path ?? '')
-  if (toolName === 'edit_file') return String(args.path ?? '')
-  if (toolName === 'grep')
-  {
-    const pattern = String(args.pattern ?? '')
-    const path = args.path ? ` ${args.path}` : ''
-    return `${pattern}${path}`
-  }
-  if (toolName === 'glob') return String(args.pattern ?? '')
-  if (toolName === 'list_files') return String(args.path ?? '.')
-  // fallback: compact JSON
+  const summarize = TOOLS_BY_NAME.get(toolName)?.display?.summarize
+  if (summarize) return summarize(args)
   const json = JSON.stringify(args)
   return json.length > 60 ? `${json.slice(0, 57)}...` : json
 }
@@ -147,34 +141,10 @@ function getCachedBlockLines(
   return lines
 }
 
-// tool-specific label used in the tool call header
+// tool-specific label used in the tool call header; unknown tools show the name
 function toolDisplayLabel(toolName: string): string
 {
-  switch (toolName)
-  {
-    case 'bash':
-      return 'Shell'
-    case 'read_file':
-      return 'Read'
-    case 'write_file':
-      return 'Write'
-    case 'edit_file':
-      return 'Edit'
-    case 'grep':
-      return 'Search'
-    case 'glob':
-      return 'Glob'
-    case 'list_files':
-      return 'List'
-    case 'git_status':
-      return 'Git Status'
-    case 'git_diff':
-      return 'Git Diff'
-    case 'git_log':
-      return 'Git Log'
-    default:
-      return toolName
-  }
+  return TOOLS_BY_NAME.get(toolName)?.display?.label ?? toolName
 }
 
 // format an in-progress tool call that depends on the current spinner frame
@@ -186,25 +156,38 @@ function formatPendingToolCall(
 {
   const spinner = style('primary')(getSpinnerFrame(spinnerTick))
   const label = toolDisplayLabel(block.toolName)
-  const argSummary = summarizeToolArgs(block.toolName, block.args)
-  const argDisplay =
-    block.toolName === 'bash'
-      ? chalk.dim('$ ') + chalk.white(argSummary)
-      : chalk.dim(argSummary)
+  const argDisplay = formatToolArgDisplay(block.toolName, block.args)
 
   const header = `   ${style('code')('│')} ${spinner} ${style('code')(label)} ${argDisplay}`
 
   return wrapLines(header, width)
 }
 
+// format assistant markdown into the '● Coral' header + wrapped body lines
+function formatAssistantText(content: string, width: number): string[]
+{
+  return [
+    '',
+    ` ${style('primary').bold('●')} ${style('muted')('Coral')}`,
+    ...wrapLines(renderMarkdownToAnsi(content), width - 3, '   '),
+  ]
+}
+
+// styled tool-arg summary — bash gets a '$ ' prefix, others dimmed
+function formatToolArgDisplay(
+  toolName: string,
+  args: Record<string, unknown>
+): string
+{
+  const argSummary = summarizeToolArgs(toolName, args)
+  return toolName === 'bash'
+    ? chalk.dim('$ ') + chalk.white(argSummary)
+    : chalk.dim(argSummary)
+}
+
 // format a finalized output block into styled terminal lines
 function formatFinalizedBlock(block: OutputBlock, width: number): string[]
 {
-  if (block.type === 'tool_call' && !block.status)
-  {
-    return formatPendingToolCall(block, width, 0)
-  }
-
   switch (block.type)
   {
     case 'user':
@@ -223,15 +206,7 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
     }
 
     case 'assistant':
-    {
-      const lines: string[] = []
-      lines.push('')
-      lines.push(` ${style('primary').bold('●')} ${style('muted')('Coral')}`)
-      lines.push(
-        ...wrapLines(renderMarkdownToAnsi(block.content), width - 3, '   ')
-      )
-      return lines
-    }
+      return formatAssistantText(block.content, width)
 
     case 'thinking':
     {
@@ -250,7 +225,6 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
     case 'tool_call':
     {
       const label = toolDisplayLabel(block.toolName)
-      const argSummary = summarizeToolArgs(block.toolName, block.args)
       const isError = block.status === 'error'
       const statusMark = isError ? style('error')('✗') : style('success')('✓')
       const duration =
@@ -258,10 +232,7 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
           ? chalk.dim(` ${formatElapsed(block.duration)}`)
           : ''
       const border = isError ? style('error')('│') : style('code')('│')
-      const argDisplay =
-        block.toolName === 'bash'
-          ? chalk.dim('$ ') + chalk.white(argSummary)
-          : chalk.dim(argSummary)
+      const argDisplay = formatToolArgDisplay(block.toolName, block.args)
 
       const header = `   ${border} ${statusMark} ${style('code')(label)} ${argDisplay}${duration}`
       return wrapLines(header, width)
@@ -337,11 +308,7 @@ function formatToolResultLines(
   {
     if (raw.length > maxWidth)
     {
-      const wrapped = wrapAnsi(raw, maxWidth, {
-        hard: false,
-        trim: false,
-        wordWrap: true,
-      }).split('\n')
+      const wrapped = wrapAnsi(raw, maxWidth, SOFT_WRAP_OPTIONS).split('\n')
       for (const segment of wrapped)
       {
         result.push(`   ${border}   ${textStyle(segment)}`)
@@ -417,11 +384,7 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
   // render streaming assistant text after reasoning
   if (streaming)
   {
-    transcript.push('')
-    transcript.push(` ${style('primary').bold('●')} ${style('muted')('Coral')}`)
-    transcript.push(
-      ...wrapLines(renderMarkdownToAnsi(streaming), width - 3, '   ')
-    )
+    transcript.push(...formatAssistantText(streaming, width))
   }
   else if (showWaitingIndicator)
   {

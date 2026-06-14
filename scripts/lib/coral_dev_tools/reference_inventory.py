@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Iterable
 import re
 
+from .report_render import render_counter, render_counter_md
+
 
 TEXT_SUFFIXES = {
     ".cjs",
@@ -277,16 +279,6 @@ def inventory_reference_tree(root: Path, *, top: int = 12) -> ReferenceInventory
     )
 
 
-def render_counter(title: str, counter: Counter[str]) -> list[str]:
-    lines = [title]
-    if not counter:
-        lines.append("  (none)")
-        return lines
-    for name, count in counter.most_common():
-        lines.append(f"  {name}: {count}")
-    return lines
-
-
 def render_hits(title: str, hits: list[FileHit]) -> list[str]:
     lines = [title]
     if not hits:
@@ -322,15 +314,6 @@ def render_text(report: ReferenceInventory) -> str:
         *render_hits("Permission/policy files", report.permission_files),
     ]
     return "\n".join(lines)
-
-
-def render_counter_md(title: str, counter: Counter[str]) -> list[str]:
-    lines = [f"## {title}", ""]
-    if not counter:
-        return [*lines, "_None._"]
-    lines.extend(["| Name | Count |", "|---|---:|"])
-    lines.extend(f"| `{name}` | {count} |" for name, count in counter.most_common())
-    return lines
 
 
 def render_hits_md(title: str, hits: list[FileHit]) -> list[str]:

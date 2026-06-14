@@ -3,7 +3,15 @@
 
 import type { Theme } from './theme.js'
 
-export const CORAL_REEF: Theme = {
+// all built-in themes share one heading-role mapping
+const DEFAULT_HEADINGS: Theme['headings'] = [
+  'primary',
+  'user',
+  'accent',
+  'code',
+]
+
+const CORAL_REEF: Theme = {
   name: 'coral-reef',
   label: 'Coral Reef',
   description: 'warm coral & ocean teal (default)',
@@ -19,10 +27,10 @@ export const CORAL_REEF: Theme = {
     thinking: { r: 215, g: 130, b: 200 },
     codeBg: { r: 30, g: 40, b: 50 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
-export const DEEP_SEA: Theme = {
+const DEEP_SEA: Theme = {
   name: 'deep-sea',
   label: 'Deep Sea',
   description: 'bioluminescent cyan & violet for dark terminals',
@@ -38,10 +46,10 @@ export const DEEP_SEA: Theme = {
     thinking: { r: 150, g: 130, b: 220 },
     codeBg: { r: 16, g: 28, b: 44 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
-export const SUNSET_TIDE: Theme = {
+const SUNSET_TIDE: Theme = {
   name: 'sunset-tide',
   label: 'Sunset Tide',
   description: 'warm coral, pink & amber',
@@ -57,10 +65,10 @@ export const SUNSET_TIDE: Theme = {
     thinking: { r: 240, g: 120, b: 170 },
     codeBg: { r: 45, g: 28, b: 24 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
-export const KELP_FOREST: Theme = {
+const KELP_FOREST: Theme = {
   name: 'kelp-forest',
   label: 'Kelp Forest',
   description: 'greens, teals & earthy sand',
@@ -76,10 +84,10 @@ export const KELP_FOREST: Theme = {
     thinking: { r: 170, g: 160, b: 200 },
     codeBg: { r: 24, g: 38, b: 30 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
-export const TIDE_POOL: Theme = {
+const TIDE_POOL: Theme = {
   name: 'tide-pool',
   label: 'Tide Pool',
   description: 'soft pastel pinks, teals & lavender',
@@ -95,10 +103,10 @@ export const TIDE_POOL: Theme = {
     thinking: { r: 190, g: 150, b: 220 },
     codeBg: { r: 36, g: 36, b: 46 },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
-export const ADAPTIVE: Theme = {
+const ADAPTIVE: Theme = {
   name: 'adaptive',
   label: 'Adaptive',
   description: "inherits your terminal's ANSI palette",
@@ -114,7 +122,7 @@ export const ADAPTIVE: Theme = {
     thinking: { ansi: 'magenta' },
     codeBg: { ansi: 'blackBright' },
   },
-  headings: ['primary', 'user', 'accent', 'code'],
+  headings: DEFAULT_HEADINGS,
 }
 
 export const THEMES: readonly Theme[] = [

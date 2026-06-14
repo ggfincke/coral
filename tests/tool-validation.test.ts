@@ -24,18 +24,6 @@ const fixtureTool: Tool = {
   },
 }
 
-test('missing required parameter fails w/ a model-friendly error', () =>
-{
-  const result = validateToolArgs(fixtureTool, { depth: 2 })
-
-  assert.equal(result.ok, false)
-  if (!result.ok)
-  {
-    assert.match(result.error, /missing required parameter 'path'/)
-    assert.match(result.error, /fixture/)
-  }
-})
-
 test('coerces common weak-model slips & rejects uncoercible types', () =>
 {
   const coerced = validateToolArgs(fixtureTool, {

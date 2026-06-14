@@ -12,6 +12,14 @@ export interface ToolResult
   diff?: string
 }
 
+// TUI presentation metadata — single source of truth for the tool's header
+// label & one-line arg summary, so renderers don't keep per-tool string ladders
+export interface ToolDisplay
+{
+  label: string
+  summarize?(args: Record<string, unknown>): string
+}
+
 // tool definition w/ schema & execute handler
 export interface Tool
 {
@@ -20,6 +28,8 @@ export interface Tool
   parameters: JsonSchema
   // read-only tools have no side effects — safe to batch & run in parallel
   readOnly?: boolean
+  // omitted label falls back to the tool name; omitted summarize to compact JSON
+  display?: ToolDisplay
   execute(args: Record<string, unknown>): Promise<ToolResult>
 }
 

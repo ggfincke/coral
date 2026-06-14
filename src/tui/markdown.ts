@@ -91,9 +91,6 @@ function renderInline(tokens: Token[] | undefined): string
       case 'br':
         output += '\n'
         break
-      case 'html':
-        output += token.text
-        break
       default:
         output += 'text' in token ? token.text : token.raw
         break
@@ -198,7 +195,8 @@ function renderBlock(token: Token, indent: number): string[]
     case 'blockquote':
     {
       const quoted = renderBlocks((token as Tokens.Blockquote).tokens, 0)
-      return prefixLines(quoted, pad + chalk.dim('│ '), pad + chalk.dim('│ '))
+      const bq = pad + chalk.dim('│ ')
+      return prefixLines(quoted, bq)
     }
     case 'list':
       return renderList(token as Tokens.List, indent)

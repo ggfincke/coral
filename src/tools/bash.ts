@@ -4,12 +4,14 @@
 import { exec } from 'node:child_process'
 import type { Tool, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
+import { DEFAULT_CHILD_PROCESS_MAX_BUFFER } from '../utils/process.js'
 
 const DEFAULT_TIMEOUT = 30_000
 
 export const bashTool: Tool = {
   name: 'bash',
   description: 'Execute a bash command and return its output.',
+  display: { label: 'Shell', summarize: (args) => String(args.command ?? '') },
   parameters: {
     type: 'object',
     properties: {
@@ -30,7 +32,7 @@ export const bashTool: Tool = {
     {
       exec(
         command,
-        { cwd: getCwd(), timeout, maxBuffer: 1024 * 1024 },
+        { cwd: getCwd(), timeout, maxBuffer: DEFAULT_CHILD_PROCESS_MAX_BUFFER },
         (err, stdout, stderr) =>
         {
           if (err)

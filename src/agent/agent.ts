@@ -43,7 +43,7 @@ import {
 import { resolveContextConfig } from '../config/context.js'
 
 export type { CompactionResult } from './compaction.js'
-import { toError } from '../utils/errors.js'
+import { toError, toErrorMessage } from '../utils/errors.js'
 import { capToolOutput } from './tool-output.js'
 import {
   parseToolCallsFromContent,
@@ -238,6 +238,8 @@ export class Agent
   // per-instance toolset & its Ollama format — subagents run a restricted subset
   private tools: Tool[]
   private ollamaTools: OllamaTool[]
+  // name -> tool for O(1) lookup; the toolset is fixed for the agent's lifetime
+  private toolsByName: Map<string, Tool>
   private maxIterations?: number
   private estimatedTokenCount = 0
   // number of leading messages that stay byte-stable across compaction — the
@@ -282,6 +284,7 @@ export class Agent
     this.thinkMode = options.think ?? true
     this.tools = options.tools ?? allTools
     this.ollamaTools = this.tools.map(toolToOllamaFormat)
+    this.toolsByName = new Map(this.tools.map((t) => [t.name, t]))
     this.maxIterations = options.maxIterations
 
     // set the global working directory — all tools resolve paths against this
@@ -303,11 +306,7 @@ export class Agent
     }
 
     // inject system prompt as first message
-    const systemContent = buildSystemPrompt({
-      model,
-      cwd: getCwd(),
-      tools: this.tools,
-    })
+    const systemContent = this.buildSystemContent(model)
     this.pushMessage({ role: 'system', content: systemContent })
 
     // expose this agent as the task-tool subagent runner (closes over this.model
@@ -372,7 +371,6 @@ export class Agent
   // stop client background work & unload the active model
   async dispose(): Promise<void>
   {
-    this.client.stopKeepAlive()
     await this.client.unloadModel(this.model)
   }
 
@@ -407,8 +405,7 @@ export class Agent
   {
     const previousModel = this.model
 
-    // unload the old model & stop its keep-alive
-    this.client.stopKeepAlive()
+    // unload the old model
     await this.client.unloadModel(previousModel)
 
     // swap to the new model & reset cached context window + pinned num_ctx
@@ -418,11 +415,7 @@ export class Agent
     this.numCtx = 0
 
     // rebuild the system prompt w/ the new model name
-    const systemContent = buildSystemPrompt({
-      model: nextModel,
-      cwd: getCwd(),
-      tools: this.tools,
-    })
+    const systemContent = this.buildSystemContent(nextModel)
 
     // replace messages[0] (the system prompt) in-place
     if (this.messages.length > 0 && this.messages[0]!.role === 'system')
@@ -532,12 +525,6 @@ export class Agent
     }
   }
 
-  // get the cached context window size (0 = unknown)
-  getContextWindowSize(): number
-  {
-    return this.contextWindowSize
-  }
-
   // get the total number of successful compaction events this session
   getCompactionCount(): number
   {
@@ -629,6 +616,34 @@ export class Agent
   {
     this.onCompactionCallback = undefined
     this.onCompactionStartCallback = undefined
+  }
+
+  // build the system prompt for a model — same wiring at construct & switch
+  private buildSystemContent(model: string): string
+  {
+    return buildSystemPrompt({ model, cwd: getCwd(), tools: this.tools })
+  }
+
+  // clean run() exit: drop compaction callbacks & signal completion
+  private finishRun(events: AgentEvents): void
+  {
+    this.clearCompactionCallbacks()
+    events.onDone()
+  }
+
+  // on abort, record whatever streamed so far as a partial assistant message
+  private recordPartialOnAbort(
+    fullContent: string,
+    fullThinking: string
+  ): void
+  {
+    if (!fullContent && !fullThinking) return
+    const partial: OllamaMessage = {
+      role: 'assistant',
+      content: fullContent || '(interrupted)',
+    }
+    if (fullThinking) partial.thinking = fullThinking
+    this.pushMessage(partial)
   }
 
   // build a model-generated summary for older messages
@@ -748,7 +763,7 @@ export class Agent
   // global registry) keeps subagents from reaching tools outside their subset
   private getOwnTool(name: string): Tool | undefined
   {
-    return this.tools.find((t) => t.name === name)
+    return this.toolsByName.get(name)
   }
 
   // canonicalize hallucinated name variants (Read_File -> read_file) in place
@@ -817,7 +832,7 @@ export class Agent
     {
       return {
         output: '',
-        error: `Tool execution failed for ${toolName}: ${toError(err).message}`,
+        error: `Tool execution failed for ${toolName}: ${toErrorMessage(err)}`,
       }
     }
   }
@@ -960,8 +975,7 @@ export class Agent
       // check for abort before each iteration
       if (signal?.aborted)
       {
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.finishRun(events)
         return
       }
 
@@ -969,8 +983,7 @@ export class Agent
       iterations++
       if (this.maxIterations !== undefined && iterations > this.maxIterations)
       {
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.finishRun(events)
         return
       }
 
@@ -1053,18 +1066,8 @@ export class Agent
         if (signal?.aborted)
         {
           // record whatever we streamed so far as a partial message
-          if (fullContent || fullThinking)
-          {
-            const partial: OllamaMessage = {
-              role: 'assistant',
-              content: fullContent || '(interrupted)',
-            }
-            if (fullThinking) partial.thinking = fullThinking
-            this.pushMessage(partial)
-          }
-
-          this.clearCompactionCallbacks()
-          events.onDone()
+          this.recordPartialOnAbort(fullContent, fullThinking)
+          this.finishRun(events)
           return
         }
 
@@ -1076,18 +1079,8 @@ export class Agent
       // aborted mid-stream — save partial content & stop
       if (signal?.aborted)
       {
-        if (fullContent || fullThinking)
-        {
-          const partial: OllamaMessage = {
-            role: 'assistant',
-            content: fullContent || '(interrupted)',
-          }
-          if (fullThinking) partial.thinking = fullThinking
-          this.pushMessage(partial)
-        }
-
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.recordPartialOnAbort(fullContent, fullThinking)
+        this.finishRun(events)
         return
       }
 
@@ -1143,8 +1136,7 @@ export class Agent
           continue
         }
 
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.finishRun(events)
         return
       }
 
@@ -1199,7 +1191,7 @@ export class Agent
           }
           catch (err)
           {
-            const errorMsg = `Parallel tool execution failed: ${toError(err).message}`
+            const errorMsg = `Parallel tool execution failed: ${toErrorMessage(err)}`
             for (const item of batch)
             {
               events.onToolResult(item.name, '', errorMsg, item.id)
@@ -1269,7 +1261,7 @@ export class Agent
             // record a result for the announced call so history stays consistent
             const errorMsg = signal?.aborted
               ? 'Tool call interrupted'
-              : `Tool approval failed for ${toolName}: ${toError(err).message}`
+              : `Tool approval failed for ${toolName}: ${toErrorMessage(err)}`
             events.onToolResult(toolName, '', errorMsg, callId)
             toolResults.push(this.buildToolMessage(toolName, '', errorMsg))
 
@@ -1328,8 +1320,7 @@ export class Agent
 
       if (abortedDuringTools)
       {
-        this.clearCompactionCallbacks()
-        events.onDone()
+        this.finishRun(events)
         return
       }
     }

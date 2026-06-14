@@ -2,7 +2,7 @@
 // find files by name pattern via ripgrep
 
 import type { Tool, ToolResult } from './tool.js'
-import { execRipgrep } from './ripgrep-utils.js'
+import { execRipgrep, NO_MATCHING_FILES_MESSAGE } from './ripgrep-utils.js'
 import { resolvePath } from '../cwd.js'
 import { truncateOutput } from '../utils/truncate-output.js'
 
@@ -13,6 +13,7 @@ export const globTool: Tool = {
   description:
     'Find files by name/path glob pattern. Returns matching file paths sorted by modification time (newest first). Requires ripgrep (rg) to be installed.',
   readOnly: true,
+  display: { label: 'Glob', summarize: (args) => String(args.pattern ?? '') },
   parameters: {
     type: 'object',
     properties: {
@@ -42,8 +43,8 @@ export const globTool: Tool = {
       path,
     ]
 
-    const result = await execRipgrep(rgArgs, 'No matching files found.')
-    if (result.error || result.output === 'No matching files found.')
+    const result = await execRipgrep(rgArgs, NO_MATCHING_FILES_MESSAGE)
+    if (result.error || result.output === NO_MATCHING_FILES_MESSAGE)
       return result
 
     return { output: truncateOutput(result.output, MAX_FILES, 'files') }

@@ -45,11 +45,5 @@ export const allTools: Tool[] = [
 // task tools, so subagents have no side effects & cannot recurse
 export const subagentTools: Tool[] = allTools.filter((t) => t.readOnly === true)
 
-// find a tool by name
-export function getToolByName(name: string): Tool | undefined
-{
-  return allTools.find((t) => t.name === name)
-}
-
 export type { Tool, ToolResult } from './tool.js'
 export { toolToOllamaFormat } from './tool.js'

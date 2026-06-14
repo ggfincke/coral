@@ -17,16 +17,19 @@ function truncateToWidth(text: string, width: number): string
   )
 }
 
+// fixed-label stages; 'idle' & unmapped values fall through to 'ready'
+const STAGE_LABELS: Partial<Record<RunStage, string>> = {
+  waiting: 'waiting for model',
+  thinking: 'thinking',
+  responding: 'responding',
+  compacting: 'compacting context',
+}
+
 export function describeRunStage(stage: RunStage): string
 {
-  if (stage === 'waiting') return 'waiting for model'
-  if (stage === 'thinking') return 'thinking'
-  if (stage === 'responding') return 'responding'
-  if (stage === 'compacting') return 'compacting context'
-  if (stage.startsWith('tool:'))
-  {
-    return `running ${stage.slice(5)}`
-  }
+  const label = STAGE_LABELS[stage]
+  if (label) return label
+  if (stage.startsWith('tool:')) return `running ${stage.slice(5)}`
   return 'ready'
 }
 

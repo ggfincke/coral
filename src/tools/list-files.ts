@@ -6,6 +6,7 @@ import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { Tool, ToolResult } from './tool.js'
 import { resolvePath } from '../cwd.js'
+import { clamp } from '../utils/clamp.js'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
 import {
   formatProjectTreeEntryName,
@@ -14,6 +15,7 @@ import {
 
 const MAX_ENTRIES = 200
 const DEFAULT_DEPTH = 2
+const MAX_DEPTH = 5
 const INDENT = '  '
 
 // directories to always skip
@@ -125,6 +127,7 @@ export const listFilesTool: Tool = {
   description:
     "List directory contents as an indented tree. Directories are marked w/ trailing '/'. Skips .git, node_modules, & other common noise directories.",
   readOnly: true,
+  display: { label: 'List', summarize: (args) => String(args.path ?? '.') },
   parameters: {
     type: 'object',
     properties: {
@@ -134,7 +137,7 @@ export const listFilesTool: Tool = {
       },
       depth: {
         type: 'number',
-        description: 'Max recursion depth (default: 2, max: 5)',
+        description: `Max recursion depth (default: ${DEFAULT_DEPTH}, max: ${MAX_DEPTH})`,
       },
     },
     required: [],
@@ -143,7 +146,7 @@ export const listFilesTool: Tool = {
   {
     const path = resolvePath((args.path as string) ?? '.')
     const rawDepth = (args.depth as number) ?? DEFAULT_DEPTH
-    const depth = Math.max(1, Math.min(5, Math.floor(rawDepth)))
+    const depth = clamp(Math.floor(rawDepth), 1, MAX_DEPTH)
 
     // verify the path is a directory
     try

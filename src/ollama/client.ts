@@ -9,6 +9,7 @@ import type {
   ModelInfo,
 } from '../types/inference.js'
 import { DEFAULT_OLLAMA_HOST } from './host.js'
+import { toErrorMessage } from '../utils/errors.js'
 export type {
   ChatRequest,
   ChatResponse,
@@ -22,6 +23,7 @@ export type {
 } from '../types/inference.js'
 
 const DEFAULT_KEEP_ALIVE = '10m'
+const JSON_HEADERS = { 'Content-Type': 'application/json' } as const
 const THINK_FALLBACK_STATUS = new Set([400, 404, 422])
 type ThinkSupport = 'unknown' | 'supported' | 'unsupported'
 
@@ -57,6 +59,8 @@ export class OllamaClient
     includeThink: boolean
   ): Record<string, unknown>
   {
+    // ! never add a `format` field to tool-bearing requests — it silently
+    // ! empties tool_calls (ollama#8095)
     // num_ctx is a top-level convenience field — Ollama expects it under options
     const { num_ctx, ...rest } = request
     const body: Record<string, unknown> = {
@@ -102,7 +106,7 @@ export class OllamaClient
     {
       return await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify(body),
         signal,
       })
@@ -110,7 +114,7 @@ export class OllamaClient
     catch (err)
     {
       if (signal?.aborted) throw err
-      const detail = err instanceof Error ? err.message : String(err)
+      const detail = toErrorMessage(err)
       throw new Error(
         `Cannot reach Ollama at ${this.baseUrl} — the server may be down, or ` +
           `the request may have exceeded the model's context or memory (${detail})`
@@ -175,12 +179,6 @@ export class OllamaClient
     this.lastModel = model
   }
 
-  // keep API compatibility w/ existing call sites
-  stopKeepAlive(): void
-  {
-    // no-op
-  }
-
   // unload a tracked model immediately
   async unloadModel(model = this.lastModel): Promise<void>
   {
@@ -190,7 +188,7 @@ export class OllamaClient
     {
       await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         body: JSON.stringify({
           model,
           messages: [],
@@ -218,10 +216,10 @@ export class OllamaClient
   {
     const res = await fetch(`${this.baseUrl}/api/show`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ model }),
     })
-    if (!res.ok) throw new Error(`Ollama API error: ${res.status}`)
+    if (!res.ok) throwApiError(res.status, '')
 
     const data = (await res.json()) as {
       model_info?: Record<string, unknown>
@@ -261,7 +259,7 @@ export class OllamaClient
   async listModels(): Promise<Model[]>
   {
     const res = await fetch(`${this.baseUrl}/api/tags`)
-    if (!res.ok) throw new Error(`Ollama API error: ${res.status}`)
+    if (!res.ok) throwApiError(res.status, '')
     const data = (await res.json()) as { models: Model[] }
     return data.models
   }
@@ -277,7 +275,7 @@ export class OllamaClient
 
     const res = await fetch(`${this.baseUrl}/api/embed`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({
         model,
         input,

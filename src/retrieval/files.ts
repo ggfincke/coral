@@ -7,7 +7,7 @@ import { join, relative, sep } from 'node:path'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
 import type { SourceFile } from './types.js'
 
-const MAX_FILE_BYTES = 512 * 1024
+const MAX_INDEXABLE_FILE_BYTES = 512 * 1024
 const MAX_PROJECT_FILES = 2_000
 const TEXT_SAMPLE_BYTES = 4_096
 const IGNORED_ENTRIES = createIgnoredEntrySet(['.coral', '.coral-retrieval'])
@@ -50,7 +50,6 @@ async function readSourceFile(
 
   return {
     path: fileStat.path,
-    absolutePath,
     size: fileStat.size,
     mtimeMs: fileStat.mtimeMs,
     sha256: createHash('sha256').update(buffer).digest('hex'),
@@ -101,7 +100,7 @@ export async function collectIndexableFiles(
       if (!entry.isFile()) continue
 
       const info = await stat(path)
-      if (!info.isFile() || info.size > MAX_FILE_BYTES) continue
+      if (!info.isFile() || info.size > MAX_INDEXABLE_FILE_BYTES) continue
 
       const fileStat: ProjectFileStat = {
         path: toProjectPath(cwd, path),

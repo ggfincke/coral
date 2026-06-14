@@ -1,7 +1,7 @@
 // src/tui/prompt-input.tsx
 // inline prompt input w/ unified keyboard, wheel, & safe text insertion
 
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { Text } from 'ink'
 import chalk from 'chalk'
 import {
@@ -39,20 +39,10 @@ interface CursorState
   cursorWidth: number
 }
 
-export function isThinkingToggleShortcut(
-  input: string,
-  key: CoralKey
-): boolean
+// ctrl + a specific letter — pass the letter pre-lowercased
+function isCtrlLetter(input: string, key: CoralKey, letter: string): boolean
 {
-  return key.ctrl && input.toLowerCase() === 't'
-}
-
-export function isPermissionToggleShortcut(
-  input: string,
-  key: CoralKey
-): boolean
-{
-  return key.ctrl && input.toLowerCase() === 'y'
+  return key.ctrl && input.toLowerCase() === letter
 }
 
 export default function PromptInput({
@@ -182,12 +172,12 @@ export default function PromptInput({
         onHistoryDown()
         return
       }
-      if (isThinkingToggleShortcut(input, key))
+      if (isCtrlLetter(input, key, 't'))
       {
         onToggleThinking()
         return
       }
-      if (isPermissionToggleShortcut(input, key))
+      if (isCtrlLetter(input, key, 'y'))
       {
         onTogglePermissions()
         return
@@ -202,7 +192,7 @@ export default function PromptInput({
         onInterrupt()
         return
       }
-      if (key.tab || (key.shift && key.tab))
+      if (key.tab)
       {
         return
       }

@@ -4,9 +4,10 @@
 import type { OllamaMessage } from '../types/inference.js'
 
 // rough token estimate: ~4 chars per token (conservative for English + code)
-const CHARS_PER_TOKEN = 4
+export const CHARS_PER_TOKEN = 4
 
 // default context window size (tokens) — conservative floor for the model lineup
+// mirrors config/context.ts DEFAULT_MAX_NUM_CTX (the num_ctx ceiling cap)
 const DEFAULT_CONTEXT_WINDOW = 32_768
 
 // prune old tool results when estimated tokens exceed this fraction of context
@@ -119,21 +120,8 @@ export function shouldCompactByTotal(
   return totalTokens > config.contextWindow * SUMMARIZE_THRESHOLD
 }
 
-// check whether summarization should trigger
-export function shouldCompact(
-  messages: OllamaMessage[],
-  config: CompactionConfig = DEFAULT_COMPACTION_CONFIG
-): boolean
-{
-  return shouldCompactByTotal(
-    messages.length,
-    estimateTotalTokens(messages),
-    config
-  )
-}
-
 // build a prune marker for a tool result being replaced
-export function buildPruneMarker(msg: OllamaMessage): string
+function buildPruneMarker(msg: OllamaMessage): string
 {
   const toolName = msg.tool_name ?? 'tool'
   const tokens = estimateMessageTokens(msg)
@@ -156,7 +144,6 @@ export function pruneToolResults(
 ): {
   prunedMessages: OllamaMessage[]
   prunedCount: number
-  tokensSaved: number
 }
 {
   // find tool-role message indices at or after the frozen prefix
@@ -172,7 +159,6 @@ export function pruneToolResults(
   )
 
   let prunedCount = 0
-  let tokensSaved = 0
   const prunedMessages: OllamaMessage[] = []
 
   for (let i = 0; i < messages.length; i++)
@@ -182,17 +168,14 @@ export function pruneToolResults(
     if (msg.role === 'tool' && i >= startIndex && !protectedSet.has(i))
     {
       const marker = buildPruneMarker(msg)
-      const originalTokens = estimateMessageTokens(msg)
       const prunedMsg: OllamaMessage = {
         role: 'tool',
         content: marker,
         tool_name: msg.tool_name,
       }
-      const markerTokens = estimateMessageTokens(prunedMsg)
 
       prunedMessages.push(prunedMsg)
       prunedCount++
-      tokensSaved += originalTokens - markerTokens
     }
     else
     {
@@ -200,7 +183,7 @@ export function pruneToolResults(
     }
   }
 
-  return { prunedMessages, prunedCount, tokensSaved }
+  return { prunedMessages, prunedCount }
 }
 
 // strip thinking blocks from messages before feeding to the summarizer

@@ -117,7 +117,6 @@ interface ParsedKey
   option: boolean
   sequence: string
   raw?: string
-  code?: string
 }
 
 function isShiftKey(code: string): boolean
@@ -166,16 +165,16 @@ export function parseKeypress(input: string | Buffer = ''): ParsedKey
     raw: value,
   }
 
-  key.sequence = key.sequence || value || key.name
-
   if (value === '\r')
   {
     key.raw = undefined
     key.name = 'return'
   }
+  // keep a bare '\n' (pasted newline) as literal input — else it falls through
+  // to the ctrl-letter branch below as Ctrl+J. Enter arrives as '\r' (above).
   else if (value === '\n')
   {
-    key.name = 'enter'
+    key.name = ''
   }
   else if (value === '\t')
   {
@@ -246,7 +245,6 @@ export function parseKeypress(input: string | Buffer = ''): ParsedKey
     key.ctrl = !!(modifier & 4)
     key.meta = !!(modifier & 2)
     key.shift = !!(modifier & 1)
-    key.code = code
     key.name = KEY_NAME[code] ?? ''
     key.shift = isShiftKey(code) || key.shift
     key.ctrl = isCtrlKey(code) || key.ctrl

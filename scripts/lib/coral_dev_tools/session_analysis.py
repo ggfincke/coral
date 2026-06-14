@@ -10,10 +10,14 @@ from typing import Any
 import hashlib
 import json
 
+from .report_render import render_counter, render_counter_md
+
 
 JsonObject = dict[str, Any]
 
+# ! keep in sync w/ src/agent/compaction.ts CHARS_PER_TOKEN
 CHARS_PER_TOKEN = 4
+# ! keep in sync w/ src/session/store.ts SESSION_INDEX_VERSION
 SESSION_INDEX_VERSION = 1
 RISKY_TOOLS = {"bash", "write_file", "edit_file"}
 
@@ -511,25 +515,9 @@ def analyze_coral_home(
     )
 
 
-def ranked(counter: Counter[str], limit: int) -> list[tuple[str, int]]:
-    if limit <= 0:
-        return []
-    return counter.most_common(limit)
-
-
 def plural(count: int, noun: str) -> str:
     suffix = "" if count == 1 else "s"
     return f"{count} {noun}{suffix}"
-
-
-def render_counter(title: str, counter: Counter[str], limit: int) -> list[str]:
-    lines = [title]
-    if not counter:
-        lines.append("  (none)")
-        return lines
-    for name, count in ranked(counter, limit):
-        lines.append(f"  {name}: {count}")
-    return lines
 
 
 def render_sessions(sessions: list[SessionMetrics], limit: int) -> list[str]:
@@ -602,18 +590,27 @@ def render_issues(issues: list[Issue], limit: int) -> list[str]:
     return lines
 
 
+def report_totals(report: AnalysisReport) -> tuple[int, int, int, int]:
+    return (
+        sum(session.message_count for session in report.sessions),
+        sum(session.tool_calls for session in report.sessions),
+        sum(session.compaction_count for session in report.sessions),
+        sum(session.estimated_tokens for session in report.sessions),
+    )
+
+
 def render_text(
     report: AnalysisReport,
     *,
     top: int = 8,
     show_prompts: bool = False,
 ) -> str:
-    total_messages = sum(session.message_count for session in report.sessions)
-    total_tool_calls = sum(session.tool_calls for session in report.sessions)
-    total_compactions = sum(session.compaction_count for session in report.sessions)
-    total_estimated_tokens = sum(
-        session.estimated_tokens for session in report.sessions
-    )
+    (
+        total_messages,
+        total_tool_calls,
+        total_compactions,
+        total_estimated_tokens,
+    ) = report_totals(report)
 
     lines = [
         "Coral session analysis",
@@ -659,27 +656,18 @@ def markdown_table(rows: list[tuple[str, str]]) -> list[str]:
     return lines
 
 
-def render_counter_md(title: str, counter: Counter[str], limit: int) -> list[str]:
-    lines = [f"## {title}", ""]
-    if not counter:
-        return [*lines, "_None._"]
-    lines.extend(["| Name | Count |", "|---|---:|"])
-    lines.extend(f"| `{name}` | {count} |" for name, count in ranked(counter, limit))
-    return lines
-
-
 def render_markdown(
     report: AnalysisReport,
     *,
     top: int = 8,
     show_prompts: bool = False,
 ) -> str:
-    total_messages = sum(session.message_count for session in report.sessions)
-    total_tool_calls = sum(session.tool_calls for session in report.sessions)
-    total_compactions = sum(session.compaction_count for session in report.sessions)
-    total_estimated_tokens = sum(
-        session.estimated_tokens for session in report.sessions
-    )
+    (
+        total_messages,
+        total_tool_calls,
+        total_compactions,
+        total_estimated_tokens,
+    ) = report_totals(report)
 
     lines = [
         "# Coral Session Analysis",
@@ -755,12 +743,14 @@ def render_markdown(
 
     lines.extend(["", "## Integrity Checks", ""])
     if report.issues:
+        issue_limit = max(top, 1)
         lines.extend(["| Severity | Issue |", "|---|---|"])
-        for issue in report.issues[: max(top, 1)]:
+        for issue in report.issues[:issue_limit]:
             message = issue.message.replace("|", "\\|")
             lines.append(f"| {issue.severity} | {message} |")
-        if len(report.issues) > top:
-            lines.append(f"| info | {len(report.issues) - top} more issues hidden |")
+        if len(report.issues) > issue_limit:
+            hidden = len(report.issues) - issue_limit
+            lines.append(f"| info | {hidden} more issues hidden |")
     else:
         lines.append("_OK._")
 

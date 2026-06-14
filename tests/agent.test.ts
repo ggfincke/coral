@@ -42,7 +42,6 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
     dir
   ) as Agent & {
     client: {
-      stopKeepAlive?: () => void
       startKeepAlive: (model: string) => void
       unloadModel?: (model?: string) => Promise<void>
       chatStream: () => AsyncGenerator<{
@@ -52,8 +51,6 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
     }
     messages: OllamaMessage[]
   }
-
-  agent.client.stopKeepAlive?.()
 
   let streamCount = 0
   agent.client = {
@@ -190,7 +187,6 @@ test('Agent only asks approval for dangerous tools & records rejections as tool 
     dir
   ) as Agent & {
     client: {
-      stopKeepAlive?: () => void
       startKeepAlive: (model: string) => void
       unloadModel?: (model?: string) => Promise<void>
       chatStream: () => AsyncGenerator<{
@@ -200,8 +196,6 @@ test('Agent only asks approval for dangerous tools & records rejections as tool 
     }
     messages: OllamaMessage[]
   }
-
-  agent.client.stopKeepAlive?.()
 
   let streamCount = 0
   agent.client = {
@@ -300,7 +294,6 @@ test('aborting mid-tools records a reply for every announced tool_call', async (
     dir
   ) as Agent & {
     client: {
-      stopKeepAlive?: () => void
       startKeepAlive: (model: string) => void
       chatStream: () => AsyncGenerator<{
         message: OllamaMessage
@@ -310,7 +303,6 @@ test('aborting mid-tools records a reply for every announced tool_call', async (
     messages: OllamaMessage[]
   }
 
-  agent.client.stopKeepAlive?.()
   agent.client = {
     startKeepAlive()
     {},
@@ -384,57 +376,6 @@ test('aborting mid-tools records a reply for every announced tool_call', async (
   assert.match(bashReply?.content ?? '', /interrupted/i)
 })
 
-test('Agent.dispose unloads the active model on shutdown', async () =>
-{
-  const dir = await mkdtemp(join(tmpdir(), 'coral-dispose-'))
-  tempDirs.push(dir)
-
-  const unloadedModels: string[] = []
-
-  const agent = new Agent(
-    'fake-model',
-    'http://localhost:11434',
-    dir
-  ) as Agent & {
-    client: {
-      stopKeepAlive?: () => void
-      startKeepAlive: (model: string) => void
-      unloadModel: (model?: string) => Promise<void>
-      chatStream: () => AsyncGenerator<{
-        message: OllamaMessage
-        done: boolean
-      }>
-    }
-  }
-
-  agent.client.stopKeepAlive?.()
-  agent.client = {
-    stopKeepAlive()
-    {},
-    startKeepAlive()
-    {},
-    unloadModel(model)
-    {
-      unloadedModels.push(model ?? '')
-      return Promise.resolve()
-    },
-    async *chatStream()
-    {
-      yield {
-        message: {
-          role: 'assistant',
-          content: 'done',
-        },
-        done: true,
-      }
-    },
-  }
-
-  await agent.dispose()
-
-  assert.deepEqual(unloadedModels, ['fake-model'])
-})
-
 test('Agent stops after maxIterations tool-call rounds', async () =>
 {
   const dir = await mkdtemp(join(tmpdir(), 'coral-maxiter-'))
@@ -445,14 +386,12 @@ test('Agent stops after maxIterations tool-call rounds', async () =>
   }) as Agent & {
     client: {
       startKeepAlive: (model: string) => void
-      stopKeepAlive?: () => void
       chatStream: () => AsyncGenerator<{
         message: OllamaMessage
         done: boolean
       }>
     }
   }
-  agent.client.stopKeepAlive?.()
 
   // a model that always asks for one more (unknown) tool — without the cap the
   // loop would never terminate

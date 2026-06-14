@@ -7,7 +7,7 @@ const MAX_CHUNK_LINES = 80
 const OVERLAP_LINES = 10
 const MAX_CHUNK_CHARS = 6_000
 
-export function chunkText(content: string, path: string): CodeChunk[]
+export function chunkText(content: string): CodeChunk[]
 {
   const lines = content.split(/\r?\n/)
   while (lines.at(-1) === '')
@@ -40,7 +40,6 @@ export function chunkText(content: string, path: string): CodeChunk[]
     if (text)
     {
       chunks.push({
-        path,
         chunkIndex: chunks.length,
         startLine: start + 1,
         endLine: end,

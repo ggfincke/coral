@@ -50,17 +50,16 @@ export function useSessionPersistence(resumeSessionId?: string): {
       const messages = agent.getMessages()
       const model = agent.getModel()
       const cwd = getCwd()
-      const metaHint = sessionMetaRef.current
-        ? {
-            createdAt: sessionMetaRef.current.createdAt,
-            title: sessionMetaRef.current.title,
-            compactionCount: agent.getCompactionCount(),
-            lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
-          }
-        : {
-            compactionCount: agent.getCompactionCount(),
-            lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
-          }
+      const metaHint = {
+        compactionCount: agent.getCompactionCount(),
+        lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
+        ...(sessionMetaRef.current
+          ? {
+              createdAt: sessionMetaRef.current.createdAt,
+              title: sessionMetaRef.current.title,
+            }
+          : {}),
+      }
 
       const meta = sessionIdRef.current
         ? saveSession(sessionIdRef.current, model, cwd, messages, metaHint)

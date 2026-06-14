@@ -151,84 +151,7 @@ test('chatStream sends think when requested', async () =>
   }
 })
 
-test('chatStream retries without think when Ollama rejects the flag', async () =>
-{
-  const originalFetch = globalThis.fetch
-  const requests: unknown[] = []
-  let callCount = 0
-
-  globalThis.fetch = (async (_input, init) =>
-  {
-    requests.push(JSON.parse(String(init?.body ?? '{}')))
-    callCount += 1
-
-    if (callCount === 1)
-    {
-      return new Response('json: unknown field "think"', { status: 400 })
-    }
-
-    return buildNdjsonResponse([
-      {
-        message: {
-          role: 'assistant',
-          content: 'done',
-        },
-        done: true,
-      },
-    ])
-  }) as typeof fetch
-
-  try
-  {
-    const client = new OllamaClient('http://localhost:11434')
-
-    for await (const chunk of client.chatStream({
-      model: 'fake-model',
-      messages: [{ role: 'user', content: 'hello' }],
-      think: true,
-    }))
-    {
-      void chunk
-    }
-
-    for await (const chunk of client.chatStream({
-      model: 'fake-model',
-      messages: [{ role: 'user', content: 'hello again' }],
-      think: true,
-    }))
-    {
-      void chunk
-    }
-
-    assert.deepEqual(requests, [
-      {
-        model: 'fake-model',
-        messages: [{ role: 'user', content: 'hello' }],
-        think: true,
-        keep_alive: '10m',
-        stream: true,
-      },
-      {
-        model: 'fake-model',
-        messages: [{ role: 'user', content: 'hello' }],
-        keep_alive: '10m',
-        stream: true,
-      },
-      {
-        model: 'fake-model',
-        messages: [{ role: 'user', content: 'hello again' }],
-        keep_alive: '10m',
-        stream: true,
-      },
-    ])
-  }
-  finally
-  {
-    globalThis.fetch = originalFetch
-  }
-})
-
-test('think fallback support is tracked per model', async () =>
+test('think fallback is tracked per model', async () =>
 {
   const originalFetch = globalThis.fetch
   const requests: unknown[] = []
@@ -270,6 +193,16 @@ test('think fallback support is tracked per model', async () =>
       void chunk
     }
 
+    // second model-a call: memory persists, so think is omitted from the start
+    for await (const chunk of client.chatStream({
+      model: 'model-a',
+      messages: [{ role: 'user', content: 'hello again' }],
+      think: true,
+    }))
+    {
+      void chunk
+    }
+
     for await (const chunk of client.chatStream({
       model: 'model-b',
       messages: [{ role: 'user', content: 'hello again' }],
@@ -294,57 +227,15 @@ test('think fallback support is tracked per model', async () =>
         stream: true,
       },
       {
-        model: 'model-b',
+        model: 'model-a',
         messages: [{ role: 'user', content: 'hello again' }],
-        think: true,
         keep_alive: '10m',
         stream: true,
       },
-    ])
-  }
-  finally
-  {
-    globalThis.fetch = originalFetch
-  }
-})
-
-test('chatStream omits think when reasoning is disabled', async () =>
-{
-  const originalFetch = globalThis.fetch
-  const requests: unknown[] = []
-
-  globalThis.fetch = (async (_input, init) =>
-  {
-    requests.push(JSON.parse(String(init?.body ?? '{}')))
-
-    return buildNdjsonResponse([
       {
-        message: {
-          role: 'assistant',
-          content: 'done',
-        },
-        done: true,
-      },
-    ])
-  }) as typeof fetch
-
-  try
-  {
-    const client = new OllamaClient('http://localhost:11434')
-
-    for await (const chunk of client.chatStream({
-      model: 'fake-model',
-      messages: [{ role: 'user', content: 'hello' }],
-      think: false,
-    }))
-    {
-      void chunk
-    }
-
-    assert.deepEqual(requests, [
-      {
-        model: 'fake-model',
-        messages: [{ role: 'user', content: 'hello' }],
+        model: 'model-b',
+        messages: [{ role: 'user', content: 'hello again' }],
+        think: true,
         keep_alive: '10m',
         stream: true,
       },

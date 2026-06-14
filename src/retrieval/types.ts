@@ -13,7 +13,6 @@ export interface Embedder
 export interface SourceFile
 {
   path: string
-  absolutePath: string
   size: number
   mtimeMs: number
   sha256: string
@@ -22,7 +21,6 @@ export interface SourceFile
 
 export interface CodeChunk
 {
-  path: string
   chunkIndex: number
   startLine: number
   endLine: number

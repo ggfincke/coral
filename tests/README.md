@@ -31,7 +31,7 @@ We intentionally do not test:
 # run Node tests
 npm test
 
-# run Python dev-tool checks
+# compile-check the Python dev-tool scripts
 npm run check:dev-tools
 
 # run in watch mode

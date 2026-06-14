@@ -26,15 +26,6 @@ function historyPath(): string
   return join(getCoralHome(), 'history.jsonl')
 }
 
-// navigation state for Up/Down arrow recall
-export interface NavigationState
-{
-  // current index into the entries array (-1 = at draft, not navigating)
-  index: number
-  // stashed draft text from before navigation began
-  draft: string
-}
-
 // result of a navigation operation
 export interface NavigationResult
 {

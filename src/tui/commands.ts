@@ -27,7 +27,15 @@ import {
   formatDurationNs,
   formatTokenCount,
   formatTokensPerSecond,
+  pluralizeMessages,
 } from './metrics.js'
+import { toErrorMessage } from '../utils/errors.js'
+
+// brand header for command output — `Coral — <title>`
+function coralHeader(title: string): string
+{
+  return `${style('primary')('Coral')} ${style('muted')(`— ${title}`)}`
+}
 
 // context passed to every command — provides access to app state & setters
 export interface CommandContext
@@ -37,7 +45,6 @@ export interface CommandContext
   host: string
   yolo: boolean
   sessionLabelId: string | null
-  messageCount: number
   // push blocks into the transcript
   pushOutput: (...blocks: OutputBlock[]) => void
   // clear the transcript & reset conversation state
@@ -61,7 +68,7 @@ export interface CommandContext
 }
 
 // a single slash command
-export interface Command
+interface Command
 {
   name: string
   aliases?: string[]
@@ -70,7 +77,7 @@ export interface Command
 }
 
 // result of parsing a slash command from input
-export interface ParsedCommand
+interface ParsedCommand
 {
   name: string
   args: string
@@ -80,16 +87,9 @@ type ResumeTarget =
   | { type: 'target'; session: SessionMeta }
   | { type: 'message'; content: string }
 
-// result of dispatching a command
-export interface DispatchResult
-{
-  // true if input was recognized as a command (even if it failed)
-  handled: boolean
-}
-
 // parse a slash command from user input
 // returns null if input doesn't start w/ /
-export function parseCommand(input: string): ParsedCommand | null
+function parseCommand(input: string): ParsedCommand | null
 {
   const trimmed = input.trim()
   if (!trimmed.startsWith('/')) return null
@@ -110,10 +110,7 @@ export function parseCommand(input: string): ParsedCommand | null
 }
 
 // find a command by name or alias
-export function findCommand(
-  name: string,
-  commands: Command[]
-): Command | undefined
+function findCommand(name: string, commands: Command[]): Command | undefined
 {
   const lower = name.toLowerCase()
 
@@ -202,10 +199,7 @@ const helpCommand: Command = {
   description: 'List available commands & keybindings',
   execute(_args, ctx)
   {
-    const lines: string[] = [
-      `${style('primary')('Coral')} ${style('muted')('— available commands')}`,
-      '',
-    ]
+    const lines: string[] = [coralHeader('available commands'), '']
 
     for (const cmd of commands)
     {
@@ -260,7 +254,7 @@ const clearCommand: Command = {
     ctx.clearSession()
     ctx.pushOutput(
       systemBlock(
-        `Conversation cleared (${cleared} ${cleared === 1 ? 'message' : 'messages'} removed)`
+        `Conversation cleared (${pluralizeMessages(cleared)} removed)`
       )
     )
   },
@@ -323,7 +317,7 @@ const statusCommand: Command = {
     const usage = ctx.agent.getTokenUsage()
 
     const lines: string[] = [
-      `${style('primary')('Coral')} ${style('muted')('— status')}`,
+      coralHeader('status'),
       '',
       `  Model:        ${chalk.white(model)}`,
       `  Permissions:  ${ctx.yolo ? style('warning')(permissions) : chalk.dim(permissions)}`,
@@ -510,7 +504,7 @@ const modelCommand: Command = {
     }
     catch (err)
     {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = toErrorMessage(err)
       ctx.pushOutput(systemBlock(`Failed to switch model: ${msg}`))
     }
   },
@@ -589,10 +583,7 @@ function formatThemeList(): string
 {
   const current = getTheme()
   const maxName = Math.max(...THEMES.map((theme) => theme.name.length))
-  const lines: string[] = [
-    `${style('primary')('Coral')} ${style('muted')('— themes')}`,
-    '',
-  ]
+  const lines: string[] = [coralHeader('themes'), '']
 
   for (const theme of THEMES)
   {
@@ -690,10 +681,7 @@ const sessionsCommand: Command = {
       return
     }
 
-    const lines: string[] = [
-      `${style('primary')('Coral')} ${style('muted')('— saved sessions')}`,
-      '',
-    ]
+    const lines: string[] = [coralHeader('saved sessions'), '']
 
     for (const s of sessions)
     {
@@ -800,7 +788,7 @@ const newCommand: Command = {
       parts.push(`Session ${savedId} saved`)
     }
     parts.push(
-      `New conversation started (${cleared} ${cleared === 1 ? 'message' : 'messages'} cleared)`
+      `New conversation started (${pluralizeMessages(cleared)} cleared)`
     )
 
     ctx.pushOutput(systemBlock(parts.join(' · ')))
@@ -826,21 +814,15 @@ const commands: Command[] = [
   exitCommand,
 ]
 
-// get the full list of registered commands
-export function getCommands(): Command[]
-{
-  return commands
-}
-
 // dispatch a slash command from user input
-// returns { handled: true } if input was a command, false otherwise
+// returns true if input was a command, false otherwise
 export async function dispatchCommand(
   input: string,
   ctx: CommandContext
-): Promise<DispatchResult>
+): Promise<boolean>
 {
   const parsed = parseCommand(input)
-  if (!parsed) return { handled: false }
+  if (!parsed) return false
 
   const cmd = findCommand(parsed.name, commands)
   if (!cmd)
@@ -851,9 +833,9 @@ export async function dispatchCommand(
           `Type ${style('user')('/help')} to see available commands.`
       )
     )
-    return { handled: true }
+    return true
   }
 
   await cmd.execute(parsed.args, ctx)
-  return { handled: true }
+  return true
 }
