@@ -82,5 +82,15 @@ export interface Model
 
 export interface ModelInfo
 {
-  context_length: number
+  // native max context (max position embeddings) reported by the model
+  contextLength: number
+  // architecture id from general.architecture (e.g. 'gemma4', 'mistral3')
+  architecture?: string
+  // transformer block count
+  blockCount?: number
+  // KV head count (GQA) — absent for some archs (e.g. gemma) in Ollama metadata
+  kvHeadCount?: number
+  // per-head key & value dims
+  keyLength?: number
+  valueLength?: number
 }

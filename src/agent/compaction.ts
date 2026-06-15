@@ -6,8 +6,8 @@ import type { OllamaMessage } from '../types/inference.js'
 // rough token estimate: ~4 chars per token (conservative for English + code)
 export const CHARS_PER_TOKEN = 4
 
-// default context window size (tokens) — conservative floor for the model lineup
-// mirrors config/context.ts DEFAULT_MAX_NUM_CTX (the num_ctx ceiling cap)
+// default context window size (tokens) — conservative floor for compaction
+// estimates when the live num_ctx is unknown
 const DEFAULT_CONTEXT_WINDOW = 32_768
 
 // prune old tool results when estimated tokens exceed this fraction of context

@@ -40,7 +40,12 @@ import {
   type CompactionResult,
   DEFAULT_COMPACTION_CONFIG,
 } from './compaction.js'
-import { resolveContextConfig } from '../config/context.js'
+import {
+  resolveContextConfig,
+  computeMemoryCappedContext,
+  estimateKvBytesPerToken,
+} from '../config/context.js'
+import { totalmem } from 'node:os'
 
 export type { CompactionResult } from './compaction.js'
 import { toError, toErrorMessage } from '../utils/errors.js'
@@ -561,17 +566,30 @@ export class Agent
     return this.contextWindowPromise
   }
 
-  // resolve the context window once: cap it, pin it as num_ctx, & align the
+  // resolve the context window once: size it to the memory budget, cap to the
+  // native window & any user override, pin it as num_ctx, & align the
   // compaction thresholds to the window the server actually allocates
   private async resolveContextWindow(): Promise<number>
   {
     try
     {
       const info = await this.client.showModel(this.model)
-      if (info.context_length > 0)
+      if (info.contextLength > 0)
       {
-        const cap = resolveContextConfig(getCwd()).maxNumCtx
-        const pinned = Math.min(info.context_length, cap)
+        const native = info.contextLength
+        const override = resolveContextConfig(getCwd()).maxNumCtx
+        const memoryCap = computeMemoryCappedContext({
+          totalMemBytes: totalmem(),
+          weightBytes: await this.getModelWeightBytes(),
+          nativeContext: native,
+          kvBytesPerToken: estimateKvBytesPerToken(info),
+        })
+
+        const pinned = Math.min(
+          native,
+          memoryCap,
+          override ?? Number.POSITIVE_INFINITY
+        )
 
         this.contextWindowSize = pinned
         this.numCtx = pinned
@@ -587,6 +605,21 @@ export class Agent
     }
 
     return this.contextWindowSize
+  }
+
+  // look up the active model's on-disk weight size (proxy for loaded weight
+  // memory). returns 0 when the lookup fails so the budget ignores weights
+  private async getModelWeightBytes(): Promise<number>
+  {
+    try
+    {
+      const models = await this.client.listModels()
+      return models.find((m) => m.name === this.model)?.size ?? 0
+    }
+    catch
+    {
+      return 0
+    }
   }
 
   // append a message while maintaining the cached token estimate

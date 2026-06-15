@@ -34,6 +34,30 @@ function throwApiError(status: number, body: string): never
   )
 }
 
+// read an exact numeric key from an Ollama model_info map
+function numAt(info: Record<string, unknown>, key: string): number | undefined
+{
+  const val = info[key]
+  return typeof val === 'number' ? val : undefined
+}
+
+// fall back to any *.context_length key, skipping training-time/original caps
+function scanContextLength(info: Record<string, unknown>): number
+{
+  for (const [key, val] of Object.entries(info))
+  {
+    if (
+      key.endsWith('.context_length') &&
+      !key.includes('original') &&
+      typeof val === 'number'
+    )
+    {
+      return val
+    }
+  }
+  return 0
+}
+
 // * Ollama REST API client
 export class OllamaClient
 {
@@ -211,7 +235,7 @@ export class OllamaClient
     }
   }
 
-  // fetch model details (context window, etc.) from the Ollama instance
+  // fetch model details (context window, KV dims, etc.) from the Ollama instance
   async showModel(model: string): Promise<ModelInfo>
   {
     const res = await fetch(`${this.baseUrl}/api/show`, {
@@ -226,20 +250,18 @@ export class OllamaClient
       parameters?: string
     }
 
-    // extract context length from model_info or parameters
-    let contextLength = 0
+    const info = data.model_info ?? {}
+    const arch =
+      typeof info['general.architecture'] === 'string'
+        ? (info['general.architecture'] as string)
+        : undefined
 
-    // try model_info first — Ollama returns context_length in various keys
-    if (data.model_info)
+    // prefer the exact arch-keyed value so we don't pick up training-time caps
+    // like mistral3.rope.scaling.original_context_length
+    let contextLength = (arch && numAt(info, `${arch}.context_length`)) || 0
+    if (contextLength === 0)
     {
-      for (const [key, val] of Object.entries(data.model_info))
-      {
-        if (key.includes('context_length') && typeof val === 'number')
-        {
-          contextLength = val
-          break
-        }
-      }
+      contextLength = scanContextLength(info)
     }
 
     // fallback: parse from parameters string (e.g., "num_ctx 8192")
@@ -252,7 +274,18 @@ export class OllamaClient
       }
     }
 
-    return { context_length: contextLength }
+    return {
+      contextLength,
+      architecture: arch,
+      blockCount: arch ? numAt(info, `${arch}.block_count`) : undefined,
+      kvHeadCount: arch
+        ? numAt(info, `${arch}.attention.head_count_kv`)
+        : undefined,
+      keyLength: arch ? numAt(info, `${arch}.attention.key_length`) : undefined,
+      valueLength: arch
+        ? numAt(info, `${arch}.attention.value_length`)
+        : undefined,
+    }
   }
 
   // fetch available models from the Ollama instance

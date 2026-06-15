@@ -8,6 +8,7 @@ import { OllamaClient } from '../ollama/client.js'
 import { clamp } from '../utils/clamp.js'
 import type { Model } from '../types/inference.js'
 import { buildModelPickerLines, sortModels } from './model-picker.js'
+import { buildWelcomeLines } from './welcome.js'
 import {
   createShutdownCoordinator,
   registerSignalHandlers,
@@ -267,6 +268,26 @@ export default function App({
     () => output.filter((block) => block.type === 'user').length,
     [output]
   )
+
+  // launch splash: shown only while the conversation is empty, then scrolls away
+  const welcomeLines = useMemo(
+    () =>
+      buildWelcomeLines({
+        width: transcriptWidth,
+        rows: chatViewportHeight,
+        model: activeModel,
+        cwd: process.cwd(),
+        themeGeneration,
+      }),
+    [transcriptWidth, chatViewportHeight, activeModel, themeGeneration]
+  )
+  // vertically center the splash within the empty chat viewport
+  const paddedWelcome = [
+    ...Array(
+      Math.max(Math.floor((chatViewportHeight - welcomeLines.length) / 2), 0)
+    ).fill(''),
+    ...welcomeLines,
+  ]
 
   const disposeAgent = useCallback(async (agentInstance: Agent | null) =>
   {
@@ -1237,9 +1258,11 @@ export default function App({
         </Box>
       ) : agent ? (
         <Box flexDirection="column">
-          {paddedTranscript.map((line, index) => (
-            <Text key={index}>{line}</Text>
-          ))}
+          {(output.length === 0 ? paddedWelcome : paddedTranscript).map(
+            (line, index) => (
+              <Text key={index}>{line}</Text>
+            )
+          )}
         </Box>
       ) : null}
 
