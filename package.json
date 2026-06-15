@@ -37,12 +37,12 @@
     "arrowParens": "always"
   },
   "dependencies": {
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "^12.10.1",
     "chalk": "^5.6.2",
     "cli-highlight": "^2.1.11",
     "commander": "^15.0.0",
     "diff": "^9.0.0",
-    "ink": "^7.0.5",
+    "ink": "^7.0.6",
     "marked": "^18.0.5",
     "react": "^19.2.7",
     "strip-ansi": "^7.2.0",
@@ -51,7 +51,7 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^22.15.3",
+    "@types/node": "^25.9.3",
     "@types/react": "^19.2.17",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
@@ -60,7 +60,7 @@
     "prettier": "^3.8.4",
     "prettier-plugin-brace-style": "^0.10.1",
     "tsx": "^4.22.4",
-    "typescript": "^5.8.2",
-    "typescript-eslint": "^8.61.0"
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.61.1"
   }
 }
