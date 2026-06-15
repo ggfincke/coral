@@ -24,7 +24,7 @@ export interface CoralConfig
     embeddingModel?: string
   }
   context?: {
-    // ceiling for the pinned num_ctx (tokens)
+    // optional num_ctx ceiling (tokens) — overrides the memory-derived default
     maxNumCtx?: number
   }
 }
