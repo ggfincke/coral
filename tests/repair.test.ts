@@ -3,7 +3,10 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { parseToolCallsFromContent } from '../src/agent/repair.js'
+import {
+  parseToolCallsFromContent,
+  looksLikeAttemptedToolCall,
+} from '../src/agent/repair.js'
 
 const TOOLS = ['read_file', 'grep', 'list_files', 'git_status']
 
@@ -64,4 +67,46 @@ test('rejects JSON that is not a tool call', () =>
 
   // plain prose
   assert.equal(parseToolCallsFromContent('I will read the file.', TOOLS), null)
+})
+
+test('looksLikeAttemptedToolCall flags botched but call-shaped content', () =>
+{
+  // leaked template wrapper is conclusive even w/ broken JSON inside
+  assert.equal(
+    looksLikeAttemptedToolCall('<|tool_call|>{"name": "read_file"', TOOLS),
+    true
+  )
+
+  // known tool name + arguments key, but trailing comma breaks the parse
+  assert.equal(
+    looksLikeAttemptedToolCall(
+      '{"name": "grep", "arguments": {"pattern": "x",}}',
+      TOOLS
+    ),
+    true
+  )
+})
+
+test('looksLikeAttemptedToolCall ignores prose & unrelated JSON', () =>
+{
+  // prose that merely names a tool
+  assert.equal(
+    looksLikeAttemptedToolCall('I will grep for the pattern next.', TOOLS),
+    false
+  )
+
+  // JSON object, args key, but no known tool name
+  assert.equal(
+    looksLikeAttemptedToolCall(
+      '{"name": "deploy", "arguments": {"env": "prod"}}',
+      TOOLS
+    ),
+    false
+  )
+
+  // known tool name but no JSON structure at all
+  assert.equal(
+    looksLikeAttemptedToolCall('the read_file helper is handy', TOOLS),
+    false
+  )
 })

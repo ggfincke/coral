@@ -372,16 +372,38 @@ const statusCommand: Command = {
     // reliability-layer counters — only shown once something needed repair
     const reliability = ctx.agent.getReliabilityStats()
     const repairs = reliability.repairedToolCalls + reliability.nameRepairs
-    if (
-      repairs + reliability.stallNudges + reliability.validationFailures >
-      0
-    )
+    const reliabilityTotal =
+      repairs +
+      reliability.stallNudges +
+      reliability.validationFailures +
+      reliability.reprompts +
+      reliability.doomLoopTrips +
+      reliability.verifyFlags
+    if (reliabilityTotal > 0)
     {
-      lines.push(
-        `  Repairs:      ${chalk.dim(
-          `${repairs} tool-call, ${reliability.stallNudges} nudge, ${reliability.validationFailures} invalid-args`
-        )}`
-      )
+      const parts = [
+        `${repairs} tool-call`,
+        `${reliability.stallNudges} nudge`,
+        `${reliability.validationFailures} invalid-args`,
+      ]
+      if (reliability.reprompts > 0)
+      {
+        parts.push(`${reliability.reprompts} reprompt`)
+      }
+      if (reliability.doomLoopTrips > 0)
+      {
+        parts.push(`${reliability.doomLoopTrips} loop`)
+      }
+      if (reliability.verifyFlags > 0)
+      {
+        parts.push(`${reliability.verifyFlags} verify-flag`)
+      }
+      lines.push(`  Repairs:      ${chalk.dim(parts.join(', '))}`)
+    }
+
+    if (ctx.agent.getVerifyEdits())
+    {
+      lines.push(`  Self-check:   ${chalk.dim('on (verifies edits)')}`)
     }
 
     lines.push(`  CWD:          ${chalk.dim(cwd)}`)
@@ -564,6 +586,52 @@ const permissionsCommand: Command = {
         )
       )
     }
+  },
+}
+
+// ── /verify ───────────────────────────────────────────────────────────
+
+const verifyCommand: Command = {
+  name: 'verify',
+  description: 'Toggle the post-edit self-check (off by default)',
+  execute(args, ctx)
+  {
+    const arg = args.trim().toLowerCase()
+
+    if (!arg)
+    {
+      const state = ctx.agent.getVerifyEdits() ? 'on' : 'off'
+      ctx.pushOutput(
+        systemBlock(
+          `Self-check: ${chalk.bold(state)} — after an edit-producing turn, a ` +
+            `read-only subagent reviews the changes against your request\n\n` +
+            `  ${style('user')('/verify on')}   — review edits before declaring done\n` +
+            `  ${style('user')('/verify off')}  — skip the check (faster)`
+        )
+      )
+      return
+    }
+
+    if (arg === 'on' || arg === 'off')
+    {
+      const enabled = arg === 'on'
+      ctx.agent.setVerifyEdits(enabled)
+      ctx.pushOutput(
+        systemBlock(
+          `Self-check → ${chalk.bold(arg)}${
+            enabled ? ' (edits reviewed after each turn)' : ''
+          }`
+        )
+      )
+      return
+    }
+
+    ctx.pushOutput(
+      systemBlock(
+        `Unknown option: "${arg}"\n` +
+          `Valid: ${style('user')('on')}, ${style('user')('off')}`
+      )
+    )
   },
 }
 
@@ -805,6 +873,7 @@ const commands: Command[] = [
   statusCommand,
   modelCommand,
   permissionsCommand,
+  verifyCommand,
   themeCommand,
   diffCommand,
   sessionsCommand,

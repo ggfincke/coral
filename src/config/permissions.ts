@@ -27,6 +27,10 @@ export interface CoralConfig
     // optional num_ctx ceiling (tokens) — overrides the memory-derived default
     maxNumCtx?: number
   }
+  verify?: {
+    // run a read-only self-check subagent after edit-producing turns
+    enabled?: boolean
+  }
 }
 
 // default policies when no config is present
