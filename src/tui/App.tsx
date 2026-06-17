@@ -40,7 +40,7 @@ import {
   formatTokensPerSecond,
   pluralizeMessages,
 } from './metrics.js'
-import { buildApprovalBox } from './approval-box.js'
+import { buildApprovalBox, buildConfirmBox } from './approval-box.js'
 import { buildRestoredBlocks, truncateToolResult } from './restored-blocks.js'
 import { buildRule, buildStatusLine, describeRunStage } from './status-line.js'
 import { buildTodoPanel } from './todo-panel.js'
@@ -67,6 +67,13 @@ interface ApprovalPrompt
   // pre-computed change preview — rendered inside the approval box
   diff?: string
   resolve: (approved: boolean) => void
+}
+
+// generic yes/no prompt — currently the doom-loop pause
+interface ConfirmPrompt
+{
+  message: string
+  resolve: (proceed: boolean) => void
 }
 
 const FLUSH_INTERVAL = 32
@@ -132,6 +139,7 @@ export default function App({
   const [themeGeneration, setThemeGeneration] = useState(getThemeGeneration)
   const [runStage, setRunStage] = useState<RunStage>('idle')
   const [approval, setApproval] = useState<ApprovalPrompt | null>(null)
+  const [confirm, setConfirm] = useState<ConfirmPrompt | null>(null)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [runElapsed, setRunElapsed] = useState<string | null>(null)
   const [sessionLabelId, setSessionLabelId] = useState<string | null>(
@@ -191,11 +199,17 @@ export default function App({
         approval.diff
       )
     : []
+  const confirmBoxLines = confirm
+    ? buildConfirmBox(confirm.message, transcriptWidth, 'doom loop')
+    : []
   const todoPanelLines = buildTodoPanel(todos, transcriptWidth)
   const headerHeight = 2
-  const inputHeight = approval ? 0 : 3
+  // either prompt takes over the input row
+  const promptActive = Boolean(approval) || Boolean(confirm)
+  const inputHeight = promptActive ? 0 : 3
   const statusHeight = 1
-  const approvalHeight = approval ? approvalBoxLines.length + 1 : 0
+  const promptBoxLines = approval ? approvalBoxLines : confirmBoxLines
+  const approvalHeight = promptActive ? promptBoxLines.length + 1 : 0
   const todoHeight = todoPanelLines.length
   const chatViewportHeight = Math.max(
     terminalSize.rows -
@@ -428,16 +442,27 @@ export default function App({
     [approval]
   )
 
+  // resolve a pending doom-loop confirm & clear the prompt
+  const resolveConfirm = useCallback(
+    (proceed: boolean) =>
+    {
+      confirm?.resolve(proceed)
+      setConfirm(null)
+    },
+    [confirm]
+  )
+
   const abortRun = useCallback(() =>
   {
     const controller = runAbortRef.current
     if (controller && !controller.signal.aborted)
     {
       controller.abort()
-      // dismiss any pending approval prompt
+      // dismiss any pending prompts
       resolveApproval(false)
+      resolveConfirm(false)
     }
-  }, [resolveApproval])
+  }, [resolveApproval, resolveConfirm])
 
   const activateModel = useCallback(
     (nextModel: string, restoredSession = resumeSession) =>
@@ -693,6 +718,20 @@ export default function App({
         return
       }
 
+      if (confirm)
+      {
+        if (ch === 'y' || ch === 'Y')
+        {
+          resolveConfirm(true)
+        }
+        else if (ch === 'n' || ch === 'N' || key.escape)
+        {
+          resolveConfirm(false)
+        }
+
+        return
+      }
+
       if (pickerVisible)
       {
         // if there's an agent behind the picker, go back to chat; else exit
@@ -758,13 +797,16 @@ export default function App({
         }
       }
     },
-    { isActive: pickerVisible || Boolean(approval) }
+    { isActive: pickerVisible || Boolean(approval) || Boolean(confirm) }
   )
 
   const handleSubmit = useCallback(
     async (value: string) =>
     {
-      if (!agent || !value.trim() || runStage !== 'idle' || approval) return
+      if (!agent || !value.trim() || runStage !== 'idle' || promptActive)
+      {
+        return
+      }
 
       // record input in history (all non-empty submissions including slash commands)
       addHistoryEntry(value.trim(), sessionIdRef.current)
@@ -872,6 +914,35 @@ export default function App({
             {
               setApproval({ toolName: name, args, diff, resolve })
             })
+          },
+          onDoomLoop(message)
+          {
+            stopWaiting()
+            return new Promise<boolean>((resolve) =>
+            {
+              setConfirm({ message, resolve })
+            })
+          },
+          onVerification(result)
+          {
+            const label =
+              result.editCount === 1 ? '1 edit' : `${result.editCount} edits`
+            let content: string
+            if (result.status === 'pass')
+            {
+              content = `${style('success')('✓ self-check passed')} — ${label} reviewed`
+            }
+            else if (result.status === 'fail')
+            {
+              content = `${style('warning')(`⚠ self-check flagged ${label}`)}: ${
+                result.reason ?? 'change may not match the request'
+              }`
+            }
+            else
+            {
+              content = `self-check inconclusive — ${label} reviewed`
+            }
+            setOutput((prev) => [...prev, { type: 'system', content }])
           },
           onToolResult(name, result, error, callId, diff)
           {
@@ -1021,7 +1092,7 @@ export default function App({
       activeModel,
       addHistoryEntry,
       agent,
-      approval,
+      promptActive,
       appendText,
       appendThinking,
       clearSession,
@@ -1075,7 +1146,7 @@ export default function App({
           ? `press r to retry · ${pickerEscHint}`
           : `${models.length} models available · enter selects · ${pickerEscHint}`
   }
-  else if (!agent || approval)
+  else if (!agent || promptActive)
   {
     statusLine = ''
   }
@@ -1285,7 +1356,15 @@ export default function App({
         </Box>
       )}
 
-      {!pickerVisible && agent && !approval && (
+      {!pickerVisible && agent && !approval && confirm && (
+        <Box flexDirection="column">
+          {confirmBoxLines.map((line, index) => (
+            <Text key={index}>{line}</Text>
+          ))}
+        </Box>
+      )}
+
+      {!pickerVisible && agent && !promptActive && (
         <Box flexDirection="column">
           <Text dimColor color={yolo ? inkColor('warning') : undefined}>
             {headerSep}

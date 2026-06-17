@@ -55,8 +55,22 @@ import {
   STALL_NUDGE_MESSAGE,
   MAX_STALL_NUDGES,
   normalizeToolName,
+  looksLikeAttemptedToolCall,
+  REPROMPT_MESSAGE,
+  MAX_REPROMPTS,
 } from './repair.js'
+import {
+  DoomLoopDetector,
+  describeDoomLoop,
+  type DoomLoopTrip,
+} from './doom-loop.js'
+import {
+  buildVerifyPrompt,
+  parseVerifyVerdict,
+  type VerificationResult,
+} from './verify.js'
 import { validateToolArgs } from './tool-validation.js'
+import { loadProjectConfig } from '../config/permissions.js'
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
@@ -161,6 +175,12 @@ export interface ReliabilityStats
   nameRepairs: number
   stallNudges: number
   validationFailures: number
+  // times the agent paused on a detected doom loop
+  doomLoopTrips: number
+  // corrective reprompts when a call-shaped turn wouldn't parse
+  reprompts: number
+  // edits a self-check flagged as wrong or inconclusive
+  verifyFlags: number
 }
 
 // token usage from Ollama's response metrics
@@ -206,6 +226,10 @@ export interface AgentEvents
     name: string,
     args: Record<string, unknown>
   ) => Promise<boolean>
+  // a stuck loop was detected — return true to continue, false to stop the run
+  onDoomLoop?: (message: string) => Promise<boolean>
+  // result of the post-edit self-check (warn-only — does not alter history)
+  onVerification?: (result: VerificationResult) => void
   onUsage?: (usage: TokenUsage) => void
   // fires before a summarization model call starts (so the TUI can show status)
   onCompactionStart?: () => void
@@ -228,6 +252,9 @@ interface AgentOptions
   // pinned num_ctx inherited from a parent agent — subagents must use the same
   // value so they don't trigger an Ollama runner reload that wipes the KV cache
   numCtx?: number
+  // run a read-only self-check subagent after edit-producing turns; defaults to
+  // the .coral.json verify.enabled flag. subagents pass false (they can't edit)
+  verifyEdits?: boolean
 }
 
 // * Conversation agent w/ tool dispatch
@@ -271,9 +298,14 @@ export class Agent
     nameRepairs: 0,
     stallNudges: 0,
     validationFailures: 0,
+    doomLoopTrips: 0,
+    reprompts: 0,
+    verifyFlags: 0,
   }
   private onCompactionCallback?: (result: CompactionResult) => void
   private onCompactionStartCallback?: () => void
+  // self-check edits after a clean completion (warn-only); off by default
+  private verifyEdits: boolean
 
   constructor(
     model: string,
@@ -291,6 +323,10 @@ export class Agent
     this.ollamaTools = this.tools.map(toolToOllamaFormat)
     this.toolsByName = new Map(this.tools.map((t) => [t.name, t]))
     this.maxIterations = options.maxIterations
+    this.verifyEdits =
+      options.verifyEdits ??
+      loadProjectConfig(cwd ?? getCwd()).verify?.enabled ??
+      false
 
     // set the global working directory — all tools resolve paths against this
     if (cwd) setCwd(cwd)
@@ -338,6 +374,7 @@ export class Agent
       maxIterations: SUBAGENT_MAX_ITERATIONS,
       registerSubagent: false,
       numCtx: this.numCtx,
+      verifyEdits: false,
     })
 
     let text = ''
@@ -371,6 +408,53 @@ export class Agent
     )
 
     return { text: text.trim(), toolCount, error }
+  }
+
+  // self-check edits w/ a fresh read-only subagent that reviews the diffs
+  // against the original request. warn-only — returns a verdict, never edits
+  // history. shares the parent's model (no dispose). null on abort/failure
+  private async runEditVerification(
+    request: string,
+    diffs: string[],
+    signal?: AbortSignal
+  ): Promise<VerificationResult | null>
+  {
+    const sub = new Agent(this.model, this.baseUrl, getCwd(), {
+      think: this.thinkMode,
+      tools: subagentTools,
+      maxIterations: SUBAGENT_MAX_ITERATIONS,
+      registerSubagent: false,
+      numCtx: this.numCtx,
+      verifyEdits: false,
+    })
+
+    let text = ''
+    let failed = false
+
+    await sub.run(
+      buildVerifyPrompt(request, diffs),
+      {
+        onToken: (token) =>
+        {
+          text += token
+        },
+        onToolCall: () =>
+        {},
+        onToolResult: () =>
+        {},
+        onToolApproval: async () => false,
+        onDone: () =>
+        {},
+        onError: () =>
+        {
+          failed = true
+        },
+      },
+      signal
+    )
+
+    if (failed || signal?.aborted) return null
+    return parseVerifyVerdict(text, diffs.length)
   }
 
   // stop client background work & unload the active model
@@ -534,6 +618,17 @@ export class Agent
   getCompactionCount(): number
   {
     return this.compactionCount
+  }
+
+  // post-edit self-check toggle (runtime via /verify)
+  getVerifyEdits(): boolean
+  {
+    return this.verifyEdits
+  }
+
+  setVerifyEdits(enabled: boolean): void
+  {
+    this.verifyEdits = enabled
   }
 
   // get the ISO timestamp of the last successful compaction (null if none)
@@ -1003,6 +1098,10 @@ export class Agent
     // keep going while the model wants to call tools
     let iterations = 0
     let stallNudges = 0
+    let reprompts = 0
+    const doomLoop = new DoomLoopDetector()
+    // diffs from edit-producing tools this run — fed to the self-check
+    const editDiffs: string[] = []
     while (true)
     {
       // check for abort before each iteration
@@ -1032,6 +1131,8 @@ export class Agent
       let fullContent = ''
       let fullThinking = ''
       let toolCalls: OllamaToolCall[] = []
+      // first doom-loop trip seen while executing this round's tools
+      let doomTrip: DoomLoopTrip | null = null
 
       try
       {
@@ -1117,14 +1218,13 @@ export class Agent
         return
       }
 
+      const toolNames = this.tools.map((t) => t.name)
+
       // repair pass: recover tool calls the model emitted as text content —
       // the most common local-model failure mode (call-shaped JSON, no call)
       if (toolCalls.length === 0 && fullContent.trim())
       {
-        const repaired = parseToolCallsFromContent(
-          fullContent,
-          this.tools.map((t) => t.name)
-        )
+        const repaired = parseToolCallsFromContent(fullContent, toolNames)
 
         if (repaired)
         {
@@ -1167,6 +1267,35 @@ export class Agent
           this.reliabilityStats.stallNudges++
           this.pushMessage({ role: 'user', content: STALL_NUDGE_MESSAGE })
           continue
+        }
+
+        // reprompt: the turn looks like a botched call the repair pass couldn't
+        // recover — prod the model to re-emit a valid one, bounded by the cap
+        if (
+          reprompts < MAX_REPROMPTS &&
+          fullContent.trim() &&
+          looksLikeAttemptedToolCall(fullContent, toolNames)
+        )
+        {
+          reprompts++
+          this.reliabilityStats.reprompts++
+          this.pushMessage({ role: 'user', content: REPROMPT_MESSAGE })
+          continue
+        }
+
+        // clean completion — optionally self-check this run's edits before done
+        if (this.verifyEdits && editDiffs.length > 0 && !signal?.aborted)
+        {
+          const verdict = await this.runEditVerification(
+            userMessage,
+            editDiffs,
+            signal
+          )
+          if (verdict)
+          {
+            if (verdict.status !== 'pass') this.reliabilityStats.verifyFlags++
+            events.onVerification?.(verdict)
+          }
         }
 
         this.finishRun(events)
@@ -1229,6 +1358,8 @@ export class Agent
             {
               events.onToolResult(item.name, '', errorMsg, item.id)
               toolResults.push(this.buildToolMessage(item.name, '', errorMsg))
+              const trip = doomLoop.record(item.name, item.args, errorMsg)
+              if (trip && !doomTrip) doomTrip = trip
             }
             continue
           }
@@ -1246,6 +1377,9 @@ export class Agent
             toolResults.push(
               this.buildToolMessage(item.name, result.output, result.error)
             )
+            const trip = doomLoop.record(item.name, item.args, result.error)
+            if (trip && !doomTrip) doomTrip = trip
+            if (result.diff) editDiffs.push(result.diff)
           }
 
           continue
@@ -1264,6 +1398,8 @@ export class Agent
           const errorMsg = `Unknown tool: ${toolName}`
           events.onToolResult(toolName, '', errorMsg, callId)
           toolResults.push(this.buildToolMessage(toolName, '', errorMsg))
+          const trip = doomLoop.record(toolName, toolArgs, errorMsg)
+          if (trip && !doomTrip) doomTrip = trip
           continue
         }
 
@@ -1326,6 +1462,9 @@ export class Agent
         toolResults.push(
           this.buildToolMessage(toolName, result.output, result.error)
         )
+        const trip = doomLoop.record(toolName, toolArgs, result.error)
+        if (trip && !doomTrip) doomTrip = trip
+        if (result.diff) editDiffs.push(result.diff)
       }
 
       // abort left later tool_calls unprocessed — record interrupted replies so
@@ -1355,6 +1494,34 @@ export class Agent
       {
         this.finishRun(events)
         return
+      }
+
+      // doom-loop guard: the window shows a stuck pattern — pause & ask the user
+      // whether to continue (interactive runs only; subagents rely on the cap)
+      if (doomTrip && events.onDoomLoop)
+      {
+        this.reliabilityStats.doomLoopTrips++
+        let proceed: boolean
+        try
+        {
+          proceed = await raceAbort(
+            events.onDoomLoop(describeDoomLoop(doomTrip)),
+            signal
+          )
+        }
+        catch
+        {
+          this.finishRun(events)
+          return
+        }
+
+        if (!proceed)
+        {
+          this.finishRun(events)
+          return
+        }
+        // fresh streak required before tripping again
+        doomLoop.reset()
       }
     }
   }

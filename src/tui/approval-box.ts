@@ -81,3 +81,42 @@ export function buildApprovalBox(
 
   return lines
 }
+
+// bordered yes/no prompt — reused for the doom-loop pause
+export function buildConfirmBox(
+  message: string,
+  width: number,
+  label = 'confirm'
+): string[]
+{
+  const warn = style('warning')
+  const innerWidth = Math.max(width - 4, 12)
+
+  const row = (content: string): string =>
+  {
+    const fill = ' '.repeat(Math.max(innerWidth - stripAnsi(content).length, 0))
+    return `${warn('│')} ${content}${fill} ${warn('│')}`
+  }
+
+  const lines: string[] = [
+    warn(`╭─${buildLabeledSeparator(innerWidth, label)}─╮`),
+    row(''),
+  ]
+
+  const wrapped = wrapAnsi(message, innerWidth, {
+    hard: true,
+    trim: false,
+    wordWrap: true,
+  })
+  for (const line of wrapped.split('\n'))
+  {
+    lines.push(row(warn(line)))
+  }
+
+  lines.push(row(''))
+  lines.push(row(warn('(y) continue  (n) stop')))
+  lines.push(row(''))
+  lines.push(warn(`╰${buildRule(innerWidth + 2)}╯`))
+
+  return lines
+}

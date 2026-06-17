@@ -12,6 +12,43 @@ export const STALL_NUDGE_MESSAGE =
 // max nudges per run() before accepting the empty turn as final
 export const MAX_STALL_NUDGES = 2
 
+// max corrective reprompts per run() when a call-shaped turn won't parse
+export const MAX_REPROMPTS = 1
+
+// injected when a turn looks like a botched tool call the repair pass couldn't
+// recover — prods the model to re-emit a valid call or finalize as plain text
+export const REPROMPT_MESSAGE =
+  "That looked like a tool call, but it wasn't valid. Re-emit it as a proper " +
+  'tool call with correct JSON, or give your final answer as plain text.'
+
+// non-global wrapper-token probe (WRAPPER_TOKEN_PATTERN below is /g & stateful)
+const WRAPPER_TOKEN_PROBE = /<\|?\/?tool_call\|?>/i
+
+// require a name/arguments/parameters key before treating content as a call
+const ARGS_KEY_PROBE = /"(?:name|arguments|parameters)"\s*:/
+
+// heuristic: does this (unparseable) content look like an attempted tool call?
+// a leaked wrapper token is conclusive; otherwise demand a JSON object carrying
+// a name/arguments key & a quoted string naming a known tool — strong enough
+// to avoid firing on prose that merely mentions a tool
+export function looksLikeAttemptedToolCall(
+  content: string,
+  toolNames: readonly string[]
+): boolean
+{
+  if (WRAPPER_TOKEN_PROBE.test(content)) return true
+
+  if (!content.includes('{') || !content.includes('}')) return false
+  if (!ARGS_KEY_PROBE.test(content)) return false
+
+  const known = new Set(toolNames.map(normalizeToolName))
+  for (const match of content.matchAll(/"([^"]+)"/g))
+  {
+    if (known.has(normalizeToolName(match[1]!))) return true
+  }
+  return false
+}
+
 // lowercase & strip separators so Read_File / READFILE match read_file
 export function normalizeToolName(name: string): string
 {
