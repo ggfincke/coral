@@ -11,11 +11,23 @@ import {
   getToolPolicy,
   type ToolPermissions,
 } from '../src/config/permissions.js'
+import { loadProjectConfig } from '../src/config/project-config.js'
+import { loadPrefs } from '../src/config/prefs.js'
 
 const tempDirs: string[] = []
+const originalCoralHome = process.env.CORAL_HOME
 
 after(async () =>
 {
+  if (originalCoralHome === undefined)
+  {
+    delete process.env.CORAL_HOME
+  }
+  else
+  {
+    process.env.CORAL_HOME = originalCoralHome
+  }
+
   await Promise.all(
     tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
   )
@@ -117,4 +129,44 @@ test('corrupt .coral.json is handled gracefully', async () =>
   // falls back to defaults
   assert.equal(perms.read_file, 'always_allow')
   assert.equal(perms.bash, 'require_approval')
+})
+
+test('loadProjectConfig owns non-permission project config sections', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-config-'))
+  tempDirs.push(dir)
+
+  const config = {
+    retrieval: { embeddingModel: 'mxbai-embed-large' },
+    context: { maxNumCtx: 32_768 },
+    verify: { enabled: false },
+  }
+  await writeFile(join(dir, '.coral.json'), JSON.stringify(config), 'utf-8')
+
+  const loaded = loadProjectConfig(dir)
+
+  assert.deepEqual(loaded.retrieval, config.retrieval)
+  assert.deepEqual(loaded.context, config.context)
+  assert.deepEqual(loaded.verify, config.verify)
+})
+
+test('loadProjectConfig ignores non-object JSON config files', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-config-'))
+  tempDirs.push(dir)
+
+  await writeFile(join(dir, '.coral.json'), '[]', 'utf-8')
+
+  assert.deepEqual(loadProjectConfig(dir), {})
+})
+
+test('loadPrefs ignores array-shaped prefs files', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-prefs-'))
+  tempDirs.push(dir)
+  process.env.CORAL_HOME = dir
+
+  await writeFile(join(dir, 'prefs.json'), '[]', 'utf-8')
+
+  assert.deepEqual(loadPrefs(), {})
 })

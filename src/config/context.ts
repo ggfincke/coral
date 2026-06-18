@@ -2,8 +2,8 @@
 // memory-aware num_ctx sizing — pin the largest context window that fits the
 // host's memory budget, capped by the model's native window & any user override
 
-import { loadProjectConfig } from './permissions.js'
-import type { ModelInfo } from '../types/inference.js'
+import { loadProjectConfig } from './project-config.js'
+import type { Model, ModelInfo } from '../types/inference.js'
 
 // fraction of unified memory the GPU may wire by default on Apple Silicon
 // (~75% above 32GiB); the remainder is left for the OS & other apps
@@ -32,6 +32,24 @@ const SLIDING_WINDOW_ARCHS = new Set(['gemma', 'gemma2', 'gemma3', 'gemma4'])
 export interface ContextConfig
 {
   // explicit ceiling from env or .coral.json; undefined when unset
+  maxNumCtx?: number
+}
+
+export interface ContextWindowResolverDependencies
+{
+  model: string
+  cwd: string
+  totalMemBytes: number
+  showModel: (model: string) => Promise<ModelInfo>
+  listModels: () => Promise<Model[]>
+}
+
+export interface ResolvedContextWindow
+{
+  contextWindow: number
+  nativeContext: number
+  memoryCap: number
+  weightBytes: number
   maxNumCtx?: number
 }
 
@@ -108,9 +126,67 @@ export function computeMemoryCappedContext(inputs: BudgetInputs): number
   return roundDownToGranularity(capped)
 }
 
+// resolve the pinned num_ctx from live model metadata & local config
+export async function resolvePinnedContextWindow(
+  deps: ContextWindowResolverDependencies
+): Promise<ResolvedContextWindow | undefined>
+{
+  let info: ModelInfo
+  try
+  {
+    info = await deps.showModel(deps.model)
+  }
+  catch
+  {
+    return undefined
+  }
+
+  if (info.contextLength <= 0) return undefined
+
+  const nativeContext = info.contextLength
+  const maxNumCtx = resolveContextConfig(deps.cwd).maxNumCtx
+  const weightBytes = await resolveModelWeightBytes(deps.model, deps.listModels)
+  const memoryCap = computeMemoryCappedContext({
+    totalMemBytes: deps.totalMemBytes,
+    weightBytes,
+    nativeContext,
+    kvBytesPerToken: estimateKvBytesPerToken(info),
+  })
+
+  // floor the budget (incl. a too-small user override) at MIN_NUM_CTX, then
+  // clamp to native so a tiny-context model is never pinned above its window
+  const budget = Math.min(memoryCap, maxNumCtx ?? Number.POSITIVE_INFINITY)
+  const contextWindow = Math.min(nativeContext, Math.max(MIN_NUM_CTX, budget))
+
+  return {
+    contextWindow,
+    nativeContext,
+    memoryCap,
+    weightBytes,
+    maxNumCtx,
+  }
+}
+
 // round down to the ctx granularity, but never below the granularity itself
 function roundDownToGranularity(value: number): number
 {
   if (value <= NUM_CTX_GRANULARITY) return value
   return Math.floor(value / NUM_CTX_GRANULARITY) * NUM_CTX_GRANULARITY
+}
+
+// look up active model weight size; unknown means "ignore weights"
+async function resolveModelWeightBytes(
+  model: string,
+  listModels: () => Promise<Model[]>
+): Promise<number>
+{
+  try
+  {
+    const models = await listModels()
+    return models.find((candidate) => candidate.name === model)?.size ?? 0
+  }
+  catch
+  {
+    return 0
+  }
 }

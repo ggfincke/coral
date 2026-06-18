@@ -2,16 +2,35 @@
 // memory-aware num_ctx budget sizing
 
 import { strict as assert } from 'node:assert'
-import { test } from 'node:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after, test } from 'node:test'
 import {
   estimateKvBytesPerToken,
   computeMemoryCappedContext,
   resolveContextConfig,
+  resolvePinnedContextWindow,
 } from '../src/config/context.js'
-import type { ModelInfo } from '../src/types/inference.js'
+import type { Model, ModelInfo } from '../src/types/inference.js'
 
 const GiB = 1024 ** 3
 const M4_MAX_MEM = 137 * 1e9
+const tempDirs: string[] = []
+
+after(async () =>
+{
+  await Promise.all(
+    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
+  )
+})
+
+async function tempProject(): Promise<string>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-context-budget-'))
+  tempDirs.push(dir)
+  return dir
+}
 
 // mistral-medium-3.5: full attention, exposes KV dims
 const MISTRAL: ModelInfo = {
@@ -126,4 +145,103 @@ test('resolveContextConfig honors the env override', () =>
   {
     delete process.env.CORAL_NUM_CTX
   }
+})
+
+test('resolvePinnedContextWindow applies the explicit num_ctx ceiling', async () =>
+{
+  const cwd = await tempProject()
+  process.env.CORAL_NUM_CTX = '65536'
+  try
+  {
+    const resolved = await resolvePinnedContextWindow({
+      model: 'gemma4:31b-mlx',
+      cwd,
+      totalMemBytes: M4_MAX_MEM,
+      showModel: async () => GEMMA,
+      listModels: async (): Promise<Model[]> => [
+        {
+          name: 'gemma4:31b-mlx',
+          size: 20.2 * 1e9,
+          modified_at: '2026-06-17T00:00:00.000Z',
+        },
+      ],
+    })
+
+    assert.equal(resolved?.contextWindow, 65_536)
+    assert.equal(resolved?.nativeContext, GEMMA.contextLength)
+    assert.equal(resolved?.weightBytes, 20.2 * 1e9)
+    assert.equal(resolved?.maxNumCtx, 65_536)
+  }
+  finally
+  {
+    delete process.env.CORAL_NUM_CTX
+  }
+})
+
+test('resolvePinnedContextWindow floors a too-small num_ctx override', async () =>
+{
+  const cwd = await tempProject()
+  process.env.CORAL_NUM_CTX = '512'
+  try
+  {
+    const resolved = await resolvePinnedContextWindow({
+      model: 'gemma4:31b-mlx',
+      cwd,
+      totalMemBytes: M4_MAX_MEM,
+      showModel: async () => GEMMA,
+      listModels: async (): Promise<Model[]> => [
+        {
+          name: 'gemma4:31b-mlx',
+          size: 20.2 * 1e9,
+          modified_at: '2026-06-17T00:00:00.000Z',
+        },
+      ],
+    })
+
+    // override is recorded, but the pinned window is floored at MIN_NUM_CTX
+    assert.equal(resolved?.maxNumCtx, 512)
+    assert.equal(resolved?.contextWindow, 8_192)
+  }
+  finally
+  {
+    delete process.env.CORAL_NUM_CTX
+  }
+})
+
+test('resolvePinnedContextWindow treats model-list failure as unknown weight', async () =>
+{
+  const cwd = await tempProject()
+  delete process.env.CORAL_NUM_CTX
+
+  const resolved = await resolvePinnedContextWindow({
+    model: 'mistral-medium-3.5:128b',
+    cwd,
+    totalMemBytes: 512 * 1e9,
+    showModel: async () => MISTRAL,
+    listModels: async () =>
+    {
+      throw new Error('tags unavailable')
+    },
+  })
+
+  assert.equal(resolved?.contextWindow, MISTRAL.contextLength)
+  assert.equal(resolved?.weightBytes, 0)
+})
+
+test('resolvePinnedContextWindow returns undefined without model metadata', async () =>
+{
+  const cwd = await tempProject()
+
+  const resolved = await resolvePinnedContextWindow({
+    model: 'missing:model',
+    cwd,
+    totalMemBytes: M4_MAX_MEM,
+    showModel: async () =>
+    {
+      throw new Error('show failed')
+    },
+    listModels: async () => [],
+  })
+
+  assert.equal(resolved, undefined)
 })

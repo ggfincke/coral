@@ -1,10 +1,9 @@
 // src/config/prefs.ts
 // user preferences persisted to ~/.coral/prefs.json
 
-import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getCoralHome } from '../utils/coral-home.js'
-import { writeJsonFile } from '../utils/json.js'
+import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
 
 export interface Prefs
 {
@@ -19,15 +18,7 @@ function prefsPath(): string
 // load prefs; missing or corrupt file -> empty prefs
 export function loadPrefs(): Prefs
 {
-  try
-  {
-    const parsed: unknown = JSON.parse(readFileSync(prefsPath(), 'utf-8'))
-    return parsed && typeof parsed === 'object' ? (parsed as Prefs) : {}
-  }
-  catch
-  {
-    return {}
-  }
+  return (readJsonObjectFile(prefsPath()) as Prefs | undefined) ?? {}
 }
 
 // merge a patch into prefs on disk & return the result
