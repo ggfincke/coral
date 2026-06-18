@@ -1,5 +1,5 @@
-// rules/comment-style-guide.js
-// enforces `&` instead of "and" & `w/` instead of "with" in comments
+// eslint-rules/comment-style-guide.js
+// enforce comment abbrevs
 
 const rule = {
   meta: {
@@ -21,7 +21,7 @@ const rule = {
   {
     const sourceCode = context.sourceCode ?? context.getSourceCode()
 
-    // regex patterns for standalone words
+    // match standalone words
     const andTestPattern = /\band\b/i
     const andReplacePattern = /\band\b/gi
     const withTestPattern = /\bwith\b/i
@@ -36,7 +36,7 @@ const rule = {
         {
           const text = comment.value
 
-          // check for "&" violations
+          // check ampersand abbrev
           if (andTestPattern.test(text))
           {
             context.report({
@@ -57,7 +57,7 @@ const rule = {
             })
           }
 
-          // check for "w/" violations
+          // check w/ abbrev
           if (withTestPattern.test(text))
           {
             context.report({

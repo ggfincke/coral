@@ -1,5 +1,5 @@
-// rules/no-jsdoc-blocks.js
-// prohibits JSDoc blocks (/** ... */) - TypeScript types provide documentation
+// eslint-rules/no-jsdoc-blocks.js
+// prohibit JSDoc blocks
 
 const rule = {
   meta: {
@@ -28,7 +28,7 @@ const rule = {
 
         for (const comment of comments)
         {
-          // check for block comments that start w/ * (JSDoc pattern)
+          // check JSDoc block shape
           if (comment.type === 'Block' && comment.value.startsWith('*'))
           {
             context.report({
