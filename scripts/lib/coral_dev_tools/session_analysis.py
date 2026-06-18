@@ -26,6 +26,7 @@ DEFAULT_APPROVAL_GATED_TOOLS = {
     "git_add",
     "git_commit",
     "git_push",
+    "git_switch",
     "write_file",
 }
 

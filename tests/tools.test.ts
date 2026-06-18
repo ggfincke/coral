@@ -26,6 +26,7 @@ import {
   gitLogTool,
   gitAddTool,
   gitCommitTool,
+  gitSwitchTool,
   gitPushTool,
 } from '../src/tools/git.js'
 import { taskTool } from '../src/tools/task.js'
@@ -245,14 +246,67 @@ test('git tools reject option-like inputs before shelling out', async () =>
   const diff = await gitDiffTool.execute({ ref: `--output=${target}` })
   const log = await gitLogTool.execute({ ref: `--output=${target}` })
   const add = await gitAddTool.execute({ paths: ['note.txt', '--all'] })
+  const branch = await gitSwitchTool.execute({ branch: '--orphan=evil' })
   const push = await gitPushTool.execute({ remote: '--exec=evil' })
 
   assert.match(diff.error ?? '', /Invalid ref/)
   assert.match(log.error ?? '', /Invalid ref/)
   assert.match(add.error ?? '', /Invalid path/)
+  assert.match(branch.error ?? '', /Invalid branch/)
   assert.match(push.error ?? '', /Invalid remote/)
   assert.equal(existsSync(target), false)
 })
+
+test(
+  'git_switch creates a branch and reports remaining status',
+  { skip: !hasGit },
+  async () =>
+  {
+    const dir = await tempDir('coral-gitswitch-')
+    assert.equal(spawnSync('git', ['init'], { cwd: dir }).status, 0)
+    assert.equal(
+      spawnSync('git', ['config', 'user.email', 'test@coral.dev'], {
+        cwd: dir,
+      }).status,
+      0
+    )
+    assert.equal(
+      spawnSync('git', ['config', 'user.name', 'Coral Test'], { cwd: dir })
+        .status,
+      0
+    )
+    await writeFile(join(dir, 'a.txt'), 'hello\n', 'utf-8')
+    assert.equal(spawnSync('git', ['add', '-A'], { cwd: dir }).status, 0)
+    assert.equal(
+      spawnSync('git', ['commit', '-m', 'init'], { cwd: dir }).status,
+      0
+    )
+    await writeFile(join(dir, 'dirty.txt'), 'dirty\n', 'utf-8')
+
+    setCwd(dir)
+    assert.equal(
+      gitSwitchTool.display?.summarize?.({
+        branch: 'feat/git-context',
+        create: true,
+        startPoint: 'main',
+      }),
+      '-c feat/git-context main'
+    )
+    const result = await gitSwitchTool.execute({
+      branch: 'feat/git-context',
+      create: true,
+    })
+    const current = spawnSync('git', ['branch', '--show-current'], {
+      cwd: dir,
+      encoding: 'utf-8',
+    })
+
+    assert.equal(result.error, undefined)
+    assert.equal(current.stdout.trim(), 'feat/git-context')
+    assert.match(result.output, /Current branch: feat\/git-context/)
+    assert.match(result.output, /\?\? dirty\.txt/)
+  }
+)
 
 test(
   'git_add and git_commit create a real commit',
@@ -377,6 +431,7 @@ test('subagentTools exposes only subagent-safe tools', () =>
     'bash',
     'git_add',
     'git_commit',
+    'git_switch',
     'git_push',
     'task',
     'todo_write',

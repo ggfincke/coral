@@ -2,15 +2,19 @@
 // regression tests for the agent tool-use loop
 
 import { strict as assert } from 'node:assert'
+import { spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { Agent, type AgentEvents } from '../src/agent/agent.js'
 import type { Tool, ToolExecutionContext } from '../src/tools/index.js'
-import type { OllamaMessage } from '../src/types/inference.js'
+import type { ChatRequest, OllamaMessage } from '../src/types/inference.js'
+import { GIT_CONTEXT_HEADING } from '../src/agent/git-context.js'
+import { estimateTotalTokens } from '../src/agent/compaction.js'
 
 const tempDirs: string[] = []
+const hasGit = spawnSync('git', ['--version']).status === 0
 
 interface TestAgentOptions
 {
@@ -20,7 +24,7 @@ interface TestAgentOptions
   maxIterations?: number
 }
 
-type TestChatStream = () => AsyncGenerator<{
+type TestChatStream = (request?: ChatRequest) => AsyncGenerator<{
   message: OllamaMessage
   done: boolean
 }>
@@ -219,6 +223,84 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
     ['read_file', 'glob']
   )
 })
+
+test(
+  'Agent sends volatile git context without persisting it',
+  { skip: !hasGit },
+  async () =>
+  {
+    const dir = await mkdtemp(join(tmpdir(), 'coral-git-context-agent-'))
+    tempDirs.push(dir)
+    assert.equal(spawnSync('git', ['init'], { cwd: dir }).status, 0)
+    assert.equal(
+      spawnSync('git', ['config', 'user.email', 'test@coral.dev'], {
+        cwd: dir,
+      }).status,
+      0
+    )
+    assert.equal(
+      spawnSync('git', ['config', 'user.name', 'Coral Test'], { cwd: dir })
+        .status,
+      0
+    )
+    await writeFile(join(dir, 'note.txt'), 'hello\n', 'utf-8')
+    assert.equal(spawnSync('git', ['add', '-A'], { cwd: dir }).status, 0)
+    assert.equal(
+      spawnSync('git', ['commit', '-m', 'init'], { cwd: dir }).status,
+      0
+    )
+
+    const agent = createTestAgent(dir)
+    const requests: OllamaMessage[][] = []
+    const contextTokens: number[] = []
+
+    attachChatStream(agent, async function* (request)
+    {
+      requests.push(request?.messages ?? [])
+      yield {
+        message: { role: 'assistant', content: 'ok' },
+        done: true,
+      }
+    })
+
+    await agent.run(
+      'first',
+      createAgentEvents({
+        onUsage(usage)
+        {
+          contextTokens.push(usage.contextTokens)
+        },
+      })
+    )
+    await agent.run(
+      'second',
+      createAgentEvents({
+        onUsage(usage)
+        {
+          contextTokens.push(usage.contextTokens)
+        },
+      })
+    )
+
+    assert.equal(requests.length, 2)
+    assert.deepEqual(contextTokens, requests.map(estimateTotalTokens))
+    for (const messages of requests)
+    {
+      assert.equal(
+        messages.filter((message) =>
+          message.content.startsWith(GIT_CONTEXT_HEADING)
+        ).length,
+        1
+      )
+    }
+    assert.equal(
+      agent.messages.some((message) =>
+        message.content.startsWith(GIT_CONTEXT_HEADING)
+      ),
+      false
+    )
+  }
+)
 
 test('Agent batches only tools marked parallelSafe', async () =>
 {

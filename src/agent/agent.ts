@@ -68,6 +68,7 @@ import {
 } from './verify.js'
 import { validateToolArgs } from './tool-validation.js'
 import { loadProjectConfig } from '../config/project-config.js'
+import { buildGitContextMessage } from './git-context.js'
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
@@ -727,6 +728,23 @@ export class Agent
     return buildSystemPrompt({ model, cwd: getCwd(), tools: this.tools })
   }
 
+  // append volatile repo state to the request only; keep session history stable
+  private buildRequestMessages(
+    gitContext: OllamaMessage | null
+  ): OllamaMessage[]
+  {
+    return gitContext ? [...this.messages, gitContext] : this.messages
+  }
+
+  // include request-only context in budget checks & usage display
+  private estimateRequestTokens(gitContext: OllamaMessage | null): number
+  {
+    return (
+      this.estimatedTokenCount +
+      (gitContext ? estimateMessageTokens(gitContext) : 0)
+    )
+  }
+
   // clean run() exit: drop compaction callbacks & signal completion
   private finishRun(events: AgentEvents): void
   {
@@ -1008,16 +1026,12 @@ export class Agent
   }
 
   // two-phase compaction: prune tool results first, then summarize if needed
-  private async compactIfNeeded(): Promise<void>
+  private async compactIfNeeded(volatileTokens = 0): Promise<void>
   {
+    const totalTokens = this.estimatedTokenCount + volatileTokens
+
     // phase 1: prune old tool results (no model call, instant)
-    if (
-      shouldPrune(
-        this.messages.length,
-        this.estimatedTokenCount,
-        this.compactionConfig
-      )
-    )
+    if (shouldPrune(this.messages.length, totalTokens, this.compactionConfig))
     {
       const beforeTokens = this.estimatedTokenCount
       const beforeMessages = this.messages.length
@@ -1046,11 +1060,13 @@ export class Agent
       }
     }
 
+    const totalAfterPrune = this.estimatedTokenCount + volatileTokens
+
     // phase 2: full summarization if still over threshold
     if (
       !shouldCompactByTotal(
         this.messages.length,
-        this.estimatedTokenCount,
+        totalAfterPrune,
         this.compactionConfig
       )
     )
@@ -1136,8 +1152,11 @@ export class Agent
         return
       }
 
+      const gitContext = await buildGitContextMessage(getCwd())
+      const volatileTokens = gitContext ? estimateMessageTokens(gitContext) : 0
+
       // compact conversation if approaching context limits
-      await this.compactIfNeeded()
+      await this.compactIfNeeded(volatileTokens)
 
       // trim history if it grows too large, preserving system prompt
       if (this.messages.length > MAX_HISTORY)
@@ -1153,10 +1172,13 @@ export class Agent
 
       try
       {
+        const requestMessages = this.buildRequestMessages(gitContext)
+        const requestContextTokens = this.estimateRequestTokens(gitContext)
+
         for await (const chunk of this.client.chatStream(
           {
             model: this.model,
-            messages: this.messages,
+            messages: requestMessages,
             tools: this.ollamaTools,
             think: this.thinkMode,
             num_ctx: this.numCtx || undefined,
@@ -1202,7 +1224,7 @@ export class Agent
               completionTokens,
               totalPromptTokens: this.totalPromptTokens,
               totalCompletionTokens: this.totalCompletionTokens,
-              contextTokens: this.estimatedTokenCount,
+              contextTokens: requestContextTokens,
               promptEvalDurationNs,
               evalDurationNs,
               totalPromptEvalDurationNs: this.totalPromptEvalDurationNs,

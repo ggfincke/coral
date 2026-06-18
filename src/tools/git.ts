@@ -3,7 +3,11 @@
 
 import type { Tool, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
-import { runGitCommand, type GitCommandOptions } from '../utils/git.js'
+import {
+  runGitCommand,
+  currentBranchLabel,
+  type GitCommandOptions,
+} from '../utils/git.js'
 
 // reject model-supplied refs that look like options — a ref like
 // '--output=<path>' would let git write to an arbitrary file
@@ -255,6 +259,100 @@ export const gitCommitTool: Tool = {
     }
 
     return runGit(['commit', '-m', message], getCwd(), '(commit created)')
+  },
+}
+
+// approval-gated write tool — switches or creates branches
+export const gitSwitchTool: Tool = {
+  name: 'git_switch',
+  description:
+    'Switch branches. Pass create:true to create a new branch from HEAD, or ' +
+    'with startPoint to create from a specific ref.',
+  display: {
+    label: 'Git Switch',
+    summarize: (args) =>
+    {
+      const parts = [
+        args.create ? '-c' : '',
+        String(args.branch ?? ''),
+        args.startPoint ? String(args.startPoint) : '',
+      ].filter(Boolean)
+      return parts.join(' ')
+    },
+  },
+  parameters: {
+    type: 'object',
+    properties: {
+      branch: {
+        type: 'string',
+        description: 'Branch name to switch to or create',
+      },
+      create: {
+        type: 'boolean',
+        description: 'Create the branch before switching (default false)',
+      },
+      startPoint: {
+        type: 'string',
+        description: 'Optional start ref when create:true',
+      },
+    },
+    required: ['branch'],
+  },
+  async execute(args): Promise<ToolResult>
+  {
+    const branch = (args.branch as string | undefined)?.trim()
+    const create = (args.create as boolean | undefined) ?? false
+    const startPoint = (args.startPoint as string | undefined)?.trim()
+
+    if (!branch)
+    {
+      return { output: '', error: 'git_switch requires a branch' }
+    }
+    if (isUnsafeRef(branch))
+    {
+      return { output: '', error: `Invalid branch: ${branch}` }
+    }
+    if (startPoint && isUnsafeRef(startPoint))
+    {
+      return { output: '', error: `Invalid startPoint: ${startPoint}` }
+    }
+    if (startPoint && !create)
+    {
+      return { output: '', error: 'git_switch startPoint requires create:true' }
+    }
+
+    const cwd = getCwd()
+
+    if (create)
+    {
+      const branchCheck = await runGitCommand(
+        ['check-ref-format', '--branch', branch],
+        cwd
+      )
+      if (branchCheck.error)
+      {
+        return { output: '', error: `Invalid branch: ${branch}` }
+      }
+    }
+
+    const flags = ['switch']
+    if (create) flags.push('-c')
+    flags.push(branch)
+    if (startPoint) flags.push(startPoint)
+
+    const switched = await runGitCommand(flags, cwd)
+    if (switched.error) return switched
+
+    const currentBranch = await currentBranchLabel(cwd)
+    const status = await runGitCommand(['status', '--short'], cwd)
+    const statusBlock =
+      !status.error && status.output.trim()
+        ? `Status:\n${status.output}`
+        : 'Status: clean'
+
+    return {
+      output: [`Current branch: ${currentBranch}`, statusBlock].join('\n'),
+    }
   },
 }
 

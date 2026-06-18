@@ -16,6 +16,7 @@ import {
   gitLogTool,
   gitAddTool,
   gitCommitTool,
+  gitSwitchTool,
   gitPushTool,
 } from './git.js'
 import { taskTool } from './task.js'
@@ -36,6 +37,7 @@ export const allTools: Tool[] = [
   gitLogTool,
   gitAddTool,
   gitCommitTool,
+  gitSwitchTool,
   gitPushTool,
   taskTool,
   todoWriteTool,

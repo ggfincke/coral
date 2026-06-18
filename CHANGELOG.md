@@ -46,12 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lines, large diffs truncated w/ a summary marker) instead of the plain
   result line, & the approval box renders the exact pending change before
   authorization. New `diff` (jsdiff) dependency for diff generation.
+- **Git workflow context:** inject a capped, volatile git snapshot into each
+  model request so branch, upstream, operation state, staged/unstaged/untracked
+  files, diff stats, & recent commits are visible without rewriting the stable
+  system prompt. Adds approval-gated `git_switch` for structured branch
+  switching/creation.
 
 ### Changed
 
 - Tool dispatch now resolves tools from the agent's own toolset instead of the
   global registry, so restricted toolsets (e.g. read-only subagents) can no
   longer reach tools outside their subset.
+- Commit workflow guidance now treats untracked files as part of "current diff"
+  unless narrowed, requires explicit path staging for grouped commits, and
+  requires a status check before claiming commit work is complete.
 
 ### Fixed
 
