@@ -1,12 +1,15 @@
 // src/session/store.ts
 // session persistence — save & resume conversations to/from disk
 
-import { readFileSync, mkdirSync, readdirSync, existsSync } from 'node:fs'
+import { mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { OllamaMessage } from '../types/inference.js'
 import { getCoralHome } from '../utils/coral-home.js'
-import { writeJsonFile } from '../utils/json.js'
+import {
+  readJsonFile as readUnknownJsonFile,
+  writeJsonFile,
+} from '../utils/json.js'
 
 // ! keep in sync w/ coral_dev_tools/session_analysis.py SESSION_INDEX_VERSION
 const SESSION_INDEX_VERSION = 1
@@ -106,14 +109,8 @@ function sortSessions(sessions: SessionMeta[]): SessionMeta[]
 // read & parse a JSON file, returning null when missing/corrupt
 function readJsonFile<T>(path: string): T | null
 {
-  try
-  {
-    return JSON.parse(readFileSync(path, 'utf-8')) as T
-  }
-  catch
-  {
-    return null
-  }
+  const parsed = readUnknownJsonFile(path)
+  return parsed === undefined ? null : (parsed as T)
 }
 
 // write the compact metadata index
@@ -261,19 +258,6 @@ export function loadSession(id: string): SessionData | null
 export function listSessions(): SessionMeta[]
 {
   return loadSessionIndex()
-}
-
-// get the most recently updated session (for --resume)
-export function getLatestSession(): SessionMeta | null
-{
-  const sessions = listSessions()
-  return sessions.length > 0 ? sessions[0]! : null
-}
-
-// check if a session exists
-export function sessionExists(id: string): boolean
-{
-  return existsSync(sessionPath(id))
 }
 
 // rename a session's title
