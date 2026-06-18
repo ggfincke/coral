@@ -6,10 +6,83 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { Agent } from '../src/agent/agent.js'
+import { Agent, type AgentEvents } from '../src/agent/agent.js'
+import type { Tool, ToolExecutionContext } from '../src/tools/index.js'
 import type { OllamaMessage } from '../src/types/inference.js'
 
 const tempDirs: string[] = []
+
+interface TestAgentOptions
+{
+  tools?: Tool[]
+  registerSubagent?: boolean
+  verifyEdits?: boolean
+  maxIterations?: number
+}
+
+type TestChatStream = () => AsyncGenerator<{
+  message: OllamaMessage
+  done: boolean
+}>
+
+type TestAgent = Agent & {
+  client: {
+    startKeepAlive: (model: string) => void
+    unloadModel?: (model?: string) => Promise<void>
+    chatStream: TestChatStream
+  }
+  messages: OllamaMessage[]
+}
+
+type ReadOnlySubagentPatch = Agent & {
+  runReadOnlySubagent: (prompt: string) => Promise<{
+    text: string
+    toolCount: number
+    error?: string
+    aborted: boolean
+  }>
+}
+
+function createTestAgent(
+  dir: string,
+  options: TestAgentOptions = {},
+  baseUrl = 'http://localhost:11434'
+): TestAgent
+{
+  return new Agent('fake-model', baseUrl, dir, options) as TestAgent
+}
+
+function attachChatStream(agent: TestAgent, chatStream: TestChatStream): void
+{
+  agent.client = {
+    startKeepAlive()
+    {},
+    chatStream,
+  }
+}
+
+function createAgentEvents(overrides: Partial<AgentEvents> = {}): AgentEvents
+{
+  return {
+    onToken()
+    {},
+    onToolCall()
+    {},
+    onToolResult()
+    {},
+    onToolApproval()
+    {
+      return Promise.resolve(true)
+    },
+    onDone()
+    {},
+    onError(error)
+    {
+      throw error
+    },
+    ...overrides,
+  }
+}
 
 // remove temp workspaces created during tests
 after(async () =>
@@ -36,113 +109,86 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
     'utf-8'
   )
 
-  const agent = new Agent(
-    'fake-model',
-    'http://localhost:11434',
-    dir
-  ) as Agent & {
-    client: {
-      startKeepAlive: (model: string) => void
-      unloadModel?: (model?: string) => Promise<void>
-      chatStream: () => AsyncGenerator<{
-        message: OllamaMessage
-        done: boolean
-      }>
-    }
-    messages: OllamaMessage[]
-  }
+  const agent = createTestAgent(dir)
 
   let streamCount = 0
-  agent.client = {
-    startKeepAlive()
-    {},
-    async *chatStream()
+  attachChatStream(agent, async function* ()
+  {
+    streamCount += 1
+
+    if (streamCount === 1)
     {
-      streamCount += 1
-
-      if (streamCount === 1)
-      {
-        yield {
-          message: {
-            role: 'assistant',
-            content: '',
-            thinking: 'Inspect files. ',
-            tool_calls: [
-              {
-                type: 'function',
-                function: {
-                  index: 1,
-                  name: 'glob',
-                  arguments: { pattern: 'src/**/*.ts' },
-                },
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          thinking: 'Inspect files. ',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 1,
+                name: 'glob',
+                arguments: { pattern: 'src/**/*.ts' },
               },
-            ],
-          },
-          done: false,
-        }
-
-        yield {
-          message: {
-            role: 'assistant',
-            content: '',
-            thinking: 'Then read package metadata.',
-            tool_calls: [
-              {
-                type: 'function',
-                function: {
-                  index: 0,
-                  name: 'read_file',
-                  arguments: { path: 'package.json' },
-                },
-              },
-            ],
-          },
-          done: true,
-        }
-
-        return
+            },
+          ],
+        },
+        done: false,
       }
 
       yield {
         message: {
           role: 'assistant',
-          content: 'done',
+          content: '',
+          thinking: 'Then read package metadata.',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 0,
+                name: 'read_file',
+                arguments: { path: 'package.json' },
+              },
+            },
+          ],
         },
         done: true,
       }
-    },
-  }
+
+      return
+    }
+
+    yield {
+      message: {
+        role: 'assistant',
+        content: 'done',
+      },
+      done: true,
+    }
+  })
 
   const seenCalls: string[] = []
   const seenResults: string[] = []
   const seenThinking: string[] = []
 
-  await agent.run('inspect the repo', {
-    onThinking(thinking)
-    {
-      seenThinking.push(thinking)
-    },
-    onToken()
-    {},
-    onToolCall(name)
-    {
-      seenCalls.push(name)
-    },
-    onToolResult(name, result, error)
-    {
-      seenResults.push(`${name}:${error ?? result.split('\n')[0]}`)
-    },
-    onToolApproval()
-    {
-      return Promise.resolve(true)
-    },
-    onDone()
-    {},
-    onError(error)
-    {
-      throw error
-    },
-  })
+  await agent.run(
+    'inspect the repo',
+    createAgentEvents({
+      onThinking(thinking)
+      {
+        seenThinking.push(thinking)
+      },
+      onToolCall(name)
+      {
+        seenCalls.push(name)
+      },
+      onToolResult(name, result, error)
+      {
+        seenResults.push(`${name}:${error ?? result.split('\n')[0]}`)
+      },
+    })
+  )
 
   assert.deepEqual(seenCalls, ['read_file', 'glob'])
   assert.equal(seenResults.length, 2)
@@ -174,34 +220,41 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
   )
 })
 
-test('Agent only asks approval for dangerous tools & records rejections as tool results', async () =>
+test('Agent batches only tools marked parallelSafe', async () =>
 {
-  const dir = await mkdtemp(join(tmpdir(), 'coral-approval-'))
+  const dir = await mkdtemp(join(tmpdir(), 'coral-parallel-contract-'))
   tempDirs.push(dir)
 
-  await writeFile(join(dir, 'note.txt'), 'hello from coral\n', 'utf-8')
-
-  const agent = new Agent(
-    'fake-model',
-    'http://localhost:11434',
-    dir
-  ) as Agent & {
-    client: {
-      startKeepAlive: (model: string) => void
-      unloadModel?: (model?: string) => Promise<void>
-      chatStream: () => AsyncGenerator<{
-        message: OllamaMessage
-        done: boolean
-      }>
+  async function runPair(
+    name: string,
+    metadata: Pick<Tool, 'subagentSafe' | 'parallelSafe'>
+  ): Promise<number>
+  {
+    let active = 0
+    let maxActive = 0
+    const tool: Tool = {
+      name,
+      description: 'timed test tool',
+      parameters: { type: 'object', properties: {} },
+      ...metadata,
+      async execute()
+      {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        active -= 1
+        return { output: name }
+      },
     }
-    messages: OllamaMessage[]
-  }
 
-  let streamCount = 0
-  agent.client = {
-    startKeepAlive()
-    {},
-    async *chatStream()
+    const agent = createTestAgent(dir, {
+      tools: [tool],
+      registerSubagent: false,
+      verifyEdits: false,
+    })
+
+    let streamCount = 0
+    attachChatStream(agent, async function* ()
     {
       streamCount += 1
 
@@ -212,20 +265,8 @@ test('Agent only asks approval for dangerous tools & records rejections as tool 
             role: 'assistant',
             content: '',
             tool_calls: [
-              {
-                type: 'function',
-                function: {
-                  name: 'read_file',
-                  arguments: { path: 'note.txt' },
-                },
-              },
-              {
-                type: 'function',
-                function: {
-                  name: 'bash',
-                  arguments: { command: 'pwd' },
-                },
-              },
+              { type: 'function', function: { name, arguments: {} } },
+              { type: 'function', function: { name, arguments: {} } },
             ],
           },
           done: true,
@@ -241,33 +282,250 @@ test('Agent only asks approval for dangerous tools & records rejections as tool 
         },
         done: true,
       }
+    })
+
+    await agent.run('run two tools', createAgentEvents())
+
+    return maxActive
+  }
+
+  assert.equal(
+    await runPair('read_file', { subagentSafe: true, parallelSafe: true }),
+    2
+  )
+  assert.equal(await runPair('search_code', { subagentSafe: true }), 1)
+})
+
+test('Agent passes request-scoped execution context to tools', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-tool-context-'))
+  tempDirs.push(dir)
+
+  let seenContext: ToolExecutionContext | undefined
+  const tool: Tool = {
+    name: 'read_file',
+    description: 'context test tool',
+    parameters: { type: 'object', properties: {} },
+    async execute(_args, context)
+    {
+      seenContext = context
+      return { output: 'ok' }
     },
   }
+
+  const agent = createTestAgent(
+    dir,
+    {
+      tools: [tool],
+      registerSubagent: false,
+      verifyEdits: false,
+    },
+    'http://ollama-a.test'
+  )
+
+  let streamCount = 0
+  attachChatStream(agent, async function* ()
+  {
+    streamCount += 1
+
+    if (streamCount === 1)
+    {
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: { name: 'read_file', arguments: {} },
+            },
+          ],
+        },
+        done: true,
+      }
+      return
+    }
+
+    yield {
+      message: {
+        role: 'assistant',
+        content: 'done',
+      },
+      done: true,
+    }
+  })
+
+  const controller = new AbortController()
+
+  await agent.run('run tool', createAgentEvents(), controller.signal)
+
+  assert.equal(seenContext?.cwd, dir)
+  assert.equal(seenContext?.ollamaHost, 'http://ollama-a.test')
+  assert.equal(seenContext?.signal, controller.signal)
+})
+
+test('Agent verifies edit diffs recorded from tool results', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-verify-diff-'))
+  tempDirs.push(dir)
+
+  const tool: Tool = {
+    name: 'read_file',
+    description: 'diff-producing test tool',
+    parameters: { type: 'object', properties: {} },
+    async execute()
+    {
+      return {
+        output: 'changed',
+        diff: '--- a/example.ts\n+++ b/example.ts\n@@\n-old\n+new\n',
+      }
+    },
+  }
+
+  const agent = createTestAgent(dir, {
+    tools: [tool],
+    registerSubagent: false,
+    verifyEdits: true,
+  })
+
+  let streamCount = 0
+  attachChatStream(agent, async function* ()
+  {
+    streamCount += 1
+
+    if (streamCount === 1)
+    {
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: { name: 'read_file', arguments: {} },
+            },
+          ],
+        },
+        done: true,
+      }
+      return
+    }
+
+    yield {
+      message: {
+        role: 'assistant',
+        content: 'done',
+      },
+      done: true,
+    }
+  })
+
+  const prototype = Agent.prototype as unknown as ReadOnlySubagentPatch
+  const originalRunReadOnlySubagent = prototype.runReadOnlySubagent
+  let verifyPrompt = ''
+
+  prototype.runReadOnlySubagent = async (prompt: string) =>
+  {
+    verifyPrompt = prompt
+    return {
+      text: 'VERDICT: FAIL - diff mismatch',
+      toolCount: 0,
+      aborted: false,
+    }
+  }
+
+  try
+  {
+    const verdicts: string[] = []
+    await agent.run(
+      'apply the requested edit',
+      createAgentEvents({
+        onVerification(result)
+        {
+          verdicts.push(`${result.status}:${result.reason ?? ''}`)
+        },
+      })
+    )
+
+    assert.ok(verifyPrompt.includes('apply the requested edit'))
+    assert.ok(verifyPrompt.includes('example.ts'))
+    assert.deepEqual(verdicts, ['fail:diff mismatch'])
+  }
+  finally
+  {
+    prototype.runReadOnlySubagent = originalRunReadOnlySubagent
+  }
+})
+
+test('Agent only asks approval for dangerous tools & records rejections as tool results', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-approval-'))
+  tempDirs.push(dir)
+
+  await writeFile(join(dir, 'note.txt'), 'hello from coral\n', 'utf-8')
+
+  const agent = createTestAgent(dir)
+
+  let streamCount = 0
+  attachChatStream(agent, async function* ()
+  {
+    streamCount += 1
+
+    if (streamCount === 1)
+    {
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                name: 'read_file',
+                arguments: { path: 'note.txt' },
+              },
+            },
+            {
+              type: 'function',
+              function: {
+                name: 'bash',
+                arguments: { command: 'pwd' },
+              },
+            },
+          ],
+        },
+        done: true,
+      }
+
+      return
+    }
+
+    yield {
+      message: {
+        role: 'assistant',
+        content: 'done',
+      },
+      done: true,
+    }
+  })
 
   const approvals: string[] = []
   const results: string[] = []
 
-  await agent.run('inspect the repo', {
-    onToken()
-    {},
-    onToolCall()
-    {},
-    onToolResult(name, result, error)
-    {
-      results.push(`${name}:${error ?? result.split('\n')[0]}`)
-    },
-    onToolApproval(name)
-    {
-      approvals.push(name)
-      return Promise.resolve(false)
-    },
-    onDone()
-    {},
-    onError(error)
-    {
-      throw error
-    },
-  })
+  await agent.run(
+    'inspect the repo',
+    createAgentEvents({
+      onToolResult(name, result, error)
+      {
+        results.push(`${name}:${error ?? result.split('\n')[0]}`)
+      },
+      onToolApproval(name)
+      {
+        approvals.push(name)
+        return Promise.resolve(false)
+      },
+    })
+  )
 
   assert.deepEqual(approvals, ['bash'])
   assert.ok(
@@ -288,75 +546,46 @@ test('aborting mid-tools records a reply for every announced tool_call', async (
   tempDirs.push(dir)
   await writeFile(join(dir, 'note.txt'), 'hello\n', 'utf-8')
 
-  const agent = new Agent(
-    'fake-model',
-    'http://localhost:11434',
-    dir
-  ) as Agent & {
-    client: {
-      startKeepAlive: (model: string) => void
-      chatStream: () => AsyncGenerator<{
-        message: OllamaMessage
-        done: boolean
-      }>
-    }
-    messages: OllamaMessage[]
-  }
+  const agent = createTestAgent(dir)
 
-  agent.client = {
-    startKeepAlive()
-    {},
-    async *chatStream()
-    {
-      yield {
-        message: {
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              type: 'function',
-              function: { name: 'read_file', arguments: { path: 'note.txt' } },
-            },
-            {
-              type: 'function',
-              function: { name: 'bash', arguments: { command: 'pwd' } },
-            },
-            {
-              type: 'function',
-              function: { name: 'read_file', arguments: { path: 'note.txt' } },
-            },
-          ],
-        },
-        done: true,
-      }
-    },
-  }
+  attachChatStream(agent, async function* ()
+  {
+    yield {
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            type: 'function',
+            function: { name: 'read_file', arguments: { path: 'note.txt' } },
+          },
+          {
+            type: 'function',
+            function: { name: 'bash', arguments: { command: 'pwd' } },
+          },
+          {
+            type: 'function',
+            function: { name: 'read_file', arguments: { path: 'note.txt' } },
+          },
+        ],
+      },
+      done: true,
+    }
+  })
 
   // abort while the approval-gated bash call is pending, mid-batch
   const controller = new AbortController()
 
   await agent.run(
     'go',
-    {
-      onToken()
-      {},
-      onToolCall()
-      {},
-      onToolResult()
-      {},
+    createAgentEvents({
       onToolApproval()
       {
         controller.abort()
         return new Promise<boolean>(() =>
         {})
       },
-      onDone()
-      {},
-      onError(error)
-      {
-        throw error
-      },
-    },
+    }),
     controller.signal
   )
 
@@ -381,64 +610,41 @@ test('Agent stops after maxIterations tool-call rounds', async () =>
   const dir = await mkdtemp(join(tmpdir(), 'coral-maxiter-'))
   tempDirs.push(dir)
 
-  const agent = new Agent('fake-model', 'http://localhost:11434', dir, {
+  const agent = createTestAgent(dir, {
     maxIterations: 3,
-  }) as Agent & {
-    client: {
-      startKeepAlive: (model: string) => void
-      chatStream: () => AsyncGenerator<{
-        message: OllamaMessage
-        done: boolean
-      }>
-    }
-  }
+  })
 
-  // a model that always asks for one more (unknown) tool — without the cap the
+  // a model that always asks for one more unknown tool; w/o the cap the
   // loop would never terminate
   let streamCount = 0
-  agent.client = {
-    startKeepAlive()
-    {},
-    async *chatStream()
-    {
-      streamCount += 1
-      yield {
-        message: {
-          role: 'assistant',
-          content: '',
-          tool_calls: [
-            {
-              type: 'function',
-              function: { index: 0, name: 'noop', arguments: {} },
-            },
-          ],
-        },
-        done: true,
-      }
-    },
-  }
+  attachChatStream(agent, async function* ()
+  {
+    streamCount += 1
+    yield {
+      message: {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          {
+            type: 'function',
+            function: { index: 0, name: 'noop', arguments: {} },
+          },
+        ],
+      },
+      done: true,
+    }
+  })
 
   let done = false
-  await agent.run('loop forever', {
-    onToken()
-    {},
-    onToolCall()
-    {},
-    onToolResult()
-    {},
-    onToolApproval()
-    {
-      return Promise.resolve(true)
-    },
-    onDone()
-    {
-      done = true
-    },
-    onError(error)
-    {
-      throw error
-    },
-  })
+  await agent.run(
+    'loop forever',
+    createAgentEvents({
+      onDone()
+      {
+        done = true
+      },
+    })
+  )
 
   assert.equal(done, true)
   assert.equal(streamCount, 3)

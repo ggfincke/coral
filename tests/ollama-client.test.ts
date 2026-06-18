@@ -332,3 +332,183 @@ test('embed posts batched input to Ollama embed endpoint', async () =>
     globalThis.fetch = originalFetch
   }
 })
+
+test('showModel includes Ollama API error bodies', async () =>
+{
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async () =>
+  {
+    return new Response('model not found', { status: 404 })
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://ollama.test')
+
+    await assert.rejects(
+      () => client.showModel('missing-model'),
+      /Ollama API error: 404 model not found/
+    )
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('embed translates fetch failures with host context', async () =>
+{
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async () =>
+  {
+    throw new Error('socket closed')
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://ollama.test')
+
+    await assert.rejects(
+      () => client.embed('nomic-embed-text', ['auth flow']),
+      /Cannot reach Ollama at http:\/\/ollama\.test: socket closed/
+    )
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('embed preserves Ollama API error text', async () =>
+{
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async () =>
+  {
+    return new Response('pull model first', { status: 404 })
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://ollama.test')
+
+    await assert.rejects(
+      () => client.embed('nomic-embed-text', ['auth flow']),
+      /Ollama API error: 404 pull model first/
+    )
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('embed rejects missing embeddings', async () =>
+{
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async () =>
+  {
+    return new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://ollama.test')
+
+    await assert.rejects(
+      () => client.embed('nomic-embed-text', ['auth flow']),
+      /did not include embeddings/
+    )
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('embed rejects response count mismatches', async () =>
+{
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async () =>
+  {
+    return new Response(JSON.stringify({ embeddings: [[1, 0]] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://ollama.test')
+
+    await assert.rejects(
+      () => client.embed('nomic-embed-text', ['auth flow', 'render button']),
+      /count mismatch: expected 2, got 1/
+    )
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('embed rejects malformed embedding vectors', async () =>
+{
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async () =>
+  {
+    return new Response(JSON.stringify({ embeddings: [['bad']] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://ollama.test')
+
+    await assert.rejects(
+      () => client.embed('nomic-embed-text', ['auth flow']),
+      /invalid embedding/
+    )
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('embed rejects empty embedding vectors', async () =>
+{
+  const originalFetch = globalThis.fetch
+
+  globalThis.fetch = (async () =>
+  {
+    return new Response(JSON.stringify({ embeddings: [[]] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }) as typeof fetch
+
+  try
+  {
+    const client = new OllamaClient('http://ollama.test')
+
+    await assert.rejects(
+      () => client.embed('nomic-embed-text', ['auth flow']),
+      /invalid embedding/
+    )
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})

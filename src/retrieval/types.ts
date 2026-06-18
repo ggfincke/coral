@@ -76,7 +76,7 @@ export interface IndexStore
   ): void
   upsertFile(projectId: number, file: IndexedFile, model: string): void
   deleteFile(projectId: number, path: string): void
-  deleteMissingFiles(projectId: number, currentPaths: Set<string>): number
+  deleteMissingFiles(projectId: number, currentPaths: Set<string>): void
   search(
     projectId: number,
     model: string,

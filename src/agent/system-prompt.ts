@@ -6,6 +6,11 @@ import { basename } from 'node:path'
 import type { Tool } from '../tools/tool.js'
 import { gatherProjectContext } from './context.js'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
+import {
+  compareProjectTreeEntries,
+  formatProjectTreeEntryName,
+  shouldIncludeProjectTreeEntry,
+} from '../shared/project-tree.js'
 
 const PROJECT_CONTEXT_LIMIT = 12
 
@@ -42,10 +47,17 @@ function formatProjectContext(cwd: string): string
   try
   {
     entries = readdirSync(cwd, { withFileTypes: true })
-      .filter((entry) => !IGNORED_ROOT_ENTRIES.has(entry.name))
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .filter((entry) =>
+        shouldIncludeProjectTreeEntry(entry.name, IGNORED_ROOT_ENTRIES)
+      )
+      .map((entry) => ({
+        name: entry.name,
+        isDir: entry.isDirectory(),
+        isSymlink: entry.isSymbolicLink(),
+      }))
+      .sort(compareProjectTreeEntries)
       .slice(0, PROJECT_CONTEXT_LIMIT)
-      .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
+      .map(formatProjectTreeEntryName)
   }
   catch
   {

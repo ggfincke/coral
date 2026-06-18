@@ -8,12 +8,13 @@ export class OllamaEmbedder implements Embedder
 {
   constructor(
     private client: OllamaClient,
-    public model = DEFAULT_EMBEDDING_MODEL
+    public model = DEFAULT_EMBEDDING_MODEL,
+    private signal?: AbortSignal
   )
   {}
 
   async embed(texts: string[]): Promise<number[][]>
   {
-    return this.client.embed(this.model, texts)
+    return this.client.embed(this.model, texts, this.signal)
   }
 }

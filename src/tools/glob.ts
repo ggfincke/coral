@@ -1,9 +1,13 @@
 // src/tools/glob.ts
 // find files by name pattern via ripgrep
 
-import type { Tool, ToolResult } from './tool.js'
+import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { execRipgrep, NO_MATCHING_FILES_MESSAGE } from './ripgrep-utils.js'
-import { resolvePath } from '../cwd.js'
+import { getCwd, resolvePath } from '../cwd.js'
+import {
+  formatProjectPath,
+  isPathInsideProject,
+} from '../shared/project-tree.js'
 import { truncateOutput } from '../utils/truncate-output.js'
 
 const MAX_FILES = 100
@@ -12,7 +16,8 @@ export const globTool: Tool = {
   name: 'glob',
   description:
     'Find files by name/path glob pattern. Returns matching file paths sorted by modification time (newest first). Requires ripgrep (rg) to be installed.',
-  readOnly: true,
+  subagentSafe: true,
+  parallelSafe: true,
   display: { label: 'Glob', summarize: (args) => String(args.pattern ?? '') },
   parameters: {
     type: 'object',
@@ -29,10 +34,13 @@ export const globTool: Tool = {
     },
     required: ['pattern'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const pattern = args.pattern as string
+    const cwd = getCwd()
     const path = resolvePath((args.path as string) ?? '.')
+    const isProjectPath = isPathInsideProject(cwd, path)
+    const searchPath = isProjectPath ? formatProjectPath(cwd, path) : path
 
     const rgArgs = [
       '--files',
@@ -40,10 +48,14 @@ export const globTool: Tool = {
       '--sortr=modified',
       '--glob',
       pattern,
-      path,
     ]
 
-    const result = await execRipgrep(rgArgs, NO_MATCHING_FILES_MESSAGE)
+    if (searchPath !== '.') rgArgs.push(searchPath)
+
+    const result = await execRipgrep(rgArgs, NO_MATCHING_FILES_MESSAGE, {
+      cwd: isProjectPath ? cwd : undefined,
+      signal: context?.signal,
+    })
     if (result.error || result.output === NO_MATCHING_FILES_MESSAGE)
       return result
 

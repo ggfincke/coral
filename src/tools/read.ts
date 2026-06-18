@@ -7,7 +7,8 @@ import { readFileGuarded } from './file-utils.js'
 export const readTool: Tool = {
   name: 'read_file',
   description: 'Read the contents of a file at the given path.',
-  readOnly: true,
+  subagentSafe: true,
+  parallelSafe: true,
   display: { label: 'Read', summarize: (args) => String(args.path ?? '') },
   parameters: {
     type: 'object',

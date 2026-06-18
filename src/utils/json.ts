@@ -1,8 +1,9 @@
 // src/utils/json.ts
 // JSON parse & file helpers
 
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { isPlainObject } from './guards.js'
 
 // parse JSON, returning undefined on any parse error
 export function tryParseJson(text: string): unknown
@@ -17,9 +18,35 @@ export function tryParseJson(text: string): unknown
   }
 }
 
-// write a value as pretty-printed JSON, creating the parent dir if needed
+// read a JSON file, returning undefined when absent, unreadable, or invalid
+export function readJsonFile(path: string): unknown | undefined
+{
+  try
+  {
+    return tryParseJson(readFileSync(path, 'utf-8'))
+  }
+  catch
+  {
+    return undefined
+  }
+}
+
+// read a JSON file that must contain a plain object
+export function readJsonObjectFile(
+  path: string
+): Record<string, unknown> | undefined
+{
+  const parsed = readJsonFile(path)
+  return isPlainObject(parsed) ? parsed : undefined
+}
+
+// write a value as pretty-printed JSON, creating the parent dir if needed.
+// write-then-rename so a crash mid-write can't leave a truncated file — the
+// rename is atomic, so readers see either the old contents or the new
 export function writeJsonFile(path: string, value: unknown): void
 {
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(value, null, 2), 'utf-8')
+  const tmp = `${path}.tmp`
+  writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf-8')
+  renameSync(tmp, path)
 }

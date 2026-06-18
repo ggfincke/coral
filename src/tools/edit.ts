@@ -6,6 +6,7 @@ import type { Tool, ToolResult } from './tool.js'
 import { readFileGuarded } from './file-utils.js'
 import { resolvePath } from '../cwd.js'
 import { applyEdit, computeDiff } from '../utils/diff.js'
+import { toErrorMessage } from '../utils/errors.js'
 
 export const editTool: Tool = {
   name: 'edit_file',
@@ -72,7 +73,10 @@ export const editTool: Tool = {
     }
     catch (err)
     {
-      return { output: '', error: `Failed to write ${path}: ${err}` }
+      return {
+        output: '',
+        error: `Failed to write ${path}: ${toErrorMessage(err)}`,
+      }
     }
 
     const replaced = replaceAll ? result.count : 1

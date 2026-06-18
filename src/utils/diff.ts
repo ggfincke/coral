@@ -1,9 +1,12 @@
 // src/utils/diff.ts
 // unified diff generation for file edits & approval previews
 
-import { readFile } from 'node:fs/promises'
 import { structuredPatch } from 'diff'
-import { resolvePath } from '../cwd.js'
+import {
+  formatPreviewSkipMessage,
+  readRequiredTextFile,
+  readOptionalPreviousTextFile,
+} from './file-read.js'
 
 // skip diffing sources past this size — generation cost outweighs the value
 const MAX_DIFF_SOURCE_CHARS = 1_000_000
@@ -74,6 +77,15 @@ export type ApplyEditResult =
       count: number
     }
 
+export type ToolDiffPreview =
+  | { kind: 'diff'; diff: string }
+  | { kind: 'message'; message: string }
+
+function diffPreview(diff: string | null): ToolDiffPreview | null
+{
+  return diff ? { kind: 'diff', diff } : null
+}
+
 export function applyEdit(
   before: string,
   oldString: string,
@@ -96,34 +108,43 @@ export function applyEdit(
   return { ok: true, after, count }
 }
 
-// best-effort pre-execution diff for the approval box — mirrors what
+// best-effort pre-execution diff for the approval box. mirrors what
 // write_file/edit_file would do w/o touching disk; null means no preview
 export async function previewToolDiff(
   toolName: string,
   args: Record<string, unknown>
-): Promise<string | null>
+): Promise<ToolDiffPreview | null>
 {
   try
   {
     if (toolName === 'write_file')
     {
-      const path = resolvePath(String(args.path ?? ''))
-      const before = await readFile(path, 'utf-8').catch(() => '')
-      return computeDiff(before, String(args.content ?? ''))
+      const before = await readOptionalPreviousTextFile(String(args.path ?? ''))
+      if (!before.ok)
+      {
+        return { kind: 'message', message: formatPreviewSkipMessage(before) }
+      }
+      return diffPreview(
+        computeDiff(before.content, String(args.content ?? ''))
+      )
     }
 
     if (toolName === 'edit_file')
     {
-      const path = resolvePath(String(args.path ?? ''))
-      const before = await readFile(path, 'utf-8').catch(() => null)
-      if (before === null) return null
+      const before = await readRequiredTextFile(String(args.path ?? ''))
+      if (!before.ok)
+      {
+        return { kind: 'message', message: formatPreviewSkipMessage(before) }
+      }
       const result = applyEdit(
-        before,
+        before.content,
         String(args.old_string ?? ''),
         String(args.new_string ?? ''),
         Boolean(args.replace_all)
       )
-      return result.ok ? computeDiff(before, result.after) : null
+      return result.ok
+        ? diffPreview(computeDiff(before.content, result.after))
+        : null
     }
   }
   catch

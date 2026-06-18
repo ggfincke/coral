@@ -47,3 +47,24 @@ test('createShutdownCoordinator runs cleanup and exit only once', async () =>
 
   assert.deepEqual(calls, ['cleanup', 'exit'])
 })
+
+test('createShutdownCoordinator can be shared by signal and UI exits', async () =>
+{
+  const calls: string[] = []
+  const shutdown = createShutdownCoordinator(
+    async () =>
+    {
+      calls.push('cleanup')
+    },
+    () =>
+    {
+      calls.push('exit')
+    }
+  )
+  const signalExit = () => shutdown()
+  const uiExit = () => shutdown()
+
+  await Promise.all([signalExit(), uiExit(), shutdown()])
+
+  assert.deepEqual(calls, ['cleanup', 'exit'])
+})

@@ -27,11 +27,23 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' } as const
 const THINK_FALLBACK_STATUS = new Set([400, 404, 422])
 type ThinkSupport = 'unknown' | 'supported' | 'unsupported'
 
+interface JsonRequestOptions
+{
+  method?: string
+  body?: unknown
+  signal?: AbortSignal
+}
+
 function throwApiError(status: number, body: string): never
 {
   throw new Error(
     body ? `Ollama API error: ${status} ${body}` : `Ollama API error: ${status}`
   )
+}
+
+function formatConnectionError(baseUrl: string, detail: string): string
+{
+  return `Cannot reach Ollama at ${baseUrl}: ${detail}`
 }
 
 // read an exact numeric key from an Ollama model_info map
@@ -118,7 +130,7 @@ export class OllamaClient
     this.thinkSupportByModel.set(model, support)
   }
 
-  // POST a chat body, mapping connection failures to an actionable message —
+  // POST a chat body, mapping connection failures to an actionable message
   // undici surfaces a dropped socket (server down, OOM, oversized request) as a
   // bare "fetch failed", so translate it while letting aborts propagate as-is
   private async chatFetch(
@@ -140,10 +152,42 @@ export class OllamaClient
       if (signal?.aborted) throw err
       const detail = toErrorMessage(err)
       throw new Error(
-        `Cannot reach Ollama at ${this.baseUrl} — the server may be down, or ` +
-          `the request may have exceeded the model's context or memory (${detail})`
+        `${formatConnectionError(this.baseUrl, detail)} - the server may be down, or ` +
+          `the request may have exceeded the model's context or memory`
       )
     }
+  }
+
+  // fetch a non-streaming JSON endpoint w/ shared error handling
+  private async jsonRequest<T>(
+    path: string,
+    options: JsonRequestOptions = {}
+  ): Promise<T>
+  {
+    const init: RequestInit = {
+      method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
+      headers: JSON_HEADERS,
+      signal: options.signal,
+    }
+
+    if (options.body !== undefined)
+    {
+      init.body = JSON.stringify(options.body)
+    }
+
+    let res: Response
+    try
+    {
+      res = await fetch(`${this.baseUrl}${path}`, init)
+    }
+    catch (err)
+    {
+      if (options.signal?.aborted) throw err
+      throw new Error(formatConnectionError(this.baseUrl, toErrorMessage(err)))
+    }
+
+    if (!res.ok) throwApiError(res.status, await res.text())
+    return (await res.json()) as T
   }
 
   // open a chat stream & fall back when think is unsupported
@@ -238,17 +282,10 @@ export class OllamaClient
   // fetch model details (context window, KV dims, etc.) from the Ollama instance
   async showModel(model: string): Promise<ModelInfo>
   {
-    const res = await fetch(`${this.baseUrl}/api/show`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({ model }),
-    })
-    if (!res.ok) throwApiError(res.status, '')
-
-    const data = (await res.json()) as {
+    const data = await this.jsonRequest<{
       model_info?: Record<string, unknown>
       parameters?: string
-    }
+    }>('/api/show', { body: { model } })
 
     const info = data.model_info ?? {}
     const arch =
@@ -291,9 +328,7 @@ export class OllamaClient
   // fetch available models from the Ollama instance
   async listModels(): Promise<Model[]>
   {
-    const res = await fetch(`${this.baseUrl}/api/tags`)
-    if (!res.ok) throwApiError(res.status, '')
-    const data = (await res.json()) as { models: Model[] }
+    const data = await this.jsonRequest<{ models: Model[] }>('/api/tags')
     return data.models
   }
 
@@ -306,23 +341,37 @@ export class OllamaClient
   {
     if (input.length === 0) return []
 
-    const res = await fetch(`${this.baseUrl}/api/embed`, {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify({
+    const data = await this.jsonRequest<EmbedResponse>('/api/embed', {
+      body: {
         model,
         input,
         keep_alive: DEFAULT_KEEP_ALIVE,
-      }),
+      },
       signal,
     })
 
-    if (!res.ok) throwApiError(res.status, await res.text())
-
-    const data = (await res.json()) as EmbedResponse
     if (!Array.isArray(data.embeddings))
     {
       throw new Error('Ollama embed response did not include embeddings')
+    }
+
+    if (data.embeddings.length !== input.length)
+    {
+      throw new Error(
+        `Ollama embed response count mismatch: expected ${input.length}, got ${data.embeddings.length}`
+      )
+    }
+
+    for (const embedding of data.embeddings)
+    {
+      if (
+        !Array.isArray(embedding) ||
+        embedding.length === 0 ||
+        embedding.some((value) => typeof value !== 'number')
+      )
+      {
+        throw new Error('Ollama embed response included an invalid embedding')
+      }
     }
 
     return data.embeddings
