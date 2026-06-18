@@ -6,8 +6,8 @@ import type { Model } from '../types/inference.js'
 import { style } from './theme.js'
 import { wrapLines } from './wrap.js'
 
-// preferred default model — pinned to the top of the picker & pre-selected at startup
-export const DEFAULT_MODEL = 'gemma4:31b-mlx'
+// preferred default model, pinned to top & selected at startup
+const DEFAULT_MODEL = 'gemma4:31b-mlx'
 
 function parseModifiedAt(value: string): number
 {

@@ -14,12 +14,8 @@ import {
 import { findTheme, THEMES } from './themes.js'
 import type { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
-import {
-  listSessions,
-  loadSession,
-  sessionExists,
-  type SessionMeta,
-} from '../session/store.js'
+import { listSessions } from '../session/store.js'
+import { resolveResumeSession } from '../session/resume.js'
 import type { OutputBlock, SystemBlock } from './transcript.js'
 import { runGitCommand } from '../utils/git.js'
 import {
@@ -30,12 +26,15 @@ import {
   pluralizeMessages,
 } from './metrics.js'
 import { toErrorMessage } from '../utils/errors.js'
-
-// brand header for command output — `Coral — <title>`
-function coralHeader(title: string): string
-{
-  return `${style('primary')('Coral')} ${style('muted')(`— ${title}`)}`
-}
+import {
+  coralHeader,
+  formatManualCompactionResult,
+  formatPermissionModeChange,
+  formatPermissionsHelp,
+  formatTuiResumeResolution,
+  formatTuiSessionList,
+  formatUnknownPermissionMode,
+} from './command-output.js'
 
 // context passed to every command — provides access to app state & setters
 export interface CommandContext
@@ -83,10 +82,6 @@ interface ParsedCommand
   args: string
 }
 
-type ResumeTarget =
-  | { type: 'target'; session: SessionMeta }
-  | { type: 'message'; content: string }
-
 // parse a slash command from user input
 // returns null if input doesn't start w/ /
 function parseCommand(input: string): ParsedCommand | null
@@ -123,73 +118,6 @@ function findCommand(name: string, commands: Command[]): Command | undefined
 function systemBlock(content: string): SystemBlock
 {
   return { type: 'system', content }
-}
-
-function formatResumedSession(session: SessionMeta): string
-{
-  return `Resumed session ${style('user')(session.id)} — ${session.title}`
-}
-
-function resolveResumeTarget(
-  args: string,
-  currentSessionId: string | null
-): ResumeTarget
-{
-  const requestedId = args.trim()
-  const sessions = listSessions()
-
-  // resolve a chosen session to a target, guarding the already-current case
-  const asTarget = (session: SessionMeta): ResumeTarget =>
-    session.id === currentSessionId
-      ? { type: 'message', content: 'Already in this session.' }
-      : { type: 'target', session }
-
-  if (!requestedId)
-  {
-    const latest = sessions.find((session) => session.id !== currentSessionId)
-    return latest
-      ? { type: 'target', session: latest }
-      : { type: 'message', content: 'No other sessions to resume.' }
-  }
-
-  const exact = sessions.find((session) => session.id === requestedId)
-  if (exact) return asTarget(exact)
-
-  // fall back to disk — a session file can exist without an index entry
-  // (e.g. concurrent writers clobbering index.json, or a copied-in session)
-  if (sessionExists(requestedId))
-  {
-    const onDisk = loadSession(requestedId)
-    if (onDisk?.meta) return asTarget(onDisk.meta)
-  }
-
-  const matches = sessions.filter((session) =>
-    session.id.startsWith(requestedId)
-  )
-
-  if (matches.length === 1) return asTarget(matches[0]!)
-
-  if (matches.length > 1)
-  {
-    const matchList = matches
-      .slice(0, 5)
-      .map(
-        (session) =>
-          `  ${style('user')(session.id)}  ${chalk.dim(session.title)}`
-      )
-      .join('\n')
-    return {
-      type: 'message',
-      content: `Ambiguous session ID "${requestedId}" — multiple matches:\n${matchList}`,
-    }
-  }
-
-  return {
-    type: 'message',
-    content:
-      `Session not found: ${requestedId}\n` +
-      `Use ${style('user')('/sessions')} to see available sessions.`,
-  }
 }
 
 // ── /help ──────────────────────────────────────────────────────────────
@@ -286,15 +214,7 @@ const compactCommand: Command = {
       return
     }
 
-    const savedTokens = result.beforeTokens - result.afterTokens
-    const savedMessages = result.beforeMessages - result.afterMessages
-    const lines = [
-      `Context compacted`,
-      `  ${result.beforeMessages} messages -> ${result.afterMessages} messages (${savedMessages} summarized)`,
-      `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (${formatTokenCount(savedTokens)} freed)`,
-    ]
-
-    ctx.pushOutput(systemBlock(lines.join('\n')))
+    ctx.pushOutput(systemBlock(formatManualCompactionResult(result)))
   },
 }
 
@@ -303,7 +223,7 @@ const compactCommand: Command = {
 const statusCommand: Command = {
   name: 'status',
   description: 'Show model, session, token usage, & working directory',
-  execute(_args, ctx)
+  async execute(_args, ctx)
   {
     const cwd = getCwd()
     const model = ctx.activeModel
@@ -313,7 +233,7 @@ const statusCommand: Command = {
     const permissions = ctx.yolo
       ? 'yolo (auto-approve all)'
       : 'ask (prompt before writes)'
-    const gitBranch = getGitBranch(cwd)
+    const gitBranch = await getGitBranch(cwd)
     const usage = ctx.agent.getTokenUsage()
 
     const lines: string[] = [
@@ -418,9 +338,9 @@ const statusCommand: Command = {
 }
 
 // get the current git branch, or null if not in a repo
-function getGitBranch(cwd: string): string | null
+async function getGitBranch(cwd: string): Promise<string | null>
 {
-  const result = runGitCommand(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, {
+  const result = await runGitCommand(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, {
     timeout: 3000,
   })
 
@@ -542,18 +462,7 @@ const permissionsCommand: Command = {
   {
     if (!args)
     {
-      const current = ctx.yolo ? 'yolo' : 'ask'
-      const description = ctx.yolo
-        ? 'auto-approve all tool calls'
-        : 'prompt before writes & shell commands'
-      ctx.pushOutput(
-        systemBlock(
-          `Permission mode: ${chalk.bold(current)} (${description})\n\n` +
-            `  ${style('user')('/permissions ask')}   — prompt before writes & shell commands\n` +
-            `  ${style('user')('/permissions yolo')}  — auto-approve all tool calls\n` +
-            `  ${chalk.dim('ctrl+y')}             — quick toggle`
-        )
-      )
+      ctx.pushOutput(systemBlock(formatPermissionsHelp(ctx.yolo)))
       return
     }
 
@@ -562,29 +471,16 @@ const permissionsCommand: Command = {
     if (mode === 'yolo')
     {
       ctx.setYolo(true)
-      ctx.pushOutput(
-        systemBlock(
-          `Permission mode → ${style('warning').bold('yolo')} (all tool calls auto-approved)`
-        )
-      )
+      ctx.pushOutput(systemBlock(formatPermissionModeChange(true)))
     }
     else if (mode === 'ask')
     {
       ctx.setYolo(false)
-      ctx.pushOutput(
-        systemBlock(
-          `Permission mode → ${chalk.bold('ask')} (prompt before writes & shell commands)`
-        )
-      )
+      ctx.pushOutput(systemBlock(formatPermissionModeChange(false)))
     }
     else
     {
-      ctx.pushOutput(
-        systemBlock(
-          `Unknown permission mode: "${mode}"\n` +
-            `Valid modes: ${style('user')('ask')}, ${style('user')('yolo')}`
-        )
-      )
+      ctx.pushOutput(systemBlock(formatUnknownPermissionMode(mode)))
     }
   },
 }
@@ -706,11 +602,11 @@ const themeCommand: Command = {
 const diffCommand: Command = {
   name: 'diff',
   description: 'Show git diff of working directory',
-  execute(_args, ctx)
+  async execute(_args, ctx)
   {
     const cwd = getCwd()
 
-    const result = runGitCommand(['diff'], cwd, { allowStdoutOnError: true })
+    const result = await runGitCommand(['diff'], cwd, { allowStdoutOnError: true })
 
     if (result.error)
     {
@@ -743,29 +639,9 @@ const sessionsCommand: Command = {
     const limit = Number.isFinite(count) && count > 0 ? count : 10
     const sessions = listSessions().slice(0, limit)
 
-    if (sessions.length === 0)
-    {
-      ctx.pushOutput(systemBlock('No saved sessions.'))
-      return
-    }
-
-    const lines: string[] = [coralHeader('saved sessions'), '']
-
-    for (const s of sessions)
-    {
-      const date = new Date(s.updatedAt).toLocaleString()
-      const isCurrent = s.id === ctx.sessionLabelId
-      const marker = isCurrent ? style('success')(' ●') : '  '
-      lines.push(
-        `${marker} ${style('user')(s.id)}  ${chalk.white(s.model)}  ${chalk.dim(date)}  ${chalk.dim(`(${s.messageCount} msgs)`)}`
-      )
-      lines.push(`     ${chalk.dim(s.title)}`)
-    }
-
-    lines.push('')
-    lines.push(chalk.dim(`Resume with ${style('user')('/resume <id>')}`))
-
-    ctx.pushOutput(systemBlock(lines.join('\n')))
+    ctx.pushOutput(
+      systemBlock(formatTuiSessionList(sessions, ctx.sessionLabelId))
+    )
   },
 }
 
@@ -776,11 +652,15 @@ const resumeCommand: Command = {
   description: 'Resume a saved session (no args = latest)',
   execute(args, ctx)
   {
-    const target = resolveResumeTarget(args, ctx.sessionLabelId)
+    const target = resolveResumeSession({
+      requestedId: args,
+      currentSessionId: ctx.sessionLabelId,
+      allowPrefix: true,
+    })
 
-    if (target.type === 'message')
+    if (target.type !== 'target')
     {
-      ctx.pushOutput(systemBlock(target.content))
+      ctx.pushOutput(systemBlock(formatTuiResumeResolution(target)))
       return
     }
 
@@ -788,7 +668,7 @@ const resumeCommand: Command = {
 
     if (ctx.resumeSession(target.session.id))
     {
-      ctx.pushOutput(systemBlock(formatResumedSession(target.session)))
+      ctx.pushOutput(systemBlock(formatTuiResumeResolution(target)))
       return
     }
 

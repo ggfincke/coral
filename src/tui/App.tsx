@@ -26,11 +26,16 @@ import { getThemeGeneration, inkColor, style } from './theme.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { previewToolDiff } from '../utils/diff.js'
 import { dispatchCommand, type CommandContext } from './commands.js'
+import {
+  formatAutoCompactionResult,
+  formatPermissionModeChange,
+} from './command-output.js'
 import { useAnimationTimer } from './use-animation-timer.js'
 import { useStreamBuffer } from './use-stream-buffer.js'
 import { useSessionPersistence } from './use-session-persistence.js'
 import { useInputHistory } from './use-input-history.js'
 import { loadSession, renameSession } from '../session/store.js'
+import { getCwd } from '../cwd.js'
 import { type RunStage } from './run-stage.js'
 import {
   buildTokenGauge,
@@ -66,6 +71,7 @@ interface ApprovalPrompt
   args: Record<string, unknown>
   // pre-computed change preview — rendered inside the approval box
   diff?: string
+  previewMessage?: string
   resolve: (approved: boolean) => void
 }
 
@@ -183,6 +189,7 @@ export default function App({
   // per-call start times keyed by callId — parallel batches run several at once
   const toolStartTimesRef = useRef<Map<number, number>>(new Map())
   const runAbortRef = useRef<AbortController | null>(null)
+  const shutdownCoordinatorRef = useRef<(() => Promise<void>) | null>(null)
   // live permission mode — read at approval time so a mid-run toggle takes effect
   const yoloRef = useRef(yolo)
   const maxOffsetRef = useRef(0)
@@ -196,7 +203,8 @@ export default function App({
         approval.toolName,
         approval.args,
         transcriptWidth,
-        approval.diff
+        approval.diff,
+        approval.previewMessage
       )
     : []
   const confirmBoxLines = confirm
@@ -290,7 +298,7 @@ export default function App({
         width: transcriptWidth,
         rows: chatViewportHeight,
         model: activeModel,
-        cwd: process.cwd(),
+        cwd: getCwd(),
         themeGeneration,
       }),
     [transcriptWidth, chatViewportHeight, activeModel, themeGeneration]
@@ -310,6 +318,16 @@ export default function App({
     disposedAgentsRef.current.add(agentInstance)
     await agentInstance.dispose()
   }, [])
+
+  const shutdown = useCallback(() =>
+  {
+    shutdownCoordinatorRef.current ??= createShutdownCoordinator(
+      () => disposeAgent(agentRef.current),
+      () => exit()
+    )
+
+    return shutdownCoordinatorRef.current()
+  }, [disposeAgent, exit])
 
   // clear transcript, scroll, & session label — used by /clear
   const clearSession = useCallback(() =>
@@ -626,17 +644,13 @@ export default function App({
 
   useEffect(() =>
   {
-    const handleShutdown = createShutdownCoordinator(
-      () => disposeAgent(agentRef.current),
-      () => exit()
-    )
     const onSignal = () =>
     {
-      void handleShutdown()
+      void shutdown()
     }
 
     return registerSignalHandlers(process, onSignal)
-  }, [disposeAgent, exit])
+  }, [shutdown])
 
   useEffect(() =>
   {
@@ -743,7 +757,7 @@ export default function App({
           }
           else
           {
-            exit()
+            void shutdown()
           }
         }
 
@@ -831,7 +845,10 @@ export default function App({
           reopenModelPicker,
           switchModel,
           setYolo,
-          exitApp: exit,
+          exitApp: () =>
+          {
+            void shutdown()
+          },
           resumeSession: resumeSessionById,
           saveCurrentSession,
           renameCurrentSession,
@@ -908,11 +925,18 @@ export default function App({
             if (yoloRef.current) return true
 
             // compute the change preview before showing the box (best-effort)
-            const diff = (await previewToolDiff(name, args)) ?? undefined
+            const preview = await previewToolDiff(name, args)
 
             return new Promise<boolean>((resolve) =>
             {
-              setApproval({ toolName: name, args, diff, resolve })
+              setApproval({
+                toolName: name,
+                args,
+                diff: preview?.kind === 'diff' ? preview.diff : undefined,
+                previewMessage:
+                  preview?.kind === 'message' ? preview.message : undefined,
+                resolve,
+              })
             })
           },
           onDoomLoop(message)
@@ -1028,27 +1052,10 @@ export default function App({
           },
           onCompaction(result)
           {
-            const saved = result.beforeTokens - result.afterTokens
-            let content: string
-
-            if (result.type === 'pruned')
-            {
-              content = `Auto-pruned ${result.prunedResults ?? 0} old tool results (~${formatTokenCount(saved)} tokens freed)`
-            }
-            else
-            {
-              const header =
-                result.type === 'trimmed'
-                  ? 'Context trimmed to recent history (summarization unavailable)'
-                  : 'Context auto-compacted'
-              content = [
-                header,
-                `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
-                `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (~${formatTokenCount(saved)} freed)`,
-              ].join('\n')
-            }
-
-            setOutput((prev) => [...prev, { type: 'system', content }])
+            setOutput((prev) => [
+              ...prev,
+              { type: 'system', content: formatAutoCompactionResult(result) },
+            ])
             setRunStage('waiting')
             startWaiting()
           },
@@ -1097,7 +1104,6 @@ export default function App({
       appendThinking,
       clearSession,
       consumeBufferedBlocks,
-      exit,
       host,
       persistSession,
       renameCurrentSession,
@@ -1109,6 +1115,7 @@ export default function App({
       saveCurrentSession,
       sessionIdRef,
       sessionLabelId,
+      shutdown,
       startWaiting,
       stopWaiting,
       switchModel,
@@ -1237,9 +1244,7 @@ export default function App({
         ...prev,
         {
           type: 'system' as const,
-          content: next
-            ? 'Permission mode → yolo (all tool calls auto-approved)'
-            : 'Permission mode → ask (prompt before writes & shell commands)',
+          content: formatPermissionModeChange(next),
         },
       ])
       return next
@@ -1283,9 +1288,9 @@ export default function App({
     }
     else
     {
-      exit()
+      void shutdown()
     }
-  }, [abortRun, exit])
+  }, [abortRun, shutdown])
 
   return (
     <Box flexDirection="column" height={terminalSize.rows}>
