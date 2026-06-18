@@ -10,10 +10,12 @@ participate in the shipped Node runtime.
 
 ```bash
 npm run check:dev-tools
-npm run test:dev-tools
 npm run sessions:analyze
 npm run reference:inventory
 ```
+
+`check:dev-tools` is a syntax-only compile gate for the Python dev-tool
+sources.
 
 Direct invocations are also supported:
 

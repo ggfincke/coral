@@ -1,4 +1,4 @@
-// rules/index.js
+// eslint-rules/index.js
 // shared ESLint comment-style rules plugin
 
 import fileHeader from './file-header.js'

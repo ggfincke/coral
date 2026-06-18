@@ -3,8 +3,13 @@
 
 import { createHash } from 'node:crypto'
 import { readdir, readFile, stat } from 'node:fs/promises'
-import { join, relative, sep } from 'node:path'
+import { join } from 'node:path'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
+import {
+  compareProjectTreeEntries,
+  formatProjectPath,
+  shouldIncludeProjectTreeEntry,
+} from '../shared/project-tree.js'
 import type { SourceFile } from './types.js'
 
 const MAX_INDEXABLE_FILE_BYTES = 512 * 1024
@@ -23,11 +28,6 @@ export interface CollectedFiles
 {
   changed: SourceFile[]
   unchangedPaths: string[]
-}
-
-function toProjectPath(cwd: string, absolutePath: string): string
-{
-  return relative(cwd, absolutePath).split(sep).join('/')
 }
 
 function isProbablyText(buffer: Buffer): boolean
@@ -81,12 +81,17 @@ export async function collectIndexableFiles(
       return
     }
 
-    entries.sort((a, b) => a.name.localeCompare(b.name))
+    entries.sort((a, b) =>
+      compareProjectTreeEntries(
+        { name: a.name, isDir: a.isDirectory(), isSymlink: a.isSymbolicLink() },
+        { name: b.name, isDir: b.isDirectory(), isSymlink: b.isSymbolicLink() }
+      )
+    )
 
     for (const entry of entries)
     {
       if (fileCount >= MAX_PROJECT_FILES) return
-      if (IGNORED_ENTRIES.has(entry.name)) continue
+      if (!shouldIncludeProjectTreeEntry(entry.name, IGNORED_ENTRIES)) continue
       if (entry.isSymbolicLink()) continue
 
       const path = join(dir, entry.name)
@@ -103,7 +108,7 @@ export async function collectIndexableFiles(
       if (!info.isFile() || info.size > MAX_INDEXABLE_FILE_BYTES) continue
 
       const fileStat: ProjectFileStat = {
-        path: toProjectPath(cwd, path),
+        path: formatProjectPath(cwd, path),
         size: info.size,
         mtimeMs: info.mtimeMs,
       }

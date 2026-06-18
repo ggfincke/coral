@@ -13,14 +13,14 @@ function isUnsafeRef(ref: string): boolean
 }
 
 // run a git command, applying a display placeholder when output is empty
-function runGit(
+async function runGit(
   args: string[],
   cwd: string,
   placeholder = '(no output)',
   options?: GitCommandOptions
-): ToolResult
+): Promise<ToolResult>
 {
-  const result = runGitCommand(args, cwd, options)
+  const result = await runGitCommand(args, cwd, options)
   if (result.error) return result
   return { output: result.output || placeholder }
 }
@@ -29,7 +29,8 @@ export const gitStatusTool: Tool = {
   name: 'git_status',
   description:
     'Show the working tree status (staged, unstaged, & untracked files).',
-  readOnly: true,
+  subagentSafe: true,
+  parallelSafe: true,
   display: { label: 'Git Status', summarize: () => '' },
   parameters: {
     type: 'object',
@@ -54,7 +55,8 @@ export const gitDiffTool: Tool = {
     'Show changes between commits, staging area, & working tree. On a large ' +
     'working tree, pass stat:true first for a per-file summary, then diff a ' +
     'specific path for detail.',
-  readOnly: true,
+  subagentSafe: true,
+  parallelSafe: true,
   display: {
     label: 'Git Diff',
     summarize: (args) =>
@@ -109,7 +111,8 @@ export const gitDiffTool: Tool = {
 export const gitLogTool: Tool = {
   name: 'git_log',
   description: 'Show recent commit history.',
-  readOnly: true,
+  subagentSafe: true,
+  parallelSafe: true,
   display: {
     label: 'Git Log',
     summarize: (args) =>
@@ -200,7 +203,7 @@ export const gitAddTool: Tool = {
 
     if (all)
     {
-      const result = runGitCommand(['add', '-A'], getCwd())
+      const result = await runGitCommand(['add', '-A'], getCwd())
       if (result.error) return result
       return { output: 'Staged all changes' }
     }
@@ -217,7 +220,7 @@ export const gitAddTool: Tool = {
       return { output: '', error: `Invalid path: ${unsafe}` }
     }
 
-    const result = runGitCommand(['add', '--', ...paths], getCwd())
+    const result = await runGitCommand(['add', '--', ...paths], getCwd())
     if (result.error) return result
     return { output: `Staged ${paths.length} path(s): ${paths.join(', ')}` }
   },
@@ -251,11 +254,7 @@ export const gitCommitTool: Tool = {
       return { output: '', error: 'git_commit requires a non-empty message' }
     }
 
-    // git prints its summary (or "nothing to commit") to stdout, exiting 1 in
-    // the latter case — surface that text rather than a generic exit error
-    return runGit(['commit', '-m', message], getCwd(), '(commit created)', {
-      allowStdoutOnError: true,
-    })
+    return runGit(['commit', '-m', message], getCwd(), '(commit created)')
   },
 }
 

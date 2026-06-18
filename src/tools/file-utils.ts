@@ -1,18 +1,17 @@
 // src/tools/file-utils.ts
 // shared file-read helpers w/ size guards
 
-import { readFile, stat } from 'node:fs/promises'
 import type { ToolResult } from './tool.js'
-import { resolvePath } from '../cwd.js'
-
-const BYTES_PER_MB = 1_048_576
-// cap reads at 1 MB so large files don't blow up context
-const MAX_READ_FILE_BYTES = BYTES_PER_MB
+import {
+  formatRequiredTextFileError,
+  readRequiredTextFile,
+} from '../utils/file-read.js'
 
 // success result from readFileGuarded
 export interface FileContent
 {
   ok: true
+  path: string
   content: string
 }
 
@@ -20,6 +19,7 @@ export interface FileContent
 export interface FileError
 {
   ok: false
+  path: string
   result: ToolResult
 }
 
@@ -28,44 +28,11 @@ export async function readFileGuarded(
   rawPath: string
 ): Promise<FileContent | FileError>
 {
-  const path = resolvePath(rawPath)
-  let size: number
-  try
-  {
-    const stats = await stat(path)
-    size = stats.size
-  }
-  catch (err)
-  {
-    return {
-      ok: false,
-      result: { output: '', error: `Failed to read ${path}: ${err}` },
-    }
-  }
-
-  if (size > MAX_READ_FILE_BYTES)
-  {
-    const sizeMB = (size / BYTES_PER_MB).toFixed(1)
-    const maxMB = (MAX_READ_FILE_BYTES / BYTES_PER_MB).toFixed(1)
-    return {
-      ok: false,
-      result: {
-        output: '',
-        error: `${path} is ${sizeMB}MB — exceeds ${maxMB}MB limit. Use bash w/ head/tail to read a portion.`,
-      },
-    }
-  }
-
-  try
-  {
-    const content = await readFile(path, 'utf-8')
-    return { ok: true, content }
-  }
-  catch (err)
-  {
-    return {
-      ok: false,
-      result: { output: '', error: `Failed to read ${path}: ${err}` },
-    }
+  const result = await readRequiredTextFile(rawPath)
+  if (result.ok) return result
+  return {
+    ok: false,
+    path: result.path,
+    result: { output: '', error: formatRequiredTextFileError(result) },
   }
 }

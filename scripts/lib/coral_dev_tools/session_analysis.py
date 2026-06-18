@@ -19,7 +19,15 @@ JsonObject = dict[str, Any]
 CHARS_PER_TOKEN = 4
 # ! keep in sync w/ src/session/store.ts SESSION_INDEX_VERSION
 SESSION_INDEX_VERSION = 1
-RISKY_TOOLS = {"bash", "write_file", "edit_file"}
+# ! keep in sync w/ src/config/permissions.ts DEFAULT_TOOL_POLICIES
+DEFAULT_APPROVAL_GATED_TOOLS = {
+    "bash",
+    "edit_file",
+    "git_add",
+    "git_commit",
+    "git_push",
+    "write_file",
+}
 
 
 @dataclass(frozen=True)
@@ -317,7 +325,9 @@ def metrics_for_session(
         names = tool_call_names(message)
         tool_calls += len(names)
         tool_counts.update(names)
-        risky_tool_calls += sum(1 for name in names if name in RISKY_TOOLS)
+        risky_tool_calls += sum(
+            1 for name in names if name in DEFAULT_APPROVAL_GATED_TOOLS
+        )
 
         if message.get("role") == "tool":
             name = message.get("tool_name")

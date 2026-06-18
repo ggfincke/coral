@@ -1,0 +1,154 @@
+// src/utils/file-read.ts
+// text-file read helpers w/ explicit safety modes
+
+import { readFile, stat } from 'node:fs/promises'
+import { resolvePath } from '../cwd.js'
+import { toErrorMessage } from './errors.js'
+
+const BYTES_PER_MB = 1_048_576
+
+export const TEXT_FILE_READ_LIMIT_BYTES = BYTES_PER_MB
+
+export type TextFileReadFailureReason = 'missing' | 'oversized' | 'unreadable'
+
+export interface TextFileReadSuccess
+{
+  ok: true
+  path: string
+  content: string
+  existed: boolean
+}
+
+export interface TextFileReadFailure
+{
+  ok: false
+  path: string
+  reason: TextFileReadFailureReason
+  message: string
+  size?: number
+  limit?: number
+}
+
+export type TextFileReadResult = TextFileReadSuccess | TextFileReadFailure
+
+function formatMB(bytes: number): string
+{
+  return (bytes / BYTES_PER_MB).toFixed(1)
+}
+
+function isMissing(err: unknown): boolean
+{
+  return (err as NodeJS.ErrnoException).code === 'ENOENT'
+}
+
+function oversizedFailure(path: string, size: number): TextFileReadFailure
+{
+  const sizeMB = formatMB(size)
+  const limitMB = formatMB(TEXT_FILE_READ_LIMIT_BYTES)
+  return {
+    ok: false,
+    path,
+    reason: 'oversized',
+    message: `${path} is ${sizeMB}MB, exceeds ${limitMB}MB read limit`,
+    size,
+    limit: TEXT_FILE_READ_LIMIT_BYTES,
+  }
+}
+
+async function readTextFile(
+  rawPath: string,
+  missingAsEmpty: boolean
+): Promise<TextFileReadResult>
+{
+  const path = resolvePath(rawPath)
+  let size: number
+  try
+  {
+    const stats = await stat(path)
+    size = stats.size
+  }
+  catch (err)
+  {
+    if (missingAsEmpty && isMissing(err))
+    {
+      return { ok: true, path, content: '', existed: false }
+    }
+
+    return {
+      ok: false,
+      path,
+      reason: isMissing(err) ? 'missing' : 'unreadable',
+      message: `Failed to read ${path}: ${toErrorMessage(err)}`,
+    }
+  }
+
+  if (size > TEXT_FILE_READ_LIMIT_BYTES)
+  {
+    return oversizedFailure(path, size)
+  }
+
+  try
+  {
+    const content = await readFile(path, 'utf-8')
+    return { ok: true, path, content, existed: true }
+  }
+  catch (err)
+  {
+    return {
+      ok: false,
+      path,
+      reason: 'unreadable',
+      message: `Failed to read ${path}: ${toErrorMessage(err)}`,
+    }
+  }
+}
+
+export function formatRequiredTextFileError(
+  failure: TextFileReadFailure
+): string
+{
+  if (failure.reason === 'oversized')
+  {
+    return `${failure.message}. Use bash w/ head/tail to read a portion.`
+  }
+
+  return failure.message
+}
+
+export function formatPreviewSkipMessage(failure: TextFileReadFailure): string
+{
+  if (failure.reason === 'missing')
+  {
+    return 'Preview skipped: target file does not exist.'
+  }
+
+  return `Preview skipped: ${failure.message}.`
+}
+
+export function formatDiffSkipMessage(failure: TextFileReadFailure): string
+{
+  if (failure.reason === 'missing')
+  {
+    return 'Diff skipped: previous file does not exist.'
+  }
+  if (failure.reason === 'oversized')
+  {
+    return `Diff skipped: previous file ${failure.message}.`
+  }
+
+  return `Diff skipped: ${failure.message}.`
+}
+
+export function readRequiredTextFile(
+  rawPath: string
+): Promise<TextFileReadResult>
+{
+  return readTextFile(rawPath, false)
+}
+
+export function readOptionalPreviousTextFile(
+  rawPath: string
+): Promise<TextFileReadResult>
+{
+  return readTextFile(rawPath, true)
+}

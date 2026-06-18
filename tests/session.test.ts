@@ -13,10 +13,37 @@ import {
   loadSession,
   listSessions,
   renameSession,
+  type SessionData,
+  type SessionMeta,
 } from '../src/session/store.js'
+import { resolveResumeSessionFromCandidates } from '../src/session/resume.js'
 
 const tempDirs: string[] = []
 const originalCoralHome = process.env.CORAL_HOME
+
+function makeMeta(id: string, title = `Session ${id}`): SessionMeta
+{
+  return {
+    id,
+    model: 'test-model',
+    cwd: '/tmp/test-project',
+    createdAt: '2026-06-17T00:00:00.000Z',
+    updatedAt: '2026-06-17T00:00:00.000Z',
+    title,
+    messageCount: 2,
+  }
+}
+
+function makeSession(meta: SessionMeta): SessionData
+{
+  return {
+    meta,
+    messages: [
+      { role: 'system', content: 'System' },
+      { role: 'user', content: meta.title },
+    ],
+  }
+}
 
 beforeEach(async () =>
 {
@@ -119,4 +146,87 @@ test('renameSession updates the index without losing conversation data', () =>
   assert.equal(renamed.createdAt, meta.createdAt)
   assert.ok(loaded)
   assert.equal(loaded.messages.length, 3)
+})
+
+test('resolveResumeSessionFromCandidates keeps exact-only CLI resolution', () =>
+{
+  const sessions = [makeMeta('abcd1234'), makeMeta('abce5678')]
+  const result = resolveResumeSessionFromCandidates({
+    requestedId: 'abcd',
+    allowPrefix: false,
+    sessions,
+    loadSessionById: () => null,
+  })
+
+  assert.equal(result.type, 'not_found')
+  if (result.type === 'not_found') assert.equal(result.requestedId, 'abcd')
+})
+
+test('resolveResumeSessionFromCandidates supports TUI prefix ambiguity', () =>
+{
+  const sessions = [makeMeta('abcd1234'), makeMeta('abce5678')]
+  const result = resolveResumeSessionFromCandidates({
+    requestedId: 'abc',
+    allowPrefix: true,
+    sessions,
+    loadSessionById: () => null,
+  })
+
+  assert.equal(result.type, 'ambiguous')
+  if (result.type === 'ambiguous')
+  {
+    assert.deepEqual(
+      result.matches.map((session) => session.id),
+      ['abcd1234', 'abce5678']
+    )
+  }
+})
+
+test('resolveResumeSessionFromCandidates guards the active session', () =>
+{
+  const current = makeMeta('abcd1234')
+  const result = resolveResumeSessionFromCandidates({
+    requestedId: current.id,
+    currentSessionId: current.id,
+    allowPrefix: true,
+    sessions: [current],
+    loadSessionById: () => null,
+  })
+
+  assert.equal(result.type, 'current')
+})
+
+test('resolveResumeSessionFromCandidates chooses latest non-current session', () =>
+{
+  const latest = makeMeta('bbbbbbbb')
+  const current = makeMeta('aaaaaaaa')
+  const result = resolveResumeSessionFromCandidates({
+    currentSessionId: current.id,
+    sessions: [current, latest],
+    loadSessionById: () => null,
+  })
+  const onlyCurrent = resolveResumeSessionFromCandidates({
+    currentSessionId: current.id,
+    sessions: [current],
+    loadSessionById: () => null,
+  })
+
+  assert.equal(result.type, 'target')
+  if (result.type === 'target') assert.equal(result.session.id, latest.id)
+  assert.equal(onlyCurrent.type, 'empty')
+})
+
+test('resolveResumeSessionFromCandidates falls back to disk-only sessions', () =>
+{
+  const diskOnly = makeMeta('feedface', 'Disk-only session')
+  const result = resolveResumeSessionFromCandidates({
+    requestedId: diskOnly.id,
+    sessions: [],
+    loadSessionById: (id) =>
+      id === diskOnly.id ? makeSession(diskOnly) : null,
+  })
+
+  assert.equal(result.type, 'target')
+  if (result.type === 'target')
+    assert.equal(result.session.title, diskOnly.title)
 })

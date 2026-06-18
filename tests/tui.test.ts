@@ -10,6 +10,37 @@ import {
   sliceViewport,
   type OutputBlock,
 } from '../src/tui/transcript.js'
+import { buildApprovalBox, buildConfirmBox } from '../src/tui/approval-box.js'
+import {
+  formatAutoCompactionResult,
+  formatCliSessionList,
+  formatManualCompactionResult,
+  formatPermissionModeChange,
+  formatPermissionsHelp,
+  formatTuiResumeResolution,
+  formatTuiSessionList,
+} from '../src/tui/command-output.js'
+import type { CompactionResult } from '../src/agent/agent.js'
+import type { ResumeSessionResolution } from '../src/session/resume.js'
+import type { SessionMeta } from '../src/session/store.js'
+
+function plain(lines: string | string[]): string
+{
+  return stripAnsi(Array.isArray(lines) ? lines.join('\n') : lines)
+}
+
+function makeSession(id: string, title = `Session ${id}`): SessionMeta
+{
+  return {
+    id,
+    model: 'test-model',
+    cwd: '/tmp/test-project',
+    createdAt: '2026-06-17T00:00:00.000Z',
+    updatedAt: '2026-06-17T12:00:00.000Z',
+    title,
+    messageCount: 3,
+  }
+}
 
 test('buildTranscriptLines renders conversation and tool results in scrollable order', () =>
 {
@@ -78,4 +109,95 @@ test('buildTranscriptLines hides saved reasoning while preserving a live hint', 
   assert.ok(hiddenLines.some((line) => line.includes('Ready.')))
   assert.ok(liveHiddenLines.some((line) => line.includes('Thinking')))
   assert.ok(liveHiddenLines.some((line) => line.includes('ctrl+t to show')))
+})
+
+test('session list formatters share rows across CLI and TUI surfaces', () =>
+{
+  const sessions = [makeSession('abcd1234', 'Inspect files')]
+  const cli = plain(formatCliSessionList(sessions))
+  const tui = plain(formatTuiSessionList(sessions, 'abcd1234'))
+
+  assert.ok(cli.includes('1 saved session(s):'))
+  assert.ok(cli.includes('abcd1234  test-model'))
+  assert.ok(cli.includes('Inspect files'))
+  assert.ok(cli.includes('Resume with: coral --session <id>'))
+
+  assert.ok(tui.includes('Coral — saved sessions'))
+  assert.ok(tui.includes('● abcd1234  test-model'))
+  assert.ok(tui.includes('Inspect files'))
+  assert.ok(tui.includes('Resume with /resume <id>'))
+})
+
+test('resume resolution formatter covers current, missing, and ambiguous states', () =>
+{
+  const sessions = [makeSession('abcd1234'), makeSession('abce5678')]
+  const current = plain(
+    formatTuiResumeResolution({ type: 'current', session: sessions[0]! })
+  )
+  const missing = plain(
+    formatTuiResumeResolution({ type: 'not_found', requestedId: 'missing' })
+  )
+  const ambiguous: ResumeSessionResolution = {
+    type: 'ambiguous',
+    requestedId: 'abc',
+    matches: sessions,
+  }
+
+  assert.equal(current, 'Already in this session.')
+  assert.ok(missing.includes('Session not found: missing'))
+  assert.ok(missing.includes('/sessions'))
+  assert.ok(plain(formatTuiResumeResolution(ambiguous)).includes('abcd1234'))
+})
+
+test('permission and compaction formatters preserve command copy', () =>
+{
+  const compacted: CompactionResult = {
+    type: 'summarized',
+    beforeMessages: 8,
+    afterMessages: 4,
+    beforeTokens: 900,
+    afterTokens: 300,
+  }
+  const pruned: CompactionResult = {
+    type: 'pruned',
+    beforeMessages: 8,
+    afterMessages: 8,
+    beforeTokens: 1200,
+    afterTokens: 800,
+    prunedResults: 2,
+  }
+
+  assert.ok(
+    plain(formatPermissionsHelp(false)).includes('Permission mode: ask')
+  )
+  assert.ok(
+    plain(formatPermissionModeChange(true)).includes(
+      'Permission mode → yolo (all tool calls auto-approved)'
+    )
+  )
+  assert.ok(
+    plain(formatManualCompactionResult(compacted)).includes(
+      '8 messages -> 4 messages (4 summarized)'
+    )
+  )
+  assert.ok(
+    plain(formatAutoCompactionResult(pruned)).includes(
+      'Auto-pruned 2 old tool results'
+    )
+  )
+})
+
+test('approval and confirm boxes share framed prompt rendering', () =>
+{
+  const approval = plain(buildApprovalBox('bash', { command: 'npm test' }, 50))
+  const confirm = plain(buildConfirmBox('Continue anyway?', 50, 'confirm'))
+
+  assert.ok(approval.includes('tool approval'))
+  assert.ok(approval.includes('Allow bash?'))
+  assert.ok(approval.includes('$ npm test'))
+  assert.ok(approval.includes('(y) approve  (n) reject  (esc) cancel'))
+
+  assert.ok(confirm.includes('confirm'))
+  assert.ok(confirm.includes('Continue anyway?'))
+  assert.ok(confirm.includes('(y) continue  (n) stop'))
 })

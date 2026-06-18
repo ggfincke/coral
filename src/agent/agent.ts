@@ -12,10 +12,11 @@ import {
   subagentTools,
   toolToOllamaFormat,
   type Tool,
+  type ToolExecutionContext,
   type ToolResult,
 } from '../tools/index.js'
 import { setSubagentRunner, type SubagentResult } from '../tools/subagent.js'
-import { setOllamaHost } from '../ollama/host.js'
+import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { setCwd, getCwd } from '../cwd.js'
 import {
@@ -40,11 +41,7 @@ import {
   type CompactionResult,
   DEFAULT_COMPACTION_CONFIG,
 } from './compaction.js'
-import {
-  resolveContextConfig,
-  computeMemoryCappedContext,
-  estimateKvBytesPerToken,
-} from '../config/context.js'
+import { resolvePinnedContextWindow } from '../config/context.js'
 import { totalmem } from 'node:os'
 
 export type { CompactionResult } from './compaction.js'
@@ -70,7 +67,7 @@ import {
   type VerificationResult,
 } from './verify.js'
 import { validateToolArgs } from './tool-validation.js'
-import { loadProjectConfig } from '../config/permissions.js'
+import { loadProjectConfig } from '../config/project-config.js'
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
@@ -86,6 +83,25 @@ interface ToolInvocation
   id: number
   name: string
   args: Record<string, unknown>
+}
+
+interface ReadOnlySubagentRunResult
+{
+  text: string
+  toolCount: number
+  error?: string
+  aborted: boolean
+}
+
+interface ToolOutcomeRecordParams
+{
+  events: AgentEvents
+  toolResults: OllamaMessage[]
+  doomLoop: DoomLoopDetector
+  editDiffs: string[]
+  invocation: ToolInvocation
+  result: ToolResult
+  trackDoom?: boolean
 }
 
 // merge streamed tool call chunks into a stable ordered list
@@ -242,7 +258,7 @@ export interface AgentEvents
 interface AgentOptions
 {
   think?: boolean | 'low' | 'medium' | 'high'
-  // restrict the toolset — subagents get a read-only subset; defaults to allTools
+  // restrict tools; subagents get a safe subset
   tools?: Tool[]
   // cap tool-call rounds (bounds subagent cost); undefined = unlimited
   maxIterations?: number
@@ -316,7 +332,6 @@ export class Agent
   {
     this.model = model
     this.baseUrl = baseUrl
-    setOllamaHost(baseUrl)
     this.client = new OllamaClient(baseUrl)
     this.thinkMode = options.think ?? true
     this.tools = options.tools ?? allTools
@@ -368,6 +383,21 @@ export class Agent
     signal?: AbortSignal
   ): Promise<SubagentResult>
   {
+    const result = await this.runReadOnlySubagent(prompt, signal)
+
+    return {
+      text: result.text,
+      toolCount: result.toolCount,
+      error: result.error,
+    }
+  }
+
+  // run a bounded read-only subagent & collect its visible output
+  private async runReadOnlySubagent(
+    prompt: string,
+    signal?: AbortSignal
+  ): Promise<ReadOnlySubagentRunResult>
+  {
     const sub = new Agent(this.model, this.baseUrl, getCwd(), {
       think: this.thinkMode,
       tools: subagentTools,
@@ -380,7 +410,6 @@ export class Agent
     let text = ''
     let toolCount = 0
     let error: string | undefined
-
     await sub.run(
       prompt,
       {
@@ -394,8 +423,8 @@ export class Agent
         },
         onToolResult: () =>
         {},
-        // subagent tools are all read-only/always_allow, so this never fires;
-        // deny anything unexpected that would otherwise need approval
+        // subagent tools are safe, but config can still gate them; deny anything
+        // unexpected that would otherwise need approval
         onToolApproval: async () => false,
         onDone: () =>
         {},
@@ -407,7 +436,12 @@ export class Agent
       signal
     )
 
-    return { text: text.trim(), toolCount, error }
+    return {
+      text: text.trim(),
+      toolCount,
+      error,
+      aborted: signal?.aborted === true,
+    }
   }
 
   // self-check edits w/ a fresh read-only subagent that reviews the diffs
@@ -419,42 +453,13 @@ export class Agent
     signal?: AbortSignal
   ): Promise<VerificationResult | null>
   {
-    const sub = new Agent(this.model, this.baseUrl, getCwd(), {
-      think: this.thinkMode,
-      tools: subagentTools,
-      maxIterations: SUBAGENT_MAX_ITERATIONS,
-      registerSubagent: false,
-      numCtx: this.numCtx,
-      verifyEdits: false,
-    })
-
-    let text = ''
-    let failed = false
-
-    await sub.run(
+    const result = await this.runReadOnlySubagent(
       buildVerifyPrompt(request, diffs),
-      {
-        onToken: (token) =>
-        {
-          text += token
-        },
-        onToolCall: () =>
-        {},
-        onToolResult: () =>
-        {},
-        onToolApproval: async () => false,
-        onDone: () =>
-        {},
-        onError: () =>
-        {
-          failed = true
-        },
-      },
       signal
     )
 
-    if (failed || signal?.aborted) return null
-    return parseVerifyVerdict(text, diffs.length)
+    if (result.error || result.aborted) return null
+    return parseVerifyVerdict(result.text, diffs.length)
   }
 
   // stop client background work & unload the active model
@@ -666,55 +671,25 @@ export class Agent
   // compaction thresholds to the window the server actually allocates
   private async resolveContextWindow(): Promise<number>
   {
-    try
+    const resolved = await resolvePinnedContextWindow({
+      model: this.model,
+      cwd: getCwd(),
+      totalMemBytes: totalmem(),
+      showModel: (model) => this.client.showModel(model),
+      listModels: () => this.client.listModels(),
+    })
+
+    if (resolved)
     {
-      const info = await this.client.showModel(this.model)
-      if (info.contextLength > 0)
-      {
-        const native = info.contextLength
-        const override = resolveContextConfig(getCwd()).maxNumCtx
-        const memoryCap = computeMemoryCappedContext({
-          totalMemBytes: totalmem(),
-          weightBytes: await this.getModelWeightBytes(),
-          nativeContext: native,
-          kvBytesPerToken: estimateKvBytesPerToken(info),
-        })
-
-        const pinned = Math.min(
-          native,
-          memoryCap,
-          override ?? Number.POSITIVE_INFINITY
-        )
-
-        this.contextWindowSize = pinned
-        this.numCtx = pinned
-        this.compactionConfig = {
-          ...this.compactionConfig,
-          contextWindow: pinned,
-        }
+      this.contextWindowSize = resolved.contextWindow
+      this.numCtx = resolved.contextWindow
+      this.compactionConfig = {
+        ...this.compactionConfig,
+        contextWindow: resolved.contextWindow,
       }
-    }
-    catch
-    {
-      // non-fatal — keep using default (0 = unknown)
     }
 
     return this.contextWindowSize
-  }
-
-  // look up the active model's on-disk weight size (proxy for loaded weight
-  // memory). returns 0 when the lookup fails so the budget ignores weights
-  private async getModelWeightBytes(): Promise<number>
-  {
-    try
-    {
-      const models = await this.client.listModels()
-      return models.find((m) => m.name === this.model)?.size ?? 0
-    }
-    catch
-    {
-      return 0
-    }
   }
 
   // append a message while maintaining the cached token estimate
@@ -916,21 +891,33 @@ export class Agent
     }
   }
 
-  // identify read-only, approval-free tools that can run out of order internally
-  // derives parallel-safety from the tool's readOnly flag (not a separate list)
+  // identify approval-free tools that can run out of order internally
   // while keeping the live policy check so approval-gated tools still serialize
   private canRunToolInParallel(toolName: string): boolean
   {
     return (
-      this.getOwnTool(toolName)?.readOnly === true &&
+      this.getOwnTool(toolName)?.parallelSafe === true &&
       getToolPolicy(this.permissions, toolName) === 'always_allow'
     )
+  }
+
+  // build request-scoped context for tools that need runtime dependencies
+  private buildToolExecutionContext(
+    signal?: AbortSignal
+  ): ToolExecutionContext
+  {
+    return {
+      cwd: getCwd(),
+      ollamaHost: this.baseUrl ?? DEFAULT_OLLAMA_HOST,
+      signal,
+    }
   }
 
   // execute a registered tool & convert thrown errors to tool results
   private async executeTool(
     toolName: string,
-    toolArgs: Record<string, unknown>
+    toolArgs: Record<string, unknown>,
+    signal?: AbortSignal
   ): Promise<ToolResult>
   {
     const tool = this.getOwnTool(toolName)
@@ -954,7 +941,10 @@ export class Agent
 
     try
     {
-      return await tool.execute(validation.args)
+      return await tool.execute(
+        validation.args,
+        this.buildToolExecutionContext(signal)
+      )
     }
     catch (err)
     {
@@ -988,6 +978,33 @@ export class Agent
       tool_name: toolName,
       content,
     }
+  }
+
+  // record one announced tool result in UI events, model history, guards, & diffs
+  private recordToolOutcome({
+    events,
+    toolResults,
+    doomLoop,
+    editDiffs,
+    invocation,
+    result,
+    trackDoom = true,
+  }: ToolOutcomeRecordParams): DoomLoopTrip | null
+  {
+    events.onToolResult(
+      invocation.name,
+      result.output,
+      result.error,
+      invocation.id,
+      result.diff
+    )
+    toolResults.push(
+      this.buildToolMessage(invocation.name, result.output, result.error)
+    )
+    if (result.diff) editDiffs.push(result.diff)
+    if (!trackDoom) return null
+
+    return doomLoop.record(invocation.name, invocation.args, result.error)
   }
 
   // two-phase compaction: prune tool results first, then summarize if needed
@@ -1302,7 +1319,7 @@ export class Agent
         return
       }
 
-      // run read-only tools in parallel batches & keep approval flow serial
+      // run parallel-safe tools in batches & keep approval flow serial
       // each call's index is its callId — correlates the result to its UI block
       const toolResults: OllamaMessage[] = []
       let abortedDuringTools = false
@@ -1341,14 +1358,16 @@ export class Agent
             events.onToolCall(item.name, item.args, item.id)
           }
 
-          // read-only tools are side-effect-free & quick — let the batch finish
+          // let parallel-safe tools finish the batch
           // so every announced call records a result (no dangling tool_calls on
           // abort); the post-loop check stops the run afterward
           let results: ToolResult[]
           try
           {
             results = await Promise.all(
-              batch.map((item) => this.executeTool(item.name, item.args))
+              batch.map((item) =>
+                this.executeTool(item.name, item.args, signal)
+              )
             )
           }
           catch (err)
@@ -1356,9 +1375,14 @@ export class Agent
             const errorMsg = `Parallel tool execution failed: ${toErrorMessage(err)}`
             for (const item of batch)
             {
-              events.onToolResult(item.name, '', errorMsg, item.id)
-              toolResults.push(this.buildToolMessage(item.name, '', errorMsg))
-              const trip = doomLoop.record(item.name, item.args, errorMsg)
+              const trip = this.recordToolOutcome({
+                events,
+                toolResults,
+                doomLoop,
+                editDiffs,
+                invocation: item,
+                result: { output: '', error: errorMsg },
+              })
               if (trip && !doomTrip) doomTrip = trip
             }
             continue
@@ -1367,19 +1391,15 @@ export class Agent
           for (const [index, result] of results.entries())
           {
             const item = batch[index]!
-            events.onToolResult(
-              item.name,
-              result.output,
-              result.error,
-              item.id,
-              result.diff
-            )
-            toolResults.push(
-              this.buildToolMessage(item.name, result.output, result.error)
-            )
-            const trip = doomLoop.record(item.name, item.args, result.error)
+            const trip = this.recordToolOutcome({
+              events,
+              toolResults,
+              doomLoop,
+              editDiffs,
+              invocation: item,
+              result,
+            })
             if (trip && !doomTrip) doomTrip = trip
-            if (result.diff) editDiffs.push(result.diff)
           }
 
           continue
@@ -1396,9 +1416,14 @@ export class Agent
         if (!tool)
         {
           const errorMsg = `Unknown tool: ${toolName}`
-          events.onToolResult(toolName, '', errorMsg, callId)
-          toolResults.push(this.buildToolMessage(toolName, '', errorMsg))
-          const trip = doomLoop.record(toolName, toolArgs, errorMsg)
+          const trip = this.recordToolOutcome({
+            events,
+            toolResults,
+            doomLoop,
+            editDiffs,
+            invocation: { id: callId, name: toolName, args: toolArgs },
+            result: { output: '', error: errorMsg },
+          })
           if (trip && !doomTrip) doomTrip = trip
           continue
         }
@@ -1409,8 +1434,15 @@ export class Agent
         if (policy === 'always_deny')
         {
           const deniedMsg = `Tool ${toolName} is denied by permission policy`
-          events.onToolResult(toolName, '', deniedMsg, callId)
-          toolResults.push(this.buildToolMessage(toolName, '', deniedMsg))
+          this.recordToolOutcome({
+            events,
+            toolResults,
+            doomLoop,
+            editDiffs,
+            invocation: { id: callId, name: toolName, args: toolArgs },
+            result: { output: '', error: deniedMsg },
+            trackDoom: false,
+          })
           continue
         }
 
@@ -1431,8 +1463,15 @@ export class Agent
             const errorMsg = signal?.aborted
               ? 'Tool call interrupted'
               : `Tool approval failed for ${toolName}: ${toErrorMessage(err)}`
-            events.onToolResult(toolName, '', errorMsg, callId)
-            toolResults.push(this.buildToolMessage(toolName, '', errorMsg))
+            this.recordToolOutcome({
+              events,
+              toolResults,
+              doomLoop,
+              editDiffs,
+              invocation: { id: callId, name: toolName, args: toolArgs },
+              result: { output: '', error: errorMsg },
+              trackDoom: false,
+            })
 
             if (signal?.aborted)
             {
@@ -1445,26 +1484,29 @@ export class Agent
           if (!approved)
           {
             const rejectedMsg = `Tool call rejected by user`
-            events.onToolResult(toolName, '', rejectedMsg, callId)
-            toolResults.push(this.buildToolMessage(toolName, '', rejectedMsg))
+            this.recordToolOutcome({
+              events,
+              toolResults,
+              doomLoop,
+              editDiffs,
+              invocation: { id: callId, name: toolName, args: toolArgs },
+              result: { output: '', error: rejectedMsg },
+              trackDoom: false,
+            })
             continue
           }
         }
 
-        const result = await this.executeTool(toolName, toolArgs)
-        events.onToolResult(
-          toolName,
-          result.output,
-          result.error,
-          callId,
-          result.diff
-        )
-        toolResults.push(
-          this.buildToolMessage(toolName, result.output, result.error)
-        )
-        const trip = doomLoop.record(toolName, toolArgs, result.error)
+        const result = await this.executeTool(toolName, toolArgs, signal)
+        const trip = this.recordToolOutcome({
+          events,
+          toolResults,
+          doomLoop,
+          editDiffs,
+          invocation: { id: callId, name: toolName, args: toolArgs },
+          result,
+        })
         if (trip && !doomTrip) doomTrip = trip
-        if (result.diff) editDiffs.push(result.diff)
       }
 
       // abort left later tool_calls unprocessed — record interrupted replies so

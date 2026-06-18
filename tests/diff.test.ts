@@ -2,8 +2,31 @@
 // unit test for unified diff generation
 
 import { strict as assert } from 'node:assert'
-import { test } from 'node:test'
-import { applyEdit, computeDiff } from '../src/utils/diff.js'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after, test } from 'node:test'
+import { setCwd } from '../src/cwd.js'
+import { applyEdit, computeDiff, previewToolDiff } from '../src/utils/diff.js'
+import { TEXT_FILE_READ_LIMIT_BYTES } from '../src/utils/file-read.js'
+
+const tempDirs: string[] = []
+const originalCwd = process.cwd()
+
+after(async () =>
+{
+  setCwd(originalCwd)
+  await Promise.all(
+    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
+  )
+})
+
+async function tempDir(prefix: string): Promise<string>
+{
+  const dir = await mkdtemp(join(tmpdir(), prefix))
+  tempDirs.push(dir)
+  return dir
+}
 
 test('generates unified diffs for the major shapes', () =>
 {
@@ -90,4 +113,24 @@ test('applyEdit covers the substitution outcomes', () =>
     after: 'foo baz',
     count: 1,
   })
+})
+
+test('previewToolDiff reports oversized previous content without diffing', async () =>
+{
+  const dir = await tempDir('coral-preview-')
+  const target = join(dir, 'big.txt')
+  await writeFile(target, 'x'.repeat(TEXT_FILE_READ_LIMIT_BYTES + 1), 'utf-8')
+
+  setCwd(dir)
+  const preview = await previewToolDiff('write_file', {
+    path: 'big.txt',
+    content: 'replacement\n',
+  })
+
+  assert.equal(preview?.kind, 'message')
+  if (preview?.kind === 'message')
+  {
+    assert.match(preview.message, /Preview skipped:/)
+    assert.match(preview.message, /exceeds 1\.0MB read limit/)
+  }
 })

@@ -1,6 +1,8 @@
 // src/shared/project-tree.ts
 // project tree filtering, sorting, & entry formatting
 
+import { isAbsolute, relative, sep } from 'node:path'
+
 export interface ProjectTreeEntry
 {
   name: string
@@ -49,4 +51,40 @@ export function formatProjectTreeEntryName(entry: ProjectTreeEntry): string
   if (entry.isDir) suffix += '/'
   if (entry.isSymlink) suffix += '@'
   return `${entry.name}${suffix}`
+}
+
+export function isPathInsideProject(
+  cwd: string,
+  absolutePath: string
+): boolean
+{
+  const projectPath = relative(cwd, absolutePath)
+  return (
+    projectPath === '' ||
+    (!isAbsolute(projectPath) &&
+      projectPath !== '..' &&
+      !projectPath.startsWith(`..${sep}`))
+  )
+}
+
+export function formatProjectPath(cwd: string, absolutePath: string): string
+{
+  const projectPath = relative(cwd, absolutePath)
+  if (projectPath === '') return '.'
+
+  if (isPathInsideProject(cwd, absolutePath))
+  {
+    return projectPath.split(sep).join('/')
+  }
+
+  return absolutePath.split(sep).join('/')
+}
+
+export function formatProjectDirectoryPath(
+  cwd: string,
+  absolutePath: string
+): string
+{
+  const displayPath = formatProjectPath(cwd, absolutePath)
+  return displayPath.endsWith('/') ? displayPath : `${displayPath}/`
 }

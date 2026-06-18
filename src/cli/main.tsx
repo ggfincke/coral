@@ -7,14 +7,15 @@ import { Command } from 'commander'
 import { createRequire } from 'node:module'
 import App from '../tui/App.js'
 import { loadPrefs } from '../config/prefs.js'
-import {
-  listSessions,
-  getLatestSession,
-  sessionExists,
-} from '../session/store.js'
+import { listSessions } from '../session/store.js'
+import { resolveResumeSession } from '../session/resume.js'
 import { setTheme } from '../tui/theme.js'
 import { findTheme, THEMES } from '../tui/themes.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
+import {
+  formatCliResumeError,
+  formatCliSessionList,
+} from '../tui/command-output.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../../package.json') as { version: string }
@@ -70,27 +71,7 @@ else
 // handle --sessions: list & exit
 if (opts.sessions)
 {
-  const sessions = listSessions()
-
-  if (sessions.length === 0)
-  {
-    console.log('No saved sessions.')
-  }
-  else
-  {
-    console.log(`${sessions.length} saved session(s):\n`)
-
-    for (const s of sessions)
-    {
-      const date = new Date(s.updatedAt).toLocaleString()
-      console.log(`  ${s.id}  ${s.model}  ${date}  (${s.messageCount} msgs)`)
-      console.log(`         ${s.title}`)
-      console.log()
-    }
-
-    console.log('Resume with: coral --session <id>')
-  }
-
+  console.log(formatCliSessionList(listSessions()))
   process.exit(0)
 }
 
@@ -99,23 +80,30 @@ let resumeSessionId: string | undefined
 
 if (opts.session)
 {
-  if (!sessionExists(opts.session))
+  const resolution = resolveResumeSession({
+    requestedId: opts.session,
+    allowPrefix: false,
+  })
+
+  if (resolution.type !== 'target')
   {
-    console.error(`Session not found: ${opts.session}`)
-    console.error('Run coral --sessions to see available sessions.')
+    console.error(formatCliResumeError(resolution))
     process.exit(1)
   }
-  resumeSessionId = opts.session
+
+  resumeSessionId = resolution.session.id
 }
 else if (opts.resume)
 {
-  const latest = getLatestSession()
-  if (!latest)
+  const resolution = resolveResumeSession()
+
+  if (resolution.type !== 'target')
   {
-    console.error('No sessions to resume.')
+    console.error(formatCliResumeError(resolution))
     process.exit(1)
   }
-  resumeSessionId = latest.id
+
+  resumeSessionId = resolution.session.id
 }
 
 render(

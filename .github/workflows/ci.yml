@@ -37,10 +37,7 @@ jobs:
       - name: Security audit
         run: npm audit --audit-level=high
 
-      - name: Run linting
-        run: npm run lint
-
-      - name: Check formatting
+      - name: Check formatting and linting
         run: npm run format:check
 
       - name: Check changelog

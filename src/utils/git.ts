@@ -1,8 +1,11 @@
 // src/utils/git.ts
 // shared git command execution helpers
 
-import { execFileSync } from 'node:child_process'
-import { DEFAULT_CHILD_PROCESS_MAX_BUFFER } from './process.js'
+import {
+  DEFAULT_CHILD_PROCESS_MAX_BUFFER,
+  execFileCommand,
+  formatProcessError,
+} from './process.js'
 
 export interface GitCommandResult
 {
@@ -22,12 +25,13 @@ export interface GitCommandOptions
 const DEFAULT_GIT_TIMEOUT = 10_000
 
 // returns trimmed raw output (empty string when git produced none) — the
-// display placeholder for empties belongs to the calling tool/display layer
-export function runGitCommand(
+// display placeholder for empties belongs to the calling tool/display layer.
+// async so batched read tools overlap & never block the event loop on a slow repo
+export async function runGitCommand(
   args: string[],
   cwd: string,
   options: GitCommandOptions = {}
-): GitCommandResult
+): Promise<GitCommandResult>
 {
   const {
     timeout = DEFAULT_GIT_TIMEOUT,
@@ -35,34 +39,26 @@ export function runGitCommand(
     allowStdoutOnError = false,
   } = options
 
-  try
+  const result = await execFileCommand('git', args, {
+    cwd,
+    timeout,
+    maxBuffer,
+  })
+  if (result.ok)
   {
-    const output = execFileSync('git', args, {
-      cwd,
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout,
-      maxBuffer,
-    })
-
-    return { output: output.trimEnd() }
+    return { output: result.stdout.trimEnd() }
   }
-  catch (err: unknown)
+
+  if (allowStdoutOnError && result.stdout)
   {
-    const execErr = err as {
-      stdout?: string
-      stderr?: string
-      message?: string
-    }
+    return { output: result.stdout.trimEnd() }
+  }
 
-    if (allowStdoutOnError && execErr.stdout)
-    {
-      return { output: execErr.stdout.trimEnd() }
-    }
-
-    return {
-      output: '',
-      error: execErr.stderr?.trim() || execErr.message || 'git command failed',
-    }
+  return {
+    output: '',
+    error: formatProcessError(result, {
+      includeStdout: true,
+      fallback: 'git command failed',
+    }),
   }
 }

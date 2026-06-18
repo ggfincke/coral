@@ -41,9 +41,11 @@ export const allTools: Tool[] = [
   todoWriteTool,
 ]
 
-// read-only subset handed to research subagents — no edit, shell, commit, or
-// task tools, so subagents have no side effects & cannot recurse
-export const subagentTools: Tool[] = allTools.filter((t) => t.readOnly === true)
+// safe subset handed to research subagents — no edit, shell, commit, or task
+// tools, so subagents cannot mutate project state or recurse
+export const subagentTools: Tool[] = allTools.filter(
+  (t) => t.subagentSafe === true
+)
 
-export type { Tool, ToolResult } from './tool.js'
+export type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 export { toolToOllamaFormat } from './tool.js'

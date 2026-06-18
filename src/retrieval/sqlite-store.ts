@@ -188,9 +188,10 @@ export class SqliteIndexStore implements IndexStore
 
   upsertFile(projectId: number, file: IndexedFile, model: string): void
   {
-    // a chunk-less file has no place in the index; never write an orphan
-    // files row (the indexer also filters empties before calling here)
-    if (file.chunks.length === 0) return
+    if (file.chunks.length === 0)
+    {
+      throw new Error(`Cannot upsert ${file.path} without chunks`)
+    }
 
     const write = this.db.transaction(() =>
     {
@@ -274,13 +275,13 @@ export class SqliteIndexStore implements IndexStore
       .run(projectId, path)
   }
 
-  deleteMissingFiles(projectId: number, currentPaths: Set<string>): number
+  deleteMissingFiles(projectId: number, currentPaths: Set<string>): void
   {
     const rows = this.db
       .prepare('SELECT path FROM files WHERE project_id = ?')
       .all(projectId) as { path: string }[]
     const stale = rows.filter((row) => !currentPaths.has(row.path))
-    if (stale.length === 0) return 0
+    if (stale.length === 0) return
 
     const remove = this.db.prepare(
       'DELETE FROM files WHERE project_id = ? AND path = ?'
@@ -293,8 +294,6 @@ export class SqliteIndexStore implements IndexStore
         remove.run(projectId, row.path)
       }
     })()
-
-    return stale.length
   }
 
   search(

@@ -1,7 +1,26 @@
-// rules/file-header.js
-// validates file headers match `// src/path/to/file.ts` pattern w/ description on line 2
+// eslint-rules/file-header.js
+// validate repo-relative file headers
 
 import { readFileSync } from 'node:fs'
+import { relative, sep } from 'node:path'
+
+const HEADER_ROOTS = ['src/', 'tests/', 'scripts/', 'eslint-rules/']
+const HEADER_FILES = new Set(['eslint.config.js'])
+
+function repoRelativePath(filename)
+{
+  if (filename.startsWith('<')) return null
+
+  const repoPath = relative(process.cwd(), filename).split(sep).join('/')
+  if (!repoPath || repoPath === '..' || repoPath.startsWith('../'))
+  {
+    return null
+  }
+
+  if (HEADER_FILES.has(repoPath)) return repoPath
+  if (HEADER_ROOTS.some((root) => repoPath.startsWith(root))) return repoPath
+  return null
+}
 
 const rule = {
   meta: {
@@ -46,16 +65,10 @@ const rule = {
         const comments = sourceCode.getAllComments()
         const firstComment = comments[0]
 
-        // get relative path from src/
-        const srcIndex = filename.indexOf('src/')
-        if (srcIndex === -1)
-        {
-          // file not in src/, skip validation
-          return
-        }
-        const relativePath = filename.slice(srcIndex)
+        const relativePath = repoRelativePath(filename)
+        if (!relativePath) return
 
-        // check if first comment exists & is on line 1
+        // check line-1 path header
         if (!firstComment || ![1, 2].includes(firstComment.loc.start.line))
         {
           context.report({
@@ -65,7 +78,7 @@ const rule = {
           return
         }
 
-        // validate the path in the header
+        // validate path text
         if (firstComment.type !== 'Line')
         {
           context.report({
@@ -89,7 +102,7 @@ const rule = {
           })
         }
 
-        // check for description on line 2
+        // check line-2 description
         const secondComment = comments[1]
         if (
           !secondComment ||

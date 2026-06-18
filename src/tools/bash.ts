@@ -1,10 +1,13 @@
 // src/tools/bash.ts
 // execute shell commands & return output
 
-import { exec } from 'node:child_process'
-import type { Tool, ToolResult } from './tool.js'
+import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
-import { DEFAULT_CHILD_PROCESS_MAX_BUFFER } from '../utils/process.js'
+import {
+  DEFAULT_CHILD_PROCESS_MAX_BUFFER,
+  execShellCommand,
+  formatProcessError,
+} from '../utils/process.js'
 
 const DEFAULT_TIMEOUT = 30_000
 
@@ -23,31 +26,27 @@ export const bashTool: Tool = {
     },
     required: ['command'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const command = args.command as string
     const timeout = (args.timeout as number) ?? DEFAULT_TIMEOUT
 
-    return new Promise((resolve) =>
-    {
-      exec(
-        command,
-        { cwd: getCwd(), timeout, maxBuffer: DEFAULT_CHILD_PROCESS_MAX_BUFFER },
-        (err, stdout, stderr) =>
-        {
-          if (err)
-          {
-            resolve({
-              output: stdout || '',
-              error: stderr || err.message,
-            })
-          }
-          else
-          {
-            resolve({ output: stdout + (stderr ? `\n${stderr}` : '') })
-          }
-        }
-      )
+    const result = await execShellCommand(command, {
+      cwd: getCwd(),
+      timeout,
+      maxBuffer: DEFAULT_CHILD_PROCESS_MAX_BUFFER,
+      signal: context?.signal,
     })
+    if (!result.ok)
+    {
+      return {
+        output: result.stdout || '',
+        error: formatProcessError(result),
+      }
+    }
+
+    return {
+      output: result.stdout + (result.stderr ? `\n${result.stderr}` : ''),
+    }
   },
 }

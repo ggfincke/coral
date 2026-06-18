@@ -1,18 +1,28 @@
 // src/tools/grep.ts
 // search file contents by regex pattern via ripgrep
 
-import type { Tool, ToolResult } from './tool.js'
+import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { execRipgrep, NO_MATCHES_MESSAGE } from './ripgrep-utils.js'
-import { resolvePath } from '../cwd.js'
+import { getCwd, resolvePath } from '../cwd.js'
+import {
+  formatProjectPath,
+  isPathInsideProject,
+} from '../shared/project-tree.js'
 import { truncateOutput } from '../utils/truncate-output.js'
 
 const MAX_RESULTS = 200
+
+function normalizeProjectGrepOutput(output: string): string
+{
+  return output.replace(/(^|\n)\.\//g, '$1')
+}
 
 export const grepTool: Tool = {
   name: 'grep',
   description:
     'Search file contents by regex pattern. Returns matching lines w/ file paths & line numbers. Requires ripgrep (rg) to be installed.',
-  readOnly: true,
+  subagentSafe: true,
+  parallelSafe: true,
   display: {
     label: 'Search',
     summarize: (args) =>
@@ -38,10 +48,13 @@ export const grepTool: Tool = {
     },
     required: ['pattern'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const pattern = args.pattern as string
+    const cwd = getCwd()
     const path = resolvePath((args.path as string) ?? '.')
+    const isProjectPath = isPathInsideProject(cwd, path)
+    const searchPath = isProjectPath ? formatProjectPath(cwd, path) : path
     const include = args.include as string | undefined
 
     const rgArgs = [
@@ -58,11 +71,17 @@ export const grepTool: Tool = {
       rgArgs.push('--glob', include)
     }
 
-    rgArgs.push(path)
+    rgArgs.push(searchPath)
 
-    const result = await execRipgrep(rgArgs, NO_MATCHES_MESSAGE)
+    const result = await execRipgrep(rgArgs, NO_MATCHES_MESSAGE, {
+      cwd: isProjectPath ? cwd : undefined,
+      signal: context?.signal,
+    })
     if (result.error || result.output === NO_MATCHES_MESSAGE) return result
 
-    return { output: truncateOutput(result.output, MAX_RESULTS, 'matches') }
+    const output = isProjectPath
+      ? normalizeProjectGrepOutput(result.output)
+      : result.output
+    return { output: truncateOutput(output, MAX_RESULTS, 'matches') }
   },
 }

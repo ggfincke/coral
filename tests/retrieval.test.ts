@@ -2,14 +2,18 @@
 // tests for semantic retrieval indexing
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, unlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { chunkText } from '../src/retrieval/chunker.js'
 import { ProjectIndexer } from '../src/retrieval/indexer.js'
 import { SqliteIndexStore } from '../src/retrieval/sqlite-store.js'
-import { CHUNKER_VERSION, type Embedder } from '../src/retrieval/types.js'
+import {
+  CHUNKER_VERSION,
+  type Embedder,
+  type IndexedFile,
+} from '../src/retrieval/types.js'
 
 const tempDirs: string[] = []
 
@@ -131,6 +135,86 @@ test('ProjectIndexer refreshes changed files', async () =>
     const refreshed = await indexer.search('auth session', 1)
     assert.equal(refreshed[0]?.path, 'feature.ts')
     assert.match(refreshed[0]?.text ?? '', /auth session/)
+  }
+  finally
+  {
+    store.close()
+  }
+})
+
+test('ProjectIndexer removes files that become empty', async () =>
+{
+  const dir = await tempDir('coral-retrieval-empty-')
+  const file = join(dir, 'feature.ts')
+  await writeFile(file, 'export const login = "auth session";\n', 'utf-8')
+
+  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const embedder = new KeywordEmbedder()
+  const indexer = new ProjectIndexer(dir, embedder, store)
+
+  try
+  {
+    assert.equal(
+      (await indexer.search('auth session', 1))[0]?.path,
+      'feature.ts'
+    )
+
+    await writeFile(file, '', 'utf-8')
+
+    assert.deepEqual(await indexer.search('auth session', 1), [])
+  }
+  finally
+  {
+    store.close()
+  }
+})
+
+test('ProjectIndexer removes deleted files from the index', async () =>
+{
+  const dir = await tempDir('coral-retrieval-delete-')
+  const file = join(dir, 'feature.ts')
+  await writeFile(file, 'export const login = "auth session";\n', 'utf-8')
+
+  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const embedder = new KeywordEmbedder()
+  const indexer = new ProjectIndexer(dir, embedder, store)
+
+  try
+  {
+    assert.equal(
+      (await indexer.search('auth session', 1))[0]?.path,
+      'feature.ts'
+    )
+
+    await unlink(file)
+
+    assert.deepEqual(await indexer.search('auth session', 1), [])
+  }
+  finally
+  {
+    store.close()
+  }
+})
+
+test('SqliteIndexStore rejects zero-chunk upserts', async () =>
+{
+  const dir = await tempDir('coral-retrieval-zero-chunk-')
+  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const projectId = store.ensureProject(dir)
+  const file: IndexedFile = {
+    path: 'empty.ts',
+    size: 0,
+    mtimeMs: 0,
+    sha256: 'empty',
+    chunks: [],
+  }
+
+  try
+  {
+    assert.throws(
+      () => store.upsertFile(projectId, file, 'test-embed'),
+      /Cannot upsert empty\.ts without chunks/
+    )
   }
   finally
   {

@@ -6,19 +6,17 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
-import { setCwd } from '../src/cwd.js'
-import { setOllamaHost } from '../src/ollama/host.js'
-import { searchCodeTool } from '../src/tools/search-code.js'
+import {
+  createSearchCodeTool,
+  searchCodeTool,
+} from '../src/tools/search-code.js'
 
 const tempDirs: string[] = []
-const originalCwd = process.cwd()
 const originalFetch = globalThis.fetch
 const originalCoralHome = process.env.CORAL_HOME
 
 after(async () =>
 {
-  setCwd(originalCwd)
-  setOllamaHost(undefined)
   globalThis.fetch = originalFetch
 
   if (originalCoralHome === undefined)
@@ -81,13 +79,16 @@ test('search_code indexes the project lazily and returns ranked snippets', async
     )
   }) as typeof fetch
 
-  setCwd(dir)
-  setOllamaHost('http://ollama.test')
-
-  const result = await searchCodeTool.execute({
-    query: 'where is auth session restored?',
-    topK: 1,
-  })
+  const result = await searchCodeTool.execute(
+    {
+      query: 'where is auth session restored?',
+      topK: 1,
+    },
+    {
+      cwd: dir,
+      ollamaHost: 'http://ollama.test',
+    }
+  )
 
   assert.equal(result.error, undefined)
   assert.match(result.output, /session\.ts:1-3/)
@@ -98,4 +99,64 @@ test('search_code indexes the project lazily and returns ranked snippets', async
   assert.ok(
     requests.every((request) => request.body.model === 'nomic-embed-text')
   )
+})
+
+test('search_code uses the execution context host per invocation', async () =>
+{
+  const dir = await tempDir('coral-search-context-')
+  const home = await tempDir('coral-search-context-home-')
+  process.env.CORAL_HOME = home
+
+  await writeFile(
+    join(dir, 'session.ts'),
+    'export function restoreSession() {\n  return "auth login";\n}\n',
+    'utf-8'
+  )
+
+  const urls: string[] = []
+  globalThis.fetch = (async (input, init) =>
+  {
+    const body = JSON.parse(String(init?.body ?? '{}')) as { input: string[] }
+    urls.push(String(input))
+
+    return new Response(
+      JSON.stringify({ embeddings: body.input.map(vectorFor) }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    )
+  }) as typeof fetch
+
+  const first = await searchCodeTool.execute(
+    { query: 'auth session', topK: 1 },
+    { cwd: dir, ollamaHost: 'http://ollama-a.test' }
+  )
+  const second = await searchCodeTool.execute(
+    { query: 'auth session', topK: 1 },
+    { cwd: dir, ollamaHost: 'http://ollama-b.test' }
+  )
+
+  assert.equal(first.error, undefined)
+  assert.equal(second.error, undefined)
+  assert.ok(urls.includes('http://ollama-a.test/api/embed'))
+  assert.ok(urls.includes('http://ollama-b.test/api/embed'))
+})
+
+test('search_code reports store construction failures as tool errors', async () =>
+{
+  const dir = await tempDir('coral-search-store-failure-')
+  const tool = createSearchCodeTool({
+    createStore()
+    {
+      throw new Error('native sqlite unavailable')
+    },
+  })
+
+  const result = await tool.execute(
+    { query: 'auth session' },
+    { cwd: dir, ollamaHost: 'http://ollama.test' }
+  )
+
+  assert.equal(result.output, '')
+  assert.match(result.error ?? '', /search_code failed/)
+  assert.match(result.error ?? '', /native sqlite unavailable/)
+  assert.doesNotMatch(result.error ?? '', /ollama pull/)
 })

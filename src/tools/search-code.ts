@@ -1,15 +1,19 @@
 // src/tools/search-code.ts
 // semantic code search backed by local Ollama embeddings
 
-import type { Tool, ToolResult } from './tool.js'
+import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
-import { getOllamaHost } from '../ollama/host.js'
+import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import { OllamaClient } from '../ollama/client.js'
 import { resolveRetrievalConfig } from '../config/retrieval.js'
 import { DEFAULT_LIMIT, ProjectIndexer } from '../retrieval/indexer.js'
 import { OllamaEmbedder } from '../retrieval/ollama-embedder.js'
 import { SqliteIndexStore } from '../retrieval/sqlite-store.js'
-import type { SearchHit } from '../retrieval/types.js'
+import {
+  DEFAULT_EMBEDDING_MODEL,
+  type IndexStore,
+  type SearchHit,
+} from '../retrieval/types.js'
 import { toErrorMessage } from '../utils/errors.js'
 
 const MAX_SNIPPET_LINES = 12
@@ -51,65 +55,109 @@ function formatHits(hits: SearchHit[]): string
     .join('\n\n')
 }
 
-export const searchCodeTool: Tool = {
-  name: 'search_code',
-  description:
-    'Semantically search the current project for code related to a natural-language query. Returns ranked file chunks with line ranges.',
-  readOnly: true,
-  display: {
-    label: 'Search Code',
-    summarize: (args) => String(args.query ?? ''),
-  },
-  parameters: {
-    type: 'object',
-    properties: {
-      query: {
-        type: 'string',
-        description: 'Natural-language description of the code to find',
-      },
-      topK: {
-        type: 'number',
-        description: `Number of ranked chunks to return (default ${DEFAULT_LIMIT})`,
-      },
-    },
-    required: ['query'],
-  },
-  async execute(args: Record<string, unknown>): Promise<ToolResult>
-  {
-    const query = (args.query as string | undefined)?.trim()
-    if (!query)
-    {
-      return { output: '', error: 'search_code requires a non-empty query' }
-    }
-
-    // clamping & defaulting live in ProjectIndexer.search
-    const topK = typeof args.topK === 'number' ? args.topK : undefined
-    const cwd = getCwd()
-    const config = resolveRetrievalConfig(cwd)
-    const store = new SqliteIndexStore()
-
-    try
-    {
-      const client = new OllamaClient(getOllamaHost())
-      const embedder = new OllamaEmbedder(client, config.embeddingModel)
-      const indexer = new ProjectIndexer(cwd, embedder, store)
-      const hits = await indexer.search(query, topK)
-
-      return { output: formatHits(hits) }
-    }
-    catch (err)
-    {
-      const message = toErrorMessage(err)
-      return {
-        output: '',
-        error:
-          `search_code failed with embedding model ${config.embeddingModel}: ${message}. ` +
-          `If the model is missing, run: ollama pull ${config.embeddingModel}`,
-      }
-    }
-    finally
-    {
-      store.close()
-    }
-  },
+interface SearchCodeDependencies
+{
+  createStore?: () => IndexStore
+  createClient?: (ollamaHost: string) => OllamaClient
 }
+
+function shouldSuggestModelPull(message: string): boolean
+{
+  const normalized = message.toLowerCase()
+  return (
+    normalized.includes('model') ||
+    normalized.includes('not found') ||
+    normalized.includes('pull') ||
+    normalized.includes('404')
+  )
+}
+
+function formatSearchError(embeddingModel: string, message: string): string
+{
+  const base = `search_code failed while using embedding model ${embeddingModel}: ${message}`
+  if (!shouldSuggestModelPull(message)) return base
+
+  return `${base}. If the model is missing, run: ollama pull ${embeddingModel}`
+}
+
+export function createSearchCodeTool(
+  dependencies: SearchCodeDependencies = {}
+): Tool
+{
+  return {
+    name: 'search_code',
+    description:
+      'Semantically search the current project for code related to a natural-language query. Returns ranked file chunks with line ranges.',
+    subagentSafe: true,
+    display: {
+      label: 'Search Code',
+      summarize: (args) => String(args.query ?? ''),
+    },
+    parameters: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Natural-language description of the code to find',
+        },
+        topK: {
+          type: 'number',
+          description: `Number of ranked chunks to return (default ${DEFAULT_LIMIT})`,
+        },
+      },
+      required: ['query'],
+    },
+    async execute(
+      args: Record<string, unknown>,
+      context?: ToolExecutionContext
+    ): Promise<ToolResult>
+    {
+      const query = (args.query as string | undefined)?.trim()
+      if (!query)
+      {
+        return { output: '', error: 'search_code requires a non-empty query' }
+      }
+
+      // clamping & defaulting live in ProjectIndexer.search
+      const topK = typeof args.topK === 'number' ? args.topK : undefined
+      const cwd = context?.cwd ?? getCwd()
+      const ollamaHost = context?.ollamaHost ?? DEFAULT_OLLAMA_HOST
+      let embeddingModel = DEFAULT_EMBEDDING_MODEL
+      let store: IndexStore | undefined
+
+      try
+      {
+        const config = resolveRetrievalConfig(cwd)
+        embeddingModel = config.embeddingModel
+        store = dependencies.createStore?.() ?? new SqliteIndexStore()
+
+        const client =
+          dependencies.createClient?.(ollamaHost) ??
+          new OllamaClient(ollamaHost)
+        const embedder = new OllamaEmbedder(
+          client,
+          embeddingModel,
+          context?.signal
+        )
+        const indexer = new ProjectIndexer(cwd, embedder, store)
+        const hits = await indexer.search(query, topK)
+
+        return { output: formatHits(hits) }
+      }
+      catch (err)
+      {
+        const message = toErrorMessage(err)
+        return {
+          output: '',
+          error: formatSearchError(embeddingModel, message),
+        }
+      }
+      finally
+      {
+        store?.close?.()
+      }
+    },
+  }
+}
+
+export const searchCodeTool: Tool = createSearchCodeTool()

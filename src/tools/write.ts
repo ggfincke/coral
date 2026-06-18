@@ -1,11 +1,16 @@
 // src/tools/write.ts
 // write content to a file, creating directories as needed
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
+import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Tool, ToolResult } from './tool.js'
 import { resolvePath } from '../cwd.js'
 import { computeDiff } from '../utils/diff.js'
+import { toErrorMessage } from '../utils/errors.js'
+import {
+  formatDiffSkipMessage,
+  readOptionalPreviousTextFile,
+} from '../utils/file-read.js'
 
 export const writeTool: Tool = {
   name: 'write_file',
@@ -21,22 +26,33 @@ export const writeTool: Tool = {
   },
   async execute(args): Promise<ToolResult>
   {
-    const path = resolvePath(args.path as string)
+    const rawPath = args.path as string
+    const path = resolvePath(rawPath)
     const content = args.content as string
     try
     {
-      // capture prior content for the diff — missing file means new file
-      const before = await readFile(path, 'utf-8').catch(() => '')
+      const before = await readOptionalPreviousTextFile(rawPath)
       await mkdir(dirname(path), { recursive: true })
       await writeFile(path, content, 'utf-8')
+      const output = `Wrote ${content.length} bytes to ${path}`
+      if (!before.ok)
+      {
+        return {
+          output: `${output}\n${formatDiffSkipMessage(before)}`,
+        }
+      }
+
       return {
-        output: `Wrote ${content.length} bytes to ${path}`,
-        diff: computeDiff(before, content) ?? undefined,
+        output,
+        diff: computeDiff(before.content, content) ?? undefined,
       }
     }
     catch (err)
     {
-      return { output: '', error: `Failed to write ${path}: ${err}` }
+      return {
+        output: '',
+        error: `Failed to write ${path}: ${toErrorMessage(err)}`,
+      }
     }
   },
 }
