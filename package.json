@@ -21,7 +21,7 @@
     "reference:inventory": "uv run python scripts/mine-reference.py",
     "check:changelog": "node scripts/check-changelog.mjs",
     "format": "prettier --write . && eslint --fix .",
-    "format:check": "prettier --check . && eslint .",
+    "format:check": "prettier --check . && npm run lint",
     "version": "npm run check:changelog && git add CHANGELOG.md"
   },
   "prettier": {
