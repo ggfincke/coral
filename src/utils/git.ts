@@ -62,3 +62,15 @@ export async function runGitCommand(
     }),
   }
 }
+
+// branch name, or detached@<sha> / unknown when HEAD is detached or unborn
+export async function currentBranchLabel(cwd: string): Promise<string>
+{
+  const branch = await runGitCommand(['branch', '--show-current'], cwd)
+  if (!branch.error && branch.output.trim()) return branch.output.trim()
+
+  const sha = await runGitCommand(['rev-parse', '--short', 'HEAD'], cwd)
+  return !sha.error && sha.output.trim()
+    ? `detached@${sha.output.trim()}`
+    : 'unknown'
+}
