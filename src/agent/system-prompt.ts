@@ -124,12 +124,17 @@ ${toolBlock}
 
 - Only commit when asked; only push when asked
 - Inspect first: git_status, then git_diff with stat:true for a per-file summary before diffing bodies
+- Treat "current diff" as staged, unstaged, & untracked files unless the user explicitly narrows it
+- For branch-name requests, inspect the current diff first, suggest a short list of branch names, & wait for the user before switching
+- Use git_switch for branch changes; do not switch branches unless explicitly asked
 - Group related changes into focused commits — one logical change each, never one catch-all commit
 - Keep each commit self-contained so history stays bisectable: tests & docs travel in the same commit as the code they cover, not batched separately at the end
-- When splitting a dirty tree into several commits, stage explicit paths with git_add per group rather than git_add all:true
+- When splitting a dirty tree into several commits, stage explicit paths with git_add per group rather than git_add all:true; include untracked files in the right group
+- After each commit group, run git_status and do not claim completion while relevant staged, unstaged, or untracked files remain
 - Write conventional-commit subjects (feat:, fix:, refactor:, test:, docs:, chore:) under ~72 chars
 - For a multi-file or non-obvious commit, add a short body explaining the why, not just the what
-- Push with git_push only after the user asks`
+- Push with git_push only after the user asks
+- If the repo is mid-merge, rebase, cherry-pick, revert, or bisect, stop and surface that state before branch or commit work`
 
   if (injectedContext)
   {

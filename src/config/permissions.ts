@@ -25,6 +25,7 @@ const DEFAULT_TOOL_POLICIES: ToolPermissions = {
   search_code: 'always_allow',
   git_add: 'require_approval',
   git_commit: 'require_approval',
+  git_switch: 'require_approval',
   git_push: 'require_approval',
   task: 'always_allow',
   todo_write: 'always_allow',
