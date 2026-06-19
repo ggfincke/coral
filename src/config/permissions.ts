@@ -34,6 +34,12 @@ const DEFAULT_TOOL_POLICIES: ToolPermissions = {
   bash: 'require_approval',
 }
 
+// return a fresh copy so callers can use defaults w/o local config overrides
+export function defaultToolPermissions(): ToolPermissions
+{
+  return { ...DEFAULT_TOOL_POLICIES }
+}
+
 // validate that a permission value is one of the allowed policies
 function isValidPolicy(value: unknown): value is PermissionPolicy
 {
@@ -77,7 +83,7 @@ export function resolvePermissions(cwd: string): ToolPermissions
   const userPerms = sanitizePermissions(userConfig.permissions)
   const projectPerms = sanitizePermissions(projectConfig.permissions)
 
-  return { ...DEFAULT_TOOL_POLICIES, ...userPerms, ...projectPerms }
+  return { ...defaultToolPermissions(), ...userPerms, ...projectPerms }
 }
 
 // get the policy for a specific tool — falls back to require_approval for unknown tools
