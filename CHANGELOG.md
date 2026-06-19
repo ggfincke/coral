@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Eval harness:** add a live-model benchmark (`npm run eval -- <model...>`)
+  that drives a real Ollama model through 6 deterministic coding tasks
+  (read-report, single-edit, create-file, search-multi-edit, build-run,
+  bug-fix-verify) in throwaway temp dirs & reports per-model task completion,
+  tool-call cleanliness (clean calls vs. reliability-layer compensations), &
+  throughput — so model selection & reliability tuning become data-driven
+  instead of vibes. Supports `--reps`, `--json`, repeatable `--task <id>`, &
+  `--host`; see `tests/scripts/eval/README.md`.
 - **Cache-friendly compaction:** compaction now keeps a byte-stable prefix
   (system prompt + append-only frozen summary blocks) and only ever summarizes,
   prunes, or trims the live tail, so llama.cpp reuses its KV cache through the

@@ -13,6 +13,7 @@
     "start": "node dist/cli/main.js",
     "test": "node --import tsx --test tests/*.test.ts",
     "bench:compaction": "tsx tests/scripts/bench-compaction.ts",
+    "eval": "tsx tests/scripts/eval/run.ts",
     "check:dev-tools": "uv run python -m compileall -q scripts tests/scripts",
     "test:watch": "node --import tsx --test --watch tests/*.test.ts",
     "lint": "eslint .",
