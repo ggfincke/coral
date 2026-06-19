@@ -272,6 +272,8 @@ interface AgentOptions
   // run a read-only self-check subagent after edit-producing turns; defaults to
   // the .coral.json verify.enabled flag. subagents pass false (they can't edit)
   verifyEdits?: boolean
+  // override local/user tool policy; eval harnesses need reproducible defaults
+  permissions?: ToolPermissions
 }
 
 // * Conversation agent w/ tool dispatch
@@ -347,8 +349,8 @@ export class Agent
     // set the global working directory — all tools resolve paths against this
     if (cwd) setCwd(cwd)
 
-    // load per-tool permission policies from config
-    this.permissions = resolvePermissions(getCwd())
+    // load per-tool permission policies from config unless a caller injects one
+    this.permissions = options.permissions ?? resolvePermissions(getCwd())
 
     // compaction defaults — can be overridden via setCompactionConfig()
     this.compactionConfig = { ...DEFAULT_COMPACTION_CONFIG }
