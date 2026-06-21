@@ -4,17 +4,14 @@
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
-import { OllamaClient } from '../ollama/client.js'
-import { resolveRetrievalConfig } from '../config/retrieval.js'
-import { DEFAULT_LIMIT, ProjectIndexer } from '../retrieval/indexer.js'
-import { OllamaEmbedder } from '../retrieval/ollama-embedder.js'
-import { SqliteIndexStore } from '../retrieval/sqlite-store.js'
+import { buildIndexer, type RetrievalDeps } from '../retrieval/build.js'
+import { DEFAULT_LIMIT } from '../retrieval/indexer.js'
 import {
   DEFAULT_EMBEDDING_MODEL,
   type IndexStore,
   type SearchHit,
 } from '../retrieval/types.js'
-import { toErrorMessage } from '../utils/errors.js'
+import { isMissingModelError, toErrorMessage } from '../utils/errors.js'
 
 const MAX_SNIPPET_LINES = 12
 const MAX_SNIPPET_CHARS = 1_200
@@ -55,34 +52,15 @@ function formatHits(hits: SearchHit[]): string
     .join('\n\n')
 }
 
-interface SearchCodeDependencies
-{
-  createStore?: () => IndexStore
-  createClient?: (ollamaHost: string) => OllamaClient
-}
-
-function shouldSuggestModelPull(message: string): boolean
-{
-  const normalized = message.toLowerCase()
-  return (
-    normalized.includes('model') ||
-    normalized.includes('not found') ||
-    normalized.includes('pull') ||
-    normalized.includes('404')
-  )
-}
-
 function formatSearchError(embeddingModel: string, message: string): string
 {
   const base = `search_code failed while using embedding model ${embeddingModel}: ${message}`
-  if (!shouldSuggestModelPull(message)) return base
+  if (!isMissingModelError(message)) return base
 
   return `${base}. If the model is missing, run: ollama pull ${embeddingModel}`
 }
 
-export function createSearchCodeTool(
-  dependencies: SearchCodeDependencies = {}
-): Tool
+export function createSearchCodeTool(dependencies: RetrievalDeps = {}): Tool
 {
   return {
     name: 'search_code',
@@ -127,20 +105,16 @@ export function createSearchCodeTool(
 
       try
       {
-        const config = resolveRetrievalConfig(cwd)
-        embeddingModel = config.embeddingModel
-        store = dependencies.createStore?.() ?? new SqliteIndexStore()
-
-        const client =
-          dependencies.createClient?.(ollamaHost) ??
-          new OllamaClient(ollamaHost)
-        const embedder = new OllamaEmbedder(
-          client,
-          embeddingModel,
-          context?.signal
+        const built = buildIndexer(
+          cwd,
+          ollamaHost,
+          context?.signal,
+          dependencies
         )
-        const indexer = new ProjectIndexer(cwd, embedder, store)
-        const hits = await indexer.search(query, topK)
+        embeddingModel = built.embeddingModel
+        store = built.store
+
+        const hits = await built.indexer.search(query, topK)
 
         return { output: formatHits(hits) }
       }

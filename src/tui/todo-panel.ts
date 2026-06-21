@@ -1,10 +1,11 @@
 // src/tui/todo-panel.ts
 // render the active task list into bordered status lines
 
+import chalk from 'chalk'
 import type { TodoItem, TodoStatus } from '../tools/todo-store.js'
 import { buildLabeledSeparator, buildRule } from './status-line.js'
 
-const MARK: Record<TodoStatus, string> = {
+export const TODO_MARK: Record<TodoStatus, string> = {
   pending: '○',
   in_progress: '◐',
   completed: '●',
@@ -40,8 +41,11 @@ export function buildTodoPanel(todos: TodoItem[], width: number): string[]
   const shown = todos.slice(0, MAX_ROWS)
   for (const todo of shown)
   {
-    const row = clip(`${MARK[todo.status]} ${todo.content}`, innerWidth)
-    lines.push(`│ ${pad(row, innerWidth)} │`)
+    // pad on plain text, then strike only the visible cell so width math holds
+    const row = clip(`${TODO_MARK[todo.status]} ${todo.content}`, innerWidth)
+    const padding = ' '.repeat(Math.max(innerWidth - row.length, 0))
+    const cell = todo.status === 'completed' ? chalk.strikethrough(row) : row
+    lines.push(`│ ${cell}${padding} │`)
   }
 
   const hidden = todos.length - shown.length

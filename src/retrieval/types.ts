@@ -51,6 +51,22 @@ export interface SearchHit
   text: string
 }
 
+// per-file build progress reported while (re)indexing
+export interface IndexProgress
+{
+  processed: number
+  total: number
+  path: string
+}
+
+// summary of an index build
+export interface IndexStats
+{
+  totalFiles: number
+  embeddedFiles: number
+  chunks: number
+}
+
 // indexed state per file; embeddingsCurrent = chunks complete for model + chunker version
 export interface IndexedFileStatus
 {

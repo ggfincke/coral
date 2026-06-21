@@ -53,6 +53,7 @@ import {
   getTodos,
   clearTodos,
   onTodosChanged,
+  setTodos as restoreStoreTodos,
   type TodoItem,
 } from '../tools/todo-store.js'
 
@@ -400,8 +401,8 @@ export default function App({
       setScrollOffset(0)
       setTokenUsage(EMPTY_TOKEN_USAGE)
       setContextWindow(0)
-      // todos aren't persisted — clear the prior session's list on resume
-      clearTodos()
+      // restore the saved task list so the todo panel survives resume
+      restoreStoreTodos(target.todos ?? [])
 
       // create fresh agent w/ restored messages
       const nextAgent = new Agent(target.meta.model, host, undefined, { think })
@@ -592,8 +593,13 @@ export default function App({
   useEffect(() =>
   {
     onTodosChanged(setTodos)
+    // hydrate the store from a resumed session so its task list shows on mount
+    if (resumeSession?.todos?.length)
+    {
+      restoreStoreTodos(resumeSession.todos)
+    }
     return () => onTodosChanged(null)
-  }, [])
+  }, [resumeSession])
 
   useEffect(() =>
   {

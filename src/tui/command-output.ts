@@ -5,6 +5,8 @@ import chalk from 'chalk'
 import type { CompactionResult } from '../agent/agent.js'
 import type { ResumeSessionResolution } from '../session/resume.js'
 import type { SessionMeta } from '../session/store.js'
+import type { IndexStats } from '../retrieval/types.js'
+import { isMissingModelError } from '../utils/errors.js'
 import { formatTokenCount } from './metrics.js'
 import { style } from './theme.js'
 
@@ -192,4 +194,38 @@ export function formatUnknownPermissionMode(mode: string): string
     `Unknown permission mode: "${mode}"\n` +
     `Valid modes: ${style('user')('ask')}, ${style('user')('yolo')}`
   )
+}
+
+// ── /index ─────────────────────────────────────────────────────────────
+
+export function formatIndexStart(cwd: string, force: boolean): string
+{
+  return force
+    ? `Rebuilding semantic index for ${chalk.dim(cwd)}…`
+    : `Indexing ${chalk.dim(cwd)}…`
+}
+
+export function formatIndexProgress(processed: number, total: number): string
+{
+  return chalk.dim(`  embedded ${processed}/${total} files`)
+}
+
+export function formatIndexResult(stats: IndexStats): string
+{
+  if (stats.totalFiles === 0) return 'No indexable files found'
+  if (stats.embeddedFiles === 0)
+  {
+    return `Index already up to date (${stats.totalFiles} files)`
+  }
+  return `Indexed ${stats.embeddedFiles}/${stats.totalFiles} files · ${stats.chunks} chunks`
+}
+
+export function formatIndexError(
+  embeddingModel: string,
+  message: string
+): string
+{
+  const base = `Index build failed (embedding model ${embeddingModel}): ${message}`
+  if (!isMissingModelError(message)) return base
+  return `${base}\nIf the model is missing, run: ollama pull ${embeddingModel}`
 }

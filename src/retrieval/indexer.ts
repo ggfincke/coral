@@ -3,7 +3,15 @@
 
 import { chunkText } from './chunker.js'
 import { collectIndexableFiles } from './files.js'
-import type { Embedder, IndexedFile, IndexStore, SearchHit } from './types.js'
+import type {
+  Embedder,
+  IndexedFile,
+  IndexedFileStatus,
+  IndexProgress,
+  IndexStats,
+  IndexStore,
+  SearchHit,
+} from './types.js'
 import { CHUNKER_VERSION } from './types.js'
 import { clamp } from '../utils/clamp.js'
 
@@ -42,13 +50,20 @@ export class ProjectIndexer
   )
   {}
 
-  private async refresh(projectId: number): Promise<void>
+  private async refresh(
+    projectId: number,
+    options: {
+      force?: boolean
+      onProgress?: (progress: IndexProgress) => void
+    } = {}
+  ): Promise<IndexStats>
   {
-    const known = this.store.listFiles(
-      projectId,
-      this.embedder.model,
-      CHUNKER_VERSION
-    )
+    const { force = false, onProgress } = options
+
+    // force ignores cached state so every file re-chunks & re-embeds
+    const known = force
+      ? new Map<string, IndexedFileStatus>()
+      : this.store.listFiles(projectId, this.embedder.model, CHUNKER_VERSION)
 
     // trusts size+mtime as change signal; sha verified only on stat mismatch
     const { changed, unchangedPaths } = await collectIndexableFiles(
@@ -66,6 +81,14 @@ export class ProjectIndexer
     )
 
     const currentPaths = new Set(unchangedPaths)
+    const total = changed.length
+    let processed = 0
+    let embeddedFiles = 0
+    let chunkCount = 0
+
+    // fire progress once per processed file; ++ only when a listener is attached
+    const report = (path: string) =>
+      onProgress?.({ processed: (processed += 1), total, path })
 
     for (const source of changed)
     {
@@ -81,6 +104,7 @@ export class ProjectIndexer
           source.size,
           source.mtimeMs
         )
+        report(source.path)
         continue
       }
 
@@ -88,6 +112,7 @@ export class ProjectIndexer
       if (chunks.length === 0)
       {
         this.store.deleteFile(projectId, source.path)
+        report(source.path)
         continue
       }
 
@@ -115,9 +140,29 @@ export class ProjectIndexer
       }
 
       this.store.upsertFile(projectId, indexedFile, this.embedder.model)
+      embeddedFiles++
+      chunkCount += chunks.length
+      report(source.path)
     }
 
     this.store.deleteMissingFiles(projectId, currentPaths)
+
+    return {
+      totalFiles: changed.length + unchangedPaths.length,
+      embeddedFiles,
+      chunks: chunkCount,
+    }
+  }
+
+  // build or refresh the index, returning a summary. force re-embeds every
+  // file; onProgress fires once per processed file so callers can show progress
+  async ensureIndexed(options?: {
+    force?: boolean
+    onProgress?: (progress: IndexProgress) => void
+  }): Promise<IndexStats>
+  {
+    const projectId = this.store.ensureProject(this.cwd)
+    return this.refresh(projectId, options)
   }
 
   async search(query: string, limit?: number): Promise<SearchHit[]>

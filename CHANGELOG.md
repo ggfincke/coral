@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Todo session persistence + `/todo`:** the task list now persists with the
+  session, so `/resume` restores it (and re-renders the panel) instead of
+  dropping it. Adds a `/todo` command (view the list, `/todo clear` to clear &
+  flush) and strikethrough styling for completed items in the live panel.
+- **`/index` command:** build or refresh the semantic code index on demand
+  (`/index`, or `/index rebuild` to force a full re-embed) with throttled
+  first-build progress in the transcript, instead of waiting for the first
+  `search_code` to index lazily. A re-entrancy guard blocks overlapping builds.
+- **`/status` frozen-prefix coverage:** `/status` now reports how much of the
+  context Coral keeps byte-stable across compaction (frozen prefix tokens, % of
+  the pinned window, & summary-block count) once compaction has run. Honest
+  bookkeeping only — SWA/MLX models (default Gemma) re-prefill regardless, so
+  it's labeled "kept stable", not a measured cache hit.
 - **`/copy` command:** `/copy` copies the last assistant response to the system
   clipboard & `/copy code` copies its last fenced code block. Uses the platform's
   native clipboard CLI (`pbcopy` / `clip` / `wl-copy` / `xclip` / `xsel`) with no
