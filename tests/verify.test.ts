@@ -3,7 +3,11 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { buildVerifyPrompt, parseVerifyVerdict } from '../src/agent/verify.js'
+import {
+  buildVerifyPrompt,
+  buildVerifyReprompt,
+  parseVerifyVerdict,
+} from '../src/agent/verify.js'
 
 test('buildVerifyPrompt carries the request, diffs, & verdict instruction', () =>
 {
@@ -13,6 +17,22 @@ test('buildVerifyPrompt carries the request, diffs, & verdict instruction', () =
   assert.ok(prompt.includes('Add a retry to fetchUser'))
   assert.ok(prompt.includes('user.ts'))
   assert.ok(prompt.includes('VERDICT: PASS'))
+})
+
+test('buildVerifyReprompt carries the reason & invites a justification', () =>
+{
+  const msg = buildVerifyReprompt('missed the null check')
+  assert.ok(msg.includes('missed the null check'))
+  assert.ok(/fix/i.test(msg))
+  // lets the model push back on a false-positive FAIL instead of forcing an edit
+  assert.ok(/correct/i.test(msg))
+})
+
+test('buildVerifyReprompt falls back to a generic prompt without a reason', () =>
+{
+  const msg = buildVerifyReprompt()
+  assert.ok(msg.length > 0)
+  assert.ok(/fix/i.test(msg))
 })
 
 test('parses a PASS verdict', () =>

@@ -49,6 +49,7 @@ function stats(overrides: Partial<ReliabilityStats> = {}): ReliabilityStats
     doomLoopTrips: 0,
     reprompts: 0,
     verifyFlags: 0,
+    verifyReprompts: 0,
     ...overrides,
   }
 }
