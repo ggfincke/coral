@@ -20,9 +20,12 @@ import type { OutputBlock, SystemBlock } from './transcript.js'
 import { runGitCommand } from '../utils/git.js'
 import { copyToClipboard } from '../utils/clipboard.js'
 import { lastAssistantText, lastCodeBlock } from './copy.js'
+import { getTodos, clearTodos, type TodoItem } from '../tools/todo-store.js'
+import { TODO_MARK } from './todo-panel.js'
 import {
   computeTokensPerSecond,
   formatDurationNs,
+  formatFrozenPrefixCoverage,
   formatTokenCount,
   formatTokensPerSecond,
   pluralizeMessages,
@@ -30,6 +33,10 @@ import {
 import { toErrorMessage } from '../utils/errors.js'
 import {
   coralHeader,
+  formatIndexError,
+  formatIndexProgress,
+  formatIndexResult,
+  formatIndexStart,
   formatManualCompactionResult,
   formatPermissionModeChange,
   formatPermissionsHelp,
@@ -37,6 +44,8 @@ import {
   formatTuiSessionList,
   formatUnknownPermissionMode,
 } from './command-output.js'
+import { buildIndexer } from '../retrieval/build.js'
+import { DEFAULT_EMBEDDING_MODEL, type IndexStore } from '../retrieval/types.js'
 
 // context passed to every command — provides access to app state & setters
 export interface CommandContext
@@ -289,6 +298,18 @@ const statusCommand: Command = {
     if (compactions > 0)
     {
       lines.push(`  Compactions:  ${chalk.dim(String(compactions))}`)
+    }
+
+    // frozen-prefix coverage — only meaningful once compaction has frozen blocks
+    const frozen = ctx.agent.getFrozenPrefix()
+    if (frozen.summaryBlocks > 0)
+    {
+      const coverage = formatFrozenPrefixCoverage(
+        frozen.tokens,
+        frozen.contextWindow,
+        frozen.summaryBlocks
+      )
+      lines.push(`  Frozen prefix:${chalk.dim(` ${coverage}`)}`)
     }
 
     // reliability-layer counters — only shown once something needed repair
@@ -683,6 +704,140 @@ const copyCommand: Command = {
   },
 }
 
+// ── /todo ──────────────────────────────────────────────────────────────
+
+// render the live task list w/ the same marks as the panel
+function formatTodoList(todos: TodoItem[]): string
+{
+  const lines: string[] = [coralHeader('tasks'), '']
+  for (const todo of todos)
+  {
+    const text = `${TODO_MARK[todo.status]} ${todo.content}`
+    const row = todo.status === 'completed' ? chalk.strikethrough(text) : text
+    lines.push(`  ${row}`)
+  }
+  return lines.join('\n')
+}
+
+const todoCommand: Command = {
+  name: 'todo',
+  description: 'Show the task list, or clear it w/ /todo clear',
+  execute(args, ctx)
+  {
+    const arg = args.trim().toLowerCase()
+
+    if (arg === 'clear')
+    {
+      clearTodos()
+      // flush the cleared list to disk so resume doesn't bring it back
+      ctx.saveCurrentSession()
+      ctx.pushOutput(systemBlock('Task list cleared'))
+      return
+    }
+
+    if (arg)
+    {
+      ctx.pushOutput(
+        systemBlock(
+          `Unknown option: "${arg}"\n` +
+            `Usage: ${style('user')('/todo')} or ${style('user')('/todo clear')}`
+        )
+      )
+      return
+    }
+
+    const todos = getTodos()
+    if (todos.length === 0)
+    {
+      ctx.pushOutput(systemBlock('No tasks yet'))
+      return
+    }
+
+    ctx.pushOutput(systemBlock(formatTodoList(todos)))
+  },
+}
+
+// ── /index ─────────────────────────────────────────────────────────────
+
+// guards against a re-entrant build — slash commands run w/ input unlocked,
+// so a second /index (or a chat turn) could otherwise overlap the first
+let indexBuilding = false
+
+const indexCommand: Command = {
+  name: 'index',
+  description:
+    'Build the semantic code index (/index rebuild forces a rebuild)',
+  async execute(args, ctx)
+  {
+    if (indexBuilding)
+    {
+      ctx.pushOutput(systemBlock('Index build already in progress'))
+      return
+    }
+
+    const arg = args.trim().toLowerCase()
+    if (arg && arg !== 'rebuild' && arg !== 'force')
+    {
+      ctx.pushOutput(
+        systemBlock(
+          `Unknown option: "${arg}"\n` +
+            `Usage: ${style('user')('/index')} or ${style('user')('/index rebuild')}`
+        )
+      )
+      return
+    }
+
+    const force = arg === 'rebuild' || arg === 'force'
+    const cwd = getCwd()
+    let store: IndexStore | undefined
+    let embeddingModel = DEFAULT_EMBEDDING_MODEL
+
+    indexBuilding = true
+    ctx.pushOutput(systemBlock(formatIndexStart(cwd, force)))
+
+    try
+    {
+      const built = buildIndexer(cwd, ctx.host)
+      store = built.store
+      embeddingModel = built.embeddingModel
+
+      const stats = await built.indexer.ensureIndexed({
+        force,
+        onProgress: (progress) =>
+        {
+          // ~10 throttled updates on big repos; quiet on small ones
+          if (progress.total < 20) return
+          const step = Math.max(1, Math.floor(progress.total / 10))
+          if (
+            progress.processed % step === 0 &&
+            progress.processed < progress.total
+          )
+          {
+            ctx.pushOutput(
+              systemBlock(
+                formatIndexProgress(progress.processed, progress.total)
+              )
+            )
+          }
+        },
+      })
+
+      ctx.pushOutput(systemBlock(formatIndexResult(stats)))
+    }
+    catch (err)
+    {
+      ctx.pushOutput(
+        systemBlock(formatIndexError(embeddingModel, toErrorMessage(err)))
+      )
+    }
+    finally
+    {
+      store?.close?.()
+      indexBuilding = false
+    }
+  },
+}
+
 // ── /sessions ─────────────────────────────────────────────────────────
 
 const sessionsCommand: Command = {
@@ -813,6 +968,8 @@ const commands: Command[] = [
   themeCommand,
   diffCommand,
   copyCommand,
+  todoCommand,
+  indexCommand,
   sessionsCommand,
   resumeCommand,
   renameCommand,

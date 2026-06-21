@@ -11,7 +11,10 @@ import { Agent, type AgentEvents } from '../src/agent/agent.js'
 import type { Tool, ToolExecutionContext } from '../src/tools/index.js'
 import type { ChatRequest, OllamaMessage } from '../src/types/inference.js'
 import { GIT_CONTEXT_HEADING } from '../src/agent/git-context.js'
-import { estimateTotalTokens } from '../src/agent/compaction.js'
+import {
+  estimateTotalTokens,
+  FROZEN_SUMMARY_MARKER,
+} from '../src/agent/compaction.js'
 
 const tempDirs: string[] = []
 const hasGit = spawnSync('git', ['--version']).status === 0
@@ -301,6 +304,36 @@ test(
     )
   }
 )
+
+test('getFrozenPrefix reports the system prompt plus frozen summary blocks', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-frozen-prefix-'))
+  tempDirs.push(dir)
+
+  const agent = createTestAgent(dir)
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System prompt' },
+    { role: 'user', content: `${FROZEN_SUMMARY_MARKER} ...]\n\nsummary one` },
+    { role: 'user', content: `${FROZEN_SUMMARY_MARKER} ...]\n\nsummary two` },
+    { role: 'user', content: 'live question' },
+    { role: 'assistant', content: 'live answer' },
+  ]
+  // restoreMessages keeps the agent's own system prompt at index 0, so the
+  // frozen prefix is [system, summary one, summary two]
+  agent.restoreMessages(messages)
+
+  const frozen = agent.getFrozenPrefix()
+
+  assert.equal(frozen.messages, 3)
+  assert.equal(frozen.summaryBlocks, 2)
+  assert.equal(
+    frozen.tokens,
+    estimateTotalTokens(agent.messages.slice(0, frozen.messages))
+  )
+  assert.ok(frozen.tokens > 0)
+  // num_ctx is unresolved until a run pins it, so the window reads 0
+  assert.equal(frozen.contextWindow, 0)
+})
 
 test('Agent batches only tools marked parallelSafe', async () =>
 {

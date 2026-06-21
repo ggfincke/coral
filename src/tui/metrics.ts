@@ -43,6 +43,12 @@ export function formatTokensPerSecond(tps: number): string
   return `${tps.toFixed(1)} tok/s`
 }
 
+// clamp context occupancy to a whole percent (callers guard contextWindow > 0)
+function percentOfWindow(tokens: number, contextWindow: number): number
+{
+  return Math.min(Math.round((tokens / contextWindow) * 100), 100)
+}
+
 export function buildTokenGauge(
   totalTokens: number,
   contextWindow: number
@@ -55,11 +61,32 @@ export function buildTokenGauge(
   if (contextWindow > 0)
   {
     const window = formatTokenCount(contextWindow)
-    const pct = Math.min(Math.round((totalTokens / contextWindow) * 100), 100)
+    const pct = percentOfWindow(totalTokens, contextWindow)
     return `${used}/${window} ctx (${pct}%)`
   }
 
   return `${used} tokens`
+}
+
+// frozen-prefix coverage for /status — tokens Coral keeps byte-stable across
+// compaction, w/ % of the pinned window when known. neutral wording: this is
+// what Coral froze to enable prefix reuse, not a measured server-side cache hit
+export function formatFrozenPrefixCoverage(
+  tokens: number,
+  contextWindow: number,
+  summaryBlocks: number
+): string
+{
+  const blocks = `${summaryBlocks} block${summaryBlocks === 1 ? '' : 's'}`
+  const size = formatTokenCount(tokens)
+
+  if (contextWindow > 0)
+  {
+    const pct = percentOfWindow(tokens, contextWindow)
+    return `~${size} kept stable (${pct}% of ctx, ${blocks})`
+  }
+
+  return `~${size} kept stable (${blocks})`
 }
 
 // '<n> message(s)' w/ correct pluralization

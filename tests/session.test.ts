@@ -2,11 +2,12 @@
 // tests for session persistence
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, beforeEach, test } from 'node:test'
 import type { OllamaMessage } from '../src/types/inference.js'
+import type { TodoItem } from '../src/tools/todo-store.js'
 import {
   createSession,
   saveSession,
@@ -108,6 +109,55 @@ test('saveSession preserves identity and updates stored messages', () =>
   assert.equal(updated.title, 'First message')
   assert.ok(loaded)
   assert.equal(loaded.messages.length, 5)
+})
+
+test('createSession and saveSession round-trip the todo list', () =>
+{
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System' },
+    { role: 'user', content: 'Plan something' },
+  ]
+  const todos: TodoItem[] = [
+    { content: 'first step', status: 'in_progress' },
+    { content: 'second step', status: 'completed' },
+  ]
+
+  const meta = createSession('test-model', '/tmp/todos', messages, todos)
+  const loaded = loadSession(meta.id)
+
+  assert.ok(loaded)
+  assert.deepEqual(loaded.todos, todos)
+
+  const nextTodos: TodoItem[] = [{ content: 'only step', status: 'completed' }]
+  saveSession(
+    meta.id,
+    'test-model',
+    '/tmp/todos',
+    messages,
+    undefined,
+    nextTodos
+  )
+  const reloaded = loadSession(meta.id)
+
+  assert.ok(reloaded)
+  assert.deepEqual(reloaded.todos, nextTodos)
+})
+
+test('loadSession tolerates legacy session files without a todos field', async () =>
+{
+  // simulate a pre-todos session file — no todos key on disk
+  const dir = join(process.env.CORAL_HOME!, 'sessions')
+  await mkdir(dir, { recursive: true })
+  const legacy = {
+    meta: makeMeta('1e6ac701'),
+    messages: [{ role: 'system', content: 'System' }],
+  }
+  await writeFile(join(dir, '1e6ac701.json'), JSON.stringify(legacy))
+
+  const loaded = loadSession('1e6ac701')
+
+  assert.ok(loaded)
+  assert.equal(loaded.todos, undefined)
 })
 
 test('listSessions orders resume targets by newest update', async () =>

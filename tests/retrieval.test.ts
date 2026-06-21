@@ -116,6 +116,57 @@ test('ProjectIndexer ranks indexed chunks and reuses current embeddings', async 
   }
 })
 
+test('ProjectIndexer.ensureIndexed reports progress, stats, and idempotency', async () =>
+{
+  const dir = await tempDir('coral-retrieval-ensure-')
+  await writeFile(
+    join(dir, 'auth.ts'),
+    'export function loginSession() {\n  return "auth";\n}\n',
+    'utf-8'
+  )
+  await writeFile(
+    join(dir, 'button.ts'),
+    'export function renderButton() {\n  return "button";\n}\n',
+    'utf-8'
+  )
+
+  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const embedder = new KeywordEmbedder()
+  const indexer = new ProjectIndexer(dir, embedder, store)
+
+  try
+  {
+    const progress: number[] = []
+    const first = await indexer.ensureIndexed({
+      onProgress: (p) =>
+      {
+        progress.push(p.processed)
+        assert.equal(p.total, 2)
+      },
+    })
+
+    assert.deepEqual(progress, [1, 2])
+    assert.equal(first.totalFiles, 2)
+    assert.equal(first.embeddedFiles, 2)
+    assert.ok(first.chunks >= 2)
+    const embeddedAfterFirst = embedder.embeddedTexts.length
+
+    // second pass embeds nothing — every file is already current
+    const second = await indexer.ensureIndexed()
+    assert.equal(second.embeddedFiles, 0)
+    assert.equal(embedder.embeddedTexts.length, embeddedAfterFirst)
+
+    // force re-embeds every file
+    const forced = await indexer.ensureIndexed({ force: true })
+    assert.equal(forced.embeddedFiles, 2)
+    assert.equal(embedder.embeddedTexts.length, embeddedAfterFirst * 2)
+  }
+  finally
+  {
+    store.close()
+  }
+})
+
 test('ProjectIndexer refreshes changed files', async () =>
 {
   const dir = await tempDir('coral-retrieval-refresh-')

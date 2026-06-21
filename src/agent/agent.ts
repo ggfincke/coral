@@ -651,6 +651,27 @@ export class Agent
     return { ...this.reliabilityStats }
   }
 
+  // frozen-prefix coverage for /status — the leading messages (system prompt +
+  // accumulated summary blocks) kept byte-stable so the KV-cache prefix can
+  // survive compaction.
+  // ! Coral bookkeeping only — SWA/MLX models (default gemma) re-prefill
+  // regardless, so this is not a measured server-side cache hit
+  getFrozenPrefix(): {
+    messages: number
+    summaryBlocks: number
+    tokens: number
+    contextWindow: number
+  }
+  {
+    const prefix = this.messages.slice(0, this.frozenPrefixLength)
+    return {
+      messages: this.frozenPrefixLength,
+      summaryBlocks: Math.max(this.frozenPrefixLength - 1, 0),
+      tokens: estimateTotalTokens(prefix),
+      contextWindow: this.contextWindowSize,
+    }
+  }
+
   // fetch the model's context window from Ollama, cap it to a sane ceiling, &
   // pin it as num_ctx for the session. safe to call multiple times — only the
   // first resolution does work. capping keeps KV-cache memory bounded & makes

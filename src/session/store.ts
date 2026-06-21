@@ -5,6 +5,7 @@ import { mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { OllamaMessage } from '../types/inference.js'
+import type { TodoItem } from '../tools/todo-store.js'
 import { getCoralHome } from '../utils/coral-home.js'
 import {
   readJsonFile as readUnknownJsonFile,
@@ -51,6 +52,8 @@ export interface SessionData
 {
   meta: SessionMeta
   messages: OllamaMessage[]
+  // task list snapshot so /resume restores the todo panel
+  todos?: TodoItem[]
 }
 
 interface SessionIndexFile
@@ -193,7 +196,8 @@ function writeSessionData(session: SessionData): void
 export function createSession(
   model: string,
   cwd: string,
-  messages: OllamaMessage[]
+  messages: OllamaMessage[],
+  todos: TodoItem[] = []
 ): SessionMeta
 {
   ensureDir()
@@ -210,7 +214,7 @@ export function createSession(
     messageCount: countConversationMessages(messages),
   }
 
-  writeSessionData({ meta, messages })
+  writeSessionData({ meta, messages, todos })
 
   return meta
 }
@@ -221,7 +225,8 @@ export function saveSession(
   model: string,
   cwd: string,
   messages: OllamaMessage[],
-  metaHint?: SessionMetaHint
+  metaHint?: SessionMetaHint,
+  todos: TodoItem[] = []
 ): SessionMeta
 {
   ensureDir()
@@ -243,7 +248,7 @@ export function saveSession(
     lastCompactedAt: metaHint?.lastCompactedAt ?? indexedMeta?.lastCompactedAt,
   }
 
-  writeSessionData({ meta, messages })
+  writeSessionData({ meta, messages, todos })
 
   return meta
 }

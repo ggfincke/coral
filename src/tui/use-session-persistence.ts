@@ -4,6 +4,7 @@
 import { useCallback, useRef, type MutableRefObject } from 'react'
 import { getCwd } from '../cwd.js'
 import type { Agent } from '../agent/agent.js'
+import { getTodos } from '../tools/todo-store.js'
 import {
   createSession,
   loadSession,
@@ -50,6 +51,7 @@ export function useSessionPersistence(resumeSessionId?: string): {
       const messages = agent.getMessages()
       const model = agent.getModel()
       const cwd = getCwd()
+      const todos = getTodos()
       const metaHint = {
         compactionCount: agent.getCompactionCount(),
         lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
@@ -62,8 +64,15 @@ export function useSessionPersistence(resumeSessionId?: string): {
       }
 
       const meta = sessionIdRef.current
-        ? saveSession(sessionIdRef.current, model, cwd, messages, metaHint)
-        : createSession(model, cwd, messages)
+        ? saveSession(
+            sessionIdRef.current,
+            model,
+            cwd,
+            messages,
+            metaHint,
+            todos
+          )
+        : createSession(model, cwd, messages, todos)
 
       sessionIdRef.current = meta.id
       sessionMetaRef.current = meta
