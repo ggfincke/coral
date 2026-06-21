@@ -45,6 +45,13 @@ export function telemetryPath(): string
   return join(getCoralHome(), 'telemetry.json')
 }
 
+// separate store for eval-harness runs — kept apart from interactive telemetry
+// so synthetic benchmark counters don't swamp the real-usage signal
+export function evalTelemetryPath(): string
+{
+  return join(getCoralHome(), 'eval-telemetry.json')
+}
+
 function emptyStore(): TelemetryStore
 {
   return { version: TELEMETRY_VERSION, models: {} }

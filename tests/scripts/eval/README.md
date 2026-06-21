@@ -78,11 +78,28 @@ npm run eval -- mistral --reps 3 --json
 
 # a single task against a remote host
 npm run eval -- mistral --task build-run --host http://192.168.1.50:11434
+
+# persist each model's summed reliability across runs, then print the lifetime view
+npm run eval -- mistral qwen3-coder --reps 3 --save-telemetry
 ```
 
 Flags: `--reps <n>`, `--json`, `--task <id>` (repeatable; unknown ids fail
-loudly), `--host <url>`, plus `--max-iterations <n>`, `--timeout <ms>`, and
-`--think <low|medium|high|on|off>`.
+loudly), `--host <url>`, plus `--max-iterations <n>`, `--timeout <ms>`,
+`--think <low|medium|high|on|off>`, and `--save-telemetry`.
+
+## Longitudinal telemetry (`--save-telemetry`)
+
+Each rep already captures the model's reliability counters, but they normally
+die with the process. With `--save-telemetry`, the harness sums every rep across
+every task for a model into one entry and folds it into
+`~/.coral/eval-telemetry.json`, so reliability becomes comparable across runs
+over time instead of just per-invocation.
+
+This is a **separate file** from the interactive `~/.coral/telemetry.json` that
+the TUI's `/telemetry` reads: synthetic benchmark counters are kept out of the
+real-usage signal. The file's `sessions` count therefore reads as "number of
+eval runs that included this model". After a saving run, the cumulative lifetime
+view is printed below the per-run report (suppressed under `--json`).
 
 ## Caveats
 
