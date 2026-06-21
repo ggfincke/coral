@@ -993,8 +993,9 @@ export default function App({
             }
             else if (result.status === 'fail')
             {
-              content = `${style('warning')(`⚠ self-check flagged ${label}`)}: ${
-                result.reason ?? 'change may not match the request'
+              const reason = result.reason ?? 'change may not match the request'
+              content = `${style('warning')(`⚠ self-check flagged ${label}`)}: ${reason}${
+                result.retrying ? ' — asking the model to fix it' : ''
               }`
             }
             else

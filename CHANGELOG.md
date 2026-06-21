@@ -93,6 +93,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Self-check now self-corrects:** when the post-edit verify pass returns a
+  FAIL, the agent feeds the reason back to the model and gives it one bounded
+  chance to fix the changes (`MAX_VERIFY_REPROMPTS`), instead of only warning
+  and finishing. A fresh self-check reviews the fix on the next finish, so the
+  surfaced verdict is always the final one; the reprompt asks the model to fix
+  _or_ briefly justify, so a weak reviewer's false FAIL doesn't force a needless
+  edit. Inconclusive verdicts still don't loop, the loop only runs when
+  `/verify` is on, and `/status` reports a `verify-fix` counter. Closes the
+  warn-only gap left by the verify MVP.
 - Tool dispatch now resolves tools from the agent's own toolset instead of the
   global registry, so restricted toolsets (e.g. read-only subagents) can no
   longer reach tools outside their subset.

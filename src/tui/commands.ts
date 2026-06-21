@@ -321,7 +321,8 @@ const statusCommand: Command = {
       reliability.validationFailures +
       reliability.reprompts +
       reliability.doomLoopTrips +
-      reliability.verifyFlags
+      reliability.verifyFlags +
+      reliability.verifyReprompts
     if (reliabilityTotal > 0)
     {
       const parts = [
@@ -341,12 +342,18 @@ const statusCommand: Command = {
       {
         parts.push(`${reliability.verifyFlags} verify-flag`)
       }
+      if (reliability.verifyReprompts > 0)
+      {
+        parts.push(`${reliability.verifyReprompts} verify-fix`)
+      }
       lines.push(`  Repairs:      ${chalk.dim(parts.join(', '))}`)
     }
 
     if (ctx.agent.getVerifyEdits())
     {
-      lines.push(`  Self-check:   ${chalk.dim('on (verifies edits)')}`)
+      lines.push(
+        `  Self-check:   ${chalk.dim('on (verifies edits, retries on fail)')}`
+      )
     }
 
     lines.push(`  CWD:          ${chalk.dim(cwd)}`)
@@ -527,8 +534,9 @@ const verifyCommand: Command = {
       ctx.pushOutput(
         systemBlock(
           `Self-check: ${chalk.bold(state)} — after an edit-producing turn, a ` +
-            `read-only subagent reviews the changes against your request\n\n` +
-            `  ${style('user')('/verify on')}   — review edits before declaring done\n` +
+            `read-only subagent reviews the changes against your request; on a ` +
+            `FAIL the model gets one chance to fix them\n\n` +
+            `  ${style('user')('/verify on')}   — review (& fix) edits before declaring done\n` +
             `  ${style('user')('/verify off')}  — skip the check (faster)`
         )
       )

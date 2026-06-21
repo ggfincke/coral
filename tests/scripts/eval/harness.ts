@@ -38,11 +38,12 @@ function emptyReliabilityStats(): ReliabilityStats
     doomLoopTrips: 0,
     reprompts: 0,
     verifyFlags: 0,
+    verifyReprompts: 0,
   }
 }
 
-// compensations = repair/name/stall/validation/reprompt counters. doomLoopTrips
-// & verifyFlags are reported but EXCLUDED — they're not tool-format issues
+// compensations = repair/name/stall/validation/reprompt counters. doomLoopTrips,
+// verifyFlags, & verifyReprompts are reported but EXCLUDED — not tool-format issues
 function countCompensations(stats: ReliabilityStats): number
 {
   return (
@@ -276,6 +277,7 @@ function meanReliability(runs: RunOutcome[]): ReliabilityStats
     doomLoopTrips: mean(runs.map((r) => r.reliability.doomLoopTrips)),
     reprompts: mean(runs.map((r) => r.reliability.reprompts)),
     verifyFlags: mean(runs.map((r) => r.reliability.verifyFlags)),
+    verifyReprompts: mean(runs.map((r) => r.reliability.verifyReprompts)),
   }
 }
 

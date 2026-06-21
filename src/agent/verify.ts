@@ -7,7 +7,12 @@ export interface VerificationResult
   // one-line explanation when the check fails
   reason?: string
   editCount: number
+  // set when a failed check is feeding back into the model for a fix attempt
+  retrying?: boolean
 }
+
+// max failed-verify -> fix attempts per run() before warn-only finish
+export const MAX_VERIFY_REPROMPTS = 1
 
 // the verdict line the self-check subagent is asked to end w/
 const VERDICT_PATTERN = /VERDICT:\s*(PASS|FAIL)\b[ \t]*[-—:]?[ \t]*(.*)/i
@@ -33,6 +38,21 @@ export function buildVerifyPrompt(request: string, diffs: string[]): string
     'VERDICT: PASS',
     'VERDICT: FAIL - <one-line reason>',
   ].join('\n')
+}
+
+// corrective user message after a failed self-check — hands the model the
+// reason & asks it to fix or justify, so a weak reviewer's false FAIL doesn't
+// force a needless edit
+export function buildVerifyReprompt(reason?: string): string
+{
+  const problem = reason
+    ? `A self-check of your changes found a problem: ${reason}.`
+    : 'A self-check of your changes flagged a possible problem.'
+  return (
+    `${problem} Re-examine the files you changed against the original ` +
+    'request, fix anything wrong or incomplete, then give your final answer. ' +
+    'If the changes are actually correct, briefly explain why instead.'
+  )
 }
 
 // extract the verdict from the subagent's reply — scans from the end since the

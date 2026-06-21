@@ -552,19 +552,24 @@ test('Agent verifies edit diffs recorded from tool results', async () =>
   try
   {
     const verdicts: string[] = []
+    const retried: (boolean | undefined)[] = []
     await agent.run(
       'apply the requested edit',
       createAgentEvents({
         onVerification(result)
         {
           verdicts.push(`${result.status}:${result.reason ?? ''}`)
+          retried.push(result.retrying)
         },
       })
     )
 
     assert.ok(verifyPrompt.includes('apply the requested edit'))
     assert.ok(verifyPrompt.includes('example.ts'))
-    assert.deepEqual(verdicts, ['fail:diff mismatch'])
+    // a FAIL feeds back one fix attempt, then re-verifies & finishes warn-only
+    assert.deepEqual(verdicts, ['fail:diff mismatch', 'fail:diff mismatch'])
+    assert.deepEqual(retried, [true, false])
+    assert.equal(agent.getReliabilityStats().verifyReprompts, 1)
   }
   finally
   {

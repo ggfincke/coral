@@ -63,7 +63,9 @@ import {
 } from './doom-loop.js'
 import {
   buildVerifyPrompt,
+  buildVerifyReprompt,
   parseVerifyVerdict,
+  MAX_VERIFY_REPROMPTS,
   type VerificationResult,
 } from './verify.js'
 import { validateToolArgs } from './tool-validation.js'
@@ -198,6 +200,8 @@ export interface ReliabilityStats
   reprompts: number
   // edits a self-check flagged as wrong or inconclusive
   verifyFlags: number
+  // failed self-checks fed back to the model for a fix attempt
+  verifyReprompts: number
 }
 
 // token usage from Ollama's response metrics
@@ -320,6 +324,7 @@ export class Agent
     doomLoopTrips: 0,
     reprompts: 0,
     verifyFlags: 0,
+    verifyReprompts: 0,
   }
   private onCompactionCallback?: (result: CompactionResult) => void
   private onCompactionStartCallback?: () => void
@@ -1155,6 +1160,7 @@ export class Agent
     let iterations = 0
     let stallNudges = 0
     let reprompts = 0
+    let verifyReprompts = 0
     const doomLoop = new DoomLoopDetector()
     // diffs from edit-producing tools this run — fed to the self-check
     const editDiffs: string[] = []
@@ -1356,7 +1362,27 @@ export class Agent
           if (verdict)
           {
             if (verdict.status !== 'pass') this.reliabilityStats.verifyFlags++
+
+            // failed self-check: hand the reason back & let the model fix it,
+            // bounded by the cap. unknown verdicts don't loop (no concrete
+            // reason to act on) & a fresh verify reviews the fix on next finish
+            const willRetry =
+              verdict.status === 'fail' &&
+              verifyReprompts < MAX_VERIFY_REPROMPTS &&
+              !signal?.aborted
+            verdict.retrying = willRetry
             events.onVerification?.(verdict)
+
+            if (willRetry)
+            {
+              verifyReprompts++
+              this.reliabilityStats.verifyReprompts++
+              this.pushMessage({
+                role: 'user',
+                content: buildVerifyReprompt(verdict.reason),
+              })
+              continue
+            }
           }
         }
 
