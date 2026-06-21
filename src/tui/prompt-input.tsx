@@ -1,8 +1,8 @@
 // src/tui/prompt-input.tsx
 // inline prompt input w/ unified keyboard, wheel, & safe text insertion
 
-import { useCallback, useMemo, useRef, useState } from 'react'
-import { Text } from 'ink'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Box, Text } from 'ink'
 import chalk from 'chalk'
 import {
   useCoralInput,
@@ -11,6 +11,15 @@ import {
   type CoralKey,
 } from './use-coral-input.js'
 import { applyPromptEdit } from './prompt-edit.js'
+import {
+  applyCompletion,
+  detectCompletion,
+  rankCommands,
+  rankFiles,
+  type CommandSummary,
+  type CompletionItem,
+} from './completion.js'
+import CompletionMenu from './completion-menu.js'
 
 export interface PromptInputProps
 {
@@ -18,6 +27,8 @@ export interface PromptInputProps
   placeholder?: string
   focus?: boolean
   showCursor?: boolean
+  completionCommands?: CommandSummary[]
+  listFiles?: () => Promise<string[]>
   onChange: (value: string) => void
   onSubmit: (value: string) => void
   onEscape: () => void
@@ -39,7 +50,7 @@ interface CursorState
   cursorWidth: number
 }
 
-// ctrl + a specific letter — pass the letter pre-lowercased
+// ctrl + a specific letter; pass the letter pre-lowercased
 function isCtrlLetter(input: string, key: CoralKey, letter: string): boolean
 {
   return key.ctrl && input.toLowerCase() === letter
@@ -50,6 +61,8 @@ export default function PromptInput({
   placeholder = '',
   focus = true,
   showCursor = true,
+  completionCommands = [],
+  listFiles,
   onChange,
   onSubmit,
   onEscape,
@@ -69,6 +82,11 @@ export default function PromptInput({
     cursorOffset: value.length,
     cursorWidth: 0,
   })
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [dismissed, setDismissed] = useState(false)
+  const [files, setFiles] = useState<string[]>([])
+  const filesRequestedRef = useRef(false)
+  const mountedRef = useRef(true)
   const pendingTerminalSequenceRef = useRef('')
   // cursor is out of sync w/ the controlled value -> the value changed
   // externally (history recall, submit clear), so render the cursor at the end
@@ -90,6 +108,64 @@ export default function PromptInput({
         : cursor,
     [cursor, focus, hasExternalValue, showCursor, value]
   )
+
+  // active completion span under the cursor, & its ranked suggestions
+  const query = useMemo(
+    () => detectCompletion(value, resolvedCursor.cursorOffset),
+    [value, resolvedCursor.cursorOffset]
+  )
+  const items: CompletionItem[] = useMemo(() =>
+  {
+    if (!query) return []
+    if (query.kind === 'command')
+      return rankCommands(query.token, completionCommands)
+    return rankFiles(query.token, files)
+  }, [query, completionCommands, files])
+  const menuOpen =
+    focus && showCursor && !dismissed && query !== null && items.length > 0
+  const safeIndex = Math.min(selectedIndex, items.length - 1)
+
+  // lazily load the project file list the first time an @-mention is typed
+  const needFiles = query?.kind === 'file'
+  useEffect(() =>
+  {
+    mountedRef.current = true
+    return () =>
+    {
+      mountedRef.current = false
+    }
+  }, [])
+  useEffect(() =>
+  {
+    if (!needFiles || !listFiles || filesRequestedRef.current) return
+    filesRequestedRef.current = true
+    void listFiles()
+      .then((loaded) =>
+      {
+        if (mountedRef.current) setFiles(loaded)
+      })
+      .catch(() =>
+      {
+        if (!mountedRef.current) return
+        filesRequestedRef.current = false
+        setFiles([])
+      })
+  }, [needFiles, listFiles])
+
+  // splice the highlighted suggestion into the prompt & close the menu
+  const acceptCompletion = useCallback(() =>
+  {
+    if (!query || items.length === 0) return
+    const item = items[Math.min(selectedIndex, items.length - 1)]!
+    const next = applyCompletion(value, query, item)
+    setCursor({
+      value: next.value,
+      cursorOffset: next.cursorOffset,
+      cursorWidth: 0,
+    })
+    setSelectedIndex(0)
+    if (next.value !== value) onChange(next.value)
+  }, [items, onChange, query, selectedIndex, value])
 
   let renderedValue = value
   let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined
@@ -140,6 +216,32 @@ export default function PromptInput({
         }
 
         pendingTerminalSequenceRef.current = ''
+      }
+
+      // the completion menu owns arrows/tab/enter/escape while it's open
+      if (menuOpen)
+      {
+        if (key.upArrow)
+        {
+          setSelectedIndex((i) => Math.max(0, i - 1))
+          return
+        }
+        if (key.downArrow)
+        {
+          setSelectedIndex((i) => Math.min(items.length - 1, i + 1))
+          return
+        }
+        if (key.tab || key.return)
+        {
+          acceptCompletion()
+          return
+        }
+        if (key.escape)
+        {
+          setDismissed(true)
+          setSelectedIndex(0)
+          return
+        }
       }
 
       if (key.pageUp)
@@ -199,7 +301,7 @@ export default function PromptInput({
       if (key.return)
       {
         onSubmit(value)
-        // a real submit clears the field — reset the cursor so a later history
+        // a real submit clears the field; reset the cursor so a later history
         // recall of the same text isn't mistaken for the current (now stale)
         // cursor value & left mid-text; skip empty/whitespace (never submitted)
         if (value.trim())
@@ -234,9 +336,16 @@ export default function PromptInput({
       if (nextState.value !== value)
       {
         onChange(nextState.value)
+        // typing/deleting re-opens a dismissed menu & resets the highlight;
+        // a cursor-only move leaves an Esc-dismissed menu closed
+        setDismissed(false)
+        setSelectedIndex(0)
       }
     },
     [
+      acceptCompletion,
+      items.length,
+      menuOpen,
       onChange,
       onEscape,
       onHistoryDown,
@@ -256,7 +365,7 @@ export default function PromptInput({
 
   useCoralInput(handleInput, { isActive: focus, enableMouseTracking: focus })
 
-  return (
+  const textLine = (
     <Text>
       {placeholder
         ? value.length > 0
@@ -264,5 +373,18 @@ export default function PromptInput({
           : renderedPlaceholder
         : renderedValue}
     </Text>
+  )
+
+  if (!menuOpen || !query) return textLine
+
+  return (
+    <Box flexDirection="column">
+      {textLine}
+      <CompletionMenu
+        items={items}
+        selectedIndex={safeIndex}
+        kind={query.kind}
+      />
+    </Box>
   )
 }

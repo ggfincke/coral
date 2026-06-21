@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Prompt completion + `@`-file mentions:** typing `/` opens a live
+  command-autocomplete menu (prefix-ranked, Tab/Enter to accept, arrows to
+  move, Esc to dismiss); typing `@` opens a fuzzy file picker over the
+  ignore-aware project tree (binary files filtered out), with quoted-path
+  support for names with spaces. Selecting an `@`-mention inserts the path and,
+  on submit, pre-reads each mentioned file into the model's context (transcript
+  still shows the clean prompt) so a small-context model gets the right code
+  without burning its window on blind `grep`. Pre-reads are bounded by a shared
+  budget (the same scale as one large tool result), so `@`-mentions can never
+  overflow the window; files past the budget are head-truncated or skipped, and
+  any truncated/skipped/missing/binary mention is reported in a one-line
+  transcript note instead of vanishing silently. Pure completion logic lives in
+  `src/tui/completion.ts` and mention parsing/expansion in `src/tui/mentions.ts`,
+  both unit-tested.
 - **Todo session persistence + `/todo`:** the task list now persists with the
   session, so `/resume` restores it (and re-renders the panel) instead of
   dropping it. Adds a `/todo` command (view the list, `/todo clear` to clear &

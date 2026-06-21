@@ -977,6 +977,15 @@ const commands: Command[] = [
   exitCommand,
 ]
 
+// command name + description pairs for prompt autocomplete
+export function commandCompletions(): { name: string; description: string }[]
+{
+  return commands.map((cmd) => ({
+    name: cmd.name,
+    description: cmd.description,
+  }))
+}
+
 // dispatch a slash command from user input
 // returns true if input was a command, false otherwise
 export async function dispatchCommand(

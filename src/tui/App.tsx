@@ -25,7 +25,13 @@ import PromptInput from './prompt-input.js'
 import { getThemeGeneration, inkColor, style } from './theme.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { previewToolDiff } from '../utils/diff.js'
-import { dispatchCommand, type CommandContext } from './commands.js'
+import {
+  commandCompletions,
+  dispatchCommand,
+  type CommandContext,
+} from './commands.js'
+import { buildMentionContext, formatMentionNotice } from './mentions.js'
+import { listProjectFiles } from './file-suggestions.js'
 import {
   formatAutoCompactionResult,
   formatPermissionModeChange,
@@ -820,6 +826,10 @@ export default function App({
     { isActive: pickerVisible || Boolean(approval) || Boolean(confirm) }
   )
 
+  // slash-command list & project-file lookup for prompt autocomplete
+  const completionCommands = useMemo(() => commandCompletions(), [])
+  const listFiles = useCallback(() => listProjectFiles(getCwd()), [])
+
   const handleSubmit = useCallback(
     async (value: string) =>
     {
@@ -892,8 +902,27 @@ export default function App({
       startWaiting()
       resetStreamBuffer()
 
+      // expand @-mentions into attached file context for the model — the
+      // transcript above still shows the clean prompt the user typed, w/ a
+      // system note when files are truncated or skipped
+      let prompt = value
+      try
+      {
+        const expansion = await buildMentionContext(value)
+        if (expansion.context) prompt = `${value}\n\n${expansion.context}`
+        const notice = formatMentionNotice(expansion)
+        if (notice)
+        {
+          setOutput((prev) => [...prev, { type: 'system', content: notice }])
+        }
+      }
+      catch
+      {
+        prompt = value
+      }
+
       await agent.run(
-        value,
+        prompt,
         {
           onThinking(thinking)
           {
@@ -1386,6 +1415,8 @@ export default function App({
             </Text>
             <PromptInput
               value={input}
+              completionCommands={completionCommands}
+              listFiles={listFiles}
               onChange={handleInputChange}
               onSubmit={handleSubmit}
               onEscape={abortOrExit}
