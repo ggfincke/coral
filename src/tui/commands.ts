@@ -18,6 +18,8 @@ import { listSessions } from '../session/store.js'
 import { resolveResumeSession } from '../session/resume.js'
 import type { OutputBlock, SystemBlock } from './transcript.js'
 import { runGitCommand } from '../utils/git.js'
+import { copyToClipboard } from '../utils/clipboard.js'
+import { lastAssistantText, lastCodeBlock } from './copy.js'
 import {
   computeTokensPerSecond,
   formatDurationNs,
@@ -633,6 +635,54 @@ const diffCommand: Command = {
   },
 }
 
+// ── /copy ──────────────────────────────────────────────────────────────
+
+const copyCommand: Command = {
+  name: 'copy',
+  description:
+    "Copy the last response (or its code block w/ 'code') to clipboard",
+  async execute(args, ctx)
+  {
+    const text = lastAssistantText(ctx.agent.getMessages())
+    if (!text)
+    {
+      ctx.pushOutput(systemBlock('Nothing to copy — no response yet'))
+      return
+    }
+
+    const wantCode = args.trim().toLowerCase() === 'code'
+    let payload = text
+    let label = 'response'
+
+    if (wantCode)
+    {
+      const block = lastCodeBlock(text)
+      if (!block)
+      {
+        ctx.pushOutput(systemBlock('No code block in the last response'))
+        return
+      }
+      payload = block
+      label = 'code block'
+    }
+
+    const result = await copyToClipboard(payload)
+    if (!result.ok)
+    {
+      ctx.pushOutput(
+        systemBlock(
+          `Failed to copy: ${result.error ?? 'clipboard unavailable'}`
+        )
+      )
+      return
+    }
+
+    const lineCount = payload.split('\n').length
+    const detail = lineCount === 1 ? '1 line' : `${lineCount} lines`
+    ctx.pushOutput(systemBlock(`Copied last ${label} to clipboard (${detail})`))
+  },
+}
+
 // ── /sessions ─────────────────────────────────────────────────────────
 
 const sessionsCommand: Command = {
@@ -762,6 +812,7 @@ const commands: Command[] = [
   verifyCommand,
   themeCommand,
   diffCommand,
+  copyCommand,
   sessionsCommand,
   resumeCommand,
   renameCommand,

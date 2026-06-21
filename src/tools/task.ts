@@ -32,7 +32,7 @@ export const taskTool: Tool = {
     },
     required: ['prompt'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context): Promise<ToolResult>
   {
     const prompt = (args.prompt as string | undefined)?.trim()
     if (!prompt)
@@ -46,7 +46,8 @@ export const taskTool: Tool = {
       return { output: '', error: 'Subagents are unavailable in this context' }
     }
 
-    const result = await runner(prompt)
+    // forward the run's abort signal so Escape interrupts the subagent
+    const result = await runner(prompt, context?.signal)
     if (result.error)
     {
       return { output: result.text, error: result.error }

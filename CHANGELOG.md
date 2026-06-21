@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`/copy` command:** `/copy` copies the last assistant response to the system
+  clipboard & `/copy code` copies its last fenced code block. Uses the platform's
+  native clipboard CLI (`pbcopy` / `clip` / `wl-copy` / `xclip` / `xsel`) with no
+  new dependency; extraction helpers live in `src/tui/copy.ts`.
 - **Eval harness:** add a live-model benchmark (`npm run eval -- <model...>`)
   that drives a real Ollama model through 6 deterministic coding tasks
   (read-report, single-edit, create-file, search-multi-edit, build-run,
@@ -71,6 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Subagent abort threading:** the `task` tool now forwards the run's
+  `AbortSignal` to the subagent runner, so `Escape` / `Ctrl+C` interrupts an
+  in-flight subagent at its next round boundary instead of running until the
+  `maxIterations` cap. The signal was already plumbed end-to-end everywhere
+  except the `task` tool itself.
 - `/diff` output now renders w/ proper git-diff coloring & a line-number
   gutter — its colors were previously clobbered by the system block's dim
   styling.

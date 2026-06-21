@@ -418,6 +418,31 @@ test('task tool fails closed when subagents are unavailable', async () =>
   assert.match(noRunner.error ?? '', /unavailable/i)
 })
 
+test('task tool forwards the abort signal to the subagent runner', async () =>
+{
+  let received: AbortSignal | undefined
+  setSubagentRunner(async (_prompt, signal) =>
+  {
+    received = signal
+    return { text: 'done', toolCount: 0 }
+  })
+
+  const controller = new AbortController()
+  const result = await taskTool.execute(
+    { prompt: 'explore the repo' },
+    {
+      cwd: process.cwd(),
+      ollamaHost: 'http://localhost:11434',
+      signal: controller.signal,
+    }
+  )
+
+  assert.equal(result.output, 'done')
+  assert.equal(received, controller.signal)
+
+  setSubagentRunner(null)
+})
+
 test('subagentTools exposes only subagent-safe tools', () =>
 {
   const names = subagentTools.map((tool) => tool.name)
