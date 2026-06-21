@@ -319,6 +319,7 @@ const statusCommand: Command = {
       repairs +
       reliability.stallNudges +
       reliability.validationFailures +
+      reliability.editRepairs +
       reliability.reprompts +
       reliability.doomLoopTrips +
       reliability.verifyFlags +
@@ -330,6 +331,10 @@ const statusCommand: Command = {
         `${reliability.stallNudges} nudge`,
         `${reliability.validationFailures} invalid-args`,
       ]
+      if (reliability.editRepairs > 0)
+      {
+        parts.push(`${reliability.editRepairs} edit-fix`)
+      }
       if (reliability.reprompts > 0)
       {
         parts.push(`${reliability.reprompts} reprompt`)

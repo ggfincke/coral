@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Whitespace-tolerant `edit_file`:** when `old_string` doesn't match the file
+  verbatim, `edit_file` now falls back to a block match that ignores
+  per-line indentation, trailing whitespace, and CRLF/LF drift — the single
+  most common way a small local model botches an edit. The replacement is
+  re-indented onto the file's own indentation, so the fix lands correctly even
+  when the model copied the wrong leading whitespace. The fallback refuses an
+  ambiguous match (more than one normalized hit without `replace_all`) so a loose
+  match can never edit the wrong block, and the approval-box preview reflects the
+  fuzzy-resolved target (preview and execution share the same `applyEdit`, so
+  they can't drift). A recovered edit is reported back to the model as matched on
+  normalized whitespace (so it copies exact text next time) and counted in a new
+  `edit-fix` reliability counter surfaced in `/status` (and the eval harness's
+  compensation rate). On a genuine miss the error now points at where
+  `old_string`'s first line does or doesn't appear in the file instead of a bare
+  "not found".
 - **Prompt completion + `@`-file mentions:** typing `/` opens a live
   command-autocomplete menu (prefix-ranked, Tab/Enter to accept, arrows to
   move, Esc to dismiss); typing `@` opens a fuzzy file picker over the

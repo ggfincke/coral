@@ -46,6 +46,7 @@ function stats(overrides: Partial<ReliabilityStats> = {}): ReliabilityStats
     nameRepairs: 0,
     stallNudges: 0,
     validationFailures: 0,
+    editRepairs: 0,
     doomLoopTrips: 0,
     reprompts: 0,
     verifyFlags: 0,

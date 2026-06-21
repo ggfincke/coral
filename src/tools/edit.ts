@@ -5,7 +5,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Tool, ToolResult } from './tool.js'
 import { readFileGuarded } from './file-utils.js'
 import { resolvePath } from '../cwd.js'
-import { applyEdit, computeDiff } from '../utils/diff.js'
+import { applyEdit, computeDiff, describeEditMiss } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
 
 export const editTool: Tool = {
@@ -58,7 +58,10 @@ export const editTool: Tool = {
     {
       if (result.reason === 'not_found')
       {
-        return { output: '', error: `old_string not found in ${path}` }
+        return {
+          output: '',
+          error: `old_string not found in ${path}.${describeEditMiss(content, oldString)}`,
+        }
       }
       return {
         output: '',
@@ -80,9 +83,16 @@ export const editTool: Tool = {
     }
 
     const replaced = replaceAll ? result.count : 1
+    // fuzzy match = old_string didn't match verbatim; tell the model so it copies
+    // exact text next time, & flag the recovery for ReliabilityStats
+    const fuzzy = result.matchType === 'fuzzy'
+    const note = fuzzy
+      ? ' (old_string matched on normalized whitespace, not verbatim — copy exact text next time)'
+      : ''
     return {
-      output: `Edited ${path}: replaced ${replaced} occurrence${replaced > 1 ? 's' : ''} (${oldString.length} chars → ${newString.length} chars)`,
+      output: `Edited ${path}: replaced ${replaced} occurrence${replaced > 1 ? 's' : ''} (${oldString.length} chars → ${newString.length} chars)${note}`,
       diff: computeDiff(content, updated) ?? undefined,
+      repaired: fuzzy,
     }
   },
 }
