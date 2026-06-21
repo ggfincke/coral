@@ -194,6 +194,9 @@ export interface ReliabilityStats
   nameRepairs: number
   stallNudges: number
   validationFailures: number
+  // edits that landed via the whitespace-tolerant fallback after old_string
+  // didn't match the file verbatim
+  editRepairs: number
   // times the agent paused on a detected doom loop
   doomLoopTrips: number
   // corrective reprompts when a call-shaped turn wouldn't parse
@@ -321,6 +324,7 @@ export class Agent
     nameRepairs: 0,
     stallNudges: 0,
     validationFailures: 0,
+    editRepairs: 0,
     doomLoopTrips: 0,
     reprompts: 0,
     verifyFlags: 0,
@@ -987,10 +991,14 @@ export class Agent
 
     try
     {
-      return await tool.execute(
+      const result = await tool.execute(
         validation.args,
         this.buildToolExecutionContext(signal)
       )
+      // a tool that recovered a near-miss call (e.g. whitespace-tolerant edit)
+      // counts as a compensation the model made us do
+      if (result.repaired) this.reliabilityStats.editRepairs++
+      return result
     }
     catch (err)
     {

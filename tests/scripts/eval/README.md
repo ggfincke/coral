@@ -39,8 +39,9 @@ prompt, then grades the result deterministically:
 - **compensation** — one count from the reliability layer that means the model's
   tool call was not clean: a repaired text-emitted call (`repairedToolCalls`), a
   hallucinated-name fix (`nameRepairs`), an empty-turn nudge (`stallNudges`), a
-  schema validation/coercion failure (`validationFailures`), or a corrective
-  re-prompt (`reprompts`). `doomLoopTrips` & `verifyFlags` are reported too but
+  schema validation/coercion failure (`validationFailures`), a whitespace-tolerant
+  edit fix (`editRepairs`), or a corrective re-prompt (`reprompts`).
+  `doomLoopTrips`, `verifyFlags`, & `verifyReprompts` are reported too but
   EXCLUDED from compensations — they aren't tool-format issues.
 - **cleanlinessRate** — the share of tool activity that wasn't a compensation:
 

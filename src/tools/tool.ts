@@ -10,6 +10,9 @@ export interface ToolResult
   error?: string
   // unified diff of a file change — TUI display only, never sent to the model
   diff?: string
+  // tool recovered from a near-miss call (e.g. a whitespace-tolerant edit match);
+  // the agent folds this into ReliabilityStats
+  repaired?: boolean
 }
 
 // TUI presentation metadata — single source of truth for the tool's header
