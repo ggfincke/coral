@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-21
+
 ### Added
 
 - **Whitespace-tolerant `edit_file`:** when `old_string` doesn't match the file
@@ -377,6 +379,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
+[0.11.0]: https://github.com/user/coral/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/user/coral/compare/be8b243...1e4817e
 [0.9.0]: https://github.com/user/coral/compare/34766ce...be8b243
 [0.8.0]: https://github.com/user/coral/compare/845d6f9...34766ce
