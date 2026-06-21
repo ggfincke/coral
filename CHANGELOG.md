@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/telemetry` command prints the per-model lifetime totals. This makes v0.11.0
   the baseline epoch for tracking whether a model gets more or less reliable
   over time.
+- **Eval harness `--save-telemetry`:** running the eval harness with
+  `--save-telemetry` now sums each model's reliability counters across every rep
+  and task into one entry and folds it into `~/.coral/eval-telemetry.json`, so
+  benchmark reliability becomes longitudinal across runs instead of dying with
+  the process. The eval store is kept separate from the interactive
+  `~/.coral/telemetry.json` that `/telemetry` reads, so synthetic benchmark
+  counters never swamp the real-usage signal. After a saving run the cumulative
+  lifetime view prints below the per-run report (suppressed under `--json`).
 
 ## [0.11.0] - 2026-06-21
 

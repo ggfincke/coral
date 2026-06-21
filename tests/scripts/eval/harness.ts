@@ -12,6 +12,10 @@ import type {
   TokenUsage,
 } from '../../../src/agent/agent.js'
 import { DEFAULT_OLLAMA_HOST } from '../../../src/ollama/host.js'
+import {
+  evalTelemetryPath,
+  recordReliability,
+} from '../../../src/telemetry/store.js'
 import type {
   EvalOptions,
   EvalReport,
@@ -265,7 +269,30 @@ export async function runRep(
 function mean(values: number[]): number
 {
   if (values.length === 0) return 0
-  return values.reduce((sum, value) => sum + value, 0) / values.length
+  return values.reduce((acc, value) => acc + value, 0) / values.length
+}
+
+// arithmetic sum; 0 for an empty set
+function sum(values: number[]): number
+{
+  return values.reduce((acc, value) => acc + value, 0)
+}
+
+// element-wise sum of the reliability counters across runs (raw totals, not
+// means) — what gets folded into the longitudinal eval telemetry store
+export function sumReliability(runs: RunOutcome[]): ReliabilityStats
+{
+  return {
+    repairedToolCalls: sum(runs.map((r) => r.reliability.repairedToolCalls)),
+    nameRepairs: sum(runs.map((r) => r.reliability.nameRepairs)),
+    stallNudges: sum(runs.map((r) => r.reliability.stallNudges)),
+    validationFailures: sum(runs.map((r) => r.reliability.validationFailures)),
+    editRepairs: sum(runs.map((r) => r.reliability.editRepairs)),
+    doomLoopTrips: sum(runs.map((r) => r.reliability.doomLoopTrips)),
+    reprompts: sum(runs.map((r) => r.reliability.reprompts)),
+    verifyFlags: sum(runs.map((r) => r.reliability.verifyFlags)),
+    verifyReprompts: sum(runs.map((r) => r.reliability.verifyReprompts)),
+  }
 }
 
 // element-wise mean of the reliability counters across runs
@@ -357,6 +384,8 @@ export async function runEval(
   for (const model of models)
   {
     const taskResults: TaskResult[] = []
+    // every rep across every task for this model — summed for telemetry below
+    const modelRuns: RunOutcome[] = []
 
     for (const task of selectedTasks)
     {
@@ -366,10 +395,23 @@ export async function runEval(
         // runRep constructs its own Agent (warm model, fresh scratch dir)
         runs.push(await runRep(model, task, { ...opts, host, reps }))
       }
+      modelRuns.push(...runs)
       taskResults.push(aggregateTask(task.id, runs))
     }
 
     modelReports.push(aggregateModel(model, taskResults))
+
+    // fold this model's summed run reliability into the longitudinal eval store
+    // as one entry, keeping eval data out of the interactive telemetry file
+    if (opts.saveTelemetry)
+    {
+      recordReliability(
+        model,
+        sumReliability(modelRuns),
+        new Date().toISOString(),
+        evalTelemetryPath()
+      )
+    }
 
     // unload this model before moving on so the next one starts cold & the
     // host frees its KV cache. a fresh disposer agent unloads w/o a run

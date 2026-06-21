@@ -5,6 +5,11 @@
 import { runEval } from './harness.js'
 import { TASKS, taskById } from './tasks.js'
 import { formatReport, reportToJson } from './report.js'
+import {
+  evalTelemetryPath,
+  formatTelemetry,
+  loadTelemetry,
+} from '../../../src/telemetry/store.js'
 import type { EvalOptions, EvalTask } from './types.js'
 
 function fail(message: string): never
@@ -68,7 +73,8 @@ function printUsageAndExit(): never
   fail(
     'usage: tsx tests/scripts/eval/run.ts <model...> ' +
       '[--host <url>] [--reps <n>] [--task <id>]... ' +
-      '[--max-iterations <n>] [--timeout <ms>] [--think <mode>] [--json]'
+      '[--max-iterations <n>] [--timeout <ms>] [--think <mode>] ' +
+      '[--json] [--save-telemetry]'
   )
 }
 
@@ -128,6 +134,9 @@ async function main(): Promise<void>
       case '--json':
         asJson = true
         break
+      case '--save-telemetry':
+        opts.saveTelemetry = true
+        break
       default:
         if (arg.startsWith('--'))
         {
@@ -156,6 +165,14 @@ async function main(): Promise<void>
   const report = await runEval(models, resolveTasks(taskFilter), opts)
 
   console.log(asJson ? reportToJson(report) : formatReport(report))
+
+  // echo the cumulative lifetime eval store after a --save-telemetry run.
+  // human-readable only — JSON mode keeps stdout machine-parseable
+  if (opts.saveTelemetry && !asJson)
+  {
+    const lines = formatTelemetry(loadTelemetry(evalTelemetryPath()))
+    console.log(['', 'Eval telemetry (lifetime):', ...lines].join('\n'))
+  }
 }
 
 void main()
