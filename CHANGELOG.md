@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-model reliability telemetry persists across sessions:** the
+  reliability-layer counters (`/status` "Repairs" line) are now folded into
+  `~/.coral/telemetry.json`, keyed by model, when an agent is disposed — so a
+  model's lifetime tool-call repairs, edit fixes, reprompts, doom-loop trips,
+  and verify flags accumulate across sessions instead of resetting each run.
+  The fold happens once per agent lifetime and only after the model has
+  produced a turn, so picker churn doesn't inflate the counts. A new
+  `/telemetry` command prints the per-model lifetime totals. This makes v0.11.0
+  the baseline epoch for tracking whether a model gets more or less reliable
+  over time.
+
 ## [0.11.0] - 2026-06-21
 
 ### Added

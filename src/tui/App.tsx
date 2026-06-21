@@ -40,6 +40,7 @@ import { useAnimationTimer } from './use-animation-timer.js'
 import { useStreamBuffer } from './use-stream-buffer.js'
 import { useSessionPersistence } from './use-session-persistence.js'
 import { useInputHistory } from './use-input-history.js'
+import { recordReliability } from '../telemetry/store.js'
 import { loadSession, renameSession } from '../session/store.js'
 import { getCwd } from '../cwd.js'
 import { type RunStage } from './run-stage.js'
@@ -323,6 +324,23 @@ export default function App({
     if (!agentInstance || disposedAgentsRef.current.has(agentInstance)) return
 
     disposedAgentsRef.current.add(agentInstance)
+    // fold this agent's reliability counters into the persistent per-model
+    // telemetry, but only once the model has actually produced a turn — skips
+    // agents abandoned in the picker. attributed to the model active at dispose
+    try
+    {
+      if (agentInstance.getMessages().some((m) => m.role === 'assistant'))
+      {
+        recordReliability(
+          agentInstance.getModel(),
+          agentInstance.getReliabilityStats()
+        )
+      }
+    }
+    catch
+    {
+      // telemetry persistence is non-fatal
+    }
     await agentInstance.dispose()
   }, [])
 

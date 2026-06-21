@@ -46,6 +46,7 @@ import {
 } from './command-output.js'
 import { buildIndexer } from '../retrieval/build.js'
 import { DEFAULT_EMBEDDING_MODEL, type IndexStore } from '../retrieval/types.js'
+import { formatTelemetry, loadTelemetry } from '../telemetry/store.js'
 
 // context passed to every command — provides access to app state & setters
 export interface CommandContext
@@ -384,6 +385,19 @@ async function getGitBranch(cwd: string): Promise<string | null>
   )
 
   return result.error || !result.output ? null : result.output
+}
+
+// ── /telemetry ─────────────────────────────────────────────────────────
+
+const telemetryCommand: Command = {
+  name: 'telemetry',
+  description: 'Show lifetime reliability counters per model',
+  execute(_args, ctx)
+  {
+    const store = loadTelemetry()
+    const lines = [coralHeader('telemetry'), '', ...formatTelemetry(store)]
+    ctx.pushOutput(systemBlock(lines.join('\n')))
+  },
 }
 
 // ── /exit ──────────────────────────────────────────────────────────────
@@ -987,6 +1001,7 @@ const commands: Command[] = [
   resumeCommand,
   renameCommand,
   newCommand,
+  telemetryCommand,
   exitCommand,
 ]
 
