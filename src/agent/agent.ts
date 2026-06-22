@@ -46,7 +46,7 @@ import { totalmem } from 'node:os'
 
 export type { CompactionResult } from './compaction.js'
 import { toError, toErrorMessage } from '../utils/errors.js'
-import { capToolOutput } from './tool-output.js'
+import { capToolOutput, capErrorMessage } from './tool-output.js'
 import {
   parseToolCallsFromContent,
   STALL_NUDGE_MESSAGE,
@@ -1018,13 +1018,14 @@ export class Agent
     error?: string
   ): OllamaMessage
   {
-    // bound output so a single huge result can't overflow the window or stall
-    // the server during prefill (errors stay short, so cap output only)
+    // bound everything the model sees here — a huge result or a ballooning
+    // error string can overflow the window or stall the server during prefill
     const capped = capToolOutput(output)
-    const content = error
+    const cappedError = error ? capErrorMessage(error) : error
+    const content = cappedError
       ? capped
-        ? `Error: ${error}\n${capped}`
-        : `Error: ${error}`
+        ? `Error: ${cappedError}\n${capped}`
+        : `Error: ${cappedError}`
       : capped
 
     return {

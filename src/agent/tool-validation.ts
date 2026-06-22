@@ -9,6 +9,10 @@ export type ValidationResult =
   | { ok: true; args: Record<string, unknown> }
   | { ok: false; error: string }
 
+// keep validation feedback model-friendly — a long list of problems makes weak
+// models halt or hallucinate, so show the first few & summarize the rest
+const MAX_VALIDATION_PROBLEMS = 8
+
 // check args against the schema, coercing common weak-model slips
 // ("2" -> 2, "true" -> true) — failures return a model-friendly error
 export function validateToolArgs(
@@ -63,11 +67,20 @@ export function validateToolArgs(
   {
     return {
       ok: false,
-      error: `Invalid arguments for ${tool.name}: ${problems.join('; ')}. Fix the arguments & call the tool again.`,
+      error: `Invalid arguments for ${tool.name}: ${summarizeProblems(problems)}. Fix the arguments & call the tool again.`,
     }
   }
 
   return { ok: true, args: coerced }
+}
+
+// cap the problem list at MAX_VALIDATION_PROBLEMS, summarizing the overflow so
+// the trailing fix instruction is never severed by a downstream char cap
+function summarizeProblems(problems: string[]): string
+{
+  if (problems.length <= MAX_VALIDATION_PROBLEMS) return problems.join('; ')
+  const shown = problems.slice(0, MAX_VALIDATION_PROBLEMS).join('; ')
+  return `${shown}; plus ${problems.length - MAX_VALIDATION_PROBLEMS} more`
 }
 
 type CoerceResult = { ok: true; value: unknown } | { ok: false }
