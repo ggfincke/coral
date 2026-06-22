@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `~/.coral/telemetry.json` that `/telemetry` reads, so synthetic benchmark
   counters never swamp the real-usage signal. After a saving run the cumulative
   lifetime view prints below the per-run report (suppressed under `--json`).
+- **Cap model-facing error text:** the text fed back to the model on a tool
+  failure is now bounded the same way tool output already was. An oversized
+  error string (e.g. a multi-KB stack trace) is truncated in the model history,
+  and the pre-dispatch validator now shows the first eight argument problems
+  plus a "plus N more" summary instead of an unbounded list — keeping the
+  trailing fix instruction intact. This stops a weak local model from stalling
+  or hallucinating on feedback larger than its own request. The full error still
+  reaches the UI; only the model's history copy is capped.
 
 ## [0.11.0] - 2026-06-21
 

@@ -45,3 +45,34 @@ test('coerces common weak-model slips & rejects uncoercible types', () =>
     assert.match(bad.error, /parameter 'depth' must be a number/)
   }
 })
+
+test('caps a long validation problem list & keeps the fix instruction', () =>
+{
+  const properties: Record<string, { type: string }> = {}
+  const required: string[] = []
+  for (let i = 1; i <= 12; i++)
+  {
+    properties[`p${i}`] = { type: 'string' }
+    required.push(`p${i}`)
+  }
+  const wide: Tool = {
+    name: 'wide',
+    description: 'many required params',
+    parameters: { type: 'object', properties, required },
+    async execute()
+    {
+      return { output: '' }
+    },
+  }
+
+  const result = validateToolArgs(wide, {})
+  assert.equal(result.ok, false)
+  if (!result.ok)
+  {
+    // 12 missing-required problems -> first 8 shown, rest summarized
+    assert.match(result.error, /plus 4 more/)
+    assert.match(result.error, /'p1'/)
+    assert.ok(!result.error.includes("'p12'"))
+    assert.match(result.error, /Fix the arguments & call the tool again\./)
+  }
+})

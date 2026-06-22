@@ -23,3 +23,21 @@ export function capToolOutput(output: string): string
     ` — narrow the scope (e.g. diff a specific path) to see the rest]`
   )
 }
+
+// errors should stay short — a multi-KB stack or tool failure drowns the signal
+// & can stall prefill on small models, so cap well below the output limit
+export const MAX_ERROR_MESSAGE_CHARS = 2_000 * CHARS_PER_TOKEN
+
+// cap an oversized error string fed back to the model, keeping the head &
+// noting how much was dropped (mirrors capToolOutput, w/o the scope hint)
+export function capErrorMessage(error: string): string
+{
+  if (error.length <= MAX_ERROR_MESSAGE_CHARS) return error
+
+  const slice = error.slice(0, MAX_ERROR_MESSAGE_CHARS)
+  const lastNewline = slice.lastIndexOf('\n')
+  const head = lastNewline > 0 ? slice.slice(0, lastNewline) : slice
+  const omitted = error.length - head.length
+
+  return `${head}\n[error truncated: ${omitted} of ${error.length} chars omitted]`
+}
