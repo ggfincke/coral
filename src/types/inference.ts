@@ -56,6 +56,9 @@ export interface ChatRequest
   // pinned context window — sent as options.num_ctx; held constant per session
   // so Ollama doesn't reload the runner & wipe the KV cache between turns
   num_ctx?: number
+  // hard ceiling on generated tokens (incl. thinking) — sent as options.num_predict
+  // so a runaway reasoner can't decode for tens of minutes in a single call
+  num_predict?: number
 }
 
 export interface ChatResponse

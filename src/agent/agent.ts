@@ -78,6 +78,21 @@ const MAX_HISTORY = 100
 // cap tool-call rounds for a research subagent so it can't loop unbounded
 const SUBAGENT_MAX_ITERATIONS = 24
 
+// hard ceiling on tokens generated per turn (incl. thinking). bounds a single
+// decode so a runaway gemma reasoner can't stream for tens of minutes. the main
+// latency knob alongside MAX_WORKING_SET_TOKENS
+const MAX_OUTPUT_TOKENS = 16_384
+
+// tighter generation ceiling for the one-shot compaction summary
+const MAX_SUMMARY_TOKENS = 8_192
+
+// working-set ceiling (tokens) that compaction targets, decoupled from num_ctx.
+// num_ctx stays pinned to the full native window (fits in unified memory here),
+// but SWA/MLX re-prefills the whole prompt every turn w/ no cache reuse, so the
+// live context must stay near this bound or per-turn prefill balloons. raise for
+// more retained context at the cost of slower turns
+const MAX_WORKING_SET_TOKENS = 32_768
+
 const COMPACTION_SYSTEM_PROMPT =
   'You are a helpful assistant. Produce a concise structured summary of the conversation.'
 
@@ -370,7 +385,10 @@ export class Agent
     {
       this.numCtx = options.numCtx
       this.contextWindowSize = options.numCtx
-      this.compactionConfig.contextWindow = options.numCtx
+      this.compactionConfig.contextWindow = Math.min(
+        options.numCtx,
+        MAX_WORKING_SET_TOKENS
+      )
     }
 
     // inject system prompt as first message
@@ -683,8 +701,8 @@ export class Agent
 
   // fetch the model's context window from Ollama, cap it to a sane ceiling, &
   // pin it as num_ctx for the session. safe to call multiple times — only the
-  // first resolution does work. capping keeps KV-cache memory bounded & makes
-  // the compaction thresholds match what the server actually allocates
+  // first resolution does work. capping keeps KV-cache memory bounded;
+  // compaction targets the smaller MAX_WORKING_SET_TOKENS, not the full window
   async fetchContextWindow(): Promise<number>
   {
     if (this.contextWindowSize > 0) return this.contextWindowSize
@@ -700,8 +718,8 @@ export class Agent
   }
 
   // resolve the context window once: size it to the memory budget, cap to the
-  // native window & any user override, pin it as num_ctx, & align the
-  // compaction thresholds to the window the server actually allocates
+  // native window & any user override, pin it as num_ctx, & cap the compaction
+  // working-set well below it (SWA/MLX re-prefills the whole prompt each turn)
   private async resolveContextWindow(): Promise<number>
   {
     const resolved = await resolvePinnedContextWindow({
@@ -718,7 +736,7 @@ export class Agent
       this.numCtx = resolved.contextWindow
       this.compactionConfig = {
         ...this.compactionConfig,
-        contextWindow: resolved.contextWindow,
+        contextWindow: Math.min(resolved.contextWindow, MAX_WORKING_SET_TOKENS),
       }
     }
 
@@ -823,6 +841,7 @@ export class Agent
           { role: 'user', content: compactionPrompt },
         ],
         num_ctx: this.numCtx || undefined,
+        num_predict: MAX_SUMMARY_TOKENS,
       }))
       {
         if (chunk.message.content)
@@ -1220,6 +1239,7 @@ export class Agent
             tools: this.ollamaTools,
             think: this.thinkMode,
             num_ctx: this.numCtx || undefined,
+            num_predict: MAX_OUTPUT_TOKENS,
           },
           signal
         ))
