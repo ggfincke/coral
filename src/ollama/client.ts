@@ -98,7 +98,7 @@ export class OllamaClient
     // ! never add a `format` field to tool-bearing requests — it silently
     // ! empties tool_calls (ollama#8095)
     // num_ctx is a top-level convenience field — Ollama expects it under options
-    const { num_ctx, ...rest } = request
+    const { num_ctx, num_predict, ...rest } = request
     const body: Record<string, unknown> = {
       ...rest,
       keep_alive: request.keep_alive ?? DEFAULT_KEEP_ALIVE,
@@ -110,10 +110,13 @@ export class OllamaClient
       delete body.think
     }
 
-    if (typeof num_ctx === 'number' && num_ctx > 0)
+    const options: Record<string, number> = {}
+    if (typeof num_ctx === 'number' && num_ctx > 0) options.num_ctx = num_ctx
+    if (typeof num_predict === 'number' && num_predict > 0)
     {
-      body.options = { num_ctx }
+      options.num_predict = num_predict
     }
+    if (Object.keys(options).length > 0) body.options = options
 
     return body
   }

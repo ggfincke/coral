@@ -36,6 +36,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or hallucinating on feedback larger than its own request. The full error still
   reaches the UI; only the model's history copy is capped.
 
+### Fixed
+
+- **Per-turn latency on large sliding-window contexts:** a single model call
+  could stall for tens of minutes deep into a long session. Two causes, both
+  fixed. First, the generate path sent no token ceiling, so a runaway reasoner
+  could decode thinking until it filled the entire window — requests now send a
+  bounded `num_predict` (a tighter ceiling for the one-shot compaction summary).
+  Second, compaction triggered at a fraction of the pinned `num_ctx`, so on a
+  model pinned to a very large native window (e.g. `gemma4` at 262144) the live
+  context was allowed to grow toward ~196k tokens before compacting — and a
+  sliding-window model on the MLX engine re-prefills the whole prompt every turn
+  with no KV-cache reuse, so each turn paid a full prefill of that context.
+  Compaction now targets a fixed working-set budget (`MAX_WORKING_SET_TOKENS`,
+  32k) decoupled from `num_ctx`, keeping the re-prefilled context small while the
+  window stays maxed. Together these bound both the decode and prefill cost of a
+  single turn.
+
 ## [0.11.0] - 2026-06-21
 
 ### Added
