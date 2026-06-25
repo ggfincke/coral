@@ -2,20 +2,13 @@
 // maintain a structured task list for multi-step work
 
 import type { Tool, ToolResult } from './tool.js'
+import { pluralize } from '../utils/pluralize.js'
 import {
   setTodos,
-  TODO_STATUSES,
+  STATUS_MARK,
+  validateTodoList,
   type TodoItem,
-  type TodoStatus,
 } from './todo-store.js'
-
-const VALID_STATUS = new Set<TodoStatus>(TODO_STATUSES)
-
-const STATUS_MARK: Record<TodoStatus, string> = {
-  pending: '[ ]',
-  in_progress: '[~]',
-  completed: '[x]',
-}
 
 // render the stored list back to the model as a confirmation
 function renderTodos(todos: TodoItem[]): string
@@ -36,7 +29,7 @@ export const todoWriteTool: Tool = {
     summarize: (args) =>
     {
       const n = Array.isArray(args.todos) ? args.todos.length : 0
-      return `${n} item${n === 1 ? '' : 's'}`
+      return pluralize(n, 'item')
     },
   },
   parameters: {
@@ -54,51 +47,13 @@ export const todoWriteTool: Tool = {
   },
   async execute(args): Promise<ToolResult>
   {
-    const raw = args.todos
-    if (!Array.isArray(raw))
+    const result = validateTodoList(args.todos)
+    if (!result.ok)
     {
-      return { output: '', error: 'todo_write requires a todos array' }
+      return { output: '', error: result.error }
     }
 
-    const todos: TodoItem[] = []
-    for (const entry of raw)
-    {
-      if (typeof entry !== 'object' || entry === null)
-      {
-        return { output: '', error: 'each todo must be an object' }
-      }
-
-      const content = (entry as Record<string, unknown>).content
-      const status = (entry as Record<string, unknown>).status
-
-      if (typeof content !== 'string' || !content.trim())
-      {
-        return {
-          output: '',
-          error: 'each todo needs a non-empty content string',
-        }
-      }
-      if (
-        typeof status !== 'string' ||
-        !VALID_STATUS.has(status as TodoStatus)
-      )
-      {
-        return {
-          output: '',
-          error: 'each todo status must be pending, in_progress, or completed',
-        }
-      }
-
-      todos.push({ content: content.trim(), status: status as TodoStatus })
-    }
-
-    const inProgress = todos.filter((t) => t.status === 'in_progress').length
-    if (inProgress > 1)
-    {
-      return { output: '', error: 'only one todo may be in_progress at a time' }
-    }
-
-    setTodos(todos)
-    return { output: renderTodos(todos) }
+    setTodos(result.todos)
+    return { output: renderTodos(result.todos) }
   },
 }
