@@ -19,7 +19,7 @@ export function tryParseJson(text: string): unknown
 }
 
 // read a JSON file, returning undefined when absent, unreadable, or invalid
-export function readJsonFile(path: string): unknown | undefined
+function readJsonFile(path: string): unknown | undefined
 {
   try
   {
@@ -32,12 +32,12 @@ export function readJsonFile(path: string): unknown | undefined
 }
 
 // read a JSON file that must contain a plain object
-export function readJsonObjectFile(
+export function readJsonObjectFile<T extends object = Record<string, unknown>>(
   path: string
-): Record<string, unknown> | undefined
+): T | undefined
 {
   const parsed = readJsonFile(path)
-  return isPlainObject(parsed) ? parsed : undefined
+  return isPlainObject(parsed) ? (parsed as T) : undefined
 }
 
 // write a value as pretty-printed JSON, creating the parent dir if needed.

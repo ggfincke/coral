@@ -106,11 +106,6 @@ function sortSessions(sessions: SessionMeta[]): SessionMeta[]
   return [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-function readSessionJson<T extends object>(path: string): T | undefined
-{
-  return readJsonObjectFile(path) as T | undefined
-}
-
 // write the compact metadata index
 function writeSessionIndex(sessions: SessionMeta[]): void
 {
@@ -135,7 +130,7 @@ function rebuildSessionIndex(): SessionMeta[]
 
   for (const file of files)
   {
-    const session = readSessionJson<SessionData>(join(dir, file))
+    const session = readJsonObjectFile<SessionData>(join(dir, file))
     if (session?.meta)
     {
       sessions.push(session.meta)
@@ -151,7 +146,7 @@ function loadSessionIndex(): SessionMeta[]
 {
   ensureDir()
 
-  const index = readSessionJson<SessionIndexFile>(sessionIndexPath())
+  const index = readJsonObjectFile<SessionIndexFile>(sessionIndexPath())
   if (
     index?.version === SESSION_INDEX_VERSION &&
     Array.isArray(index.sessions)
@@ -251,7 +246,7 @@ export function saveSession(
 // load a session's messages by ID
 export function loadSession(id: string): SessionData | undefined
 {
-  return readSessionJson<SessionData>(sessionPath(id))
+  return readJsonObjectFile<SessionData>(sessionPath(id))
 }
 
 // list all sessions, sorted by updatedAt (newest first)
@@ -266,7 +261,7 @@ export function renameSession(
   title: string
 ): SessionMeta | undefined
 {
-  const session = readSessionJson<SessionData>(sessionPath(id))
+  const session = readJsonObjectFile<SessionData>(sessionPath(id))
   if (!session?.meta) return undefined
 
   session.meta.title = title
