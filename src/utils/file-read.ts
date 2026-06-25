@@ -3,6 +3,7 @@
 
 import { readFile, stat } from 'node:fs/promises'
 import { resolvePath } from '../cwd.js'
+import { formatBytes } from './bytes.js'
 import { toErrorMessage } from './errors.js'
 
 const BYTES_PER_MB = 1_048_576
@@ -31,11 +32,6 @@ export interface TextFileReadFailure
 
 export type TextFileReadResult = TextFileReadSuccess | TextFileReadFailure
 
-function formatMB(bytes: number): string
-{
-  return (bytes / BYTES_PER_MB).toFixed(1)
-}
-
 function isMissing(err: unknown): boolean
 {
   return (err as NodeJS.ErrnoException).code === 'ENOENT'
@@ -43,13 +39,13 @@ function isMissing(err: unknown): boolean
 
 function oversizedFailure(path: string, size: number): TextFileReadFailure
 {
-  const sizeMB = formatMB(size)
-  const limitMB = formatMB(TEXT_FILE_READ_LIMIT_BYTES)
+  const sizeLabel = formatBytes(size)
+  const limitLabel = formatBytes(TEXT_FILE_READ_LIMIT_BYTES)
   return {
     ok: false,
     path,
     reason: 'oversized',
-    message: `${path} is ${sizeMB}MB, exceeds ${limitMB}MB read limit`,
+    message: `${path} is ${sizeLabel}, exceeds ${limitLabel} read limit`,
     size,
     limit: TEXT_FILE_READ_LIMIT_BYTES,
   }

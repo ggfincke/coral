@@ -25,3 +25,9 @@ export function isMissingModelError(message: string): boolean
     normalized.includes('404')
   )
 }
+
+// append the standard ollama pull hint when base already carries the error
+export function withPullHint(base: string, model: string, sep: string): string
+{
+  return `${base}${sep}If the model is missing, run: ollama pull ${model}`
+}

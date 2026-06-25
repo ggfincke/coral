@@ -9,3 +9,8 @@ export function getCoralHome(): string
   const override = process.env.CORAL_HOME
   return override ? resolve(override) : join(homedir(), '.coral')
 }
+
+export function coralHomePath(...segments: string[]): string
+{
+  return join(getCoralHome(), ...segments)
+}

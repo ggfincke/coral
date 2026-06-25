@@ -1,9 +1,9 @@
 // src/utils/json.ts
 // JSON parse & file helpers
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { isPlainObject } from './guards.js'
+import { ensureParentDir } from './fs.js'
 
 // parse JSON, returning undefined on any parse error
 export function tryParseJson(text: string): unknown
@@ -45,7 +45,7 @@ export function readJsonObjectFile(
 // rename is atomic, so readers see either the old contents or the new
 export function writeJsonFile(path: string, value: unknown): void
 {
-  mkdirSync(dirname(path), { recursive: true })
+  ensureParentDir(path)
   const tmp = `${path}.tmp`
   writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf-8')
   renameSync(tmp, path)
