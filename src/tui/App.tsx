@@ -310,9 +310,8 @@ export default function App({
         rows: chatViewportHeight,
         model: activeModel,
         cwd: getCwd(),
-        themeGeneration,
       }),
-    [transcriptWidth, chatViewportHeight, activeModel, themeGeneration]
+    [transcriptWidth, chatViewportHeight, activeModel]
   )
   const paddedWelcome = centerLinesVertical(welcomeLines, chatViewportHeight)
 

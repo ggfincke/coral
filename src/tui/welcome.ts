@@ -51,8 +51,6 @@ export interface WelcomeOptions
   rows: number
   model?: string
   cwd: string
-  // cache key — bumped on /theme switch so the splash re-tints; read live via style()
-  themeGeneration: number
 }
 
 // vertical gradient endpoints: bright coral tips -> sandy base

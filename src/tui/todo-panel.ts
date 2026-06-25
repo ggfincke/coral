@@ -3,6 +3,7 @@
 
 import chalk from 'chalk'
 import { TODO_MARK, type TodoItem } from '../tools/todo-store.js'
+import { ellipsize } from '../utils/ellipsize.js'
 import { boxFrame } from './status-line.js'
 import { padEnd } from './wrap.js'
 
@@ -19,12 +20,6 @@ export function strikeIfDone(todo: TodoItem, text: string): string
   return todo.status === 'completed' ? chalk.strikethrough(text) : text
 }
 
-function clip(text: string, width: number): string
-{
-  if (text.length <= width) return text
-  return text.slice(0, Math.max(width - 1, 0)) + '…'
-}
-
 // returns [] when the list is empty so callers can skip the panel entirely
 export function buildTodoPanel(todos: TodoItem[], width: number): string[]
 {
@@ -37,8 +32,8 @@ export function buildTodoPanel(todos: TodoItem[], width: number): string[]
   const shown = todos.slice(0, MAX_ROWS)
   for (const todo of shown)
   {
-    // clip -> pad on plain text, then strike only the visible cell
-    const row = clip(todoRowText(todo), frame.innerWidth)
+    // ellipsize -> pad on plain text, then strike only the visible cell
+    const row = ellipsize(todoRowText(todo), frame.innerWidth)
     const padded = padEnd(row, frame.innerWidth)
     const cell = strikeIfDone(todo, padded)
     lines.push(frame.row(cell))
@@ -47,7 +42,7 @@ export function buildTodoPanel(todos: TodoItem[], width: number): string[]
   const hidden = todos.length - shown.length
   if (hidden > 0)
   {
-    lines.push(frame.row(clip(`…+${hidden} more`, frame.innerWidth)))
+    lines.push(frame.row(ellipsize(`…+${hidden} more`, frame.innerWidth)))
   }
 
   lines.push(frame.bottom)
