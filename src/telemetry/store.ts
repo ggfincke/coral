@@ -5,9 +5,10 @@ import type { ReliabilityStats } from '../types/inference.js'
 import { coralHomePath } from '../utils/coral-home.js'
 import { isPlainObject } from '../utils/guards.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
+import { pluralize } from '../utils/pluralize.js'
 
 // lifetime reliability for one model, accumulated across agent lifetimes
-export interface ModelTelemetry
+interface ModelTelemetry
 {
   reliability: ReliabilityStats
   // count of agent lifetimes folded into this record
@@ -128,9 +129,7 @@ export function formatTelemetry(store: TelemetryStore): string[]
   const lines: string[] = []
   for (const [model, record] of models)
   {
-    const sessions = record.sessions
-    const label = sessions === 1 ? 'session' : 'sessions'
-    lines.push(`${model}  (${sessions} ${label})`)
+    lines.push(`${model}  (${pluralize(record.sessions, 'session')})`)
 
     const counters = (
       Object.keys(RELIABILITY_LABELS) as (keyof ReliabilityStats)[]
