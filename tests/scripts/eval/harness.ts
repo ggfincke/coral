@@ -4,15 +4,19 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Agent } from '../../../src/agent/agent.js'
-import { defaultToolPermissions } from '../../../src/config/permissions.js'
-import type {
-  AgentEvents,
-  ReliabilityStats,
-  TokenUsage,
+import {
+  Agent,
+  type AgentEvents,
+  type TokenUsage,
 } from '../../../src/agent/agent.js'
+import { defaultToolPermissions } from '../../../src/config/permissions.js'
 import { DEFAULT_OLLAMA_HOST } from '../../../src/ollama/host.js'
 import {
+  makeReliabilityStats,
+  type ReliabilityStats,
+} from '../../../src/types/inference.js'
+import {
+  addReliability,
   evalTelemetryPath,
   recordReliability,
 } from '../../../src/telemetry/store.js'
@@ -30,22 +34,6 @@ import type {
 const DEFAULT_REPS = 1
 const DEFAULT_MAX_ITERATIONS = 15
 const DEFAULT_TIMEOUT_MS = 120000
-
-// zeroed reliability counters for runs that error before capturing real stats
-function emptyReliabilityStats(): ReliabilityStats
-{
-  return {
-    repairedToolCalls: 0,
-    nameRepairs: 0,
-    stallNudges: 0,
-    validationFailures: 0,
-    editRepairs: 0,
-    doomLoopTrips: 0,
-    reprompts: 0,
-    verifyFlags: 0,
-    verifyReprompts: 0,
-  }
-}
 
 // compensations = repair/name/stall/validation/editRepair/reprompt counters.
 // doomLoopTrips, verifyFlags, & verifyReprompts are reported but EXCLUDED — not
@@ -246,7 +234,7 @@ export async function runRep(
     return {
       toolCallsExecuted,
       toolErrors,
-      reliability: emptyReliabilityStats(),
+      reliability: makeReliabilityStats(),
       cleanlinessRate: computeCleanliness(toolCallsExecuted, 0),
       promptTokens: 0,
       completionTokens: 0,
@@ -282,34 +270,23 @@ function sum(values: number[]): number
 // means) — what gets folded into the longitudinal eval telemetry store
 export function sumReliability(runs: RunOutcome[]): ReliabilityStats
 {
-  return {
-    repairedToolCalls: sum(runs.map((r) => r.reliability.repairedToolCalls)),
-    nameRepairs: sum(runs.map((r) => r.reliability.nameRepairs)),
-    stallNudges: sum(runs.map((r) => r.reliability.stallNudges)),
-    validationFailures: sum(runs.map((r) => r.reliability.validationFailures)),
-    editRepairs: sum(runs.map((r) => r.reliability.editRepairs)),
-    doomLoopTrips: sum(runs.map((r) => r.reliability.doomLoopTrips)),
-    reprompts: sum(runs.map((r) => r.reliability.reprompts)),
-    verifyFlags: sum(runs.map((r) => r.reliability.verifyFlags)),
-    verifyReprompts: sum(runs.map((r) => r.reliability.verifyReprompts)),
-  }
+  return runs.reduce(
+    (acc, run) => addReliability(acc, run.reliability),
+    makeReliabilityStats()
+  )
 }
 
 // element-wise mean of the reliability counters across runs
 function meanReliability(runs: RunOutcome[]): ReliabilityStats
 {
-  if (runs.length === 0) return emptyReliabilityStats()
-  return {
-    repairedToolCalls: mean(runs.map((r) => r.reliability.repairedToolCalls)),
-    nameRepairs: mean(runs.map((r) => r.reliability.nameRepairs)),
-    stallNudges: mean(runs.map((r) => r.reliability.stallNudges)),
-    validationFailures: mean(runs.map((r) => r.reliability.validationFailures)),
-    editRepairs: mean(runs.map((r) => r.reliability.editRepairs)),
-    doomLoopTrips: mean(runs.map((r) => r.reliability.doomLoopTrips)),
-    reprompts: mean(runs.map((r) => r.reliability.reprompts)),
-    verifyFlags: mean(runs.map((r) => r.reliability.verifyFlags)),
-    verifyReprompts: mean(runs.map((r) => r.reliability.verifyReprompts)),
+  if (runs.length === 0) return makeReliabilityStats()
+  const n = runs.length
+  const mean = makeReliabilityStats()
+  for (const key of Object.keys(mean) as (keyof ReliabilityStats)[])
+  {
+    mean[key] = sum(runs.map((run) => run.reliability[key])) / n
   }
+  return mean
 }
 
 // collapse a task's reps into one result — majority-pass verdict + mean metrics

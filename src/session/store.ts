@@ -6,13 +6,11 @@ import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { OllamaMessage } from '../types/inference.js'
 import type { TodoItem } from '../tools/todo-store.js'
-import { getCoralHome } from '../utils/coral-home.js'
-import {
-  readJsonFile as readUnknownJsonFile,
-  writeJsonFile,
-} from '../utils/json.js'
+import { coralHomePath } from '../utils/coral-home.js'
+import { ellipsize } from '../utils/ellipsize.js'
+import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
 
-// ! keep in sync w/ coral_dev_tools/session_analysis.py SESSION_INDEX_VERSION
+// ! keep in sync w/ scripts/lib/coral_dev_tools/session_analysis.py SESSION_INDEX_VERSION
 const SESSION_INDEX_VERSION = 1
 
 // session metadata stored alongside the conversation
@@ -75,8 +73,7 @@ function extractTitle(messages: OllamaMessage[]): string
   if (!firstUser) return '(empty session)'
 
   const text = firstUser.content.trim()
-  if (text.length > 80) return text.slice(0, 77) + '…'
-  return text
+  return ellipsize(text, 80)
 }
 
 // ensure the sessions directory exists
@@ -88,7 +85,7 @@ function ensureDir(): void
 // get the directory where sessions live
 function sessionsDir(): string
 {
-  return join(getCoralHome(), 'sessions')
+  return coralHomePath('sessions')
 }
 
 // get the compact metadata index path
@@ -109,11 +106,9 @@ function sortSessions(sessions: SessionMeta[]): SessionMeta[]
   return [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-// read & parse a JSON file, returning null when missing/corrupt
-function readJsonFile<T>(path: string): T | null
+function readSessionJson<T extends object>(path: string): T | undefined
 {
-  const parsed = readUnknownJsonFile(path)
-  return parsed === undefined ? null : (parsed as T)
+  return readJsonObjectFile(path) as T | undefined
 }
 
 // write the compact metadata index
@@ -140,7 +135,7 @@ function rebuildSessionIndex(): SessionMeta[]
 
   for (const file of files)
   {
-    const session = readJsonFile<SessionData>(join(dir, file))
+    const session = readSessionJson<SessionData>(join(dir, file))
     if (session?.meta)
     {
       sessions.push(session.meta)
@@ -156,7 +151,7 @@ function loadSessionIndex(): SessionMeta[]
 {
   ensureDir()
 
-  const index = readJsonFile<SessionIndexFile>(sessionIndexPath())
+  const index = readSessionJson<SessionIndexFile>(sessionIndexPath())
   if (
     index?.version === SESSION_INDEX_VERSION &&
     Array.isArray(index.sessions)
@@ -254,9 +249,9 @@ export function saveSession(
 }
 
 // load a session's messages by ID
-export function loadSession(id: string): SessionData | null
+export function loadSession(id: string): SessionData | undefined
 {
-  return readJsonFile<SessionData>(sessionPath(id))
+  return readSessionJson<SessionData>(sessionPath(id))
 }
 
 // list all sessions, sorted by updatedAt (newest first)
@@ -266,10 +261,13 @@ export function listSessions(): SessionMeta[]
 }
 
 // rename a session's title
-export function renameSession(id: string, title: string): SessionMeta | null
+export function renameSession(
+  id: string,
+  title: string
+): SessionMeta | undefined
 {
-  const session = readJsonFile<SessionData>(sessionPath(id))
-  if (!session?.meta) return null
+  const session = readSessionJson<SessionData>(sessionPath(id))
+  if (!session?.meta) return undefined
 
   session.meta.title = title
   session.meta.updatedAt = new Date().toISOString()

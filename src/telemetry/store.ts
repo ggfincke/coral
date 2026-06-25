@@ -1,13 +1,10 @@
 // src/telemetry/store.ts
 // persist per-model reliability telemetry across sessions (~/.coral/telemetry.json)
 
-import { join } from 'node:path'
-import type { ReliabilityStats } from '../agent/agent.js'
-import { getCoralHome } from '../utils/coral-home.js'
+import type { ReliabilityStats } from '../types/inference.js'
+import { coralHomePath } from '../utils/coral-home.js'
 import { isPlainObject } from '../utils/guards.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
-
-const TELEMETRY_VERSION = 1
 
 // lifetime reliability for one model, accumulated across agent lifetimes
 export interface ModelTelemetry
@@ -23,7 +20,6 @@ export interface ModelTelemetry
 
 export interface TelemetryStore
 {
-  version: number
   models: Record<string, ModelTelemetry>
 }
 
@@ -42,19 +38,19 @@ const RELIABILITY_LABELS: Record<keyof ReliabilityStats, string> = {
 
 export function telemetryPath(): string
 {
-  return join(getCoralHome(), 'telemetry.json')
+  return coralHomePath('telemetry.json')
 }
 
 // separate store for eval-harness runs — kept apart from interactive telemetry
 // so synthetic benchmark counters don't swamp the real-usage signal
 export function evalTelemetryPath(): string
 {
-  return join(getCoralHome(), 'eval-telemetry.json')
+  return coralHomePath('eval-telemetry.json')
 }
 
 function emptyStore(): TelemetryStore
 {
-  return { version: TELEMETRY_VERSION, models: {} }
+  return { models: {} }
 }
 
 // element-wise sum of two counter sets. keys come from the live `add` stats so
@@ -90,7 +86,6 @@ export function foldReliability(
     updatedAt: now,
   }
   return {
-    version: TELEMETRY_VERSION,
     models: { ...store.models, [model]: record },
   }
 }
@@ -101,7 +96,6 @@ export function loadTelemetry(path = telemetryPath()): TelemetryStore
   const raw = readJsonObjectFile(path)
   if (!raw || !isPlainObject(raw.models)) return emptyStore()
   return {
-    version: TELEMETRY_VERSION,
     models: raw.models as Record<string, ModelTelemetry>,
   }
 }

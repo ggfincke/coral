@@ -2,8 +2,7 @@
 // unit test for unified diff generation
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { setCwd } from '../src/cwd.js'
@@ -14,24 +13,16 @@ import {
   previewToolDiff,
 } from '../src/utils/diff.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../src/utils/file-read.js'
+import { makeTempDirPool } from './helpers/temp.js'
 
-const tempDirs: string[] = []
+const { tempDir, cleanup } = makeTempDirPool({ autoCleanup: false })
 const originalCwd = process.cwd()
 
 after(async () =>
 {
   setCwd(originalCwd)
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
+  await cleanup()
 })
-
-async function tempDir(prefix: string): Promise<string>
-{
-  const dir = await mkdtemp(join(tmpdir(), prefix))
-  tempDirs.push(dir)
-  return dir
-}
 
 test('generates unified diffs for the major shapes', () =>
 {
@@ -265,6 +256,6 @@ test('previewToolDiff reports oversized previous content without diffing', async
   if (preview?.kind === 'message')
   {
     assert.match(preview.message, /Preview skipped:/)
-    assert.match(preview.message, /exceeds 1\.0MB read limit/)
+    assert.match(preview.message, /exceeds 1\.0 MB read limit/)
   }
 })

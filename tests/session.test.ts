@@ -2,8 +2,7 @@
 // tests for session persistence
 
 import { strict as assert } from 'node:assert'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, beforeEach, test } from 'node:test'
 import type { OllamaMessage } from '../src/types/inference.js'
@@ -18,55 +17,28 @@ import {
   type SessionMeta,
 } from '../src/session/store.js'
 import { resolveResumeSessionFromCandidates } from '../src/session/resume.js'
+import { makeTempDirPool } from './helpers/temp.js'
+import { captureCoralHome } from './helpers/coral-home.js'
+import { makeSessionData, makeSessionMeta } from './helpers/session.js'
 
-const tempDirs: string[] = []
-const originalCoralHome = process.env.CORAL_HOME
+const { tempDir, cleanup } = makeTempDirPool({ autoCleanup: false })
+const restoreCoralHome = captureCoralHome()
 
-function makeMeta(id: string, title = `Session ${id}`): SessionMeta
-{
-  return {
-    id,
-    model: 'test-model',
-    cwd: '/tmp/test-project',
-    createdAt: '2026-06-17T00:00:00.000Z',
-    updatedAt: '2026-06-17T00:00:00.000Z',
-    title,
-    messageCount: 2,
-  }
-}
+const makeMeta = (id: string, title?: string): SessionMeta =>
+  makeSessionMeta(title === undefined ? { id } : { id, title })
 
-function makeSession(meta: SessionMeta): SessionData
-{
-  return {
-    meta,
-    messages: [
-      { role: 'system', content: 'System' },
-      { role: 'user', content: meta.title },
-    ],
-  }
-}
+const makeSession = (meta: SessionMeta): SessionData => makeSessionData(meta)
 
 beforeEach(async () =>
 {
-  const dir = await mkdtemp(join(tmpdir(), 'coral-sessions-'))
-  tempDirs.push(dir)
+  const dir = await tempDir('coral-sessions-')
   process.env.CORAL_HOME = dir
 })
 
 after(async () =>
 {
-  if (originalCoralHome === undefined)
-  {
-    delete process.env.CORAL_HOME
-  }
-  else
-  {
-    process.env.CORAL_HOME = originalCoralHome
-  }
-
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
+  restoreCoralHome()
+  await cleanup()
 })
 
 test('createSession and loadSession round-trip conversation state', () =>
@@ -160,6 +132,17 @@ test('loadSession tolerates legacy session files without a todos field', async (
   assert.equal(loaded.todos, undefined)
 })
 
+test('loadSession treats objectless JSON session files as missing', async () =>
+{
+  const dir = join(process.env.CORAL_HOME!, 'sessions')
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'nulljson.json'), 'null', 'utf-8')
+
+  const loaded = loadSession('nulljson')
+
+  assert.equal(loaded, undefined)
+})
+
 test('listSessions orders resume targets by newest update', async () =>
 {
   const first = createSession('model-a', '/tmp/a', [
@@ -205,7 +188,7 @@ test('resolveResumeSessionFromCandidates keeps exact-only CLI resolution', () =>
     requestedId: 'abcd',
     allowPrefix: false,
     sessions,
-    loadSessionById: () => null,
+    loadSessionById: () => undefined,
   })
 
   assert.equal(result.type, 'not_found')
@@ -219,7 +202,7 @@ test('resolveResumeSessionFromCandidates supports TUI prefix ambiguity', () =>
     requestedId: 'abc',
     allowPrefix: true,
     sessions,
-    loadSessionById: () => null,
+    loadSessionById: () => undefined,
   })
 
   assert.equal(result.type, 'ambiguous')
@@ -240,7 +223,7 @@ test('resolveResumeSessionFromCandidates guards the active session', () =>
     currentSessionId: current.id,
     allowPrefix: true,
     sessions: [current],
-    loadSessionById: () => null,
+    loadSessionById: () => undefined,
   })
 
   assert.equal(result.type, 'current')
@@ -253,12 +236,12 @@ test('resolveResumeSessionFromCandidates chooses latest non-current session', ()
   const result = resolveResumeSessionFromCandidates({
     currentSessionId: current.id,
     sessions: [current, latest],
-    loadSessionById: () => null,
+    loadSessionById: () => undefined,
   })
   const onlyCurrent = resolveResumeSessionFromCandidates({
     currentSessionId: current.id,
     sessions: [current],
-    loadSessionById: () => null,
+    loadSessionById: () => undefined,
   })
 
   assert.equal(result.type, 'target')
@@ -273,7 +256,7 @@ test('resolveResumeSessionFromCandidates falls back to disk-only sessions', () =
     requestedId: diskOnly.id,
     sessions: [],
     loadSessionById: (id) =>
-      id === diskOnly.id ? makeSession(diskOnly) : null,
+      id === diskOnly.id ? makeSession(diskOnly) : undefined,
   })
 
   assert.equal(result.type, 'target')

@@ -2,27 +2,15 @@
 // tests for startup project context injection
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { gatherProjectContext } from '../src/agent/context.js'
+import { makeTempDirPool } from './helpers/temp.js'
 
-const tempDirs: string[] = []
+const { tempDir } = makeTempDirPool()
 
-after(async () =>
-{
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
-})
-
-async function tempProject(): Promise<string>
-{
-  const dir = await mkdtemp(join(tmpdir(), 'coral-ctx-'))
-  tempDirs.push(dir)
-  return dir
-}
+const tempProject = () => tempDir('coral-ctx-')
 
 test('gatherProjectContext loads project instructions and key metadata', async () =>
 {

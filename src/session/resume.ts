@@ -25,7 +25,7 @@ export interface ResolveResumeSessionOptions
 export interface ResolveResumeSessionCandidatesOptions extends ResolveResumeSessionOptions
 {
   sessions: SessionMeta[]
-  loadSessionById?: (id: string) => SessionData | null
+  loadSessionById?: (id: string) => SessionData | undefined
 }
 
 function asResolution(

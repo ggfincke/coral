@@ -10,17 +10,6 @@ import type {
 } from '../types/inference.js'
 import { DEFAULT_OLLAMA_HOST } from './host.js'
 import { toErrorMessage } from '../utils/errors.js'
-export type {
-  ChatRequest,
-  ChatResponse,
-  EmbedResponse,
-  JsonSchema,
-  Model,
-  ModelInfo,
-  OllamaMessage,
-  OllamaTool,
-  OllamaToolCall,
-} from '../types/inference.js'
 
 const DEFAULT_KEEP_ALIVE = '10m'
 const JSON_HEADERS = { 'Content-Type': 'application/json' } as const

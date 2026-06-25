@@ -2,10 +2,7 @@
 // memory-aware num_ctx budget sizing
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import {
   estimateKvBytesPerToken,
   computeMemoryCappedContext,
@@ -13,24 +10,13 @@ import {
   resolvePinnedContextWindow,
 } from '../src/config/context.js'
 import type { Model, ModelInfo } from '../src/types/inference.js'
+import { makeTempDirPool } from './helpers/temp.js'
 
 const GiB = 1024 ** 3
 const M4_MAX_MEM = 137 * 1e9
-const tempDirs: string[] = []
+const { tempDir } = makeTempDirPool()
 
-after(async () =>
-{
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
-})
-
-async function tempProject(): Promise<string>
-{
-  const dir = await mkdtemp(join(tmpdir(), 'coral-context-budget-'))
-  tempDirs.push(dir)
-  return dir
-}
+const tempProject = () => tempDir('coral-context-budget-')
 
 // mistral-medium-3.5: full attention, exposes KV dims
 const MISTRAL: ModelInfo = {
