@@ -12,14 +12,13 @@ import {
 import { makeTempDirPool } from './helpers/temp.js'
 import { captureCoralHome } from './helpers/coral-home.js'
 import { keywordVector } from './helpers/embed.js'
+import { parseFetchJsonBody, withFetch } from './helpers/fetch.js'
 
 const { tempDir, cleanup } = makeTempDirPool({ autoCleanup: false })
-const originalFetch = globalThis.fetch
 const restoreCoralHome = captureCoralHome()
 
 after(async () =>
 {
-  globalThis.fetch = originalFetch
   restoreCoralHome()
   await cleanup()
 })
@@ -44,39 +43,45 @@ test('search_code indexes the project lazily and returns ranked snippets', async
   const requests: { url: string; body: { input: string[]; model: string } }[] =
     []
 
-  globalThis.fetch = (async (input, init) =>
-  {
-    const body = JSON.parse(String(init?.body ?? '{}')) as {
-      input: string[]
-      model: string
-    }
-    requests.push({ url: String(input), body })
-
-    return new Response(
-      JSON.stringify({ embeddings: body.input.map(keywordVector) }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    )
-  }) as typeof fetch
-
-  const result = await searchCodeTool.execute(
+  await withFetch(
+    (input, init) =>
     {
-      query: 'where is auth session restored?',
-      topK: 1,
+      const body = parseFetchJsonBody<{
+        input: string[]
+        model: string
+      }>(init)
+      requests.push({ url: String(input), body })
+
+      return new Response(
+        JSON.stringify({ embeddings: body.input.map(keywordVector) }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
     },
+    async () =>
     {
-      cwd: dir,
-      ollamaHost: 'http://ollama.test',
-    }
-  )
+      const result = await searchCodeTool.execute(
+        {
+          query: 'where is auth session restored?',
+          topK: 1,
+        },
+        {
+          cwd: dir,
+          ollamaHost: 'http://ollama.test',
+        }
+      )
 
-  assert.equal(result.error, undefined)
-  assert.match(result.output, /session\.ts:1-3/)
-  assert.match(result.output, /restoreSession/)
-  assert.ok(
-    requests.every((request) => request.url === 'http://ollama.test/api/embed')
-  )
-  assert.ok(
-    requests.every((request) => request.body.model === 'nomic-embed-text')
+      assert.equal(result.error, undefined)
+      assert.match(result.output, /session\.ts:1-3/)
+      assert.match(result.output, /restoreSession/)
+      assert.ok(
+        requests.every(
+          (request) => request.url === 'http://ollama.test/api/embed'
+        )
+      )
+      assert.ok(
+        requests.every((request) => request.body.model === 'nomic-embed-text')
+      )
+    }
   )
 })
 
@@ -93,30 +98,34 @@ test('search_code uses the execution context host per invocation', async () =>
   )
 
   const urls: string[] = []
-  globalThis.fetch = (async (input, init) =>
-  {
-    const body = JSON.parse(String(init?.body ?? '{}')) as { input: string[] }
-    urls.push(String(input))
+  await withFetch(
+    (input, init) =>
+    {
+      const body = parseFetchJsonBody<{ input: string[] }>(init)
+      urls.push(String(input))
 
-    return new Response(
-      JSON.stringify({ embeddings: body.input.map(keywordVector) }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    )
-  }) as typeof fetch
+      return new Response(
+        JSON.stringify({ embeddings: body.input.map(keywordVector) }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      )
+    },
+    async () =>
+    {
+      const first = await searchCodeTool.execute(
+        { query: 'auth session', topK: 1 },
+        { cwd: dir, ollamaHost: 'http://ollama-a.test' }
+      )
+      const second = await searchCodeTool.execute(
+        { query: 'auth session', topK: 1 },
+        { cwd: dir, ollamaHost: 'http://ollama-b.test' }
+      )
 
-  const first = await searchCodeTool.execute(
-    { query: 'auth session', topK: 1 },
-    { cwd: dir, ollamaHost: 'http://ollama-a.test' }
+      assert.equal(first.error, undefined)
+      assert.equal(second.error, undefined)
+      assert.ok(urls.includes('http://ollama-a.test/api/embed'))
+      assert.ok(urls.includes('http://ollama-b.test/api/embed'))
+    }
   )
-  const second = await searchCodeTool.execute(
-    { query: 'auth session', topK: 1 },
-    { cwd: dir, ollamaHost: 'http://ollama-b.test' }
-  )
-
-  assert.equal(first.error, undefined)
-  assert.equal(second.error, undefined)
-  assert.ok(urls.includes('http://ollama-a.test/api/embed'))
-  assert.ok(urls.includes('http://ollama-b.test/api/embed'))
 })
 
 test('search_code appends ollama pull hint for missing embedding models', async () =>
@@ -131,20 +140,21 @@ test('search_code appends ollama pull hint for missing embedding models', async 
     'utf-8'
   )
 
-  globalThis.fetch = (async () =>
-  {
-    return new Response('model not found', { status: 404 })
-  }) as typeof fetch
+  await withFetch(
+    () => new Response('model not found', { status: 404 }),
+    async () =>
+    {
+      const result = await searchCodeTool.execute(
+        { query: 'auth session', topK: 1 },
+        { cwd: dir, ollamaHost: 'http://ollama.test' }
+      )
 
-  const result = await searchCodeTool.execute(
-    { query: 'auth session', topK: 1 },
-    { cwd: dir, ollamaHost: 'http://ollama.test' }
+      assert.equal(result.output, '')
+      assert.match(result.error ?? '', /search_code failed/)
+      assert.match(result.error ?? '', /Ollama API error: 404 model not found/)
+      assert.match(result.error ?? '', /ollama pull nomic-embed-text/)
+    }
   )
-
-  assert.equal(result.output, '')
-  assert.match(result.error ?? '', /search_code failed/)
-  assert.match(result.error ?? '', /Ollama API error: 404 model not found/)
-  assert.match(result.error ?? '', /ollama pull nomic-embed-text/)
 })
 
 test('search_code reports store construction failures as tool errors', async () =>

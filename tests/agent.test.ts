@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Agent } from '../src/agent/agent.js'
 import type { Tool, ToolExecutionContext } from '../src/tools/index.js'
+import type { SubagentResult } from '../src/tools/subagent.js'
 import type { OllamaMessage } from '../src/types/inference.js'
 import { GIT_CONTEXT_HEADING } from '../src/agent/git-context.js'
 import {
@@ -20,11 +21,10 @@ import { makeFakeAgent, makeAgentEvents } from './helpers/agent-harness.js'
 const { tempDir } = makeTempDirPool()
 
 type ReadOnlySubagentPatch = Agent & {
-  runReadOnlySubagent: (prompt: string) => Promise<{
-    text: string
-    error?: string
-    aborted: boolean
-  }>
+  runReadOnlySubagent: (
+    prompt: string,
+    signal?: AbortSignal
+  ) => Promise<SubagentResult>
 }
 
 test('Agent accumulates streamed tool calls, preserves thinking, & tags tool results', async () =>

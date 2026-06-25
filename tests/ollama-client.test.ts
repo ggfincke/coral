@@ -4,7 +4,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { OllamaClient } from '../src/ollama/client.js'
-import { withFetch } from './helpers/fetch.js'
+import { parseFetchJsonBody, withFetch } from './helpers/fetch.js'
 
 function buildNdjsonResponse(lines: unknown[]): Response
 {
@@ -22,9 +22,9 @@ test('chatStream defaults keep_alive to 10m', async () =>
   const requests: unknown[] = []
 
   await withFetch(
-    (async (_input, init) =>
+    async (_input, init) =>
     {
-      requests.push(JSON.parse(String(init?.body ?? '{}')))
+      requests.push(parseFetchJsonBody(init))
 
       return buildNdjsonResponse([
         {
@@ -35,7 +35,7 @@ test('chatStream defaults keep_alive to 10m', async () =>
           done: true,
         },
       ])
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://localhost:11434')
@@ -67,14 +67,14 @@ test('chatStream nests num_ctx and num_predict under options', async () =>
   const requests: Record<string, unknown>[] = []
 
   await withFetch(
-    (async (_input, init) =>
+    async (_input, init) =>
     {
-      requests.push(JSON.parse(String(init?.body ?? '{}')))
+      requests.push(parseFetchJsonBody(init))
 
       return buildNdjsonResponse([
         { message: { role: 'assistant', content: 'done' }, done: true },
       ])
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://localhost:11434')
@@ -104,9 +104,9 @@ test('chatStream sends think when requested', async () =>
   const requests: unknown[] = []
 
   await withFetch(
-    (async (_input, init) =>
+    async (_input, init) =>
     {
-      requests.push(JSON.parse(String(init?.body ?? '{}')))
+      requests.push(parseFetchJsonBody(init))
 
       return buildNdjsonResponse([
         {
@@ -118,7 +118,7 @@ test('chatStream sends think when requested', async () =>
           done: true,
         },
       ])
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://localhost:11434')
@@ -150,12 +150,12 @@ test('think fallback is tracked per model', async () =>
   const requests: unknown[] = []
 
   await withFetch(
-    (async (_input, init) =>
+    async (_input, init) =>
     {
-      const body = JSON.parse(String(init?.body ?? '{}')) as {
+      const body = parseFetchJsonBody<{
         model?: string
         think?: boolean
-      }
+      }>(init)
       requests.push(body)
 
       if (body.model === 'model-a' && body.think === true)
@@ -172,7 +172,7 @@ test('think fallback is tracked per model', async () =>
           done: true,
         },
       ])
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://localhost:11434')
@@ -242,11 +242,11 @@ test('unloadModel sends keep_alive 0 for immediate shutdown', async () =>
   const requests: unknown[] = []
 
   await withFetch(
-    (async (_input, init) =>
+    async (_input, init) =>
     {
-      requests.push(JSON.parse(String(init?.body ?? '{}')))
+      requests.push(parseFetchJsonBody(init))
       return new Response(null, { status: 200 })
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://localhost:11434')
@@ -272,11 +272,11 @@ test('embed posts batched input to Ollama embed endpoint', async () =>
   const requests: { url: string; body: unknown }[] = []
 
   await withFetch(
-    (async (input, init) =>
+    async (input, init) =>
     {
       requests.push({
         url: String(input),
-        body: JSON.parse(String(init?.body ?? '{}')),
+        body: parseFetchJsonBody(init),
       })
 
       return new Response(
@@ -288,7 +288,7 @@ test('embed posts batched input to Ollama embed endpoint', async () =>
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } }
       )
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://ollama.test')
@@ -318,10 +318,10 @@ test('embed posts batched input to Ollama embed endpoint', async () =>
 test('showModel includes Ollama API error bodies', async () =>
 {
   await withFetch(
-    (async () =>
+    async () =>
     {
       return new Response('model not found', { status: 404 })
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://ollama.test')
@@ -337,10 +337,10 @@ test('showModel includes Ollama API error bodies', async () =>
 test('embed translates fetch failures with host context', async () =>
 {
   await withFetch(
-    (async () =>
+    async () =>
     {
       throw new Error('socket closed')
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://ollama.test')
@@ -356,10 +356,10 @@ test('embed translates fetch failures with host context', async () =>
 test('embed preserves Ollama API error text', async () =>
 {
   await withFetch(
-    (async () =>
+    async () =>
     {
       return new Response('pull model first', { status: 404 })
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://ollama.test')
@@ -375,13 +375,13 @@ test('embed preserves Ollama API error text', async () =>
 test('embed rejects missing embeddings', async () =>
 {
   await withFetch(
-    (async () =>
+    async () =>
     {
       return new Response(JSON.stringify({}), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://ollama.test')
@@ -397,13 +397,13 @@ test('embed rejects missing embeddings', async () =>
 test('embed rejects response count mismatches', async () =>
 {
   await withFetch(
-    (async () =>
+    async () =>
     {
       return new Response(JSON.stringify({ embeddings: [[1, 0]] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://ollama.test')
@@ -419,13 +419,13 @@ test('embed rejects response count mismatches', async () =>
 test('embed rejects malformed embedding vectors', async () =>
 {
   await withFetch(
-    (async () =>
+    async () =>
     {
       return new Response(JSON.stringify({ embeddings: [['bad']] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://ollama.test')
@@ -441,13 +441,13 @@ test('embed rejects malformed embedding vectors', async () =>
 test('embed rejects empty embedding vectors', async () =>
 {
   await withFetch(
-    (async () =>
+    async () =>
     {
       return new Response(JSON.stringify({ embeddings: [[]] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
-    }) as typeof fetch,
+    },
     async () =>
     {
       const client = new OllamaClient('http://ollama.test')

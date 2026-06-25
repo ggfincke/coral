@@ -13,10 +13,19 @@ export function initTestRepo(
 {
   const run = (...args: string[]) =>
     spawnSync('git', args, { cwd: dir, encoding: 'utf-8' })
+  const runRequired = (...args: string[]) =>
+  {
+    const result = run(...args)
+    if (result.status !== 0)
+    {
+      const detail = result.stderr || result.stdout || 'unknown git failure'
+      throw new Error(`git ${args.join(' ')} failed: ${detail.trim()}`)
+    }
+  }
 
-  run('init')
-  run('config', 'user.email', 'test@coral.dev')
-  run('config', 'user.name', 'Coral Test')
+  runRequired('init')
+  runRequired('config', 'user.email', 'test@coral.dev')
+  runRequired('config', 'user.name', 'Coral Test')
 
   return run
 }
