@@ -17,9 +17,9 @@ export interface JsonSchema
   required?: string[]
 }
 
-export type JsonSchemaProperty = JsonSchema['properties'][string]
+type JsonSchemaProperty = JsonSchema['properties'][string]
 
-export interface JsonSchemaParamEntry
+interface JsonSchemaParamEntry
 {
   name: string
   schema: JsonSchemaProperty

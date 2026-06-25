@@ -33,7 +33,7 @@ export function truncateOutput(
   return shown ? `${shown}${separator}${suffix}` : suffix
 }
 
-export interface LineBoundaryTruncation
+interface LineBoundaryTruncation
 {
   head: string
   omitted: number

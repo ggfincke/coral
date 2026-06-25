@@ -116,7 +116,7 @@ export function roleRgb(role: Role): RGB | null
 }
 
 // linear interpolate between two numbers, rounded to an integer
-export function lerp(a: number, b: number, t: number): number
+function lerp(a: number, b: number, t: number): number
 {
   return Math.round(a + (b - a) * t)
 }

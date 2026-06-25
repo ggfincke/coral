@@ -1,7 +1,7 @@
 // src/utils/attached-file.ts
 // labeled file/snippet blocks for model prompt assembly
 
-export interface FormatAttachedFileBlockOptions
+interface FormatAttachedFileBlockOptions
 {
   truncated?: boolean
   fence?: 'none' | string

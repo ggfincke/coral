@@ -53,7 +53,7 @@ export function describeRunStageWithElapsed(
   return parts.join(' · ')
 }
 
-export interface BoxFrame
+interface BoxFrame
 {
   innerWidth: number
   top: string
