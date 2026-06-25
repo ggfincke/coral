@@ -2,7 +2,29 @@
 // shared ripgrep execution & error handling
 
 import type { ToolResult } from './tool.js'
+import { getCwd, resolvePath } from '../cwd.js'
+import {
+  formatProjectPath,
+  isPathInsideProject,
+} from '../shared/project-tree.js'
 import { execFileCommand, formatProcessError } from '../utils/process.js'
+
+export interface RgSearchTarget
+{
+  searchPath: string
+  cwd: string
+  isProjectPath: boolean
+}
+
+// resolve raw tool path into rg searchPath + optional project cwd
+export function resolveRgSearchTarget(rawPath?: string): RgSearchTarget
+{
+  const cwd = getCwd()
+  const path = resolvePath(rawPath ?? '.')
+  const isProjectPath = isPathInsideProject(cwd, path)
+  const searchPath = isProjectPath ? formatProjectPath(cwd, path) : path
+  return { searchPath, cwd, isProjectPath }
+}
 
 const RG_TIMEOUT = 15_000
 const RG_MAX_BUFFER = 5 * 1024 * 1024

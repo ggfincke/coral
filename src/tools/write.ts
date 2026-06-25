@@ -5,6 +5,7 @@ import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Tool, ToolResult } from './tool.js'
 import { resolvePath } from '../cwd.js'
+import { formatBytes } from '../utils/bytes.js'
 import { computeDiff } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
@@ -34,7 +35,7 @@ export const writeTool: Tool = {
       const before = await readOptionalPreviousTextFile(rawPath)
       await mkdir(dirname(path), { recursive: true })
       await writeFile(path, content, 'utf-8')
-      const output = `Wrote ${content.length} bytes to ${path}`
+      const output = `Wrote ${formatBytes(content.length)} to ${path}`
       if (!before.ok)
       {
         return {

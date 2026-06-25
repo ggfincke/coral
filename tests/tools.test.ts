@@ -4,15 +4,7 @@
 import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import {
-  mkdtemp,
-  mkdir,
-  readFile,
-  rm,
-  utimes,
-  writeFile,
-} from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { setCwd } from '../src/cwd.js'
@@ -35,27 +27,19 @@ import { subagentTools } from '../src/tools/index.js'
 import { searchCodeTool } from '../src/tools/search-code.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../src/utils/file-read.js'
 import { execFileCommand, formatProcessError } from '../src/utils/process.js'
+import { makeTempDirPool } from './helpers/temp.js'
+import { HAS_GIT, initTestRepo } from './helpers/git.js'
 
-const tempDirs: string[] = []
+const { tempDir, cleanup } = makeTempDirPool({ autoCleanup: false })
 const originalCwd = process.cwd()
 const hasRipgrep = spawnSync('rg', ['--version']).status === 0
-const hasGit = spawnSync('git', ['--version']).status === 0
 
 after(async () =>
 {
   setCwd(originalCwd)
   setSubagentRunner(null)
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
+  await cleanup()
 })
-
-async function tempDir(prefix: string): Promise<string>
-{
-  const dir = await mkdtemp(join(tmpdir(), prefix))
-  tempDirs.push(dir)
-  return dir
-}
 
 test('list_files renders nested project entries under the correct parent', async () =>
 {
@@ -146,9 +130,9 @@ test('write_file overwrites oversized targets without previewing old content', a
 
   assert.equal(result.error, undefined)
   assert.equal(result.diff, undefined)
-  assert.match(result.output, /Wrote 6 bytes/)
+  assert.match(result.output, /Wrote 6 B/)
   assert.match(result.output, /Diff skipped:/)
-  assert.match(result.output, /exceeds 1\.0MB read limit/)
+  assert.match(result.output, /exceeds 1\.0 MB read limit/)
   assert.equal(await readFile(target, 'utf-8'), 'small\n')
 })
 
@@ -259,28 +243,14 @@ test('git tools reject option-like inputs before shelling out', async () =>
 
 test(
   'git_switch creates a branch and reports remaining status',
-  { skip: !hasGit },
+  { skip: !HAS_GIT },
   async () =>
   {
     const dir = await tempDir('coral-gitswitch-')
-    assert.equal(spawnSync('git', ['init'], { cwd: dir }).status, 0)
-    assert.equal(
-      spawnSync('git', ['config', 'user.email', 'test@coral.dev'], {
-        cwd: dir,
-      }).status,
-      0
-    )
-    assert.equal(
-      spawnSync('git', ['config', 'user.name', 'Coral Test'], { cwd: dir })
-        .status,
-      0
-    )
+    const run = initTestRepo(dir)
     await writeFile(join(dir, 'a.txt'), 'hello\n', 'utf-8')
-    assert.equal(spawnSync('git', ['add', '-A'], { cwd: dir }).status, 0)
-    assert.equal(
-      spawnSync('git', ['commit', '-m', 'init'], { cwd: dir }).status,
-      0
-    )
+    assert.equal(run('add', '-A').status, 0)
+    assert.equal(run('commit', '-m', 'init').status, 0)
     await writeFile(join(dir, 'dirty.txt'), 'dirty\n', 'utf-8')
 
     setCwd(dir)
@@ -310,13 +280,11 @@ test(
 
 test(
   'git_add and git_commit create a real commit',
-  { skip: !hasGit },
+  { skip: !HAS_GIT },
   async () =>
   {
     const dir = await tempDir('coral-gitcommit-')
-    spawnSync('git', ['init'], { cwd: dir })
-    spawnSync('git', ['config', 'user.email', 'test@coral.dev'], { cwd: dir })
-    spawnSync('git', ['config', 'user.name', 'Coral Test'], { cwd: dir })
+    initTestRepo(dir)
     await writeFile(join(dir, 'a.txt'), 'hello\n', 'utf-8')
 
     setCwd(dir)
@@ -331,28 +299,14 @@ test(
 
 test(
   'git_commit reports a clean-tree failure without changing HEAD',
-  { skip: !hasGit },
+  { skip: !HAS_GIT },
   async () =>
   {
     const dir = await tempDir('coral-gitcommit-clean-')
-    assert.equal(spawnSync('git', ['init'], { cwd: dir }).status, 0)
-    assert.equal(
-      spawnSync('git', ['config', 'user.email', 'test@coral.dev'], {
-        cwd: dir,
-      }).status,
-      0
-    )
-    assert.equal(
-      spawnSync('git', ['config', 'user.name', 'Coral Test'], { cwd: dir })
-        .status,
-      0
-    )
+    const run = initTestRepo(dir)
     await writeFile(join(dir, 'a.txt'), 'hello\n', 'utf-8')
-    assert.equal(spawnSync('git', ['add', '-A'], { cwd: dir }).status, 0)
-    assert.equal(
-      spawnSync('git', ['commit', '-m', 'init'], { cwd: dir }).status,
-      0
-    )
+    assert.equal(run('add', '-A').status, 0)
+    assert.equal(run('commit', '-m', 'init').status, 0)
 
     const before = spawnSync('git', ['rev-parse', 'HEAD'], {
       cwd: dir,
@@ -376,7 +330,7 @@ test(
 
 test(
   'git_push can publish a commit to a local remote',
-  { skip: !hasGit },
+  { skip: !HAS_GIT },
   async () =>
   {
     const bare = await tempDir('coral-bare-')
@@ -424,7 +378,7 @@ test('task tool forwards the abort signal to the subagent runner', async () =>
   setSubagentRunner(async (_prompt, signal) =>
   {
     received = signal
-    return { text: 'done', toolCount: 0 }
+    return { text: 'done' }
   })
 
   const controller = new AbortController()

@@ -2,10 +2,9 @@
 // tests for semantic retrieval indexing
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm, unlink, utimes, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { unlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { chunkText } from '../src/retrieval/chunker.js'
 import { ProjectIndexer } from '../src/retrieval/indexer.js'
 import { SqliteIndexStore } from '../src/retrieval/sqlite-store.js'
@@ -14,22 +13,10 @@ import {
   type Embedder,
   type IndexedFile,
 } from '../src/retrieval/types.js'
+import { makeTempDirPool } from './helpers/temp.js'
+import { keywordVector } from './helpers/embed.js'
 
-const tempDirs: string[] = []
-
-after(async () =>
-{
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
-})
-
-async function tempDir(prefix: string): Promise<string>
-{
-  const dir = await mkdtemp(join(tmpdir(), prefix))
-  tempDirs.push(dir)
-  return dir
-}
+const { tempDir } = makeTempDirPool()
 
 class KeywordEmbedder implements Embedder
 {
@@ -39,9 +26,7 @@ class KeywordEmbedder implements Embedder
   async embed(texts: string[]): Promise<number[][]>
   {
     this.embeddedTexts.push(...texts)
-    return texts.map((text) =>
-      /login|auth|session/i.test(text) ? [1, 0] : [0, 1]
-    )
+    return texts.map((text) => keywordVector(text))
   }
 }
 

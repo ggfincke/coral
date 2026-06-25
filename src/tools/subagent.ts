@@ -5,8 +5,8 @@
 export interface SubagentResult
 {
   text: string
-  toolCount: number
   error?: string
+  aborted?: boolean
 }
 
 export type SubagentRunner = (

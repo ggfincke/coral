@@ -7,6 +7,7 @@ import { readFileGuarded } from './file-utils.js'
 import { resolvePath } from '../cwd.js'
 import { applyEdit, computeDiff, describeEditMiss } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { pluralize } from '../utils/pluralize.js'
 
 export const editTool: Tool = {
   name: 'edit_file',
@@ -90,7 +91,7 @@ export const editTool: Tool = {
       ? ' (old_string matched on normalized whitespace, not verbatim — copy exact text next time)'
       : ''
     return {
-      output: `Edited ${path}: replaced ${replaced} occurrence${replaced > 1 ? 's' : ''} (${oldString.length} chars → ${newString.length} chars)${note}`,
+      output: `Edited ${path}: replaced ${pluralize(replaced, 'occurrence')} (${oldString.length} chars → ${newString.length} chars)${note}`,
       diff: computeDiff(content, updated) ?? undefined,
       repaired: fuzzy,
     }
