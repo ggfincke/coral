@@ -2,10 +2,12 @@
 // conversation loop w/ tool-use cycling
 
 import { OllamaClient } from '../ollama/client.js'
-import type {
-  OllamaMessage,
-  OllamaToolCall,
-  OllamaTool,
+import {
+  makeReliabilityStats,
+  type OllamaMessage,
+  type OllamaToolCall,
+  type OllamaTool,
+  type ReliabilityStats,
 } from '../types/inference.js'
 import {
   allTools,
@@ -103,14 +105,6 @@ interface ToolInvocation
   args: Record<string, unknown>
 }
 
-interface ReadOnlySubagentRunResult
-{
-  text: string
-  toolCount: number
-  error?: string
-  aborted: boolean
-}
-
 interface ToolOutcomeRecordParams
 {
   events: AgentEvents
@@ -199,27 +193,6 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
       }
     )
   })
-}
-
-// reliability-layer counters — how often the agent had to compensate for the
-// model botching a tool call (per-model telemetry for /status)
-export interface ReliabilityStats
-{
-  repairedToolCalls: number
-  nameRepairs: number
-  stallNudges: number
-  validationFailures: number
-  // edits that landed via the whitespace-tolerant fallback after old_string
-  // didn't match the file verbatim
-  editRepairs: number
-  // times the agent paused on a detected doom loop
-  doomLoopTrips: number
-  // corrective reprompts when a call-shaped turn wouldn't parse
-  reprompts: number
-  // edits a self-check flagged as wrong or inconclusive
-  verifyFlags: number
-  // failed self-checks fed back to the model for a fix attempt
-  verifyReprompts: number
 }
 
 // token usage from Ollama's response metrics
@@ -334,17 +307,7 @@ export class Agent
   private compactFailureCount = 0
   private compactionCount = 0
   private lastCompactedAt: string | null = null
-  private reliabilityStats: ReliabilityStats = {
-    repairedToolCalls: 0,
-    nameRepairs: 0,
-    stallNudges: 0,
-    validationFailures: 0,
-    editRepairs: 0,
-    doomLoopTrips: 0,
-    reprompts: 0,
-    verifyFlags: 0,
-    verifyReprompts: 0,
-  }
+  private reliabilityStats: ReliabilityStats = makeReliabilityStats()
   private onCompactionCallback?: (result: CompactionResult) => void
   private onCompactionStartCallback?: () => void
   // self-check edits after a clean completion (warn-only); off by default
@@ -399,34 +362,20 @@ export class Agent
     // so a later switchModel is reflected automatically)
     if (options.registerSubagent !== false)
     {
-      setSubagentRunner((prompt, signal) => this.runSubagent(prompt, signal))
+      setSubagentRunner((prompt, signal) =>
+        this.runReadOnlySubagent(prompt, signal)
+      )
     }
 
     // track the active model so shutdown can unload it
     this.client.startKeepAlive(model)
   }
 
-  // run a one-shot research subagent w/ a fresh context & read-only toolset,
-  // returning its final text — shares the parent's loaded model, so never dispose
-  private async runSubagent(
-    prompt: string,
-    signal?: AbortSignal
-  ): Promise<SubagentResult>
-  {
-    const result = await this.runReadOnlySubagent(prompt, signal)
-
-    return {
-      text: result.text,
-      toolCount: result.toolCount,
-      error: result.error,
-    }
-  }
-
   // run a bounded read-only subagent & collect its visible output
   private async runReadOnlySubagent(
     prompt: string,
     signal?: AbortSignal
-  ): Promise<ReadOnlySubagentRunResult>
+  ): Promise<SubagentResult>
   {
     const sub = new Agent(this.model, this.baseUrl, getCwd(), {
       think: this.thinkMode,
@@ -438,7 +387,6 @@ export class Agent
     })
 
     let text = ''
-    let toolCount = 0
     let error: string | undefined
     await sub.run(
       prompt,
@@ -448,9 +396,7 @@ export class Agent
           text += token
         },
         onToolCall: () =>
-        {
-          toolCount++
-        },
+        {},
         onToolResult: () =>
         {},
         // subagent tools are safe, but config can still gate them; deny anything
@@ -468,7 +414,6 @@ export class Agent
 
     return {
       text: text.trim(),
-      toolCount,
       error,
       aborted: signal?.aborted === true,
     }
@@ -989,15 +934,9 @@ export class Agent
     signal?: AbortSignal
   ): Promise<ToolResult>
   {
-    const tool = this.getOwnTool(toolName)
-
-    if (!tool)
-    {
-      return {
-        output: '',
-        error: `Unknown tool: ${toolName}`,
-      }
-    }
+    // both serial & parallel dispatch resolve the tool & skip unknown names
+    // before calling executeTool, so resolution here can't miss
+    const tool = this.getOwnTool(toolName)!
 
     // schema-check & coerce args before executing — a friendly error here lets
     // the model retry w/ fixed args instead of hitting a runtime failure

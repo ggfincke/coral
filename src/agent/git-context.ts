@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
 import type { OllamaMessage } from '../types/inference.js'
 import { runGitCommand, currentBranchLabel } from '../utils/git.js'
+import { excerpt } from '../utils/ellipsize.js'
 
 const MAX_FILES_PER_SECTION = 12
 const MAX_STAT_LINES = 12
@@ -87,9 +88,7 @@ function formatBlock(label: string, value: string | null): string[]
 
 function summarizeGitError(error: string | undefined): string
 {
-  const firstLine = error?.trim().split('\n')[0] ?? ''
-  const fallback = firstLine || 'git command failed'
-  return fallback.length > 180 ? `${fallback.slice(0, 177)}...` : fallback
+  return excerpt(error ?? '', 180) || 'git command failed'
 }
 
 async function upstreamSummary(cwd: string): Promise<string>

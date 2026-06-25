@@ -1,6 +1,8 @@
 // src/agent/doom-loop.ts
 // detect a stuck agent loop — same tool+args or same error repeated
 
+import { excerpt } from '../utils/ellipsize.js'
+
 // repeats within the window before a trip fires
 export const DEFAULT_DOOM_LOOP_THRESHOLD = 3
 // recent calls considered when counting repeats
@@ -73,7 +75,7 @@ export class DoomLoopDetector
       {
         return {
           kind: 'repeat-error',
-          detail: excerpt(errorText),
+          detail: excerpt(errorText, 80),
           count: sameError,
         }
       }
@@ -98,13 +100,6 @@ export function describeDoomLoop(trip: DoomLoopTrip): string
     return `Coral called ${trip.detail} with identical arguments ${trip.count} times.`
   }
   return `Coral hit the same error ${trip.count} times: ${trip.detail}`
-}
-
-// short single-line excerpt of an error for the trip message
-function excerpt(text: string): string
-{
-  const firstLine = text.split('\n')[0]!.trim()
-  return firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine
 }
 
 // deterministic JSON w/ sorted keys so {a,b} & {b,a} share a signature

@@ -2,9 +2,8 @@
 // two-layer conversation compaction — prune tool results first, then summarize
 
 import type { OllamaMessage } from '../types/inference.js'
-
-// rough token estimate: ~4 chars per token (conservative for English + code)
-export const CHARS_PER_TOKEN = 4
+import { ellipsize } from '../utils/ellipsize.js'
+import { CHARS_PER_TOKEN } from '../utils/limits.js'
 
 // default context window size (tokens) — conservative floor for compaction
 // estimates when the live num_ctx is unknown
@@ -127,8 +126,7 @@ function buildPruneMarker(msg: OllamaMessage): string
   const tokens = estimateMessageTokens(msg)
 
   // take the first 60 chars of content as a preview
-  const preview =
-    msg.content.length > 60 ? msg.content.slice(0, 57) + '…' : msg.content
+  const preview = ellipsize(msg.content, 60)
 
   return `[tool result pruned — ${toolName}: ${preview}, ~${tokens} tokens]`
 }
@@ -238,10 +236,7 @@ function formatMessagesForSummary(messages: OllamaMessage[]): string
       case 'tool':
       {
         // truncate long tool results for the summary
-        const content =
-          msg.content.length > 300
-            ? msg.content.slice(0, 297) + '…'
-            : msg.content
+        const content = ellipsize(msg.content, 300)
         lines.push(`  [${msg.tool_name ?? 'tool'} result] ${content}`)
         break
       }

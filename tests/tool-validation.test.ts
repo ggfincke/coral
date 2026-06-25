@@ -24,6 +24,32 @@ const fixtureTool: Tool = {
   },
 }
 
+test('coerces a JSON-string object parameter', () =>
+{
+  const tool: Tool = {
+    name: 'opts',
+    description: 'object param fixture',
+    parameters: {
+      type: 'object',
+      properties: {
+        config: { type: 'object' },
+      },
+      required: ['config'],
+    },
+    async execute()
+    {
+      return { output: '' }
+    },
+  }
+
+  const result = validateToolArgs(tool, { config: '{"key":"value"}' })
+  assert.ok(result.ok)
+  if (result.ok)
+  {
+    assert.deepEqual(result.args.config, { key: 'value' })
+  }
+})
+
 test('coerces common weak-model slips & rejects uncoercible types', () =>
 {
   const coerced = validateToolArgs(fixtureTool, {
