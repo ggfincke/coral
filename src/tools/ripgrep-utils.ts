@@ -9,7 +9,7 @@ import {
 } from '../shared/project-tree.js'
 import { execFileCommand, formatProcessError } from '../utils/process.js'
 
-export interface RgSearchTarget
+interface RgSearchTarget
 {
   searchPath: string
   cwd: string
@@ -41,40 +41,39 @@ interface RipgrepOptions
 }
 
 // execute ripgrep w/ shared error handling
-export function execRipgrep(
+export async function execRipgrep(
   args: string[],
   noMatchMessage: string,
   options: RipgrepOptions = {}
 ): Promise<ToolResult>
 {
-  return execFileCommand('rg', args, {
+  const result = await execFileCommand('rg', args, {
     timeout: RG_TIMEOUT,
     maxBuffer: RG_MAX_BUFFER,
     cwd: options.cwd,
     signal: options.signal,
-  }).then((result) =>
-  {
-    if (!result.ok && result.code === 'ENOENT')
-    {
-      return {
-        output: '',
-        error:
-          'ripgrep (rg) is not installed. Install it: https://github.com/BurntSushi/ripgrep#installation',
-      }
-    }
-
-    // exit code 1 = no matches
-    if (!result.ok && result.code === 1)
-    {
-      return { output: noMatchMessage }
-    }
-
-    // exit code 2 = pattern/config error, other codes = timeout/signal/etc
-    if (!result.ok)
-    {
-      return { output: '', error: formatProcessError(result) }
-    }
-
-    return { output: result.stdout }
   })
+
+  if (!result.ok && result.code === 'ENOENT')
+  {
+    return {
+      output: '',
+      error:
+        'ripgrep (rg) is not installed. Install it: https://github.com/BurntSushi/ripgrep#installation',
+    }
+  }
+
+  // exit code 1 = no matches
+  if (!result.ok && result.code === 1)
+  {
+    return { output: noMatchMessage }
+  }
+
+  // exit code 2 = pattern/config error, other codes = timeout/signal/etc
+  if (!result.ok)
+  {
+    return { output: '', error: formatProcessError(result) }
+  }
+
+  return { output: result.stdout }
 }

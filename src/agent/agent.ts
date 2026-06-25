@@ -1449,6 +1449,11 @@ export class Agent
         toolIndex++
         const toolName = call.function.name
         const toolArgs = call.function.arguments ?? {}
+        const invocation: ToolInvocation = {
+          id: callId,
+          name: toolName,
+          args: toolArgs,
+        }
         events.onToolCall(toolName, toolArgs, callId)
 
         const tool = this.getOwnTool(toolName)
@@ -1460,7 +1465,7 @@ export class Agent
             toolResults,
             doomLoop,
             editDiffs,
-            invocation: { id: callId, name: toolName, args: toolArgs },
+            invocation,
             result: { output: '', error: errorMsg },
           })
           if (trip && !doomTrip) doomTrip = trip
@@ -1478,7 +1483,7 @@ export class Agent
             toolResults,
             doomLoop,
             editDiffs,
-            invocation: { id: callId, name: toolName, args: toolArgs },
+            invocation,
             result: { output: '', error: deniedMsg },
             trackDoom: false,
           })
@@ -1507,7 +1512,7 @@ export class Agent
               toolResults,
               doomLoop,
               editDiffs,
-              invocation: { id: callId, name: toolName, args: toolArgs },
+              invocation,
               result: { output: '', error: errorMsg },
               trackDoom: false,
             })
@@ -1528,7 +1533,7 @@ export class Agent
               toolResults,
               doomLoop,
               editDiffs,
-              invocation: { id: callId, name: toolName, args: toolArgs },
+              invocation,
               result: { output: '', error: rejectedMsg },
               trackDoom: false,
             })
@@ -1542,7 +1547,7 @@ export class Agent
           toolResults,
           doomLoop,
           editDiffs,
-          invocation: { id: callId, name: toolName, args: toolArgs },
+          invocation,
           result,
         })
         if (trip && !doomTrip) doomTrip = trip
