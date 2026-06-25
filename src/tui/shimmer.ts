@@ -2,7 +2,7 @@
 // cosine-falloff shimmer animation for terminal text
 
 import chalk from 'chalk'
-import { roleRgb, style } from './theme.js'
+import { lerpRgb, roleRgb, style } from './theme.js'
 
 // shimmer band half-width in characters
 const BAND_HALF_WIDTH = 5
@@ -10,11 +10,6 @@ const BAND_HALF_WIDTH = 5
 const PADDING = 10
 // full cycle duration in seconds
 const CYCLE_SECONDS = 1.8
-
-function lerp(a: number, b: number, t: number): number
-{
-  return Math.round(a + (b - a) * t)
-}
 
 // render a string w/ a cosine-falloff shimmer sweep at the given time
 // elapsed is in milliseconds
@@ -55,9 +50,7 @@ export function shimmerText(text: string, elapsed: number): string
     // clamp & scale down slightly so base color is always visible
     const intensity = Math.min(t, 1.0) * 0.9
 
-    const r = lerp(base.r, highlight.r, intensity)
-    const g = lerp(base.g, highlight.g, intensity)
-    const b = lerp(base.b, highlight.b, intensity)
+    const { r, g, b } = lerpRgb(base, highlight, intensity)
 
     result += chalk.rgb(r, g, b)(ch)
   }

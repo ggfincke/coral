@@ -4,14 +4,8 @@
 import chalk from 'chalk'
 import { getCwd } from '../cwd.js'
 import { savePrefs } from '../config/prefs.js'
-import {
-  getTheme,
-  setTheme,
-  style,
-  type Role,
-  type RoleColor,
-} from './theme.js'
-import { findTheme, THEMES } from './themes.js'
+import { getTheme, setTheme, style } from './theme.js'
+import { findTheme } from './themes.js'
 import type { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
 import { listSessions } from '../session/store.js'
@@ -20,16 +14,15 @@ import type { OutputBlock, SystemBlock } from './transcript.js'
 import { runGitCommand } from '../utils/git.js'
 import { copyToClipboard } from '../utils/clipboard.js'
 import { lastAssistantText, lastCodeBlock } from './copy.js'
-import { getTodos, clearTodos, type TodoItem } from '../tools/todo-store.js'
-import { TODO_MARK } from './todo-panel.js'
+import { getTodos, clearTodos } from '../tools/todo-store.js'
 import {
   computeTokensPerSecond,
   formatDurationNs,
   formatFrozenPrefixCoverage,
   formatTokenCount,
   formatTokensPerSecond,
-  pluralizeMessages,
 } from './metrics.js'
+import { pluralize } from '../utils/pluralize.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
   coralHeader,
@@ -40,10 +33,13 @@ import {
   formatManualCompactionResult,
   formatPermissionModeChange,
   formatPermissionsHelp,
+  formatThemeList,
+  formatTodoList,
   formatTuiResumeResolution,
   formatTuiSessionList,
   formatUnknownPermissionMode,
 } from './command-output.js'
+import type { CommandSummary } from './completion.js'
 import { buildIndexer } from '../retrieval/build.js'
 import { DEFAULT_EMBEDDING_MODEL, type IndexStore } from '../retrieval/types.js'
 import { formatTelemetry, loadTelemetry } from '../telemetry/store.js'
@@ -194,7 +190,7 @@ const clearCommand: Command = {
     ctx.clearSession()
     ctx.pushOutput(
       systemBlock(
-        `Conversation cleared (${pluralizeMessages(cleared)} removed)`
+        `Conversation cleared (${pluralize(cleared, 'message')} removed)`
       )
     )
   },
@@ -587,36 +583,6 @@ const verifyCommand: Command = {
 
 // ── /theme ─────────────────────────────────────────────────────────────
 
-// colored swatch dot rendered in a specific theme's own palette
-function swatch(color: RoleColor): string
-{
-  return 'ansi' in color
-    ? chalk[color.ansi]('●')
-    : chalk.rgb(color.r, color.g, color.b)('●')
-}
-
-const SWATCH_ROLES: Role[] = ['primary', 'accent', 'user', 'code', 'muted']
-
-function formatThemeList(): string
-{
-  const current = getTheme()
-  const maxName = Math.max(...THEMES.map((theme) => theme.name.length))
-  const lines: string[] = [coralHeader('themes'), '']
-
-  for (const theme of THEMES)
-  {
-    const dots = SWATCH_ROLES.map((role) => swatch(theme.roles[role])).join(' ')
-    const marker = theme === current ? style('primary')('›') : ' '
-    lines.push(
-      `${marker} ${dots}  ${theme.name.padEnd(maxName)}  ${chalk.dim(theme.description)}`
-    )
-  }
-
-  lines.push('')
-  lines.push(chalk.dim(`Switch with ${style('user')('/theme <name>')}`))
-  return lines.join('\n')
-}
-
 const themeCommand: Command = {
   name: 'theme',
   description: 'Show or switch the color theme',
@@ -726,25 +692,12 @@ const copyCommand: Command = {
     }
 
     const lineCount = payload.split('\n').length
-    const detail = lineCount === 1 ? '1 line' : `${lineCount} lines`
+    const detail = pluralize(lineCount, 'line')
     ctx.pushOutput(systemBlock(`Copied last ${label} to clipboard (${detail})`))
   },
 }
 
 // ── /todo ──────────────────────────────────────────────────────────────
-
-// render the live task list w/ the same marks as the panel
-function formatTodoList(todos: TodoItem[]): string
-{
-  const lines: string[] = [coralHeader('tasks'), '']
-  for (const todo of todos)
-  {
-    const text = `${TODO_MARK[todo.status]} ${todo.content}`
-    const row = todo.status === 'completed' ? chalk.strikethrough(text) : text
-    lines.push(`  ${row}`)
-  }
-  return lines.join('\n')
-}
 
 const todoCommand: Command = {
   name: 'todo',
@@ -974,7 +927,7 @@ const newCommand: Command = {
       parts.push(`Session ${savedId} saved`)
     }
     parts.push(
-      `New conversation started (${pluralizeMessages(cleared)} cleared)`
+      `New conversation started (${pluralize(cleared, 'message')} cleared)`
     )
 
     ctx.pushOutput(systemBlock(parts.join(' · ')))
@@ -1006,7 +959,7 @@ const commands: Command[] = [
 ]
 
 // command name + description pairs for prompt autocomplete
-export function commandCompletions(): { name: string; description: string }[]
+export function commandCompletions(): CommandSummary[]
 {
   return commands.map((cmd) => ({
     name: cmd.name,

@@ -5,10 +5,20 @@ import {
   readRequiredTextFile,
   type TextFileReadResult,
 } from '../utils/file-read.js'
-import { decodeMentionPath } from './mention-path.js'
-import { MAX_TOOL_OUTPUT_CHARS } from '../agent/tool-output.js'
+import {
+  decodeMentionPath,
+  MENTION_BOUNDARY,
+  QUOTED_BODY,
+  UNQUOTED_RUN,
+} from './mention-path.js'
+import { formatAttachedFileBlock } from '../utils/attached-file.js'
+import { MAX_TOOL_OUTPUT_CHARS } from '../utils/limits.js'
+import { truncateToLineBoundary } from '../utils/truncate-output.js'
 
-const MENTION_PATTERN = /(?:^|\s)@(?:"((?:\\.|[^"\\])*)"|([^\s]+))/g
+const MENTION_PATTERN = new RegExp(
+  `${MENTION_BOUNDARY}(?:"(${QUOTED_BODY})"|(${UNQUOTED_RUN}+))`,
+  'g'
+)
 
 // total @-mention pre-read budget — same scale as one large tool result, so
 // attaching files never injects more than a single read would
@@ -63,21 +73,6 @@ export function parseMentions(value: string): string[]
   return paths
 }
 
-// head-truncate content to the remaining budget, cut back to a line boundary so
-// the model never sees a half-line
-function clampToBudget(
-  content: string,
-  remaining: number
-): { text: string; truncated: boolean }
-{
-  if (content.length <= remaining) return { text: content, truncated: false }
-
-  const slice = content.slice(0, remaining)
-  const lastNewline = slice.lastIndexOf('\n')
-  const text = lastNewline > 0 ? slice.slice(0, lastNewline) : slice
-  return { text, truncated: true }
-}
-
 // read each mentioned file & format an attachment block for the model. content
 // is bounded by a shared budget (earlier mentions win); unreadable, oversized,
 // binary, & over-budget files are skipped & reported, never injected
@@ -123,11 +118,12 @@ export async function buildMentionContext(
       continue
     }
 
-    const { text, truncated } = clampToBudget(result.content, remaining)
-    used += text.length
-    blocks.push(
-      `===== ${path}${truncated ? ' (truncated)' : ''} =====\n${text}`
+    const { head: text, truncated } = truncateToLineBoundary(
+      result.content,
+      remaining
     )
+    used += text.length
+    blocks.push(formatAttachedFileBlock(path, text, { truncated }))
     attached.push({ path, truncated })
   }
 

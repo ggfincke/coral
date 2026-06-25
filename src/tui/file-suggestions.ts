@@ -70,7 +70,7 @@ export function isLikelyTextPath(path: string): boolean
 
 // ignore-aware project file paths (stat-only walk — no file contents read),
 // filtered to text-ish files. cached per cwd for the session; new files
-// mid-session won't appear until reset
+// mid-session won't appear until restart
 export async function listProjectFiles(cwd: string): Promise<string[]>
 {
   const cached = cache.get(cwd)
@@ -80,9 +80,4 @@ export async function listProjectFiles(cwd: string): Promise<string[]>
   const paths = unchangedPaths.filter(isLikelyTextPath)
   cache.set(cwd, paths)
   return paths
-}
-
-export function resetProjectFileCache(): void
-{
-  cache.clear()
 }

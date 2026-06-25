@@ -6,6 +6,7 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
 import { clamp } from '../utils/clamp.js'
+import { pluralize } from '../utils/pluralize.js'
 import type { Model } from '../types/inference.js'
 import { buildModelPickerLines, sortModels } from './model-picker.js'
 import { buildWelcomeLines } from './welcome.js'
@@ -15,7 +16,9 @@ import {
 } from './shutdown.js'
 import {
   buildTranscriptLines,
+  centerLinesVertical,
   maxScrollOffset,
+  padLinesTop,
   sliceViewport,
   type DiffBlock,
   type OutputBlock,
@@ -50,16 +53,21 @@ import {
   formatElapsed,
   formatTokenCount,
   formatTokensPerSecond,
-  pluralizeMessages,
 } from './metrics.js'
 import { buildApprovalBox, buildConfirmBox } from './approval-box.js'
 import { buildRestoredBlocks, truncateToolResult } from './restored-blocks.js'
-import { buildRule, buildStatusLine, describeRunStage } from './status-line.js'
+import {
+  buildRule,
+  buildStatusLine,
+  describeRunStageWithElapsed,
+} from './status-line.js'
+import { LineList } from './line-list.js'
 import { buildTodoPanel } from './todo-panel.js'
 import {
   getTodos,
   clearTodos,
   onTodosChanged,
+  sanitizeTodos,
   setTodos as restoreStoreTodos,
   type TodoItem,
 } from '../tools/todo-store.js'
@@ -271,12 +279,7 @@ export default function App({
     chatViewportHeight,
     scrollOffset
   )
-  const paddedTranscript = [
-    ...Array(Math.max(chatViewportHeight - visibleTranscript.length, 0)).fill(
-      ''
-    ),
-    ...visibleTranscript,
-  ]
+  const paddedTranscript = padLinesTop(visibleTranscript, chatViewportHeight)
 
   const pickerLines =
     pickerState === 'ready'
@@ -289,10 +292,10 @@ export default function App({
       : pickerState === 'loading'
         ? ['Loading Ollama models…', `Host: ${host}`]
         : ['Failed to load Ollama models', `Host: ${host}`, '', pickerError]
-  const visiblePicker = [
-    ...Array(Math.max(pickerViewportHeight - pickerLines.length, 0)).fill(''),
-    ...pickerLines.slice(-pickerViewportHeight),
-  ]
+  const visiblePicker = padLinesTop(
+    pickerLines.slice(-pickerViewportHeight),
+    pickerViewportHeight
+  )
 
   const messageCount = useMemo(
     () => output.filter((block) => block.type === 'user').length,
@@ -311,13 +314,7 @@ export default function App({
       }),
     [transcriptWidth, chatViewportHeight, activeModel, themeGeneration]
   )
-  // vertically center the splash within the empty chat viewport
-  const paddedWelcome = [
-    ...Array(
-      Math.max(Math.floor((chatViewportHeight - welcomeLines.length) / 2), 0)
-    ).fill(''),
-    ...welcomeLines,
-  ]
+  const paddedWelcome = centerLinesVertical(welcomeLines, chatViewportHeight)
 
   const disposeAgent = useCallback(async (agentInstance: Agent | null) =>
   {
@@ -402,7 +399,7 @@ export default function App({
           updatedAt: result.updatedAt,
         }
       }
-      return result !== null
+      return result !== undefined
     },
     [sessionIdRef, sessionMetaRef]
   )
@@ -426,7 +423,7 @@ export default function App({
       setTokenUsage(EMPTY_TOKEN_USAGE)
       setContextWindow(0)
       // restore the saved task list so the todo panel survives resume
-      restoreStoreTodos(target.todos ?? [])
+      restoreStoreTodos(sanitizeTodos(target.todos))
 
       // create fresh agent w/ restored messages
       const nextAgent = new Agent(target.meta.model, host, undefined, { think })
@@ -620,7 +617,7 @@ export default function App({
     // hydrate the store from a resumed session so its task list shows on mount
     if (resumeSession?.todos?.length)
     {
-      restoreStoreTodos(resumeSession.todos)
+      restoreStoreTodos(sanitizeTodos(resumeSession.todos))
     }
     return () => onTodosChanged(null)
   }, [resumeSession])
@@ -1002,8 +999,7 @@ export default function App({
           },
           onVerification(result)
           {
-            const label =
-              result.editCount === 1 ? '1 edit' : `${result.editCount} edits`
+            const label = pluralize(result.editCount, 'edit')
             let content: string
             if (result.status === 'pass')
             {
@@ -1214,7 +1210,10 @@ export default function App({
   else if (scrollOffset > 0)
   {
     const stateLeft = isRunning
-      ? `scrollback · ${describeRunStage(runStage)} · ${runElapsed ?? '0.0s'}`
+      ? describeRunStageWithElapsed(runStage, runElapsed, {
+          prefix: 'scrollback',
+          elapsedFallback: '0.0s',
+        })
       : `scrollback · ${scrollOffset} lines above`
     const hintRight = isRunning
       ? 'ctrl+c interrupts · pgdn returns'
@@ -1223,9 +1222,7 @@ export default function App({
   }
   else if (isRunning)
   {
-    const stageStr = runElapsed
-      ? `${describeRunStage(runStage)} · ${runElapsed}`
-      : describeRunStage(runStage)
+    const stageStr = describeRunStageWithElapsed(runStage, runElapsed)
     const stateLeft = [stageStr, tokenGauge, perfGauge]
       .filter(Boolean)
       .join(' · ')
@@ -1372,7 +1369,7 @@ export default function App({
           {messageCount > 0 && (
             <>
               <Text dimColor>{' · '}</Text>
-              <Text dimColor>{pluralizeMessages(messageCount)}</Text>
+              <Text dimColor>{pluralize(messageCount, 'message')}</Text>
             </>
           )}
         </Text>
@@ -1381,46 +1378,23 @@ export default function App({
       <Text dimColor>{headerSep}</Text>
 
       {pickerVisible ? (
-        <Box flexDirection="column">
-          {visiblePicker.map((line, index) => (
-            <Text key={index}>{line}</Text>
-          ))}
-        </Box>
+        <LineList lines={visiblePicker} />
       ) : agent ? (
-        <Box flexDirection="column">
-          {(output.length === 0 ? paddedWelcome : paddedTranscript).map(
-            (line, index) => (
-              <Text key={index}>{line}</Text>
-            )
-          )}
-        </Box>
+        <LineList
+          lines={output.length === 0 ? paddedWelcome : paddedTranscript}
+        />
       ) : null}
 
       {!pickerVisible && agent && todoPanelLines.length > 0 && (
-        <Box flexDirection="column">
-          {todoPanelLines.map((line, index) => (
-            <Text key={index} dimColor>
-              {line}
-            </Text>
-          ))}
-        </Box>
+        <LineList lines={todoPanelLines} dim />
       )}
 
       {!pickerVisible && agent && approval && (
-        <Box flexDirection="column">
-          {approvalBoxLines.map((line, index) => (
-            // lines are pre-styled — an outer color prop would clobber the diff
-            <Text key={index}>{line}</Text>
-          ))}
-        </Box>
+        <LineList lines={approvalBoxLines} />
       )}
 
       {!pickerVisible && agent && !approval && confirm && (
-        <Box flexDirection="column">
-          {confirmBoxLines.map((line, index) => (
-            <Text key={index}>{line}</Text>
-          ))}
-        </Box>
+        <LineList lines={confirmBoxLines} />
       )}
 
       {!pickerVisible && agent && !promptActive && (

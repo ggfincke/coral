@@ -1,6 +1,8 @@
 // src/tui/metrics.ts
 // shared token, throughput, & duration formatting for TUI surfaces
 
+import { pluralize } from '../utils/pluralize.js'
+
 export function formatElapsed(ms: number): string
 {
   if (ms < 60_000)
@@ -77,7 +79,7 @@ export function formatFrozenPrefixCoverage(
   summaryBlocks: number
 ): string
 {
-  const blocks = `${summaryBlocks} block${summaryBlocks === 1 ? '' : 's'}`
+  const blocks = pluralize(summaryBlocks, 'block')
   const size = formatTokenCount(tokens)
 
   if (contextWindow > 0)
@@ -87,10 +89,4 @@ export function formatFrozenPrefixCoverage(
   }
 
   return `~${size} kept stable (${blocks})`
-}
-
-// '<n> message(s)' w/ correct pluralization
-export function pluralizeMessages(n: number): string
-{
-  return `${n} ${n === 1 ? 'message' : 'messages'}`
 }

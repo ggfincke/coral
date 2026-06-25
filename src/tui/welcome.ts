@@ -2,9 +2,9 @@
 // startup welcome splash: pixel-coral logo + wordmark, theme-tinted
 
 import chalk, { type ChalkInstance } from 'chalk'
-import stripAnsi from 'strip-ansi'
 import { homedir } from 'node:os'
-import { roleRgb, style, type RGB } from './theme.js'
+import { lerpRgb, roleRgb, style, type RGB } from './theme.js'
+import { center, visibleWidth } from './wrap.js'
 
 // pixel grids: '#' = coral cell, '.' = empty. each cell -> a 2-col block so it reads square
 const CORAL_FULL = [
@@ -55,18 +55,6 @@ export interface WelcomeOptions
   themeGeneration: number
 }
 
-function lerp(a: number, b: number, t: number): number
-{
-  return Math.round(a + (b - a) * t)
-}
-
-// center a styled line within width, measuring visible (ansi-stripped) length
-function center(line: string, width: number): string
-{
-  const pad = Math.max(Math.floor((width - stripAnsi(line).length) / 2), 0)
-  return ' '.repeat(pad) + line
-}
-
 // vertical gradient endpoints: bright coral tips -> sandy base
 // ansi-based themes have no rgb to interpolate -> solid primary
 function makePaint(): (t: number) => ChalkInstance
@@ -75,11 +63,10 @@ function makePaint(): (t: number) => ChalkInstance
   const bot: RGB | null = roleRgb('muted')
   if (!top || !bot) return () => style('primary')
   return (t: number) =>
-    chalk.rgb(
-      lerp(top.r, bot.r, t),
-      lerp(top.g, bot.g, t),
-      lerp(top.b, bot.b, t)
-    )
+  {
+    const rgb = lerpRgb(top, bot, t)
+    return chalk.rgb(rgb.r, rgb.g, rgb.b)
+  }
 }
 
 // raw logo rows: left-aligned, each LOGO_COLS visible cols (empty cells -> spaces)
@@ -135,7 +122,7 @@ function composeHorizontal(
   width: number
 ): string[]
 {
-  const textWidth = Math.max(...textLines.map((line) => stripAnsi(line).length))
+  const textWidth = Math.max(...textLines.map((line) => visibleWidth(line)))
   const blockWidth = LOGO_COLS + GAP + textWidth
   const indent = ' '.repeat(Math.max(Math.floor((width - blockWidth) / 2), 0))
   const textTop = Math.round((logoRows.length - textLines.length) / 2)
@@ -169,7 +156,7 @@ export function buildWelcomeLines(opts: WelcomeOptions): string[]
   const textColWidth = width - LOGO_COLS - GAP
 
   // wide enough to seat the text beside the coral -> horizontal lockup
-  if (textColWidth >= stripAnsi(wordmark).length)
+  if (textColWidth >= visibleWidth(wordmark))
   {
     const info = infoText(cwd, model, textColWidth)
     return composeHorizontal(logoRows, [wordmark, info], width)

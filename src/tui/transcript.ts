@@ -10,6 +10,7 @@ import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from './theme.js'
 import { SOFT_WRAP_OPTIONS, wrapLines } from './wrap.js'
 import { allTools } from '../tools/index.js'
+import { ellipsize } from '../utils/ellipsize.js'
 
 // block types w/ richer data for tool calls & results
 
@@ -116,7 +117,7 @@ export function summarizeToolArgs(
   const summarize = TOOLS_BY_NAME.get(toolName)?.display?.summarize
   if (summarize) return summarize(args)
   const json = JSON.stringify(args)
-  return json.length > 60 ? `${json.slice(0, 57)}...` : json
+  return ellipsize(json, 60)
 }
 
 function getCachedBlockLines(
@@ -418,4 +419,15 @@ export function sliceViewport(
   const end = Math.max(lines.length - clampedOffset, 0)
   const start = Math.max(end - viewportHeight, 0)
   return lines.slice(start, end)
+}
+
+export function padLinesTop(lines: string[], height: number): string[]
+{
+  return [...Array(Math.max(height - lines.length, 0)).fill(''), ...lines]
+}
+
+export function centerLinesVertical(lines: string[], height: number): string[]
+{
+  const topPad = Math.max(Math.floor((height - lines.length) / 2), 0)
+  return [...Array(topPad).fill(''), ...lines]
 }

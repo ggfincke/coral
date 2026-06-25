@@ -23,24 +23,15 @@ import {
 import type { CompactionResult } from '../src/agent/agent.js'
 import type { ResumeSessionResolution } from '../src/session/resume.js'
 import type { SessionMeta } from '../src/session/store.js'
+import { makeSessionMeta } from './helpers/session.js'
 
 function plain(lines: string | string[]): string
 {
   return stripAnsi(Array.isArray(lines) ? lines.join('\n') : lines)
 }
 
-function makeSession(id: string, title = `Session ${id}`): SessionMeta
-{
-  return {
-    id,
-    model: 'test-model',
-    cwd: '/tmp/test-project',
-    createdAt: '2026-06-17T00:00:00.000Z',
-    updatedAt: '2026-06-17T12:00:00.000Z',
-    title,
-    messageCount: 3,
-  }
-}
+const makeSession = (id: string, title?: string): SessionMeta =>
+  makeSessionMeta(title === undefined ? { id } : { id, title })
 
 test('buildTranscriptLines renders conversation and tool results in scrollable order', () =>
 {

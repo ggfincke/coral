@@ -115,6 +115,22 @@ export function roleRgb(role: Role): RGB | null
   return 'ansi' in color ? null : color
 }
 
+// linear interpolate between two numbers, rounded to an integer
+export function lerp(a: number, b: number, t: number): number
+{
+  return Math.round(a + (b - a) * t)
+}
+
+// linear interpolate between two RGB colors
+export function lerpRgb(a: RGB, b: RGB, t: number): RGB
+{
+  return {
+    r: lerp(a.r, b.r, t),
+    g: lerp(a.g, b.g, t),
+    b: lerp(a.b, b.b, t),
+  }
+}
+
 // bold heading style for markdown; depths past h4 fall back to bold white
 export function headingStyle(depth: number): ChalkInstance
 {

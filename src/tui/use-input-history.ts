@@ -7,7 +7,6 @@ import {
   appendHistoryEntry,
   computeNavigateUp,
   computeNavigateDown,
-  MAX_ENTRIES,
   type HistoryEntry,
 } from './input-history.js'
 
@@ -98,12 +97,6 @@ export function useInputHistory(): InputHistoryControls
 
       entries.push(entry)
       appendHistoryEntry(entry)
-
-      // trim if over max
-      if (entries.length > MAX_ENTRIES)
-      {
-        entriesRef.current = entries.slice(-MAX_ENTRIES)
-      }
 
       resetNavigation()
     },

@@ -6,9 +6,12 @@ import type { CompactionResult } from '../agent/agent.js'
 import type { ResumeSessionResolution } from '../session/resume.js'
 import type { SessionMeta } from '../session/store.js'
 import type { IndexStats } from '../retrieval/types.js'
-import { isMissingModelError } from '../utils/errors.js'
+import type { TodoItem } from '../tools/todo-store.js'
+import { isMissingModelError, withPullHint } from '../utils/errors.js'
 import { formatTokenCount } from './metrics.js'
-import { style } from './theme.js'
+import { getTheme, style, type Role, type RoleColor } from './theme.js'
+import { THEMES } from './themes.js'
+import { strikeIfDone, todoRowText } from './todo-panel.js'
 
 export function coralHeader(title: string): string
 {
@@ -227,5 +230,49 @@ export function formatIndexError(
 {
   const base = `Index build failed (embedding model ${embeddingModel}): ${message}`
   if (!isMissingModelError(message)) return base
-  return `${base}\nIf the model is missing, run: ollama pull ${embeddingModel}`
+  return withPullHint(base, embeddingModel, '\n')
+}
+
+// ── /theme ─────────────────────────────────────────────────────────────
+
+// colored swatch dot rendered in a specific theme's own palette
+function swatch(color: RoleColor): string
+{
+  return 'ansi' in color
+    ? chalk[color.ansi]('●')
+    : chalk.rgb(color.r, color.g, color.b)('●')
+}
+
+const SWATCH_ROLES: Role[] = ['primary', 'accent', 'user', 'code', 'muted']
+
+export function formatThemeList(): string
+{
+  const current = getTheme()
+  const maxName = Math.max(...THEMES.map((theme) => theme.name.length))
+  const lines: string[] = [coralHeader('themes'), '']
+
+  for (const theme of THEMES)
+  {
+    const dots = SWATCH_ROLES.map((role) => swatch(theme.roles[role])).join(' ')
+    const marker = theme === current ? style('primary')('›') : ' '
+    lines.push(
+      `${marker} ${dots}  ${theme.name.padEnd(maxName)}  ${chalk.dim(theme.description)}`
+    )
+  }
+
+  lines.push('')
+  lines.push(chalk.dim(`Switch with ${style('user')('/theme <name>')}`))
+  return lines.join('\n')
+}
+
+// ── /todo ──────────────────────────────────────────────────────────────
+
+export function formatTodoList(todos: TodoItem[]): string
+{
+  const lines: string[] = [coralHeader('tasks'), '']
+  for (const todo of todos)
+  {
+    lines.push(`  ${strikeIfDone(todo, todoRowText(todo))}`)
+  }
+  return lines.join('\n')
 }

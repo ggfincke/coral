@@ -254,14 +254,6 @@ export function applyPromptEdit({
   {
     return deleteWordBefore(value, cursor.cursorOffset)
   }
-  if (key.meta && input === 'b')
-  {
-    return updateCursor(value, previousWordOffset(value, cursor.cursorOffset))
-  }
-  if (key.meta && input === 'f')
-  {
-    return updateCursor(value, nextWordOffset(value, cursor.cursorOffset))
-  }
   if (key.meta && input === 'd')
   {
     return deleteWordAfter(value, cursor.cursorOffset)
