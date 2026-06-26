@@ -2,7 +2,7 @@
 // tests for session persistence
 
 import { strict as assert } from 'node:assert'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, beforeEach, test } from 'node:test'
 import type { OllamaMessage } from '../src/types/inference.js'
@@ -143,6 +143,83 @@ test('loadSession treats objectless JSON session files as missing', async () =>
   assert.equal(loaded, undefined)
 })
 
+test('session APIs reject path traversal IDs', async () =>
+{
+  const sessionsDir = join(process.env.CORAL_HOME!, 'sessions')
+  await mkdir(sessionsDir, { recursive: true })
+  await writeFile(
+    join(process.env.CORAL_HOME!, 'outside.json'),
+    JSON.stringify(makeSession(makeMeta('feedface'))),
+    'utf-8'
+  )
+
+  assert.equal(loadSession('../outside'), undefined)
+  assert.equal(renameSession('../outside', 'bad'), undefined)
+  assert.throws(() =>
+    saveSession('../outside', 'test-model', '/tmp/test', [
+      { role: 'system', content: 'System' },
+    ])
+  )
+})
+
+test('loadSession rejects a session whose messages field is not an array', async () =>
+{
+  const dir = join(process.env.CORAL_HOME!, 'sessions')
+  await mkdir(dir, { recursive: true })
+  const malformed = {
+    meta: makeMeta('1a2b3c4d'),
+    messages: 'not-array',
+  }
+  await writeFile(join(dir, '1a2b3c4d.json'), JSON.stringify(malformed))
+
+  assert.equal(loadSession('1a2b3c4d'), undefined)
+})
+
+test('loadSessionIndex filters invalid index rows and rebuilds from disk', async () =>
+{
+  const dir = join(process.env.CORAL_HOME!, 'sessions')
+  await mkdir(dir, { recursive: true })
+
+  const valid = makeMeta('11112222')
+  // valid meta plus a bogus row missing required fields
+  const index = {
+    version: 1,
+    sessions: [valid, { id: '33334444' }],
+  }
+  await writeFile(join(dir, 'index.json'), JSON.stringify(index))
+  // write the matching session file so a rebuild keeps the valid one
+  await writeFile(
+    join(dir, '11112222.json'),
+    JSON.stringify(makeSession(valid))
+  )
+
+  const ids = listSessions().map((session) => session.id)
+
+  assert.deepEqual(ids, ['11112222'])
+})
+
+test('loadSession and rebuild ignore filename/meta id mismatch', async () =>
+{
+  const dir = join(process.env.CORAL_HOME!, 'sessions')
+  await mkdir(dir, { recursive: true })
+  // basename deadbeef but meta.id feedface — both valid hex, mismatched
+  await writeFile(
+    join(dir, 'deadbeef.json'),
+    JSON.stringify(makeSession(makeMeta('feedface')))
+  )
+
+  assert.equal(loadSession('feedface'), undefined)
+  assert.equal(loadSession('deadbeef'), undefined)
+
+  // force a rebuild from disk — the mismatched session must not appear
+  await rm(join(dir, 'index.json'), { force: true })
+
+  assert.equal(
+    listSessions().some((session) => session.id === 'feedface'),
+    false
+  )
+})
+
 test('listSessions orders resume targets by newest update', async () =>
 {
   const first = createSession('model-a', '/tmp/a', [
@@ -193,6 +270,28 @@ test('resolveResumeSessionFromCandidates keeps exact-only CLI resolution', () =>
 
   assert.equal(result.type, 'not_found')
   if (result.type === 'not_found') assert.equal(result.requestedId, 'abcd')
+})
+
+test('resolveResumeSessionFromCandidates reports missing cwd when required', () =>
+{
+  const unavailable = makeSessionMeta({
+    id: 'abcd1234',
+    cwd: '/missing/project',
+  })
+  const available = makeSessionMeta({ id: 'abce5678', cwd: '/tmp/project' })
+  const result = resolveResumeSessionFromCandidates({
+    requestedId: unavailable.id,
+    requireExistingCwd: true,
+    sessions: [unavailable, available],
+    loadSessionById: () => undefined,
+    canResumeInCwd: (cwd) => cwd === available.cwd,
+  })
+
+  assert.equal(result.type, 'unavailable')
+  if (result.type === 'unavailable')
+  {
+    assert.equal(result.session.id, unavailable.id)
+  }
 })
 
 test('resolveResumeSessionFromCandidates supports TUI prefix ambiguity', () =>

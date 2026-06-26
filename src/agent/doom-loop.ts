@@ -4,9 +4,9 @@
 import { excerpt } from '../utils/ellipsize.js'
 
 // repeats within the window before a trip fires
-export const DEFAULT_DOOM_LOOP_THRESHOLD = 3
+const DEFAULT_DOOM_LOOP_THRESHOLD = 3
 // recent calls considered when counting repeats
-export const DEFAULT_DOOM_LOOP_WINDOW = 12
+const DEFAULT_DOOM_LOOP_WINDOW = 12
 
 export interface DoomLoopConfig
 {
@@ -14,7 +14,7 @@ export interface DoomLoopConfig
   window: number
 }
 
-export const DEFAULT_DOOM_LOOP_CONFIG: DoomLoopConfig = {
+const DEFAULT_DOOM_LOOP_CONFIG: DoomLoopConfig = {
   threshold: DEFAULT_DOOM_LOOP_THRESHOLD,
   window: DEFAULT_DOOM_LOOP_WINDOW,
 }

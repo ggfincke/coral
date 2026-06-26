@@ -7,10 +7,12 @@ import {
   type SessionData,
   type SessionMeta,
 } from './store.js'
+import { existsSync } from 'node:fs'
 
 export type ResumeSessionResolution =
   | { type: 'target'; session: SessionMeta }
   | { type: 'current'; session: SessionMeta }
+  | { type: 'unavailable'; session: SessionMeta }
   | { type: 'empty' }
   | { type: 'not_found'; requestedId: string }
   | { type: 'ambiguous'; requestedId: string; matches: SessionMeta[] }
@@ -20,6 +22,8 @@ export interface ResolveResumeSessionOptions
   requestedId?: string
   currentSessionId?: string | null
   allowPrefix?: boolean
+  requireExistingCwd?: boolean
+  canResumeInCwd?: (cwd: string) => boolean
 }
 
 export interface ResolveResumeSessionCandidatesOptions extends ResolveResumeSessionOptions
@@ -30,18 +34,25 @@ export interface ResolveResumeSessionCandidatesOptions extends ResolveResumeSess
 
 function asResolution(
   session: SessionMeta,
-  currentSessionId: string | null | undefined
+  currentSessionId: string | null | undefined,
+  requireExistingCwd: boolean,
+  canResumeInCwd: (cwd: string) => boolean
 ): ResumeSessionResolution
 {
-  return session.id === currentSessionId
-    ? { type: 'current', session }
-    : { type: 'target', session }
+  if (session.id === currentSessionId) return { type: 'current', session }
+  if (requireExistingCwd && !canResumeInCwd(session.cwd))
+  {
+    return { type: 'unavailable', session }
+  }
+  return { type: 'target', session }
 }
 
 export function resolveResumeSessionFromCandidates({
   requestedId,
   currentSessionId,
   allowPrefix = false,
+  requireExistingCwd = false,
+  canResumeInCwd = existsSync,
   sessions,
   loadSessionById = loadSession,
 }: ResolveResumeSessionCandidatesOptions): ResumeSessionResolution
@@ -51,14 +62,33 @@ export function resolveResumeSessionFromCandidates({
   if (!normalizedId)
   {
     const latest = sessions.find((session) => session.id !== currentSessionId)
-    return latest ? { type: 'target', session: latest } : { type: 'empty' }
+    return latest
+      ? asResolution(
+          latest,
+          currentSessionId,
+          requireExistingCwd,
+          canResumeInCwd
+        )
+      : { type: 'empty' }
   }
 
   const exact = sessions.find((session) => session.id === normalizedId)
-  if (exact) return asResolution(exact, currentSessionId)
+  if (exact)
+    return asResolution(
+      exact,
+      currentSessionId,
+      requireExistingCwd,
+      canResumeInCwd
+    )
 
   const onDisk = loadSessionById(normalizedId)
-  if (onDisk?.meta) return asResolution(onDisk.meta, currentSessionId)
+  if (onDisk?.meta)
+    return asResolution(
+      onDisk.meta,
+      currentSessionId,
+      requireExistingCwd,
+      canResumeInCwd
+    )
 
   if (allowPrefix)
   {
@@ -66,7 +96,13 @@ export function resolveResumeSessionFromCandidates({
       session.id.startsWith(normalizedId)
     )
 
-    if (matches.length === 1) return asResolution(matches[0]!, currentSessionId)
+    if (matches.length === 1)
+      return asResolution(
+        matches[0]!,
+        currentSessionId,
+        requireExistingCwd,
+        canResumeInCwd
+      )
     if (matches.length > 1)
     {
       return { type: 'ambiguous', requestedId: normalizedId, matches }

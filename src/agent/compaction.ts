@@ -10,13 +10,13 @@ import { CHARS_PER_TOKEN } from '../utils/limits.js'
 const DEFAULT_CONTEXT_WINDOW = 32_768
 
 // prune old tool results when estimated tokens exceed this fraction of context
-export const PRUNE_THRESHOLD = 0.75
+const PRUNE_THRESHOLD = 0.75
 
 // trigger full summarization when estimated tokens exceed this fraction of context
-export const SUMMARIZE_THRESHOLD = 0.9
+const SUMMARIZE_THRESHOLD = 0.9
 
 // keep this many recent tool results untouched during pruning
-export const PRUNE_PROTECT_COUNT = 6
+const PRUNE_PROTECT_COUNT = 6
 
 // stop retrying summarization after this many consecutive failures
 export const MAX_COMPACT_FAILURES = 2
