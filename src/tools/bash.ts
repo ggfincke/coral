@@ -32,7 +32,7 @@ export const bashTool: Tool = {
     const timeout = (args.timeout as number) ?? DEFAULT_TIMEOUT
 
     const result = await execShellCommand(command, {
-      cwd: getCwd(),
+      cwd: context?.cwd ?? getCwd(),
       timeout,
       maxBuffer: DEFAULT_CHILD_PROCESS_MAX_BUFFER,
       signal: context?.signal,

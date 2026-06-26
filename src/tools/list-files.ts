@@ -4,8 +4,9 @@
 import { readdir, stat } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
-import type { Tool, ToolResult } from './tool.js'
-import { getCwd, resolvePath } from '../cwd.js'
+import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
+import { getCwd } from '../cwd.js'
+import { checkWorkspacePath } from './path-policy.js'
 import { clamp } from '../utils/clamp.js'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
 import {
@@ -145,10 +146,17 @@ export const listFilesTool: Tool = {
     },
     required: [],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
-    const cwd = getCwd()
-    const path = resolvePath((args.path as string) ?? '.')
+    const cwd = context?.cwd ?? getCwd()
+    const allowed = await checkWorkspacePath(
+      cwd,
+      args.path as string | undefined,
+      context?.allowOutsideWorkspace === true
+    )
+    if (!allowed.ok) return { output: '', error: allowed.error }
+
+    const path = allowed.path
     const rawDepth = (args.depth as number) ?? DEFAULT_DEPTH
     const depth = clamp(Math.floor(rawDepth), 1, MAX_DEPTH)
 

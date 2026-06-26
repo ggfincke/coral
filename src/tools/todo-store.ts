@@ -12,6 +12,11 @@ export interface TodoItem
 
 const VALID_STATUS = new Set<TodoStatus>(TODO_STATUSES)
 
+export function isTodoStatus(value: string): value is TodoStatus
+{
+  return VALID_STATUS.has(value as TodoStatus)
+}
+
 // parse one todo entry; returns undefined for invalid shapes
 function parseTodoEntry(entry: unknown): TodoItem | undefined
 {
@@ -21,12 +26,12 @@ function parseTodoEntry(entry: unknown): TodoItem | undefined
   const status = (entry as Record<string, unknown>).status
 
   if (typeof content !== 'string' || !content.trim()) return undefined
-  if (typeof status !== 'string' || !VALID_STATUS.has(status as TodoStatus))
+  if (typeof status !== 'string' || !isTodoStatus(status))
   {
     return undefined
   }
 
-  return { content: content.trim(), status: status as TodoStatus }
+  return { content: content.trim(), status }
 }
 
 // lenient — for session restore; drops invalid entries, demotes extra in_progress
@@ -78,7 +83,7 @@ export function validateTodoList(
         error: 'each todo needs a non-empty content string',
       }
     }
-    if (typeof status !== 'string' || !VALID_STATUS.has(status as TodoStatus))
+    if (typeof status !== 'string' || !isTodoStatus(status))
     {
       return {
         ok: false,
@@ -86,7 +91,7 @@ export function validateTodoList(
       }
     }
 
-    todos.push({ content: content.trim(), status: status as TodoStatus })
+    todos.push({ content: content.trim(), status })
   }
 
   const inProgress = todos.filter((t) => t.status === 'in_progress').length

@@ -32,6 +32,11 @@ export interface TextFileReadFailure
 
 export type TextFileReadResult = TextFileReadSuccess | TextFileReadFailure
 
+export interface TextFileReadOptions
+{
+  cwd?: string
+}
+
 function isMissing(err: unknown): boolean
 {
   return (err as NodeJS.ErrnoException).code === 'ENOENT'
@@ -53,10 +58,11 @@ function oversizedFailure(path: string, size: number): TextFileReadFailure
 
 async function readTextFile(
   rawPath: string,
-  missingAsEmpty: boolean
+  missingAsEmpty: boolean,
+  options: TextFileReadOptions = {}
 ): Promise<TextFileReadResult>
 {
-  const path = resolvePath(rawPath)
+  const path = resolvePath(rawPath, options.cwd)
   let size: number
   try
   {
@@ -136,15 +142,17 @@ export function formatDiffSkipMessage(failure: TextFileReadFailure): string
 }
 
 export function readRequiredTextFile(
-  rawPath: string
+  rawPath: string,
+  options: TextFileReadOptions = {}
 ): Promise<TextFileReadResult>
 {
-  return readTextFile(rawPath, false)
+  return readTextFile(rawPath, false, options)
 }
 
 export function readOptionalPreviousTextFile(
-  rawPath: string
+  rawPath: string,
+  options: TextFileReadOptions = {}
 ): Promise<TextFileReadResult>
 {
-  return readTextFile(rawPath, true)
+  return readTextFile(rawPath, true, options)
 }

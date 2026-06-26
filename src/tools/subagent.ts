@@ -1,6 +1,6 @@
 // src/tools/subagent.ts
-// runtime holder for the subagent runner injected by the agent layer —
-// tools can't import Agent directly w/o a tools<->agent import cycle
+// process-global fallback subagent runner — the task tool prefers its ToolContext
+// runner, falling back here when run outside an agent (avoids a tools<->agent cycle)
 
 export interface SubagentResult
 {
@@ -16,7 +16,8 @@ export type SubagentRunner = (
 
 let activeRunner: SubagentRunner | null = null
 
-// the main agent registers its runner here; the task tool reads it
+// set the fallback runner for the task tool when it runs without a ToolContext
+// runner (e.g. direct taskTool.execute() in tests); agents inject via ToolContext
 export function setSubagentRunner(runner: SubagentRunner | null): void
 {
   activeRunner = runner

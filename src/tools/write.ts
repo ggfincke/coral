@@ -3,8 +3,9 @@
 
 import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { Tool, ToolResult } from './tool.js'
-import { resolvePath } from '../cwd.js'
+import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
+import { checkWorkspacePath } from './path-policy.js'
+import { getCwd } from '../cwd.js'
 import { formatBytes } from '../utils/bytes.js'
 import { computeDiff } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
@@ -25,14 +26,23 @@ export const writeTool: Tool = {
     },
     required: ['path', 'content'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
+    const cwd = context?.cwd ?? getCwd()
     const rawPath = args.path as string
-    const path = resolvePath(rawPath)
     const content = args.content as string
+    let path = rawPath
     try
     {
-      const before = await readOptionalPreviousTextFile(rawPath)
+      const allowed = await checkWorkspacePath(
+        cwd,
+        rawPath,
+        context?.allowOutsideWorkspace === true
+      )
+      if (!allowed.ok) return { output: '', error: allowed.error }
+
+      path = allowed.path
+      const before = await readOptionalPreviousTextFile(path)
       await mkdir(dirname(path), { recursive: true })
       await writeFile(path, content, 'utf-8')
       const output = `Wrote ${formatBytes(content.length)} to ${path}`

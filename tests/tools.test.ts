@@ -4,15 +4,17 @@
 import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, utimes, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { setCwd } from '../src/cwd.js'
 import { bashTool } from '../src/tools/bash.js'
+import { readTool } from '../src/tools/read.js'
 import { globTool } from '../src/tools/glob.js'
 import { grepTool } from '../src/tools/grep.js'
 import { listFilesTool } from '../src/tools/list-files.js'
 import { writeTool } from '../src/tools/write.js'
+import { editTool } from '../src/tools/edit.js'
 import {
   gitDiffTool,
   gitLogTool,
@@ -135,6 +137,162 @@ test('write_file overwrites oversized targets without previewing old content', a
   assert.match(result.output, /exceeds 1\.0 MB read limit/)
   assert.equal(await readFile(target, 'utf-8'), 'small\n')
 })
+
+test('edit_file changes disk, returns a diff, and leaves misses untouched', async () =>
+{
+  const dir = await tempDir('coral-edit-exec-')
+  await mkdir(join(dir, 'src'), { recursive: true })
+  const target = join(dir, 'src', 'feature.ts')
+  await writeFile(
+    target,
+    'export function label() {\n  return "old"\n}\n',
+    'utf-8'
+  )
+
+  setCwd(dir)
+  const edited = await editTool.execute({
+    path: 'src/feature.ts',
+    old_string: '  return "old"',
+    new_string: '  return "new"',
+  })
+
+  assert.equal(edited.error, undefined)
+  assert.match(edited.output, /replaced 1 occurrence/)
+  assert.ok((edited.diff ?? '').includes('-  return "old"'))
+  assert.ok((edited.diff ?? '').includes('+  return "new"'))
+  assert.equal(
+    await readFile(target, 'utf-8'),
+    'export function label() {\n  return "new"\n}\n'
+  )
+
+  const missed = await editTool.execute({
+    path: 'src/feature.ts',
+    old_string: 'missing',
+    new_string: 'replacement',
+  })
+
+  assert.match(missed.error ?? '', /old_string not found/)
+  assert.equal(
+    await readFile(target, 'utf-8'),
+    'export function label() {\n  return "new"\n}\n'
+  )
+})
+
+test('read and list tools deny off-workspace paths without approval', async () =>
+{
+  const dir = await tempDir('coral-path-policy-')
+  const outside = await tempDir('coral-outside-')
+  await writeFile(join(outside, 'secret.txt'), 'secret\n', 'utf-8')
+
+  setCwd(dir)
+
+  const readDenied = await readTool.execute({
+    path: join(outside, 'secret.txt'),
+  })
+  const listDenied = await listFilesTool.execute({ path: outside })
+  const readAllowed = await readTool.execute(
+    { path: join(outside, 'secret.txt') },
+    {
+      cwd: dir,
+      ollamaHost: 'http://localhost:11434',
+      allowOutsideWorkspace: true,
+    }
+  )
+
+  assert.match(readDenied.error ?? '', /outside workspace/)
+  assert.match(listDenied.error ?? '', /outside workspace/)
+  assert.equal(readAllowed.output, 'secret\n')
+})
+
+test('write and edit tools deny off-workspace paths without approval', async () =>
+{
+  const dir = await tempDir('coral-write-policy-')
+  const outside = await tempDir('coral-write-outside-')
+  const outsideFile = join(outside, 'secret.txt')
+  await writeFile(outsideFile, 'secret\n', 'utf-8')
+
+  setCwd(dir)
+
+  const writeDenied = await writeTool.execute({
+    path: outsideFile,
+    content: 'changed\n',
+  })
+  const editDenied = await editTool.execute({
+    path: outsideFile,
+    old_string: 'secret',
+    new_string: 'changed',
+  })
+  const writeAllowed = await writeTool.execute(
+    { path: outsideFile, content: 'approved\n' },
+    {
+      cwd: dir,
+      ollamaHost: 'http://localhost:11434',
+      allowOutsideWorkspace: true,
+    }
+  )
+
+  assert.match(writeDenied.error ?? '', /outside workspace/)
+  assert.match(editDenied.error ?? '', /outside workspace/)
+  assert.equal(writeAllowed.error, undefined)
+  assert.equal(await readFile(outsideFile, 'utf-8'), 'approved\n')
+})
+
+test('write and edit tools deny workspace symlink escapes', async () =>
+{
+  const dir = await tempDir('coral-symlink-policy-')
+  const outside = await tempDir('coral-symlink-outside-')
+  await symlink(outside, join(dir, 'link'), 'dir')
+  await writeFile(join(outside, 'existing.txt'), 'secret\n', 'utf-8')
+
+  setCwd(dir)
+
+  const writeDenied = await writeTool.execute({
+    path: 'link/new.txt',
+    content: 'created outside\n',
+  })
+  const editDenied = await editTool.execute({
+    path: 'link/existing.txt',
+    old_string: 'secret',
+    new_string: 'changed',
+  })
+
+  assert.match(writeDenied.error ?? '', /symlink/)
+  assert.match(editDenied.error ?? '', /symlink/)
+  assert.equal(existsSync(join(outside, 'new.txt')), false)
+  assert.equal(
+    await readFile(join(outside, 'existing.txt'), 'utf-8'),
+    'secret\n'
+  )
+})
+
+test(
+  'grep denies off-workspace paths without approval',
+  { skip: !hasRipgrep },
+  async () =>
+  {
+    const dir = await tempDir('coral-grep-policy-')
+    const outside = await tempDir('coral-grep-outside-')
+    await writeFile(join(outside, 'secret.txt'), 'needle\n', 'utf-8')
+
+    setCwd(dir)
+
+    const denied = await grepTool.execute({
+      pattern: 'needle',
+      path: outside,
+    })
+    const allowed = await grepTool.execute(
+      { pattern: 'needle', path: outside },
+      {
+        cwd: dir,
+        ollamaHost: 'http://localhost:11434',
+        allowOutsideWorkspace: true,
+      }
+    )
+
+    assert.match(denied.error ?? '', /outside workspace/)
+    assert.match(allowed.output, /secret\.txt:1:needle/)
+  }
+)
 
 test('process helper captures stdout, stderr, ENOENT, and timeouts', async () =>
 {

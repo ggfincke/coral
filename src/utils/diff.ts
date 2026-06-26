@@ -7,6 +7,8 @@ import {
   readRequiredTextFile,
   readOptionalPreviousTextFile,
 } from './file-read.js'
+import { getCwd } from '../cwd.js'
+import { checkWorkspacePath } from '../tools/path-policy.js'
 
 // skip diffing sources past this size — generation cost outweighs the value
 const MAX_DIFF_SOURCE_CHARS = 1_000_000
@@ -80,6 +82,12 @@ export type ApplyEditResult =
 export type ToolDiffPreview =
   | { kind: 'diff'; diff: string }
   | { kind: 'message'; message: string }
+
+export interface ToolDiffPreviewOptions
+{
+  cwd?: string
+  allowOutsideWorkspace?: boolean
+}
 
 function diffPreview(diff: string | null): ToolDiffPreview | null
 {
@@ -279,14 +287,26 @@ export function describeEditMiss(before: string, oldString: string): string
 // write_file/edit_file would do w/o touching disk; null means no preview
 export async function previewToolDiff(
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  options: ToolDiffPreviewOptions = {}
 ): Promise<ToolDiffPreview | null>
 {
   try
   {
+    const cwd = options.cwd ?? getCwd()
     if (toolName === 'write_file')
     {
-      const before = await readOptionalPreviousTextFile(String(args.path ?? ''))
+      const allowed = await checkWorkspacePath(
+        cwd,
+        args.path as string | undefined,
+        options.allowOutsideWorkspace === true
+      )
+      if (!allowed.ok)
+      {
+        return { kind: 'message', message: `Preview skipped: ${allowed.error}` }
+      }
+
+      const before = await readOptionalPreviousTextFile(allowed.path)
       if (!before.ok)
       {
         return { kind: 'message', message: formatPreviewSkipMessage(before) }
@@ -298,7 +318,17 @@ export async function previewToolDiff(
 
     if (toolName === 'edit_file')
     {
-      const before = await readRequiredTextFile(String(args.path ?? ''))
+      const allowed = await checkWorkspacePath(
+        cwd,
+        args.path as string | undefined,
+        options.allowOutsideWorkspace === true
+      )
+      if (!allowed.ok)
+      {
+        return { kind: 'message', message: `Preview skipped: ${allowed.error}` }
+      }
+
+      const before = await readRequiredTextFile(allowed.path)
       if (!before.ok)
       {
         return { kind: 'message', message: formatPreviewSkipMessage(before) }

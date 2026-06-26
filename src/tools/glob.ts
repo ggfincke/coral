@@ -36,9 +36,16 @@ export const globTool: Tool = {
   async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const pattern = args.pattern as string
-    const { searchPath, cwd, isProjectPath } = resolveRgSearchTarget(
-      args.path as string | undefined
-    )
+    const { searchPath, cwd, isProjectPath, error } =
+      await resolveRgSearchTarget(
+        args.path as string | undefined,
+        context?.cwd,
+        context?.allowOutsideWorkspace === true
+      )
+    if (error)
+    {
+      return { output: '', error }
+    }
 
     const rgArgs = [
       '--files',

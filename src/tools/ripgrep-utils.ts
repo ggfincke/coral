@@ -2,7 +2,8 @@
 // shared ripgrep execution & error handling
 
 import type { ToolResult } from './tool.js'
-import { getCwd, resolvePath } from '../cwd.js'
+import { getCwd } from '../cwd.js'
+import { checkWorkspacePath } from './path-policy.js'
 import {
   formatProjectPath,
   isPathInsideProject,
@@ -14,13 +15,28 @@ interface RgSearchTarget
   searchPath: string
   cwd: string
   isProjectPath: boolean
+  error?: string
 }
 
 // resolve raw tool path into rg searchPath + optional project cwd
-export function resolveRgSearchTarget(rawPath?: string): RgSearchTarget
+export async function resolveRgSearchTarget(
+  rawPath?: string,
+  cwd = getCwd(),
+  allowOutsideWorkspace = false
+): Promise<RgSearchTarget>
 {
-  const cwd = getCwd()
-  const path = resolvePath(rawPath ?? '.')
+  const allowed = await checkWorkspacePath(cwd, rawPath, allowOutsideWorkspace)
+  if (!allowed.ok)
+  {
+    return {
+      searchPath: allowed.path,
+      cwd,
+      isProjectPath: false,
+      error: allowed.error,
+    }
+  }
+
+  const path = allowed.path
   const isProjectPath = isPathInsideProject(cwd, path)
   const searchPath = isProjectPath ? formatProjectPath(cwd, path) : path
   return { searchPath, cwd, isProjectPath }

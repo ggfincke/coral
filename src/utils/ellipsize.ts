@@ -5,6 +5,8 @@
 export function ellipsize(text: string, max: number, glyph = '…'): string
 {
   if (text.length <= max) return text
+  // when max can't fit text + glyph, return as much of the glyph as fits
+  if (max <= glyph.length) return glyph.slice(0, Math.max(max, 0))
   return text.slice(0, max - glyph.length) + glyph
 }
 
