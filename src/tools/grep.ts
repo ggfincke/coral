@@ -2,12 +2,11 @@
 // search file contents by regex pattern via ripgrep
 
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
-import { execRipgrep, NO_MATCHES_MESSAGE } from './ripgrep-utils.js'
-import { getCwd, resolvePath } from '../cwd.js'
 import {
-  formatProjectPath,
-  isPathInsideProject,
-} from '../shared/project-tree.js'
+  execRipgrep,
+  NO_MATCHES_MESSAGE,
+  resolveRgSearchTarget,
+} from './ripgrep-utils.js'
 import { truncateOutput } from '../utils/truncate-output.js'
 
 const MAX_RESULTS = 200
@@ -51,10 +50,16 @@ export const grepTool: Tool = {
   async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const pattern = args.pattern as string
-    const cwd = getCwd()
-    const path = resolvePath((args.path as string) ?? '.')
-    const isProjectPath = isPathInsideProject(cwd, path)
-    const searchPath = isProjectPath ? formatProjectPath(cwd, path) : path
+    const { searchPath, cwd, isProjectPath, error } =
+      await resolveRgSearchTarget(
+        args.path as string | undefined,
+        context?.cwd,
+        context?.allowOutsideWorkspace === true
+      )
+    if (error)
+    {
+      return { output: '', error }
+    }
     const include = args.include as string | undefined
 
     const rgArgs = [

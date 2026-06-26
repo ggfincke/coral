@@ -1,7 +1,7 @@
 // src/tools/git.ts
 // git tools for status, diff, & log
 
-import type { Tool, ToolResult } from './tool.js'
+import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
 import {
   runGitCommand,
@@ -45,11 +45,11 @@ export const gitStatusTool: Tool = {
       },
     },
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const short = (args.short as boolean) ?? true
     const flags = short ? ['status', '--short'] : ['status']
-    return runGit(flags, getCwd())
+    return runGit(flags, context?.cwd ?? getCwd())
   },
 }
 
@@ -89,7 +89,7 @@ export const gitDiffTool: Tool = {
       },
     },
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const staged = args.staged as boolean | undefined
     const stat = args.stat as boolean | undefined
@@ -108,7 +108,9 @@ export const gitDiffTool: Tool = {
     if (path) flags.push('--', path)
 
     // git diff can exit 1 w/ valid output in some configs — trust stdout here
-    return runGit(flags, getCwd(), '(no output)', { allowStdoutOnError: true })
+    return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
+      allowStdoutOnError: true,
+    })
   },
 }
 
@@ -143,7 +145,7 @@ export const gitLogTool: Tool = {
       },
     },
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const count = (args.count as number) ?? 10
     const oneline = (args.oneline as boolean) ?? true
@@ -168,7 +170,7 @@ export const gitLogTool: Tool = {
     if (ref) flags.push(ref)
     if (path) flags.push('--', path)
 
-    return runGit(flags, getCwd())
+    return runGit(flags, context?.cwd ?? getCwd())
   },
 }
 
@@ -200,14 +202,15 @@ export const gitAddTool: Tool = {
       },
     },
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
+    const cwd = context?.cwd ?? getCwd()
     const all = args.all as boolean | undefined
     const paths = args.paths as string[] | undefined
 
     if (all)
     {
-      const result = await runGitCommand(['add', '-A'], getCwd())
+      const result = await runGitCommand(['add', '-A'], cwd)
       if (result.error) return result
       return { output: 'Staged all changes' }
     }
@@ -224,7 +227,7 @@ export const gitAddTool: Tool = {
       return { output: '', error: `Invalid path: ${unsafe}` }
     }
 
-    const result = await runGitCommand(['add', '--', ...paths], getCwd())
+    const result = await runGitCommand(['add', '--', ...paths], cwd)
     if (result.error) return result
     return { output: `Staged ${paths.length} path(s): ${paths.join(', ')}` }
   },
@@ -250,7 +253,7 @@ export const gitCommitTool: Tool = {
     },
     required: ['message'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const message = (args.message as string | undefined)?.trim()
     if (!message)
@@ -258,7 +261,11 @@ export const gitCommitTool: Tool = {
       return { output: '', error: 'git_commit requires a non-empty message' }
     }
 
-    return runGit(['commit', '-m', message], getCwd(), '(commit created)')
+    return runGit(
+      ['commit', '-m', message],
+      context?.cwd ?? getCwd(),
+      '(commit created)'
+    )
   },
 }
 
@@ -298,7 +305,7 @@ export const gitSwitchTool: Tool = {
     },
     required: ['branch'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const branch = (args.branch as string | undefined)?.trim()
     const create = (args.create as boolean | undefined) ?? false
@@ -321,7 +328,7 @@ export const gitSwitchTool: Tool = {
       return { output: '', error: 'git_switch startPoint requires create:true' }
     }
 
-    const cwd = getCwd()
+    const cwd = context?.cwd ?? getCwd()
 
     if (create)
     {
@@ -387,7 +394,7 @@ export const gitPushTool: Tool = {
       },
     },
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const remote = args.remote as string | undefined
     const branch = args.branch as string | undefined
@@ -421,6 +428,8 @@ export const gitPushTool: Tool = {
     if (branch) flags.push(branch)
 
     // pushes hit the network — allow more time than the default git timeout
-    return runGit(flags, getCwd(), '(pushed)', { timeout: 60_000 })
+    return runGit(flags, context?.cwd ?? getCwd(), '(pushed)', {
+      timeout: 60_000,
+    })
   },
 }

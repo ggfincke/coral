@@ -2,9 +2,8 @@
 // SQLite-backed semantic code index
 
 import Database from 'better-sqlite3'
-import { mkdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { getCoralHome } from '../utils/coral-home.js'
+import { coralHomePath } from '../utils/coral-home.js'
+import { ensureParentDir } from '../utils/fs.js'
 import { blobToVector, cosineSimilarity, vectorToBlob } from './vector.js'
 import type {
   IndexedFile,
@@ -40,7 +39,7 @@ interface SearchRow
 
 function defaultDbPath(): string
 {
-  return join(getCoralHome(), 'retrieval', 'index.sqlite')
+  return coralHomePath('retrieval', 'index.sqlite')
 }
 
 export class SqliteIndexStore implements IndexStore
@@ -49,7 +48,7 @@ export class SqliteIndexStore implements IndexStore
 
   constructor(path = defaultDbPath())
   {
-    mkdirSync(dirname(path), { recursive: true })
+    ensureParentDir(path)
     this.db = new Database(path)
     this.db.pragma('foreign_keys = ON')
     this.migrate()

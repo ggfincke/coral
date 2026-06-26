@@ -3,6 +3,7 @@
 
 import { readFile, stat } from 'node:fs/promises'
 import { resolvePath } from '../cwd.js'
+import { formatBytes } from './bytes.js'
 import { toErrorMessage } from './errors.js'
 
 const BYTES_PER_MB = 1_048_576
@@ -31,9 +32,9 @@ export interface TextFileReadFailure
 
 export type TextFileReadResult = TextFileReadSuccess | TextFileReadFailure
 
-function formatMB(bytes: number): string
+export interface TextFileReadOptions
 {
-  return (bytes / BYTES_PER_MB).toFixed(1)
+  cwd?: string
 }
 
 function isMissing(err: unknown): boolean
@@ -43,13 +44,13 @@ function isMissing(err: unknown): boolean
 
 function oversizedFailure(path: string, size: number): TextFileReadFailure
 {
-  const sizeMB = formatMB(size)
-  const limitMB = formatMB(TEXT_FILE_READ_LIMIT_BYTES)
+  const sizeLabel = formatBytes(size)
+  const limitLabel = formatBytes(TEXT_FILE_READ_LIMIT_BYTES)
   return {
     ok: false,
     path,
     reason: 'oversized',
-    message: `${path} is ${sizeMB}MB, exceeds ${limitMB}MB read limit`,
+    message: `${path} is ${sizeLabel}, exceeds ${limitLabel} read limit`,
     size,
     limit: TEXT_FILE_READ_LIMIT_BYTES,
   }
@@ -57,10 +58,11 @@ function oversizedFailure(path: string, size: number): TextFileReadFailure
 
 async function readTextFile(
   rawPath: string,
-  missingAsEmpty: boolean
+  missingAsEmpty: boolean,
+  options: TextFileReadOptions = {}
 ): Promise<TextFileReadResult>
 {
-  const path = resolvePath(rawPath)
+  const path = resolvePath(rawPath, options.cwd)
   let size: number
   try
   {
@@ -140,15 +142,17 @@ export function formatDiffSkipMessage(failure: TextFileReadFailure): string
 }
 
 export function readRequiredTextFile(
-  rawPath: string
+  rawPath: string,
+  options: TextFileReadOptions = {}
 ): Promise<TextFileReadResult>
 {
-  return readTextFile(rawPath, false)
+  return readTextFile(rawPath, false, options)
 }
 
 export function readOptionalPreviousTextFile(
-  rawPath: string
+  rawPath: string,
+  options: TextFileReadOptions = {}
 ): Promise<TextFileReadResult>
 {
-  return readTextFile(rawPath, true)
+  return readTextFile(rawPath, true, options)
 }

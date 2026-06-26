@@ -4,8 +4,13 @@
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-export function getCoralHome(): string
+function getCoralHome(): string
 {
   const override = process.env.CORAL_HOME
   return override ? resolve(override) : join(homedir(), '.coral')
+}
+
+export function coralHomePath(...segments: string[]): string
+{
+  return join(getCoralHome(), ...segments)
 }

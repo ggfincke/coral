@@ -2,11 +2,13 @@
 // surgical find/replace file edits
 
 import { writeFile } from 'node:fs/promises'
-import type { Tool, ToolResult } from './tool.js'
+import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { readFileGuarded } from './file-utils.js'
-import { resolvePath } from '../cwd.js'
+import { checkWorkspacePath } from './path-policy.js'
+import { getCwd } from '../cwd.js'
 import { applyEdit, computeDiff, describeEditMiss } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { pluralize } from '../utils/pluralize.js'
 
 export const editTool: Tool = {
   name: 'edit_file',
@@ -30,9 +32,9 @@ export const editTool: Tool = {
     },
     required: ['path', 'old_string', 'new_string'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
-    const path = resolvePath(args.path as string)
+    const cwd = context?.cwd ?? getCwd()
     const oldString = args.old_string as string
     const newString = args.new_string as string
     const replaceAll = (args.replace_all as boolean) ?? false
@@ -49,6 +51,14 @@ export const editTool: Tool = {
       }
     }
 
+    const allowed = await checkWorkspacePath(
+      cwd,
+      args.path as string | undefined,
+      context?.allowOutsideWorkspace === true
+    )
+    if (!allowed.ok) return { output: '', error: allowed.error }
+
+    const path = allowed.path
     const readResult = await readFileGuarded(path)
     if (!readResult.ok) return readResult.result
     const content = readResult.content
@@ -90,7 +100,7 @@ export const editTool: Tool = {
       ? ' (old_string matched on normalized whitespace, not verbatim — copy exact text next time)'
       : ''
     return {
-      output: `Edited ${path}: replaced ${replaced} occurrence${replaced > 1 ? 's' : ''} (${oldString.length} chars → ${newString.length} chars)${note}`,
+      output: `Edited ${path}: replaced ${pluralize(replaced, 'occurrence')} (${oldString.length} chars → ${newString.length} chars)${note}`,
       diff: computeDiff(content, updated) ?? undefined,
       repaired: fuzzy,
     }

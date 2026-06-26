@@ -17,6 +17,26 @@ export interface JsonSchema
   required?: string[]
 }
 
+type JsonSchemaProperty = JsonSchema['properties'][string]
+
+interface JsonSchemaParamEntry
+{
+  name: string
+  schema: JsonSchemaProperty
+  required: boolean
+}
+
+// zip schema properties w/ the required set for validators & prompt rendering
+export function paramEntries(schema: JsonSchema): JsonSchemaParamEntry[]
+{
+  const requiredSet = new Set(schema.required ?? [])
+  return Object.entries(schema.properties).map(([name, propSchema]) => ({
+    name,
+    schema: propSchema,
+    required: requiredSet.has(name),
+  }))
+}
+
 export interface OllamaMessage
 {
   role: 'system' | 'user' | 'assistant' | 'tool'
@@ -96,4 +116,43 @@ export interface ModelInfo
   // per-head key & value dims
   keyLength?: number
   valueLength?: number
+}
+
+// reliability-layer counters — how often the agent had to compensate for the
+// model botching a tool call (per-model telemetry for /status)
+export interface ReliabilityStats
+{
+  repairedToolCalls: number
+  nameRepairs: number
+  stallNudges: number
+  validationFailures: number
+  // edits that landed via the whitespace-tolerant fallback after old_string
+  // didn't match the file verbatim
+  editRepairs: number
+  // times the agent paused on a detected doom loop
+  doomLoopTrips: number
+  // corrective reprompts when a call-shaped turn wouldn't parse
+  reprompts: number
+  // edits a self-check flagged as wrong or inconclusive
+  verifyFlags: number
+  // failed self-checks fed back to the model for a fix attempt
+  verifyReprompts: number
+}
+
+export function makeReliabilityStats(
+  overrides: Partial<ReliabilityStats> = {}
+): ReliabilityStats
+{
+  return {
+    repairedToolCalls: 0,
+    nameRepairs: 0,
+    stallNudges: 0,
+    validationFailures: 0,
+    editRepairs: 0,
+    doomLoopTrips: 0,
+    reprompts: 0,
+    verifyFlags: 0,
+    verifyReprompts: 0,
+    ...overrides,
+  }
 }

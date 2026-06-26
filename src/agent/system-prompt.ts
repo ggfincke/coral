@@ -4,6 +4,7 @@
 import { readdirSync } from 'node:fs'
 import { basename } from 'node:path'
 import type { Tool } from '../tools/tool.js'
+import { paramEntries } from '../types/inference.js'
 import { gatherProjectContext } from './context.js'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
 import {
@@ -20,15 +21,14 @@ const IGNORED_ROOT_ENTRIES = createIgnoredEntrySet()
 // format a single tool into a readable block
 function formatTool(tool: Tool): string
 {
-  const { properties, required = [] } = tool.parameters
-  const requiredSet = new Set(required)
-
-  const paramLines = Object.entries(properties).map(([name, schema]) =>
-  {
-    const req = requiredSet.has(name) ? ' (required)' : ' (optional)'
-    const desc = schema.description ? ` — ${schema.description}` : ''
-    return `    - ${name}: ${schema.type}${req}${desc}`
-  })
+  const paramLines = paramEntries(tool.parameters).map(
+    ({ name, schema, required }) =>
+    {
+      const req = required ? ' (required)' : ' (optional)'
+      const desc = schema.description ? ` — ${schema.description}` : ''
+      return `    - ${name}: ${schema.type}${req}${desc}`
+    }
+  )
 
   return `- **${tool.name}**: ${tool.description}\n  Parameters:\n${paramLines.join('\n')}`
 }

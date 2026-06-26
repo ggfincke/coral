@@ -18,10 +18,10 @@ export function setCwd(dir: string): void
   cwd = resolve(dir)
 }
 
-// resolve a path against the working directory
-// absolute paths pass through unchanged, relative paths are resolved against CWD
-export function resolvePath(p: string): string
+// resolve a path against a working directory
+// absolute paths pass through unchanged, relative paths use the provided cwd
+export function resolvePath(p: string, baseCwd = cwd): string
 {
   if (isAbsolute(p)) return p
-  return resolve(cwd, p)
+  return resolve(baseCwd, p)
 }

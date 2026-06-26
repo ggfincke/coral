@@ -2,8 +2,7 @@
 // unit test for unified diff generation
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { setCwd } from '../src/cwd.js'
@@ -14,24 +13,16 @@ import {
   previewToolDiff,
 } from '../src/utils/diff.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../src/utils/file-read.js'
+import { makeTempDirPool } from './helpers/temp.js'
 
-const tempDirs: string[] = []
+const { tempDir, cleanup } = makeTempDirPool({ autoCleanup: false })
 const originalCwd = process.cwd()
 
 after(async () =>
 {
   setCwd(originalCwd)
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
+  await cleanup()
 })
-
-async function tempDir(prefix: string): Promise<string>
-{
-  const dir = await mkdtemp(join(tmpdir(), prefix))
-  tempDirs.push(dir)
-  return dir
-}
 
 test('generates unified diffs for the major shapes', () =>
 {
@@ -265,6 +256,55 @@ test('previewToolDiff reports oversized previous content without diffing', async
   if (preview?.kind === 'message')
   {
     assert.match(preview.message, /Preview skipped:/)
-    assert.match(preview.message, /exceeds 1\.0MB read limit/)
+    assert.match(preview.message, /exceeds 1\.0 MB read limit/)
   }
+})
+
+test('previewToolDiff uses request cwd and does not leak off-workspace content', async () =>
+{
+  const globalDir = await tempDir('coral-preview-global-')
+  const agentDir = await tempDir('coral-preview-agent-')
+  const outside = await tempDir('coral-preview-outside-')
+  await writeFile(join(globalDir, 'same.txt'), 'global secret\n', 'utf-8')
+  await writeFile(join(agentDir, 'same.txt'), 'agent visible\n', 'utf-8')
+  await writeFile(join(outside, 'secret.txt'), 'SECRET_VALUE\n', 'utf-8')
+
+  setCwd(globalDir)
+
+  const scoped = await previewToolDiff(
+    'write_file',
+    {
+      path: 'same.txt',
+      content: 'replacement\n',
+    },
+    { cwd: agentDir }
+  )
+  const outsideWrite = await previewToolDiff(
+    'write_file',
+    {
+      path: join(outside, 'secret.txt'),
+      content: 'replacement\n',
+    },
+    { cwd: agentDir }
+  )
+  const outsideEdit = await previewToolDiff(
+    'edit_file',
+    {
+      path: join(outside, 'secret.txt'),
+      old_string: 'SECRET_VALUE',
+      new_string: 'replacement',
+    },
+    { cwd: agentDir }
+  )
+
+  assert.equal(scoped?.kind, 'diff')
+  if (scoped?.kind === 'diff')
+  {
+    assert.ok(scoped.diff.includes('-agent visible'))
+    assert.ok(!scoped.diff.includes('global secret'))
+  }
+  assert.equal(outsideWrite?.kind, 'message')
+  assert.equal(outsideEdit?.kind, 'message')
+  assert.ok(!JSON.stringify(outsideWrite).includes('SECRET_VALUE'))
+  assert.ok(!JSON.stringify(outsideEdit).includes('SECRET_VALUE'))
 })

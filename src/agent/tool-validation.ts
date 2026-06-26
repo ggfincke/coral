@@ -2,6 +2,8 @@
 // validate & coerce tool args against the tool's JSON schema pre-dispatch
 
 import type { Tool } from '../tools/index.js'
+import { paramEntries } from '../types/inference.js'
+import { ellipsize } from '../utils/ellipsize.js'
 import { tryParseJson } from '../utils/json.js'
 import { isPlainObject } from '../utils/guards.js'
 
@@ -22,7 +24,8 @@ export function validateToolArgs(
 {
   const problems: string[] = []
   const coerced: Record<string, unknown> = { ...args }
-  const { properties, required = [] } = tool.parameters
+  const entries = paramEntries(tool.parameters)
+  const schemaByName = new Map(entries.map((e) => [e.name, e.schema]))
 
   // treat null/undefined as omitted so optional params w/ null don't fail
   for (const [key, value] of Object.entries(coerced))
@@ -30,17 +33,17 @@ export function validateToolArgs(
     if (value === null || value === undefined) delete coerced[key]
   }
 
-  for (const key of required)
+  for (const { name, required } of entries)
   {
-    if (!(key in coerced))
+    if (required && !(name in coerced))
     {
-      problems.push(`missing required parameter '${key}'`)
+      problems.push(`missing required parameter '${name}'`)
     }
   }
 
   for (const [key, value] of Object.entries(coerced))
   {
-    const schema = properties[key]
+    const schema = schemaByName.get(key)
     // tolerate extra params — tools read named fields & ignore the rest
     if (!schema) continue
 
@@ -142,11 +145,11 @@ function coerceValue(
     }
 
     case 'object':
-      if (isPlainObject(value))
-      {
-        return { ok: true, value }
-      }
-      return { ok: false }
+    {
+      const obj = typeof value === 'string' ? tryParseJson(value) : value
+      if (!isPlainObject(obj)) return { ok: false }
+      return { ok: true, value: obj }
+    }
 
     default:
       // unknown schema type — pass through rather than block the call
@@ -163,13 +166,8 @@ function article(type: string): string
 
 function describe(value: unknown): string
 {
-  if (typeof value === 'string') return `string "${truncate(value)}"`
+  if (typeof value === 'string') return `string "${ellipsize(value, 40)}"`
   if (Array.isArray(value)) return 'an array'
   if (value === null) return 'null'
-  return `${typeof value} ${truncate(JSON.stringify(value) ?? String(value))}`
-}
-
-function truncate(text: string): string
-{
-  return text.length > 40 ? `${text.slice(0, 40)}...` : text
+  return `${typeof value} ${ellipsize(JSON.stringify(value) ?? String(value), 40)}`
 }

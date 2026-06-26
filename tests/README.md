@@ -31,14 +31,17 @@ We intentionally do not test:
 # run Node tests
 npm test
 
-# compile-check the Python dev-tool scripts
+# compile-check Python dev tools and run focused dev-tool checks
 npm run check:dev-tools
+
+# typecheck TypeScript eval and benchmark scripts
+npm run typecheck:scripts
 
 # run in watch mode
 npm run test:watch
 
 # run a specific test file
-node --import tsx --test tests/agent.test.ts
+node --import tsx --test tests/agent/agent.test.ts
 ```
 
 ## Adding Tests
