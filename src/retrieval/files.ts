@@ -2,27 +2,20 @@
 // project file discovery for semantic indexing
 
 import { createHash } from 'node:crypto'
-import { readdir, readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
-import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
+import { readFile } from 'node:fs/promises'
 import {
-  compareProjectTreeEntries,
-  formatProjectPath,
-  shouldIncludeProjectTreeEntry,
-} from '../shared/project-tree.js'
+  iterateProjectFiles,
+  type ProjectFile,
+} from '../shared/project-files.js'
+import { isLikelyTextPath } from '../shared/text-paths.js'
 import type { SourceFile } from './types.js'
 
 const MAX_INDEXABLE_FILE_BYTES = 512 * 1024
 const MAX_PROJECT_FILES = 2_000
 const TEXT_SAMPLE_BYTES = 4_096
-const IGNORED_ENTRIES = createIgnoredEntrySet(['.coral', '.coral-retrieval'])
+const RETRIEVAL_IGNORED_ENTRIES = ['.coral', '.coral-retrieval']
 
-export interface ProjectFileStat
-{
-  path: string
-  size: number
-  mtimeMs: number
-}
+export type ProjectFileStat = Pick<ProjectFile, 'path' | 'size' | 'mtimeMs'>
 
 export interface CollectedFiles
 {
@@ -41,11 +34,10 @@ function isProbablyText(buffer: Buffer): boolean
 }
 
 async function readSourceFile(
-  fileStat: ProjectFileStat,
-  absolutePath: string
+  fileStat: ProjectFile
 ): Promise<SourceFile | null>
 {
-  const buffer = await readFile(absolutePath)
+  const buffer = await readFile(fileStat.absolutePath)
   if (!isProbablyText(buffer)) return null
 
   return {
@@ -65,70 +57,26 @@ export async function collectIndexableFiles(
 {
   const changed: SourceFile[] = []
   const unchangedPaths: string[] = []
-  let fileCount = 0
 
-  async function walk(dir: string): Promise<void>
+  // lazy walk: stop once MAX_PROJECT_FILES are accepted (a binary file w/ a
+  // text extension is dropped by readSourceFile & must not consume a slot)
+  for await (const file of iterateProjectFiles(cwd, {
+    maxFileBytes: MAX_INDEXABLE_FILE_BYTES,
+    ignoredEntries: RETRIEVAL_IGNORED_ENTRIES,
+    includePath: isLikelyTextPath,
+  }))
   {
-    if (fileCount >= MAX_PROJECT_FILES) return
+    if (changed.length + unchangedPaths.length >= MAX_PROJECT_FILES) break
 
-    let entries
-    try
+    if (isCurrent(file))
     {
-      entries = await readdir(dir, { withFileTypes: true })
-    }
-    catch
-    {
-      return
+      unchangedPaths.push(file.path)
+      continue
     }
 
-    entries.sort((a, b) =>
-      compareProjectTreeEntries(
-        { name: a.name, isDir: a.isDirectory(), isSymlink: a.isSymbolicLink() },
-        { name: b.name, isDir: b.isDirectory(), isSymlink: b.isSymbolicLink() }
-      )
-    )
-
-    for (const entry of entries)
-    {
-      if (fileCount >= MAX_PROJECT_FILES) return
-      if (!shouldIncludeProjectTreeEntry(entry.name, IGNORED_ENTRIES)) continue
-      if (entry.isSymbolicLink()) continue
-
-      const path = join(dir, entry.name)
-
-      if (entry.isDirectory())
-      {
-        await walk(path)
-        continue
-      }
-
-      if (!entry.isFile()) continue
-
-      const info = await stat(path)
-      if (!info.isFile() || info.size > MAX_INDEXABLE_FILE_BYTES) continue
-
-      const fileStat: ProjectFileStat = {
-        path: formatProjectPath(cwd, path),
-        size: info.size,
-        mtimeMs: info.mtimeMs,
-      }
-
-      if (isCurrent(fileStat))
-      {
-        unchangedPaths.push(fileStat.path)
-        fileCount++
-        continue
-      }
-
-      const source = await readSourceFile(fileStat, path)
-      if (source)
-      {
-        changed.push(source)
-        fileCount++
-      }
-    }
+    const source = await readSourceFile(file)
+    if (source) changed.push(source)
   }
 
-  await walk(cwd)
   return { changed, unchangedPaths }
 }

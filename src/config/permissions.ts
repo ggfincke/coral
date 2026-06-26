@@ -71,10 +71,42 @@ function sanitizePermissions(raw: unknown): ToolPermissions
   return result
 }
 
+function stricterPolicy(
+  current: PermissionPolicy,
+  project: PermissionPolicy
+): PermissionPolicy
+{
+  const rank: Record<PermissionPolicy, number> = {
+    always_allow: 0,
+    require_approval: 1,
+    always_deny: 2,
+  }
+
+  return rank[project] > rank[current] ? project : current
+}
+
+function applyProjectPermissions(
+  base: ToolPermissions,
+  project: ToolPermissions
+): ToolPermissions
+{
+  const result = { ...base }
+
+  for (const [toolName, policy] of Object.entries(project))
+  {
+    result[toolName] = stricterPolicy(
+      result[toolName] ?? 'require_approval',
+      policy
+    )
+  }
+
+  return result
+}
+
 // resolve the effective permission config by loading:
 // 1. built-in defaults
-// 2. user-level ~/.coral.json (overrides defaults)
-// 3. project-level .coral.json in CWD (overrides user-level)
+// 2. user-level ~/.coral.json (may loosen or tighten defaults)
+// 3. project-level .coral.json in CWD (tightens only; never loosens)
 export function resolvePermissions(cwd: string): ToolPermissions
 {
   const userConfig = loadUserConfig()
@@ -83,7 +115,10 @@ export function resolvePermissions(cwd: string): ToolPermissions
   const userPerms = sanitizePermissions(userConfig.permissions)
   const projectPerms = sanitizePermissions(projectConfig.permissions)
 
-  return { ...defaultToolPermissions(), ...userPerms, ...projectPerms }
+  return applyProjectPermissions(
+    { ...defaultToolPermissions(), ...userPerms },
+    projectPerms
+  )
 }
 
 // get the policy for a specific tool — falls back to require_approval for unknown tools
