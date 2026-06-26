@@ -29,15 +29,25 @@ function requireFlagValue(argv: string[], index: number, flag: string): string
   return value
 }
 
-// fail loudly on a non-positive or NaN numeric flag (e.g. a typo'd value).
-// guards reps/maxIterations/timeoutMs from silently producing bogus reports
-function requirePositive(value: number | undefined, flag: string): void
+// fail loudly on a non-positive or NaN numeric flag
+function requirePositiveNumber(value: number, flag: string): number
 {
-  if (value === undefined) return
   if (!Number.isFinite(value) || value <= 0)
   {
     fail(`${flag} must be a positive number`)
   }
+  return value
+}
+
+// reject fractional loop bounds before the harness can mislabel reports
+function requirePositiveInteger(value: number, flag: string): number
+{
+  requirePositiveNumber(value, flag)
+  if (!Number.isInteger(value))
+  {
+    fail(`${flag} must be a positive integer`)
+  }
+  return value
 }
 
 // coerce a --think flag value to the EvalOptions think type
@@ -63,9 +73,28 @@ function parseThink(value: string): EvalOptions['think']
   fail('--think must be one of low, medium, high, on, off, true, or false')
 }
 
-function parseNumberFlag(argv: string[], index: number, flag: string): number
+function parsePositiveNumberFlag(
+  argv: string[],
+  index: number,
+  flag: string
+): number
 {
-  return Number(requireFlagValue(argv, index, flag))
+  return requirePositiveNumber(
+    Number(requireFlagValue(argv, index, flag)),
+    flag
+  )
+}
+
+function parsePositiveIntegerFlag(
+  argv: string[],
+  index: number,
+  flag: string
+): number
+{
+  return requirePositiveInteger(
+    Number(requireFlagValue(argv, index, flag)),
+    flag
+  )
 }
 
 function printUsageAndExit(): never
@@ -112,7 +141,7 @@ async function main(): Promise<void>
         i++
         break
       case '--reps':
-        opts.reps = parseNumberFlag(argv, i, arg)
+        opts.reps = parsePositiveIntegerFlag(argv, i, arg)
         i++
         break
       case '--task':
@@ -120,11 +149,11 @@ async function main(): Promise<void>
         i++
         break
       case '--max-iterations':
-        opts.maxIterations = parseNumberFlag(argv, i, arg)
+        opts.maxIterations = parsePositiveIntegerFlag(argv, i, arg)
         i++
         break
       case '--timeout':
-        opts.timeoutMs = parseNumberFlag(argv, i, arg)
+        opts.timeoutMs = parsePositiveNumberFlag(argv, i, arg)
         i++
         break
       case '--think':
@@ -156,11 +185,6 @@ async function main(): Promise<void>
   {
     printUsageAndExit()
   }
-
-  // reject NaN/non-positive numeric flags so a typo can't fake a green report
-  requirePositive(opts.reps, '--reps')
-  requirePositive(opts.maxIterations, '--max-iterations')
-  requirePositive(opts.timeoutMs, '--timeout')
 
   const report = await runEval(models, resolveTasks(taskFilter), opts)
 

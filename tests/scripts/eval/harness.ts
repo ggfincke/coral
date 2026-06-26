@@ -111,7 +111,8 @@ export async function runRep(
     // seed the scratch dir before the agent sees it
     await task.setup(dir)
 
-    // constructor calls setCwd(dir) (GLOBAL) — reps must run sequentially
+    // reps run sequentially — one local runner serves every rep, so parallel
+    // reps would thrash model load/unload on the shared host
     const agent = new Agent(model, host, dir, {
       maxIterations,
       think: opts.think,
@@ -337,8 +338,9 @@ export function aggregateModel(
   }
 }
 
-// run every model over every task. tasks run SEQUENTIALLY (Agent.setCwd is
-// global), keeping each model warm across its tasks & disposing only on switch
+// run every model over every task. tasks run SEQUENTIALLY because a single local
+// Ollama runner serves every rep — parallel reps would thrash model load/unload —
+// keeping each model warm across its tasks & disposing only on switch
 export async function runEval(
   models: string[],
   tasks: EvalTask[],

@@ -154,7 +154,7 @@ test('restricted toolsets cannot reach tools outside their subset', async () =>
       ],
       [{ message: { role: 'assistant', content: 'done' }, done: true }],
     ],
-    { tools: subagentTools, registerSubagent: false }
+    { tools: subagentTools }
   )
 
   const seenResults: string[] = []

@@ -2,6 +2,7 @@
 // unit tests for the eval harness graders & aggregation (no live model)
 
 import { strict as assert } from 'node:assert'
+import { execFileSync } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -81,6 +82,54 @@ function requireTask(id: string): EvalTask
   assert.ok(task)
   return task
 }
+
+// run the eval CLI in a child process & capture its exit code + stderr. every
+// case here fails during arg parsing, so the harness never reaches a live model
+function runEvalCli(args: string[]): { code: number; stderr: string }
+{
+  try
+  {
+    execFileSync(
+      process.execPath,
+      ['--import', 'tsx', 'tests/scripts/eval/run.ts', ...args],
+      { encoding: 'utf-8', stdio: 'pipe' }
+    )
+    return { code: 0, stderr: '' }
+  }
+  catch (err)
+  {
+    const failure = err as { status?: number; stderr?: string }
+    return { code: failure.status ?? -1, stderr: failure.stderr ?? '' }
+  }
+}
+
+describe('eval CLI argument parsing', () =>
+{
+  it('fails fast on malformed flags, unknown flags, and unknown task ids', () =>
+  {
+    const fractional = runEvalCli(['--reps', '1.5', 'fake-model'])
+    assert.equal(fractional.code, 1)
+    assert.match(fractional.stderr, /--reps must be a positive integer/)
+
+    assert.match(
+      runEvalCli(['--reps', '0', 'fake-model']).stderr,
+      /--reps must be a positive number/
+    )
+    assert.match(
+      runEvalCli(['--think', 'bogus', 'fake-model']).stderr,
+      /--think must be one of/
+    )
+    assert.match(
+      runEvalCli(['--task', 'nope', 'fake-model']).stderr,
+      /unknown task id: nope/
+    )
+    assert.match(
+      runEvalCli(['--bogus', 'fake-model']).stderr,
+      /unknown flag: --bogus/
+    )
+    assert.match(runEvalCli(['--reps']).stderr, /--reps requires a value/)
+  })
+})
 
 describe('answerContains', () =>
 {

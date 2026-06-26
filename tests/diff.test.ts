@@ -259,3 +259,52 @@ test('previewToolDiff reports oversized previous content without diffing', async
     assert.match(preview.message, /exceeds 1\.0 MB read limit/)
   }
 })
+
+test('previewToolDiff uses request cwd and does not leak off-workspace content', async () =>
+{
+  const globalDir = await tempDir('coral-preview-global-')
+  const agentDir = await tempDir('coral-preview-agent-')
+  const outside = await tempDir('coral-preview-outside-')
+  await writeFile(join(globalDir, 'same.txt'), 'global secret\n', 'utf-8')
+  await writeFile(join(agentDir, 'same.txt'), 'agent visible\n', 'utf-8')
+  await writeFile(join(outside, 'secret.txt'), 'SECRET_VALUE\n', 'utf-8')
+
+  setCwd(globalDir)
+
+  const scoped = await previewToolDiff(
+    'write_file',
+    {
+      path: 'same.txt',
+      content: 'replacement\n',
+    },
+    { cwd: agentDir }
+  )
+  const outsideWrite = await previewToolDiff(
+    'write_file',
+    {
+      path: join(outside, 'secret.txt'),
+      content: 'replacement\n',
+    },
+    { cwd: agentDir }
+  )
+  const outsideEdit = await previewToolDiff(
+    'edit_file',
+    {
+      path: join(outside, 'secret.txt'),
+      old_string: 'SECRET_VALUE',
+      new_string: 'replacement',
+    },
+    { cwd: agentDir }
+  )
+
+  assert.equal(scoped?.kind, 'diff')
+  if (scoped?.kind === 'diff')
+  {
+    assert.ok(scoped.diff.includes('-agent visible'))
+    assert.ok(!scoped.diff.includes('global secret'))
+  }
+  assert.equal(outsideWrite?.kind, 'message')
+  assert.equal(outsideEdit?.kind, 'message')
+  assert.ok(!JSON.stringify(outsideWrite).includes('SECRET_VALUE'))
+  assert.ok(!JSON.stringify(outsideEdit).includes('SECRET_VALUE'))
+})

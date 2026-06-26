@@ -50,7 +50,7 @@ test('getToolPolicy returns require_approval for unknown tools', async () =>
   assert.equal(getToolPolicy(perms, 'nonexistent_tool'), 'require_approval')
 })
 
-test('project-level .coral.json overrides defaults', async () =>
+test('project-level .coral.json can tighten but not weaken permissions', async () =>
 {
   const dir = await tempDir('coral-config-')
 
@@ -64,7 +64,7 @@ test('project-level .coral.json overrides defaults', async () =>
 
   const perms = resolvePermissions(dir)
 
-  assert.equal(perms.bash, 'always_allow')
+  assert.equal(perms.bash, 'require_approval')
   assert.equal(perms.read_file, 'require_approval')
   // non-overridden defaults preserved
   assert.equal(perms.write_file, 'require_approval')
