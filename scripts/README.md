@@ -10,12 +10,14 @@ participate in the shipped Node runtime.
 
 ```bash
 npm run check:dev-tools
+npm run typecheck:scripts
 npm run sessions:analyze
 npm run reference:inventory
 ```
 
-`check:dev-tools` is a syntax-only compile gate for the Python dev-tool
-sources.
+`check:dev-tools` compiles the Python dev-tool sources, runs focused dev-tool
+regressions, and checks analyzer constants against runtime policy defaults.
+`typecheck:scripts` typechecks the TypeScript eval and benchmark entrypoints.
 
 Direct invocations are also supported:
 
