@@ -2,11 +2,11 @@
 // session restore/persist helpers for the TUI shell
 
 import { useCallback, useRef, type MutableRefObject } from 'react'
-import { getCwd } from '../cwd.js'
 import type { Agent } from '../agent/agent.js'
 import { getTodos } from '../tools/todo-store.js'
 import {
   createSession,
+  isValidSessionId,
   loadSession,
   saveSession,
   type SessionData,
@@ -21,7 +21,11 @@ export function useSessionPersistence(resumeSessionId?: string): {
   persistSession: (agent: Agent) => SessionMeta | null
 }
 {
-  const sessionIdRef = useRef<string | null>(resumeSessionId ?? null)
+  const sessionIdRef = useRef<string | null>(
+    resumeSessionId && isValidSessionId(resumeSessionId)
+      ? resumeSessionId
+      : null
+  )
   const sessionMetaRef = useRef<SessionMeta | null>(null)
   const resumeSessionRef = useRef<SessionData | null | undefined>(undefined)
 
@@ -50,7 +54,7 @@ export function useSessionPersistence(resumeSessionId?: string): {
     {
       const messages = agent.getMessages()
       const model = agent.getModel()
-      const cwd = getCwd()
+      const cwd = agent.getCwd()
       const todos = getTodos()
       const metaHint = {
         compactionCount: agent.getCompactionCount(),

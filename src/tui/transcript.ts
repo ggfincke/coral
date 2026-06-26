@@ -11,6 +11,7 @@ import { getThemeGeneration, style } from './theme.js'
 import { SOFT_WRAP_OPTIONS, wrapLines } from './wrap.js'
 import { allTools } from '../tools/index.js'
 import { ellipsize } from '../utils/ellipsize.js'
+import { sanitizeUntrustedText, sanitizeStyledText } from './sanitize.js'
 
 // block types w/ richer data for tool calls & results
 
@@ -115,9 +116,9 @@ export function summarizeToolArgs(
 ): string
 {
   const summarize = TOOLS_BY_NAME.get(toolName)?.display?.summarize
-  if (summarize) return summarize(args)
+  if (summarize) return sanitizeUntrustedText(summarize(args))
   const json = JSON.stringify(args)
-  return ellipsize(json, 60)
+  return ellipsize(sanitizeUntrustedText(json), 60)
 }
 
 function getCachedBlockLines(
@@ -174,6 +175,19 @@ function formatAssistantText(content: string, width: number): string[]
   ]
 }
 
+// live text updates every frame; keep it cheap until finalized
+function formatStreamingAssistantText(
+  content: string,
+  width: number
+): string[]
+{
+  return [
+    '',
+    ` ${style('primary').bold('●')} ${style('muted')('Coral')}`,
+    ...wrapLines(sanitizeUntrustedText(content), width - 3, '   '),
+  ]
+}
+
 // styled tool-arg summary — bash gets a '$ ' prefix, others dimmed
 function formatToolArgDisplay(
   toolName: string,
@@ -193,7 +207,7 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
   {
     case 'user':
     {
-      const contentLines = block.content.split('\n')
+      const contentLines = sanitizeUntrustedText(block.content).split('\n')
       const lines: string[] = []
       lines.push('')
       lines.push(
@@ -215,7 +229,11 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
       const border = style('thinking')('│')
       lines.push('')
       lines.push(`   ${border} ${style('thinking').dim('Thinking')}`)
-      const thinkLines = wrapLines(chalk.dim(block.content), width - 6, '')
+      const thinkLines = wrapLines(
+        chalk.dim(sanitizeUntrustedText(block.content)),
+        width - 6,
+        ''
+      )
       for (const line of thinkLines)
       {
         lines.push(`   ${border} ${line}`)
@@ -257,7 +275,13 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
       const lines: string[] = []
       lines.push('')
       lines.push(` ${style('error').bold('✗')} ${style('error')('Error')}`)
-      lines.push(...wrapLines(style('error')(block.content), width - 3, '   '))
+      lines.push(
+        ...wrapLines(
+          style('error')(sanitizeUntrustedText(block.content)),
+          width - 3,
+          '   '
+        )
+      )
       return lines
     }
 
@@ -265,7 +289,9 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
     {
       const lines: string[] = []
       lines.push('')
-      for (const line of block.content.split('\n'))
+      // preserve app-built chalk styling while stripping dangerous controls —
+      // system blocks carry styled formatter output (/status, /theme, etc.)
+      for (const line of sanitizeStyledText(block.content).split('\n'))
       {
         lines.push(`   ${chalk.dim(line)}`)
       }
@@ -302,7 +328,7 @@ function formatToolResultLines(
   const textStyle = isError ? style('error') : chalk.dim
   const border = isError ? style('error')('│') : chalk.dim('│')
   const maxWidth = Math.max(width - 8, 12)
-  const contentLines = content.split('\n')
+  const contentLines = sanitizeUntrustedText(content).split('\n')
   const result: string[] = []
 
   for (const raw of contentLines)
@@ -385,7 +411,7 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
   // render streaming assistant text after reasoning
   if (streaming)
   {
-    transcript.push(...formatAssistantText(streaming, width))
+    transcript.push(...formatStreamingAssistantText(streaming, width))
   }
   else if (showWaitingIndicator)
   {

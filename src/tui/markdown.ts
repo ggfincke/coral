@@ -6,6 +6,7 @@ import { highlight, supportsLanguage } from 'cli-highlight'
 import { lexer, type Token, type Tokens } from 'marked'
 import { codeSpanStyle, headingStyle, style } from './theme.js'
 import { padEnd, visibleWidth } from './wrap.js'
+import { sanitizeUntrustedText } from './sanitize.js'
 
 function prefixLines(
   lines: string[],
@@ -239,6 +240,7 @@ function renderBlocks(tokens: Token[], indent: number): string[]
 
 export function renderMarkdownToAnsi(markdown: string): string
 {
-  if (!markdown.trim()) return ''
-  return renderBlocks(lexer(markdown), 0).join('\n')
+  const sanitized = sanitizeUntrustedText(markdown)
+  if (!sanitized.trim()) return ''
+  return renderBlocks(lexer(sanitized), 0).join('\n')
 }

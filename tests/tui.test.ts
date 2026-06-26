@@ -20,10 +20,15 @@ import {
   formatTuiResumeResolution,
   formatTuiSessionList,
 } from '../src/tui/command-output.js'
-import type { CompactionResult } from '../src/agent/agent.js'
+import { dispatchCommand, type CommandContext } from '../src/tui/commands.js'
+import type { Agent, CompactionResult } from '../src/agent/agent.js'
+import type { IndexStore } from '../src/retrieval/types.js'
 import type { ResumeSessionResolution } from '../src/session/resume.js'
 import type { SessionMeta } from '../src/session/store.js'
+import { restoredSessionForPickerSelection } from '../src/tui/model-activation.js'
+import { makeFakeAgent } from './helpers/agent-harness.js'
 import { makeSessionMeta } from './helpers/session.js'
+import { makeTempDirPool } from './helpers/temp.js'
 
 function plain(lines: string | string[]): string
 {
@@ -32,6 +37,38 @@ function plain(lines: string | string[]): string
 
 const makeSession = (id: string, title?: string): SessionMeta =>
   makeSessionMeta(title === undefined ? { id } : { id, title })
+const { tempDir } = makeTempDirPool()
+
+function makeCommandContext(
+  agent: Partial<Agent>,
+  output: OutputBlock[] = []
+): CommandContext
+{
+  return {
+    agent: agent as Agent,
+    activeModel: 'test-model',
+    host: 'http://localhost:11434',
+    yolo: false,
+    sessionLabelId: 'abcd1234',
+    pushOutput: (...blocks) => output.push(...blocks),
+    clearSession()
+    {},
+    reopenModelPicker()
+    {},
+    switchModel: async () =>
+    {},
+    getCwd: () => '/tmp/project',
+    setYolo()
+    {},
+    exitApp()
+    {},
+    resumeSession: () => false,
+    saveCurrentSession: () => 'abcd1234',
+    renameCurrentSession: () => false,
+    notifyThemeChanged()
+    {},
+  }
+}
 
 test('buildTranscriptLines renders conversation and tool results in scrollable order', () =>
 {
@@ -102,6 +139,69 @@ test('buildTranscriptLines hides saved reasoning while preserving a live hint', 
   assert.ok(liveHiddenLines.some((line) => line.includes('ctrl+t to show')))
 })
 
+test('buildTranscriptLines neutralizes untrusted terminal control sequences', () =>
+{
+  const blocks: OutputBlock[] = [
+    { type: 'assistant', content: 'hello \x1b]52;c;AAAA\x07 world' },
+    { type: 'system', content: 'system\x1b]52;c;CCCC\x07 note\x1b[2J' },
+    {
+      type: 'tool_result',
+      toolName: 'read_file',
+      content: 'before\x1b[2Jafter',
+    },
+    { type: 'diff', unified: '@@ -1,1 +1,1 @@\n-\x1b[2Jold\n+new' },
+  ]
+
+  const rendered = buildTranscriptLines({
+    blocks,
+    streaming: 'live\x1b]52;c;BBBB\x07 text',
+    width: 80,
+  }).join('\n')
+
+  assert.ok(!rendered.includes('\x1b]52'))
+  assert.ok(!rendered.includes('\x1b[2J'))
+  assert.ok(!plain(rendered).includes('\x07'))
+  assert.ok(plain(rendered).includes('hello  world'))
+  assert.ok(plain(rendered).includes('system note'))
+  assert.ok(plain(rendered).includes('beforeafter'))
+})
+
+test('buildTranscriptLines keeps app SGR styling in system blocks but strips controls', () =>
+{
+  const rendered = buildTranscriptLines({
+    blocks: [
+      {
+        type: 'system',
+        content: 'plain \x1b[36mcolored\x1b[39m end\x1b[2J\x1b]52;c;DDDD\x07',
+      },
+    ],
+    width: 80,
+  }).join('\n')
+
+  // SGR color codes from app formatters survive
+  assert.ok(rendered.includes('\x1b[36m'))
+  assert.ok(rendered.includes('\x1b[39m'))
+  // dangerous screen/clipboard controls are removed
+  assert.ok(!rendered.includes('\x1b[2J'))
+  assert.ok(!rendered.includes('\x1b]52'))
+  assert.ok(plain(rendered).includes('plain colored end'))
+})
+
+test('buildTranscriptLines leaves streaming markdown unparsed until finalized', () =>
+{
+  const rendered = plain(
+    buildTranscriptLines({
+      blocks: [],
+      streaming: '## Live\n\n```ts\nconst value = 1\n```',
+      width: 80,
+    })
+  )
+
+  assert.ok(rendered.includes('## Live'))
+  assert.ok(rendered.includes('```ts'))
+  assert.ok(rendered.includes('const value = 1'))
+})
+
 test('session list formatters share rows across CLI and TUI surfaces', () =>
 {
   const sessions = [makeSession('abcd1234', 'Inspect files')]
@@ -117,6 +217,26 @@ test('session list formatters share rows across CLI and TUI surfaces', () =>
   assert.ok(tui.includes('● abcd1234  test-model'))
   assert.ok(tui.includes('Inspect files'))
   assert.ok(tui.includes('Resume with /resume <id>'))
+})
+
+test('session list formatters sanitize session identifiers and models', () =>
+{
+  const sessions = [
+    makeSessionMeta({
+      id: 'abcd1234\x1b[2J',
+      model: 'test-model\x1b]52;c;AAAA\x07',
+      title: 'Unsafe\x1b[2J title',
+    }),
+  ]
+  const cli = formatCliSessionList(sessions)
+  const tui = formatTuiSessionList(sessions, null)
+
+  assert.ok(!cli.includes('\x1b[2J'))
+  assert.ok(!cli.includes('\x1b]52'))
+  assert.ok(!tui.includes('\x1b[2J'))
+  assert.ok(!tui.includes('\x1b]52'))
+  assert.ok(plain(cli).includes('abcd1234  test-model'))
+  assert.ok(plain(tui).includes('abcd1234  test-model'))
 })
 
 test('resume resolution formatter covers current, missing, and ambiguous states', () =>
@@ -138,6 +258,26 @@ test('resume resolution formatter covers current, missing, and ambiguous states'
   assert.ok(missing.includes('Session not found: missing'))
   assert.ok(missing.includes('/sessions'))
   assert.ok(plain(formatTuiResumeResolution(ambiguous)).includes('abcd1234'))
+
+  const unavailable = plain(
+    formatTuiResumeResolution({
+      type: 'unavailable',
+      session: makeSessionMeta({ id: 'feedface', cwd: '/missing/project' }),
+    })
+  )
+  assert.ok(unavailable.includes('Session unavailable: feedface'))
+  assert.ok(unavailable.includes('/missing/project'))
+})
+
+test('model picker selection uses null to suppress stale resume restore', () =>
+{
+  const session = {
+    meta: makeSessionMeta({ id: 'abcddcba' }),
+    messages: [{ role: 'user' as const, content: 'old' }],
+  }
+
+  assert.equal(restoredSessionForPickerSelection(true, session), null)
+  assert.equal(restoredSessionForPickerSelection(false, session), session)
 })
 
 test('permission and compaction formatters preserve command copy', () =>
@@ -191,4 +331,145 @@ test('approval and confirm boxes share framed prompt rendering', () =>
   assert.ok(confirm.includes('confirm'))
   assert.ok(confirm.includes('Continue anyway?'))
   assert.ok(confirm.includes('(y) continue  (n) stop'))
+})
+
+test('dispatchCommand persists after successful manual compaction', async () =>
+{
+  const compacted: CompactionResult = {
+    type: 'summarized',
+    beforeMessages: 8,
+    afterMessages: 4,
+    beforeTokens: 900,
+    afterTokens: 300,
+  }
+  const output: OutputBlock[] = []
+  let saves = 0
+
+  const ctx = makeCommandContext(
+    {
+      getMessageCount: () => 8,
+      forceCompact: async () => compacted,
+    },
+    output
+  )
+  ctx.saveCurrentSession = () =>
+  {
+    saves += 1
+    return 'abcd1234'
+  }
+
+  assert.equal(await dispatchCommand('/compact', ctx), true)
+  assert.equal(saves, 1)
+  assert.ok(
+    plain(
+      output
+        .filter(
+          (block): block is Extract<OutputBlock, { type: 'system' }> =>
+            block.type === 'system'
+        )
+        .map((block) => block.content)
+    ).includes('Context compacted')
+  )
+})
+
+test('dispatchCommand does not save interrupted manual compaction', async () =>
+{
+  const dir = await tempDir('coral-tui-compact-abort-')
+  const { agent } = makeFakeAgent(dir, [])
+  agent.restoreMessages([
+    { role: 'system', content: 'System' },
+    { role: 'user', content: 'one' },
+    { role: 'assistant', content: 'two' },
+    { role: 'user', content: 'three' },
+    { role: 'assistant', content: 'four' },
+  ])
+  const beforeMessages = agent.getMessages().map((message) => message.content)
+  const controller = new AbortController()
+  agent.client = {
+    startKeepAlive()
+    {},
+    async *chatStream(_request, signal)
+    {
+      assert.equal(signal, controller.signal)
+      controller.abort()
+      yield { message: { role: 'assistant', content: 'partial' }, done: false }
+    },
+  } as typeof agent.client
+
+  const output: OutputBlock[] = []
+  let saves = 0
+  const ctx = makeCommandContext(agent, output)
+  ctx.signal = controller.signal
+  ctx.saveCurrentSession = () =>
+  {
+    saves += 1
+    return 'abcd1234'
+  }
+
+  assert.equal(await dispatchCommand('/compact', ctx), true)
+  assert.equal(saves, 0)
+  assert.equal(agent.getCompactionCount(), 0)
+  assert.deepEqual(
+    agent.getMessages().map((message) => message.content),
+    beforeMessages
+  )
+  const rendered = plain(
+    output
+      .filter(
+        (block): block is Extract<OutputBlock, { type: 'system' }> =>
+          block.type === 'system'
+      )
+      .map((block) => block.content)
+  )
+  assert.ok(rendered.includes('Compaction interrupted'))
+  assert.ok(!rendered.includes('Context compacted'))
+})
+
+test('dispatchCommand passes the command abort signal into /index', async () =>
+{
+  const output: OutputBlock[] = []
+  const controller = new AbortController()
+  let seenSignal: AbortSignal | undefined
+  let closed = false
+  const store: IndexStore = {
+    ensureProject: () => 1,
+    listFiles: () => new Map(),
+    touchFile()
+    {},
+    upsertFile()
+    {},
+    deleteFile()
+    {},
+    deleteMissingFiles()
+    {},
+    search: () => [],
+    close()
+    {
+      closed = true
+    },
+  }
+  const ctx = makeCommandContext({} as Agent, output)
+  ctx.signal = controller.signal
+  ctx.buildIndexer = (cwd, host, signal) =>
+  {
+    assert.equal(cwd, '/tmp/project')
+    assert.equal(host, 'http://localhost:11434')
+    seenSignal = signal
+    return {
+      store,
+      embeddingModel: 'test-embed',
+      indexer: {
+        ensureIndexed: async () => ({
+          totalFiles: 1,
+          embeddedFiles: 1,
+          chunks: 1,
+        }),
+      } as never,
+    }
+  }
+
+  assert.equal(await dispatchCommand('/index', ctx), true)
+  assert.equal(seenSignal, controller.signal)
+  assert.equal(closed, true)
+  assert.ok(plain(output.map((block) => block.content)).includes('Indexed 1/1'))
 })

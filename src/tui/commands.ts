@@ -2,7 +2,6 @@
 // slash command registry, parser, & dispatcher
 
 import chalk from 'chalk'
-import { getCwd } from '../cwd.js'
 import { savePrefs } from '../config/prefs.js'
 import { getTheme, setTheme, style } from './theme.js'
 import { findTheme } from './themes.js'
@@ -41,6 +40,7 @@ import {
 } from './command-output.js'
 import type { CommandSummary } from './completion.js'
 import { buildIndexer } from '../retrieval/build.js'
+import type { BuiltIndexer } from '../retrieval/build.js'
 import { DEFAULT_EMBEDDING_MODEL, type IndexStore } from '../retrieval/types.js'
 import { formatTelemetry, loadTelemetry } from '../telemetry/store.js'
 
@@ -60,6 +60,16 @@ export interface CommandContext
   reopenModelPicker: () => void
   // switch model in-place (keeps conversation history)
   switchModel: (modelName: string) => Promise<void>
+  // current session working directory
+  getCwd: () => string
+  // abort signal for long-running slash commands
+  signal?: AbortSignal
+  // test seam for index command construction
+  buildIndexer?: (
+    cwd: string,
+    ollamaHost: string,
+    signal?: AbortSignal
+  ) => BuiltIndexer
   // set the permission mode at runtime
   setYolo: (yolo: boolean) => void
   // exit the application
@@ -212,16 +222,22 @@ const compactCommand: Command = {
 
     ctx.pushOutput(systemBlock('Compacting conversation...'))
 
-    const result = await ctx.agent.forceCompact()
+    const result = await ctx.agent.forceCompact(ctx.signal)
 
     if (!result)
     {
+      if (ctx.signal?.aborted)
+      {
+        ctx.pushOutput(systemBlock('Compaction interrupted'))
+        return
+      }
       ctx.pushOutput(
         systemBlock('Compaction skipped — not enough context to summarize')
       )
       return
     }
 
+    ctx.saveCurrentSession()
     ctx.pushOutput(systemBlock(formatManualCompactionResult(result)))
   },
 }
@@ -233,7 +249,7 @@ const statusCommand: Command = {
   description: 'Show model, session, token usage, & working directory',
   async execute(_args, ctx)
   {
-    const cwd = getCwd()
+    const cwd = ctx.getCwd()
     const model = ctx.activeModel
     const tokens = ctx.agent.getEstimatedTokens()
     const messages = ctx.agent.getMessageCount()
@@ -489,6 +505,7 @@ const modelCommand: Command = {
     try
     {
       await ctx.switchModel(resolvedModel)
+      ctx.saveCurrentSession()
       ctx.pushOutput(
         systemBlock(`Switched model: ${previousModel} → ${resolvedModel}`)
       )
@@ -624,7 +641,7 @@ const diffCommand: Command = {
   description: 'Show git diff of working directory',
   async execute(_args, ctx)
   {
-    const cwd = getCwd()
+    const cwd = ctx.getCwd()
 
     const result = await runGitCommand(['diff'], cwd, {
       allowStdoutOnError: true,
@@ -768,7 +785,7 @@ const indexCommand: Command = {
     }
 
     const force = arg === 'rebuild' || arg === 'force'
-    const cwd = getCwd()
+    const cwd = ctx.getCwd()
     let store: IndexStore | undefined
     let embeddingModel = DEFAULT_EMBEDDING_MODEL
 
@@ -777,7 +794,8 @@ const indexCommand: Command = {
 
     try
     {
-      const built = buildIndexer(cwd, ctx.host)
+      const build = ctx.buildIndexer ?? buildIndexer
+      const built = build(cwd, ctx.host, ctx.signal)
       store = built.store
       embeddingModel = built.embeddingModel
 
@@ -847,6 +865,7 @@ const resumeCommand: Command = {
       requestedId: args,
       currentSessionId: ctx.sessionLabelId,
       allowPrefix: true,
+      requireExistingCwd: true,
     })
 
     if (target.type !== 'target')

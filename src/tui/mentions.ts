@@ -14,6 +14,7 @@ import {
 import { formatAttachedFileBlock } from '../utils/attached-file.js'
 import { MAX_TOOL_OUTPUT_CHARS } from '../utils/limits.js'
 import { truncateToLineBoundary } from '../utils/truncate-output.js'
+import { checkWorkspacePath } from '../tools/path-policy.js'
 
 const MENTION_PATTERN = new RegExp(
   `${MENTION_BOUNDARY}(?:"(${QUOTED_BODY})"|(${UNQUOTED_RUN}+))`,
@@ -33,6 +34,7 @@ export type MentionSkipReason =
   | 'too large'
   | 'binary'
   | 'unreadable'
+  | 'outside workspace'
   | 'over budget'
 
 export interface MentionAttachment
@@ -79,7 +81,8 @@ export function parseMentions(value: string): string[]
 export async function buildMentionContext(
   value: string,
   read: (path: string) => Promise<TextFileReadResult> = readRequiredTextFile,
-  budget: number = MENTION_BUDGET_CHARS
+  budget: number = MENTION_BUDGET_CHARS,
+  cwd?: string
 ): Promise<MentionExpansion>
 {
   const paths = parseMentions(value)
@@ -99,7 +102,19 @@ export async function buildMentionContext(
       continue
     }
 
-    const result = await read(path)
+    let readPath = path
+    if (cwd)
+    {
+      const allowed = await checkWorkspacePath(cwd, path, false)
+      if (!allowed.ok)
+      {
+        skipped.push({ path, reason: 'outside workspace' })
+        continue
+      }
+      readPath = allowed.path
+    }
+
+    const result = await read(readPath)
     if (!result.ok)
     {
       const reason: MentionSkipReason =

@@ -7,6 +7,7 @@ import { renderUnifiedDiff } from './diff.js'
 import { summarizeToolArgs } from './transcript.js'
 import { boxFrame } from './status-line.js'
 import { style } from './theme.js'
+import { sanitizeUntrustedText } from './sanitize.js'
 
 // cap change previews so large edits don't swallow the screen
 const MAX_PREVIEW_LINES = 20
@@ -110,7 +111,7 @@ export function buildApprovalBox(
   else if (previewMessage)
   {
     box.lines.push(box.row(''))
-    box.pushWrapped(chalk.dim(previewMessage))
+    box.pushWrapped(chalk.dim(sanitizeUntrustedText(previewMessage)))
   }
 
   return box.finish(box.warn('(y) approve  (n) reject  (esc) cancel'))
@@ -124,6 +125,6 @@ export function buildConfirmBox(
 ): string[]
 {
   const box = createPromptBox(width, label)
-  box.pushWrapped(message, box.warn)
+  box.pushWrapped(sanitizeUntrustedText(message), box.warn)
   return box.finish(box.warn('(y) continue  (n) stop'))
 }

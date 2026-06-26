@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
+import { existsSync } from 'node:fs'
 import { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
 import { clamp } from '../utils/clamp.js'
@@ -44,7 +45,11 @@ import { useStreamBuffer } from './use-stream-buffer.js'
 import { useSessionPersistence } from './use-session-persistence.js'
 import { useInputHistory } from './use-input-history.js'
 import { recordReliability } from '../telemetry/store.js'
-import { loadSession, renameSession } from '../session/store.js'
+import {
+  loadSession,
+  renameSession,
+  type SessionData,
+} from '../session/store.js'
 import { getCwd } from '../cwd.js'
 import { type RunStage } from './run-stage.js'
 import {
@@ -71,6 +76,7 @@ import {
   setTodos as restoreStoreTodos,
   type TodoItem,
 } from '../tools/todo-store.js'
+import { restoredSessionForPickerSelection } from './model-activation.js'
 
 interface Props
 {
@@ -102,6 +108,11 @@ const FLUSH_INTERVAL = 32
 const SPINNER_INTERVAL = 80
 const SCROLL_LINES = 3
 
+function canResumeInCwd(cwd: string): boolean
+{
+  return existsSync(cwd)
+}
+
 // zeroed token-usage state — initial value & reset target
 const EMPTY_TOKEN_USAGE = {
   // cumulative session totals (every turn re-prefills the context)
@@ -128,7 +139,14 @@ export default function App({
 
   const { sessionIdRef, sessionMetaRef, getResumeSession, persistSession } =
     useSessionPersistence(resumeSessionId)
-  const resumeSession = getResumeSession()
+  const loadedResumeSession = getResumeSession()
+  const resumeSession =
+    loadedResumeSession && canResumeInCwd(loadedResumeSession.meta.cwd)
+      ? loadedResumeSession
+      : null
+  const resumeSessionUnavailable = Boolean(
+    loadedResumeSession && !resumeSession
+  )
 
   const [activeModel, setActiveModel] = useState(
     model ?? resumeSession?.meta.model ?? ''
@@ -137,7 +155,7 @@ export default function App({
   {
     if (!model) return null
 
-    const nextAgent = new Agent(model, host, undefined, { think })
+    const nextAgent = new Agent(model, host, resumeSession?.meta.cwd, { think })
     if (resumeSession)
     {
       nextAgent.restoreMessages(resumeSession.messages)
@@ -160,12 +178,17 @@ export default function App({
   // mirrors the module-level theme generation so theme switches re-render
   const [themeGeneration, setThemeGeneration] = useState(getThemeGeneration)
   const [runStage, setRunStage] = useState<RunStage>('idle')
+  // block new submits while a long slash command or an in-place model switch is
+  // still in flight — keeps command/chat turns from overlapping & stops a fast
+  // submit from running against the pre-switch model
+  const [commandRunning, setCommandRunning] = useState(false)
+  const [switchingModel, setSwitchingModel] = useState(false)
   const [approval, setApproval] = useState<ApprovalPrompt | null>(null)
   const [confirm, setConfirm] = useState<ConfirmPrompt | null>(null)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [runElapsed, setRunElapsed] = useState<string | null>(null)
   const [sessionLabelId, setSessionLabelId] = useState<string | null>(
-    resumeSession?.meta.id ?? resumeSessionId ?? null
+    resumeSession?.meta.id ?? null
   )
   const [tokenUsage, setTokenUsage] = useState(EMPTY_TOKEN_USAGE)
   const [contextWindow, setContextWindow] = useState(0)
@@ -212,6 +235,7 @@ export default function App({
   const chatViewportHeightRef = useRef(6)
 
   const isRunning = runStage !== 'idle'
+  const currentCwd = agent?.getCwd() ?? getCwd()
   const transcriptWidth = Math.max(terminalSize.columns - 2, 20)
 
   const approvalBoxLines = approval
@@ -309,9 +333,9 @@ export default function App({
         width: transcriptWidth,
         rows: chatViewportHeight,
         model: activeModel,
-        cwd: getCwd(),
+        cwd: currentCwd,
       }),
-    [transcriptWidth, chatViewportHeight, activeModel]
+    [transcriptWidth, chatViewportHeight, activeModel, currentCwd]
   )
   const paddedWelcome = centerLinesVertical(welcomeLines, chatViewportHeight)
 
@@ -325,12 +349,12 @@ export default function App({
     // agents abandoned in the picker. attributed to the model active at dispose
     try
     {
-      if (agentInstance.getMessages().some((m) => m.role === 'assistant'))
+      if (agentInstance.hasProducedTurn())
       {
-        recordReliability(
-          agentInstance.getModel(),
-          agentInstance.getReliabilityStats()
-        )
+        for (const entry of agentInstance.getReliabilityTelemetry())
+        {
+          recordReliability(entry.model, entry.stats)
+        }
       }
     }
     catch
@@ -409,6 +433,7 @@ export default function App({
     {
       const target = loadSession(sessionId)
       if (!target) return false
+      if (!canResumeInCwd(target.meta.cwd)) return false
 
       const currentAgent = agentRef.current
       if (currentAgent)
@@ -425,7 +450,9 @@ export default function App({
       restoreStoreTodos(sanitizeTodos(target.todos))
 
       // create fresh agent w/ restored messages
-      const nextAgent = new Agent(target.meta.model, host, undefined, { think })
+      const nextAgent = new Agent(target.meta.model, host, target.meta.cwd, {
+        think,
+      })
       nextAgent.restoreMessages(target.messages)
 
       // update session tracking
@@ -460,15 +487,28 @@ export default function App({
     void loadModelsRef.current?.()
   }, [])
 
-  // switch model in-place — keeps conversation history, unloads old model
-  const switchModel = useCallback(async (modelName: string) =>
-  {
-    const currentAgent = agentRef.current
-    if (!currentAgent) return
+  const completeModelSwitch = useCallback(
+    (agentInstance: Agent, modelName: string) =>
+    {
+      setActiveModel(modelName)
+      setContextWindow(0)
+      fetchContextWindowForAgent(agentInstance)
+    },
+    [fetchContextWindowForAgent]
+  )
 
-    await currentAgent.switchModel(modelName)
-    setActiveModel(modelName)
-  }, [])
+  // switch model in-place — keeps conversation history, unloads old model
+  const switchModel = useCallback(
+    async (modelName: string) =>
+    {
+      const currentAgent = agentRef.current
+      if (!currentAgent) return
+
+      await currentAgent.switchModel(modelName)
+      completeModelSwitch(currentAgent, modelName)
+    },
+    [completeModelSwitch]
+  )
 
   // abort the current agent run — called by Ctrl+C & Escape while running
   // resolve a pending tool approval & clear the prompt
@@ -504,20 +544,35 @@ export default function App({
   }, [resolveApproval, resolveConfirm])
 
   const activateModel = useCallback(
-    (nextModel: string, restoredSession = resumeSession) =>
+    (nextModel: string, restoredSession: SessionData | null) =>
     {
       const existingAgent = agentRef.current
 
       // if there's an existing agent, switch in-place to preserve history
       if (existingAgent && !restoredSession)
       {
-        void existingAgent.switchModel(nextModel).then(() =>
-        {
-          setContextWindow(0)
-          fetchContextWindowForAgent(existingAgent)
-        })
-        setActiveModel(nextModel)
+        // hide the picker now, but defer the model UI update & block submits
+        // until the switch completes — switchModel() unloads the old model
+        // before adopting the new one, so a fast submit would otherwise run the
+        // next prompt against the pre-switch model
         setPickerState('hidden')
+        setSwitchingModel(true)
+        void (async () =>
+        {
+          try
+          {
+            await existingAgent.switchModel(nextModel)
+            completeModelSwitch(existingAgent, nextModel)
+          }
+          catch
+          {
+            // switch failed — keep the previous model & let the user retry
+          }
+          finally
+          {
+            setSwitchingModel(false)
+          }
+        })()
         return
       }
 
@@ -530,7 +585,9 @@ export default function App({
       setActiveModel(nextModel)
       setContextWindow(0)
 
-      const nextAgent = new Agent(nextModel, host, undefined, { think })
+      const nextAgent = new Agent(nextModel, host, restoredSession?.meta.cwd, {
+        think,
+      })
       if (restoredSession)
       {
         nextAgent.restoreMessages(restoredSession.messages)
@@ -541,7 +598,7 @@ export default function App({
       setPickerState('hidden')
       fetchContextWindowForAgent(nextAgent)
     },
-    [disposeAgent, fetchContextWindowForAgent, host, resumeSession, think]
+    [completeModelSwitch, disposeAgent, fetchContextWindowForAgent, host, think]
   )
 
   const loadModels = useCallback(async () =>
@@ -597,6 +654,14 @@ export default function App({
   {
     loadModelsRef.current = loadModels
   }, [loadModels])
+
+  useEffect(() =>
+  {
+    if (!resumeSessionUnavailable) return
+
+    sessionIdRef.current = null
+    sessionMetaRef.current = null
+  }, [resumeSessionUnavailable, sessionIdRef, sessionMetaRef])
 
   useEffect(() =>
   {
@@ -828,7 +893,10 @@ export default function App({
           if (selected)
           {
             // when reopening mid-session, switch in-place (no restore session)
-            activateModel(selected.name, agent ? undefined : resumeSession)
+            activateModel(
+              selected.name,
+              restoredSessionForPickerSelection(Boolean(agent), resumeSession)
+            )
           }
         }
         else if (key.escape)
@@ -842,12 +910,22 @@ export default function App({
 
   // slash-command list & project-file lookup for prompt autocomplete
   const completionCommands = useMemo(() => commandCompletions(), [])
-  const listFiles = useCallback(() => listProjectFiles(getCwd()), [])
+  const listFiles = useCallback(
+    () => listProjectFiles(currentCwd),
+    [currentCwd]
+  )
 
   const handleSubmit = useCallback(
     async (value: string) =>
     {
-      if (!agent || !value.trim() || runStage !== 'idle' || promptActive)
+      if (
+        !agent ||
+        !value.trim() ||
+        runStage !== 'idle' ||
+        promptActive ||
+        commandRunning ||
+        switchingModel
+      )
       {
         return
       }
@@ -860,6 +938,11 @@ export default function App({
       {
         setInput('')
         setScrollOffset(0)
+        const commandController = new AbortController()
+        runAbortRef.current = commandController
+        // lock submits for the command's lifetime so a long command (/index,
+        // /compact, …) can't overlap w/ a chat turn or another command
+        setCommandRunning(true)
 
         const cmdCtx: CommandContext = {
           agent,
@@ -867,6 +950,8 @@ export default function App({
           host,
           yolo,
           sessionLabelId,
+          signal: commandController.signal,
+          getCwd: () => agent.getCwd(),
           pushOutput: (...blocks) =>
           {
             setOutput((prev) => [...prev, ...blocks])
@@ -885,7 +970,18 @@ export default function App({
           notifyThemeChanged: () => setThemeGeneration(getThemeGeneration()),
         }
 
-        if (await dispatchCommand(value.trim(), cmdCtx)) return
+        try
+        {
+          if (await dispatchCommand(value.trim(), cmdCtx)) return
+        }
+        finally
+        {
+          if (runAbortRef.current === commandController)
+          {
+            runAbortRef.current = null
+          }
+          setCommandRunning(false)
+        }
       }
 
       const controller = new AbortController()
@@ -922,7 +1018,12 @@ export default function App({
       let prompt = value
       try
       {
-        const expansion = await buildMentionContext(value)
+        const expansion = await buildMentionContext(
+          value,
+          undefined,
+          undefined,
+          agent.getCwd()
+        )
         if (expansion.context) prompt = `${value}\n\n${expansion.context}`
         const notice = formatMentionNotice(expansion)
         if (notice)
@@ -974,7 +1075,9 @@ export default function App({
             if (yoloRef.current) return true
 
             // compute the change preview before showing the box (best-effort)
-            const preview = await previewToolDiff(name, args)
+            const preview = await previewToolDiff(name, args, {
+              cwd: agent.getCwd(),
+            })
 
             return new Promise<boolean>((resolve) =>
             {
@@ -1152,6 +1255,7 @@ export default function App({
       appendText,
       appendThinking,
       clearSession,
+      commandRunning,
       consumeBufferedBlocks,
       host,
       persistSession,
@@ -1167,6 +1271,7 @@ export default function App({
       shutdown,
       startWaiting,
       stopWaiting,
+      switchingModel,
       switchModel,
       yolo,
     ]
@@ -1227,6 +1332,22 @@ export default function App({
       .join(' · ')
     statusLine = buildStatusLine(
       stateLeft,
+      'ctrl+c interrupts',
+      transcriptWidth
+    )
+  }
+  else if (switchingModel)
+  {
+    statusLine = buildStatusLine(
+      'switching model…',
+      'esc quits',
+      transcriptWidth
+    )
+  }
+  else if (commandRunning)
+  {
+    statusLine = buildStatusLine(
+      'running command…',
       'ctrl+c interrupts',
       transcriptWidth
     )
@@ -1407,6 +1528,7 @@ export default function App({
             </Text>
             <PromptInput
               value={input}
+              filesCacheKey={currentCwd}
               completionCommands={completionCommands}
               listFiles={listFiles}
               onChange={handleInputChange}

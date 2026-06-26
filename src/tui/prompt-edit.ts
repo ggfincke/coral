@@ -5,6 +5,9 @@ import type { CoralKey } from './use-coral-input.js'
 import { clamp } from '../utils/clamp.js'
 
 const WORD_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' })
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, {
+  granularity: 'grapheme',
+})
 
 export interface PromptCursorState
 {
@@ -35,6 +38,89 @@ interface WordBoundary
 function clampCursorOffset(offset: number, value: string): number
 {
   return clamp(offset, 0, value.length)
+}
+
+// single-entry cache of grapheme boundary offsets for the current value —
+// arrow/delete keys reuse the cached offsets instead of re-segmenting
+let graphemeCache: { value: string; offsets: number[] } | null = null
+
+// ascending grapheme boundary offsets for value: every segment start + the end
+function graphemeOffsets(value: string): number[]
+{
+  if (graphemeCache && graphemeCache.value === value)
+    return graphemeCache.offsets
+  const offsets: number[] = []
+  for (const segment of GRAPHEME_SEGMENTER.segment(value))
+    offsets.push(segment.index)
+  offsets.push(value.length)
+  graphemeCache = { value, offsets }
+  return offsets
+}
+
+function isGraphemeBoundary(value: string, offset: number): boolean
+{
+  if (offset <= 0 || offset >= value.length) return true
+
+  const offsets = graphemeOffsets(value)
+  let lo = 0
+  let hi = offsets.length - 1
+  while (lo <= hi)
+  {
+    const mid = (lo + hi) >> 1
+    if (offsets[mid] === offset) return true
+    if (offsets[mid] < offset) lo = mid + 1
+    else hi = mid - 1
+  }
+
+  return false
+}
+
+function previousGraphemeOffset(value: string, offset: number): number
+{
+  const clamped = clamp(offset, 0, value.length)
+  if (clamped <= 0) return 0
+
+  // largest offset strictly less than clamped
+  const offsets = graphemeOffsets(value)
+  let lo = 0
+  let hi = offsets.length - 1
+  let result = 0
+  while (lo <= hi)
+  {
+    const mid = (lo + hi) >> 1
+    if (offsets[mid] < clamped)
+    {
+      result = offsets[mid]
+      lo = mid + 1
+    }
+    else hi = mid - 1
+  }
+
+  return result
+}
+
+function nextGraphemeOffset(value: string, offset: number): number
+{
+  const clamped = clamp(offset, 0, value.length)
+  if (clamped >= value.length) return value.length
+
+  // smallest offset strictly greater than clamped
+  const offsets = graphemeOffsets(value)
+  let lo = 0
+  let hi = offsets.length - 1
+  let result = value.length
+  while (lo <= hi)
+  {
+    const mid = (lo + hi) >> 1
+    if (offsets[mid] > clamped)
+    {
+      result = offsets[mid]
+      hi = mid - 1
+    }
+    else lo = mid + 1
+  }
+
+  return result
 }
 
 function getWordBoundaries(value: string): WordBoundary[]
@@ -109,9 +195,13 @@ function deleteBackward(value: string, cursorOffset: number): PromptEditResult
     return updateCursor(value, cursorOffset)
   }
 
+  const previousOffset = previousGraphemeOffset(value, cursorOffset)
+  const deleteEnd = isGraphemeBoundary(value, cursorOffset)
+    ? cursorOffset
+    : nextGraphemeOffset(value, previousOffset)
   return updateCursor(
-    value.slice(0, cursorOffset - 1) + value.slice(cursorOffset),
-    cursorOffset - 1
+    value.slice(0, previousOffset) + value.slice(deleteEnd),
+    previousOffset
   )
 }
 
@@ -122,9 +212,13 @@ function deleteForward(value: string, cursorOffset: number): PromptEditResult
     return updateCursor(value, cursorOffset)
   }
 
+  const startOffset = isGraphemeBoundary(value, cursorOffset)
+    ? cursorOffset
+    : previousGraphemeOffset(value, cursorOffset)
+  const nextOffset = nextGraphemeOffset(value, startOffset)
   return updateCursor(
-    value.slice(0, cursorOffset) + value.slice(cursorOffset + 1),
-    cursorOffset
+    value.slice(0, startOffset) + value.slice(nextOffset),
+    startOffset
   )
 }
 
@@ -208,11 +302,14 @@ export function applyPromptEdit({
   }
   if (key.ctrl && input === 'b')
   {
-    return updateCursor(value, cursor.cursorOffset - 1)
+    return updateCursor(
+      value,
+      previousGraphemeOffset(value, cursor.cursorOffset)
+    )
   }
   if (key.ctrl && input === 'f')
   {
-    return updateCursor(value, cursor.cursorOffset + 1)
+    return updateCursor(value, nextGraphemeOffset(value, cursor.cursorOffset))
   }
   if (key.leftArrow && (key.ctrl || key.meta))
   {
@@ -224,11 +321,14 @@ export function applyPromptEdit({
   }
   if (key.leftArrow)
   {
-    return updateCursor(value, cursor.cursorOffset - 1)
+    return updateCursor(
+      value,
+      previousGraphemeOffset(value, cursor.cursorOffset)
+    )
   }
   if (key.rightArrow)
   {
-    return updateCursor(value, cursor.cursorOffset + 1)
+    return updateCursor(value, nextGraphemeOffset(value, cursor.cursorOffset))
   }
   if (key.ctrl && input === 'u')
   {
