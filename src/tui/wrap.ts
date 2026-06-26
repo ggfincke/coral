@@ -1,7 +1,29 @@
 // src/tui/wrap.ts
 // shared ANSI-aware line wrapping for TUI renderers
 
+import stripAnsi from 'strip-ansi'
 import wrapAnsi from 'wrap-ansi'
+
+// visible terminal width after stripping ANSI escape codes
+export function visibleWidth(text: string): number
+{
+  return stripAnsi(text).length
+}
+
+// right-pad a possibly ANSI-styled string to a visible width
+export function padEnd(value: string, width: number): string
+{
+  return value + ' '.repeat(Math.max(width - visibleWidth(value), 0))
+}
+
+// center a possibly ANSI-styled line within a visible width
+export function center(line: string, width: number): string
+{
+  const totalPad = Math.max(width - visibleWidth(line), 0)
+  const leftPad = Math.floor(totalPad / 2)
+  const rightPad = totalPad - leftPad
+  return ' '.repeat(leftPad) + line + ' '.repeat(rightPad)
+}
 
 // soft-wrap opts (break on spaces, keep leading/trailing space) — shared so the
 // transcript tool-result wrapper can't drift from wrapLines
@@ -14,13 +36,13 @@ export const SOFT_WRAP_OPTIONS = {
 // wrap text to width while preserving an optional prefix indent
 export function wrapLines(text: string, width: number, indent = ''): string[]
 {
-  const visibleWidth = Math.max(width - indent.length, 12)
+  const wrapWidth = Math.max(width - indent.length, 12)
 
   return text.split('\n').flatMap((line) =>
   {
     if (!line) return [indent]
 
-    return wrapAnsi(line, visibleWidth, SOFT_WRAP_OPTIONS)
+    return wrapAnsi(line, wrapWidth, SOFT_WRAP_OPTIONS)
       .split('\n')
       .map((wrappedLine) => indent + wrappedLine)
   })

@@ -2,27 +2,22 @@
 // render the active task list into bordered status lines
 
 import chalk from 'chalk'
-import type { TodoItem, TodoStatus } from '../tools/todo-store.js'
-import { buildLabeledSeparator, buildRule } from './status-line.js'
-
-export const TODO_MARK: Record<TodoStatus, string> = {
-  pending: '○',
-  in_progress: '◐',
-  completed: '●',
-}
+import { TODO_MARK, type TodoItem } from '../tools/todo-store.js'
+import { ellipsize } from '../utils/ellipsize.js'
+import { boxFrame } from './status-line.js'
+import { padEnd } from './wrap.js'
 
 // cap rendered rows so a long list can't swallow the transcript viewport
 const MAX_ROWS = 8
 
-function clip(text: string, width: number): string
+export function todoRowText(todo: TodoItem): string
 {
-  if (text.length <= width) return text
-  return text.slice(0, Math.max(width - 1, 0)) + '…'
+  return `${TODO_MARK[todo.status]} ${todo.content}`
 }
 
-function pad(text: string, width: number): string
+export function strikeIfDone(todo: TodoItem, text: string): string
 {
-  return text + ' '.repeat(Math.max(width - text.length, 0))
+  return todo.status === 'completed' ? chalk.strikethrough(text) : text
 }
 
 // returns [] when the list is empty so callers can skip the panel entirely
@@ -30,30 +25,26 @@ export function buildTodoPanel(todos: TodoItem[], width: number): string[]
 {
   if (todos.length === 0) return []
 
-  const innerWidth = Math.max(width - 4, 12)
   const done = todos.filter((t) => t.status === 'completed').length
-  const label = `tasks ${done}/${todos.length}`
-
-  const top = `╭─${buildLabeledSeparator(innerWidth, label)}─╮`
-  const bottom = `╰${buildRule(innerWidth + 2)}╯`
-  const lines: string[] = [top]
+  const frame = boxFrame(width, `tasks ${done}/${todos.length}`)
+  const lines: string[] = [frame.top]
 
   const shown = todos.slice(0, MAX_ROWS)
   for (const todo of shown)
   {
-    // pad on plain text, then strike only the visible cell so width math holds
-    const row = clip(`${TODO_MARK[todo.status]} ${todo.content}`, innerWidth)
-    const padding = ' '.repeat(Math.max(innerWidth - row.length, 0))
-    const cell = todo.status === 'completed' ? chalk.strikethrough(row) : row
-    lines.push(`│ ${cell}${padding} │`)
+    // ellipsize -> pad on plain text, then strike only the visible cell
+    const row = ellipsize(todoRowText(todo), frame.innerWidth)
+    const padded = padEnd(row, frame.innerWidth)
+    const cell = strikeIfDone(todo, padded)
+    lines.push(frame.row(cell))
   }
 
   const hidden = todos.length - shown.length
   if (hidden > 0)
   {
-    lines.push(`│ ${pad(clip(`…+${hidden} more`, innerWidth), innerWidth)} │`)
+    lines.push(frame.row(ellipsize(`…+${hidden} more`, frame.innerWidth)))
   }
 
-  lines.push(bottom)
+  lines.push(frame.bottom)
   return lines
 }

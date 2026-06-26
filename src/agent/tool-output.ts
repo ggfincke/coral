@@ -1,22 +1,20 @@
 // src/agent/tool-output.ts
 // bound tool output before it enters the model context
 
-import { CHARS_PER_TOKEN } from './compaction.js'
-
-// ~25k tokens — one huge tool result (e.g. a full `git diff` of a lockfile)
-// would otherwise overflow the window or stall prefill
-export const MAX_TOOL_OUTPUT_CHARS = 25_000 * CHARS_PER_TOKEN
+import {
+  MAX_ERROR_MESSAGE_CHARS,
+  MAX_TOOL_OUTPUT_CHARS,
+} from '../utils/limits.js'
+import { truncateToLineBoundary } from '../utils/truncate-output.js'
 
 // cap oversized tool output, keeping the head & noting how much was dropped
 export function capToolOutput(output: string): string
 {
-  if (output.length <= MAX_TOOL_OUTPUT_CHARS) return output
-
-  // cut back to a line boundary so the model never sees a half-line
-  const slice = output.slice(0, MAX_TOOL_OUTPUT_CHARS)
-  const lastNewline = slice.lastIndexOf('\n')
-  const head = lastNewline > 0 ? slice.slice(0, lastNewline) : slice
-  const omitted = output.length - head.length
+  const { head, omitted, truncated } = truncateToLineBoundary(
+    output,
+    MAX_TOOL_OUTPUT_CHARS
+  )
+  if (!truncated) return output
 
   return (
     `${head}\n\n[output truncated: ${omitted} of ${output.length} chars omitted` +
@@ -24,20 +22,15 @@ export function capToolOutput(output: string): string
   )
 }
 
-// errors should stay short — a multi-KB stack or tool failure drowns the signal
-// & can stall prefill on small models, so cap well below the output limit
-export const MAX_ERROR_MESSAGE_CHARS = 2_000 * CHARS_PER_TOKEN
-
 // cap an oversized error string fed back to the model, keeping the head &
 // noting how much was dropped (mirrors capToolOutput, w/o the scope hint)
 export function capErrorMessage(error: string): string
 {
-  if (error.length <= MAX_ERROR_MESSAGE_CHARS) return error
-
-  const slice = error.slice(0, MAX_ERROR_MESSAGE_CHARS)
-  const lastNewline = slice.lastIndexOf('\n')
-  const head = lastNewline > 0 ? slice.slice(0, lastNewline) : slice
-  const omitted = error.length - head.length
+  const { head, omitted, truncated } = truncateToLineBoundary(
+    error,
+    MAX_ERROR_MESSAGE_CHARS
+  )
+  if (!truncated) return error
 
   return `${head}\n[error truncated: ${omitted} of ${error.length} chars omitted]`
 }

@@ -36,6 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or hallucinating on feedback larger than its own request. The full error still
   reaches the UI; only the model's history copy is capped.
 
+### Changed
+
+- **Semantic index & `@`-mentions now respect `.gitignore`:** project file
+  discovery prefers `git ls-files --cached --others --exclude-standard`, so
+  git-ignored files no longer land in the semantic index or the `@`-mention
+  picker (previously a raw filesystem walk indexed them). Outside a git repo it
+  falls back to the ignore-aware filesystem walk.
+- **Project `.coral.json` permissions are tighten-only:** a project-level
+  permission config can now only make a tool's policy stricter than the
+  user/default policy, never looser. A repo can tighten `always_allow` to
+  `require_approval`/`always_deny`, but a project asking for `always_allow` on a
+  tool the user left at `require_approval` is ignored — so cloning an untrusted
+  repo can't silently widen what its config auto-approves.
+
 ### Fixed
 
 - **Per-turn latency on large sliding-window contexts:** a single model call
@@ -425,16 +439,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
-[0.11.0]: https://github.com/user/coral/compare/v0.10.0...v0.11.0
-[0.10.0]: https://github.com/user/coral/compare/be8b243...1e4817e
-[0.9.0]: https://github.com/user/coral/compare/34766ce...be8b243
-[0.8.0]: https://github.com/user/coral/compare/845d6f9...34766ce
-[0.7.0]: https://github.com/user/coral/compare/5d929ab...845d6f9
-[0.6.0]: https://github.com/user/coral/compare/0096d5a...5d929ab
-[0.5.1]: https://github.com/user/coral/compare/1bee633...0096d5a
-[0.5.0]: https://github.com/user/coral/compare/74b7dac...1bee633
-[0.4.0]: https://github.com/user/coral/compare/6c3f8f7...74b7dac
-[0.3.0]: https://github.com/user/coral/compare/39eac65...6c3f8f7
-[0.2.0]: https://github.com/user/coral/compare/8a34d6c...39eac65
-[0.1.1]: https://github.com/user/coral/compare/6326d14...8a34d6c
-[0.1.0]: https://github.com/user/coral/releases/tag/6326d14
+[0.11.0]: https://github.com/ggfincke/coral/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/ggfincke/coral/compare/be8b243...1e4817e
+[0.9.0]: https://github.com/ggfincke/coral/compare/34766ce...be8b243
+[0.8.0]: https://github.com/ggfincke/coral/compare/845d6f9...34766ce
+[0.7.0]: https://github.com/ggfincke/coral/compare/5d929ab...845d6f9
+[0.6.0]: https://github.com/ggfincke/coral/compare/0096d5a...5d929ab
+[0.5.1]: https://github.com/ggfincke/coral/compare/1bee633...0096d5a
+[0.5.0]: https://github.com/ggfincke/coral/compare/74b7dac...1bee633
+[0.4.0]: https://github.com/ggfincke/coral/compare/6c3f8f7...74b7dac
+[0.3.0]: https://github.com/ggfincke/coral/compare/39eac65...6c3f8f7
+[0.2.0]: https://github.com/ggfincke/coral/compare/8a34d6c...39eac65
+[0.1.1]: https://github.com/ggfincke/coral/compare/6326d14...8a34d6c
+[0.1.0]: https://github.com/ggfincke/coral/releases/tag/6326d14

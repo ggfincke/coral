@@ -6,9 +6,13 @@ import type { CompactionResult } from '../agent/agent.js'
 import type { ResumeSessionResolution } from '../session/resume.js'
 import type { SessionMeta } from '../session/store.js'
 import type { IndexStats } from '../retrieval/types.js'
-import { isMissingModelError } from '../utils/errors.js'
+import type { TodoItem } from '../tools/todo-store.js'
+import { isMissingModelError, withPullHint } from '../utils/errors.js'
 import { formatTokenCount } from './metrics.js'
-import { style } from './theme.js'
+import { getTheme, style, type Role, type RoleColor } from './theme.js'
+import { THEMES } from './themes.js'
+import { strikeIfDone, todoRowText } from './todo-panel.js'
+import { sanitizeUntrustedText } from './sanitize.js'
 
 export function coralHeader(title: string): string
 {
@@ -25,6 +29,16 @@ function formatSessionCount(session: SessionMeta): string
   return `${session.messageCount} msgs`
 }
 
+function cleanSessionId(session: SessionMeta): string
+{
+  return sanitizeUntrustedText(session.id)
+}
+
+function cleanSessionModel(session: SessionMeta): string
+{
+  return sanitizeUntrustedText(session.model)
+}
+
 export function formatCliSessionList(sessions: SessionMeta[]): string
 {
   if (sessions.length === 0) return 'No saved sessions.'
@@ -34,9 +48,9 @@ export function formatCliSessionList(sessions: SessionMeta[]): string
   for (const session of sessions)
   {
     lines.push(
-      `  ${session.id}  ${session.model}  ${formatSessionDate(session)}  (${formatSessionCount(session)})`
+      `  ${cleanSessionId(session)}  ${cleanSessionModel(session)}  ${formatSessionDate(session)}  (${formatSessionCount(session)})`
     )
-    lines.push(`         ${session.title}`)
+    lines.push(`         ${sanitizeUntrustedText(session.title)}`)
     lines.push('')
   }
 
@@ -58,9 +72,9 @@ export function formatTuiSessionList(
     const isCurrent = session.id === currentSessionId
     const marker = isCurrent ? style('success')(' ●') : '  '
     lines.push(
-      `${marker} ${style('user')(session.id)}  ${chalk.white(session.model)}  ${chalk.dim(formatSessionDate(session))}  ${chalk.dim(`(${formatSessionCount(session)})`)}`
+      `${marker} ${style('user')(cleanSessionId(session))}  ${chalk.white(cleanSessionModel(session))}  ${chalk.dim(formatSessionDate(session))}  ${chalk.dim(`(${formatSessionCount(session)})`)}`
     )
-    lines.push(`     ${chalk.dim(session.title)}`)
+    lines.push(`     ${chalk.dim(sanitizeUntrustedText(session.title))}`)
   }
 
   lines.push('')
@@ -71,7 +85,7 @@ export function formatTuiSessionList(
 
 function formatResumedSession(session: SessionMeta): string
 {
-  return `Resumed session ${style('user')(session.id)} — ${session.title}`
+  return `Resumed session ${style('user')(cleanSessionId(session))} — ${sanitizeUntrustedText(session.title)}`
 }
 
 function formatResumeMatches(matches: SessionMeta[]): string
@@ -79,7 +93,8 @@ function formatResumeMatches(matches: SessionMeta[]): string
   return matches
     .slice(0, 5)
     .map(
-      (session) => `  ${style('user')(session.id)}  ${chalk.dim(session.title)}`
+      (session) =>
+        `  ${style('user')(cleanSessionId(session))}  ${chalk.dim(sanitizeUntrustedText(session.title))}`
     )
     .join('\n')
 }
@@ -94,16 +109,21 @@ export function formatTuiResumeResolution(
       return formatResumedSession(resolution.session)
     case 'current':
       return 'Already in this session.'
+    case 'unavailable':
+      return (
+        `Session unavailable: ${style('user')(cleanSessionId(resolution.session))}\n` +
+        `Working directory no longer exists: ${sanitizeUntrustedText(resolution.session.cwd)}`
+      )
     case 'empty':
       return 'No other sessions to resume.'
     case 'ambiguous':
       return (
-        `Ambiguous session ID "${resolution.requestedId}" — multiple matches:\n` +
+        `Ambiguous session ID "${sanitizeUntrustedText(resolution.requestedId)}" — multiple matches:\n` +
         formatResumeMatches(resolution.matches)
       )
     case 'not_found':
       return (
-        `Session not found: ${resolution.requestedId}\n` +
+        `Session not found: ${sanitizeUntrustedText(resolution.requestedId)}\n` +
         `Use ${style('user')('/sessions')} to see available sessions.`
       )
   }
@@ -116,18 +136,23 @@ export function formatCliResumeError(
   switch (resolution.type)
   {
     case 'current':
-      return `Session already active: ${resolution.session.id}`
+      return `Session already active: ${cleanSessionId(resolution.session)}`
+    case 'unavailable':
+      return (
+        `Cannot resume session ${cleanSessionId(resolution.session)}.\n` +
+        `Working directory no longer exists: ${sanitizeUntrustedText(resolution.session.cwd)}`
+      )
     case 'empty':
       return 'No sessions to resume.'
     case 'ambiguous':
       return (
-        `Ambiguous session ID "${resolution.requestedId}" — multiple matches:\n` +
+        `Ambiguous session ID "${sanitizeUntrustedText(resolution.requestedId)}" — multiple matches:\n` +
         formatResumeMatches(resolution.matches) +
         '\nUse the full session ID.'
       )
     case 'not_found':
       return (
-        `Session not found: ${resolution.requestedId}\n` +
+        `Session not found: ${sanitizeUntrustedText(resolution.requestedId)}\n` +
         'Run coral --sessions to see available sessions.'
       )
   }
@@ -227,5 +252,49 @@ export function formatIndexError(
 {
   const base = `Index build failed (embedding model ${embeddingModel}): ${message}`
   if (!isMissingModelError(message)) return base
-  return `${base}\nIf the model is missing, run: ollama pull ${embeddingModel}`
+  return withPullHint(base, embeddingModel, '\n')
+}
+
+// ── /theme ─────────────────────────────────────────────────────────────
+
+// colored swatch dot rendered in a specific theme's own palette
+function swatch(color: RoleColor): string
+{
+  return 'ansi' in color
+    ? chalk[color.ansi]('●')
+    : chalk.rgb(color.r, color.g, color.b)('●')
+}
+
+const SWATCH_ROLES: Role[] = ['primary', 'accent', 'user', 'code', 'muted']
+
+export function formatThemeList(): string
+{
+  const current = getTheme()
+  const maxName = Math.max(...THEMES.map((theme) => theme.name.length))
+  const lines: string[] = [coralHeader('themes'), '']
+
+  for (const theme of THEMES)
+  {
+    const dots = SWATCH_ROLES.map((role) => swatch(theme.roles[role])).join(' ')
+    const marker = theme === current ? style('primary')('›') : ' '
+    lines.push(
+      `${marker} ${dots}  ${theme.name.padEnd(maxName)}  ${chalk.dim(theme.description)}`
+    )
+  }
+
+  lines.push('')
+  lines.push(chalk.dim(`Switch with ${style('user')('/theme <name>')}`))
+  return lines.join('\n')
+}
+
+// ── /todo ──────────────────────────────────────────────────────────────
+
+export function formatTodoList(todos: TodoItem[]): string
+{
+  const lines: string[] = [coralHeader('tasks'), '']
+  for (const todo of todos)
+  {
+    lines.push(`  ${strikeIfDone(todo, todoRowText(todo))}`)
+  }
+  return lines.join('\n')
 }

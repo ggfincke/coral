@@ -1,7 +1,13 @@
 // src/tui/completion.ts
 // pure completion logic for slash commands & @-file mentions in the prompt
 
-import { decodeMentionPath, encodeMentionPath } from './mention-path.js'
+import {
+  decodeMentionPath,
+  encodeMentionPath,
+  MENTION_BOUNDARY,
+  QUOTED_BODY,
+  UNQUOTED_RUN,
+} from './mention-path.js'
 
 export type CompletionKind = 'command' | 'file'
 
@@ -58,7 +64,9 @@ export function detectCompletion(
     }
   }
 
-  const quotedMention = /(?:^|\s)@"((?:\\.|[^"\\])*)$/.exec(before)
+  const quotedMention = new RegExp(
+    `${MENTION_BOUNDARY}"(${QUOTED_BODY})$`
+  ).exec(before)
   if (quotedMention)
   {
     const rawToken = quotedMention[1] ?? ''
@@ -71,7 +79,9 @@ export function detectCompletion(
   }
 
   // @-mention: '@' at line start or after whitespace, then a non-space run
-  const mention = /(?:^|\s)@(\S*)$/.exec(before)
+  const mention = new RegExp(`${MENTION_BOUNDARY}(${UNQUOTED_RUN}*)$`).exec(
+    before
+  )
   if (mention)
   {
     const token = mention[1] ?? ''

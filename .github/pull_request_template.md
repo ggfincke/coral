@@ -13,10 +13,12 @@
 <!-- How was this tested? -->
 
 - [ ] Changelog check passes (`npm run check:changelog`)
-- [ ] Lint passes (`npm run lint`)
-- [ ] Formatting passes (`npm run format:check`)
+- [ ] Security audit passes (`npm audit --audit-level=high`)
+- [ ] Formatting and linting pass (`npm run format:check`)
 - [ ] Typecheck passes (`npm run typecheck`)
+- [ ] Script typecheck passes (`npm run typecheck:scripts`)
 - [ ] Unit tests pass (`npm test`)
+- [ ] Dev-tool checks pass (`npm run check:dev-tools`)
 - [ ] Build passes (`npm run build`)
 
 ## Related Issues

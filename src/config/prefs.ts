@@ -1,8 +1,7 @@
 // src/config/prefs.ts
-// user preferences persisted to ~/.coral/prefs.json
+// mutable user prefs in ~/.coral/prefs.json (distinct from read-only .coral.json loaders)
 
-import { join } from 'node:path'
-import { getCoralHome } from '../utils/coral-home.js'
+import { coralHomePath } from '../utils/coral-home.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
 
 export interface Prefs
@@ -10,21 +9,18 @@ export interface Prefs
   theme?: string
 }
 
-function prefsPath(): string
-{
-  return join(getCoralHome(), 'prefs.json')
-}
-
 // load prefs; missing or corrupt file -> empty prefs
 export function loadPrefs(): Prefs
 {
-  return (readJsonObjectFile(prefsPath()) as Prefs | undefined) ?? {}
+  return (
+    (readJsonObjectFile(coralHomePath('prefs.json')) as Prefs | undefined) ?? {}
+  )
 }
 
 // merge a patch into prefs on disk & return the result
 export function savePrefs(patch: Partial<Prefs>): Prefs
 {
   const next = { ...loadPrefs(), ...patch }
-  writeJsonFile(prefsPath(), next)
+  writeJsonFile(coralHomePath('prefs.json'), next)
   return next
 }

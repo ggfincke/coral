@@ -20,6 +20,8 @@ import {
   type CompletionItem,
 } from './completion.js'
 import CompletionMenu from './completion-menu.js'
+import { resetPromptFileSuggestions } from './prompt-file-suggestions.js'
+import { renderPromptValueWithCursor } from './prompt-render.js'
 
 export interface PromptInputProps
 {
@@ -27,6 +29,7 @@ export interface PromptInputProps
   placeholder?: string
   focus?: boolean
   showCursor?: boolean
+  filesCacheKey?: string
   completionCommands?: CommandSummary[]
   listFiles?: () => Promise<string[]>
   onChange: (value: string) => void
@@ -61,6 +64,7 @@ export default function PromptInput({
   placeholder = '',
   focus = true,
   showCursor = true,
+  filesCacheKey,
   completionCommands = [],
   listFiles,
   onChange,
@@ -86,6 +90,7 @@ export default function PromptInput({
   const [dismissed, setDismissed] = useState(false)
   const [files, setFiles] = useState<string[]>([])
   const filesRequestedRef = useRef(false)
+  const filesCacheKeyRef = useRef(filesCacheKey)
   const mountedRef = useRef(true)
   const pendingTerminalSequenceRef = useRef('')
   // cursor is out of sync w/ the controlled value -> the value changed
@@ -152,6 +157,18 @@ export default function PromptInput({
       })
   }, [needFiles, listFiles])
 
+  useEffect(() =>
+  {
+    if (filesCacheKeyRef.current === filesCacheKey) return
+    filesCacheKeyRef.current = filesCacheKey
+
+    const reset = resetPromptFileSuggestions()
+    filesRequestedRef.current = reset.filesRequested
+    setFiles(reset.files)
+    setSelectedIndex(reset.selectedIndex)
+    setDismissed(reset.dismissed)
+  }, [filesCacheKey])
+
   // splice the highlighted suggestion into the prompt & close the menu
   const acceptCompletion = useCallback(() =>
   {
@@ -178,23 +195,11 @@ export default function PromptInput({
         ? chalk.inverse(placeholder[0]) + chalk.grey(placeholder.slice(1))
         : chalk.inverse(' ')
 
-    renderedValue = value.length > 0 ? '' : chalk.inverse(' ')
-
-    let index = 0
-    for (const char of value)
-    {
-      renderedValue +=
-        index >= resolvedCursor.cursorOffset - resolvedCursor.cursorWidth &&
-        index <= resolvedCursor.cursorOffset
-          ? chalk.inverse(char)
-          : char
-      index += 1
-    }
-
-    if (value.length > 0 && resolvedCursor.cursorOffset === value.length)
-    {
-      renderedValue += chalk.inverse(' ')
-    }
+    renderedValue = renderPromptValueWithCursor(
+      value,
+      resolvedCursor.cursorOffset,
+      resolvedCursor.cursorWidth
+    )
   }
 
   const handleInput = useCallback(

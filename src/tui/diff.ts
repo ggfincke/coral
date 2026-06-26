@@ -3,6 +3,7 @@
 
 import chalk from 'chalk'
 import { style } from './theme.js'
+import { sanitizeUntrustedText } from './sanitize.js'
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
 
@@ -50,7 +51,7 @@ function fitContent(
 // styled lines: dim two-column gutter, +/- sign, themed add/remove colors
 export function renderUnifiedDiff(unified: string, width: number): string[]
 {
-  const rawLines = unified.split('\n')
+  const rawLines = sanitizeUntrustedText(unified).split('\n')
   const numWidth = gutterWidth(rawLines)
   const gutterCols = numWidth * 2 + 1
   const contentWidth = Math.max(width - gutterCols - 1, 8)

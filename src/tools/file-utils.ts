@@ -5,6 +5,7 @@ import type { ToolResult } from './tool.js'
 import {
   formatRequiredTextFileError,
   readRequiredTextFile,
+  type TextFileReadOptions,
 } from '../utils/file-read.js'
 
 // success result from readFileGuarded
@@ -25,10 +26,11 @@ export interface FileError
 
 // read a file w/ size guard to prevent loading huge files into memory
 export async function readFileGuarded(
-  rawPath: string
+  rawPath: string,
+  options: TextFileReadOptions = {}
 ): Promise<FileContent | FileError>
 {
-  const result = await readRequiredTextFile(rawPath)
+  const result = await readRequiredTextFile(rawPath, options)
   if (result.ok) return result
   return {
     ok: false,

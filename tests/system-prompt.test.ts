@@ -2,26 +2,17 @@
 // regression tests for system prompt project context
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import { buildSystemPrompt } from '../src/agent/system-prompt.js'
+import { makeTempDirPool } from './helpers/temp.js'
 
-const tempDirs: string[] = []
-
-// remove temp workspaces created during tests
-after(async () =>
-{
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
-})
+const { tempDir } = makeTempDirPool()
 
 test('buildSystemPrompt includes lightweight project context', async () =>
 {
-  const dir = await mkdtemp(join(tmpdir(), 'coral-prompt-'))
-  tempDirs.push(dir)
+  const dir = await tempDir('coral-prompt-')
 
   await mkdir(join(dir, 'src'))
   await writeFile(join(dir, 'README.md'), '# Fixture\n', 'utf-8')

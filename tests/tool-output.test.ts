@@ -3,12 +3,11 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
+import { capToolOutput, capErrorMessage } from '../src/agent/tool-output.js'
 import {
-  capToolOutput,
-  capErrorMessage,
   MAX_TOOL_OUTPUT_CHARS,
   MAX_ERROR_MESSAGE_CHARS,
-} from '../src/agent/tool-output.js'
+} from '../src/utils/limits.js'
 
 test('capToolOutput truncates oversized output and marks the omission', () =>
 {

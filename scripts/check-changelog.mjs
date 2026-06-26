@@ -70,6 +70,13 @@ if (!versionHeadingPattern.test(changelog))
   errors.push(`Missing changelog entry for package version ${pkg.version}.`)
 }
 
+if (/https:\/\/github\.com\/user\/coral\b/.test(changelog))
+{
+  errors.push(
+    'CHANGELOG.md must not contain placeholder github.com/user/coral URLs.'
+  )
+}
+
 const versionHeading = headings.find((heading) => heading.title === pkg.version)
 const nextHeading = headings.find(
   (heading) =>

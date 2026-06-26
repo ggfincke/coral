@@ -74,7 +74,7 @@ npm run eval -- gemma4:31b-mlx
 npm run eval -- mistral qwen3-coder llama3.1
 
 # 3 reps each, JSON output for downstream tooling
-npm run eval -- mistral --reps 3 --json
+npm run --silent eval -- mistral --reps 3 --json
 
 # a single task against a remote host
 npm run eval -- mistral --task build-run --host http://192.168.1.50:11434
@@ -112,6 +112,7 @@ view is printed below the per-run report (suppressed under `--json`).
 - Each run is bounded by a **`maxIterations` cap** (default 15) and a per-rep
   timeout (default 120s); a hit cap or timeout yields a failed/aborted outcome
   rather than hanging the suite.
-- Tasks run **sequentially**, not in parallel: `Agent` sets the working directory
-  via a global `setCwd`, so concurrent reps would clobber each other. Models are
-  kept warm across their own tasks and unloaded only when switching models.
+- Tasks run **sequentially**, not in parallel: a single local Ollama runner serves
+  every rep, so concurrent reps would thrash model load/unload and contend for the
+  host. Models are kept warm across their own tasks and unloaded only when
+  switching models.

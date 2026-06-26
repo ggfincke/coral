@@ -253,7 +253,7 @@ function toInputEvent(packet: string): ParsedInputEvent | null
     tab: keypress.name === 'tab',
     backspace: keypress.name === 'backspace',
     delete: keypress.name === 'delete',
-    meta: keypress.meta || keypress.name === 'escape' || keypress.option,
+    meta: keypress.meta || keypress.option,
   })
 
   let input = keypress.ctrl ? keypress.name : keypress.sequence

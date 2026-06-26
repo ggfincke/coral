@@ -2,6 +2,7 @@
 // spinner/shimmer timer management for visible run-stage animations
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { clearTimerRef } from './clear-timer-ref.js'
 import { isAnimatedRunStage, type RunStage } from './run-stage.js'
 
 export interface AnimationTimerState
@@ -42,11 +43,7 @@ export function useAnimationTimer(
 
   const resetAnimation = useCallback(() =>
   {
-    if (timerRef.current)
-    {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
+    clearTimerRef(timerRef)
 
     waitingStartRef.current = null
     setWaitingElapsed(0)
@@ -72,11 +69,7 @@ export function useAnimationTimer(
 
     return () =>
     {
-      if (timerRef.current)
-      {
-        clearInterval(timerRef.current)
-        timerRef.current = null
-      }
+      clearTimerRef(timerRef)
     }
   }, [interval, runStage])
 

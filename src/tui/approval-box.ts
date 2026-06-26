@@ -2,12 +2,12 @@
 // bordered tool approval prompt formatting
 
 import chalk from 'chalk'
-import stripAnsi from 'strip-ansi'
 import wrapAnsi from 'wrap-ansi'
 import { renderUnifiedDiff } from './diff.js'
 import { summarizeToolArgs } from './transcript.js'
-import { buildLabeledSeparator, buildRule } from './status-line.js'
+import { boxFrame } from './status-line.js'
 import { style } from './theme.js'
+import { sanitizeUntrustedText } from './sanitize.js'
 
 // cap change previews so large edits don't swallow the screen
 const MAX_PREVIEW_LINES = 20
@@ -34,47 +34,44 @@ function formatApprovalArgs(
 function createPromptBox(width: number, label: string): PromptBoxBuilder
 {
   const warn = style('warning')
-  const innerWidth = Math.max(width - 4, 12)
+  const frame = boxFrame(width, label, warn)
 
-  // pad by visible length; styled content carries ANSI codes
-  const row = (content: string): string =>
-  {
-    const fill = ' '.repeat(Math.max(innerWidth - stripAnsi(content).length, 0))
-    return `${warn('│')} ${content}${fill} ${warn('│')}`
-  }
-
-  const lines: string[] = [
-    warn(`╭─${buildLabeledSeparator(innerWidth, label)}─╮`),
-    row(''),
-  ]
+  const lines: string[] = [frame.top, frame.row('')]
 
   const pushWrapped = (
     content: string,
     decorate: (line: string) => string = (line) => line
   ) =>
   {
-    const wrapped = wrapAnsi(content, innerWidth, {
+    const wrapped = wrapAnsi(content, frame.innerWidth, {
       hard: true,
       trim: false,
       wordWrap: true,
     })
     for (const line of wrapped.split('\n'))
     {
-      lines.push(row(decorate(line)))
+      lines.push(frame.row(decorate(line)))
     }
   }
 
   const finish = (actionLine: string): string[] =>
   {
-    lines.push(row(''))
-    lines.push(row(actionLine))
-    lines.push(row(''))
-    lines.push(warn(`╰${buildRule(innerWidth + 2)}╯`))
+    lines.push(frame.row(''))
+    lines.push(frame.row(actionLine))
+    lines.push(frame.row(''))
+    lines.push(frame.bottom)
 
     return lines
   }
 
-  return { innerWidth, lines, row, warn, pushWrapped, finish }
+  return {
+    innerWidth: frame.innerWidth,
+    lines,
+    row: frame.row,
+    warn,
+    pushWrapped,
+    finish,
+  }
 }
 
 // lines come back fully styled; render w/o an outer Ink color prop so the
@@ -114,7 +111,7 @@ export function buildApprovalBox(
   else if (previewMessage)
   {
     box.lines.push(box.row(''))
-    box.pushWrapped(chalk.dim(previewMessage))
+    box.pushWrapped(chalk.dim(sanitizeUntrustedText(previewMessage)))
   }
 
   return box.finish(box.warn('(y) approve  (n) reject  (esc) cancel'))
@@ -128,6 +125,6 @@ export function buildConfirmBox(
 ): string[]
 {
   const box = createPromptBox(width, label)
-  box.pushWrapped(message, box.warn)
+  box.pushWrapped(sanitizeUntrustedText(message), box.warn)
   return box.finish(box.warn('(y) continue  (n) stop'))
 }

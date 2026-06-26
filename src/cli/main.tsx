@@ -83,6 +83,7 @@ if (opts.session)
   const resolution = resolveResumeSession({
     requestedId: opts.session,
     allowPrefix: false,
+    requireExistingCwd: true,
   })
 
   if (resolution.type !== 'target')
@@ -95,7 +96,7 @@ if (opts.session)
 }
 else if (opts.resume)
 {
-  const resolution = resolveResumeSession()
+  const resolution = resolveResumeSession({ requireExistingCwd: true })
 
   if (resolution.type !== 'target')
   {
@@ -113,5 +114,6 @@ render(
     think={opts.think ?? true}
     yolo={opts.yolo ?? false}
     resumeSessionId={resumeSessionId}
-  />
+  />,
+  { exitOnCtrlC: false }
 )

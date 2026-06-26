@@ -2,8 +2,7 @@
 // tests for input history persistence & navigation state
 
 import { strict as assert } from 'node:assert'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, beforeEach, test } from 'node:test'
 
@@ -14,9 +13,11 @@ import {
   computeNavigateDown,
   type HistoryEntry,
 } from '../src/tui/input-history.js'
+import { makeTempDirPool } from './helpers/temp.js'
+import { captureCoralHome } from './helpers/coral-home.js'
 
-const tempDirs: string[] = []
-const originalCoralHome = process.env.CORAL_HOME
+const { tempDirSync, cleanup } = makeTempDirPool({ autoCleanup: false })
+const restoreCoralHome = captureCoralHome()
 
 function historyPath(): string
 {
@@ -25,26 +26,14 @@ function historyPath(): string
 
 beforeEach(() =>
 {
-  const dir = mkdtempSync(join(tmpdir(), 'coral-history-'))
-  tempDirs.push(dir)
+  const dir = tempDirSync('coral-history-')
   process.env.CORAL_HOME = dir
 })
 
-after(() =>
+after(async () =>
 {
-  if (originalCoralHome === undefined)
-  {
-    delete process.env.CORAL_HOME
-  }
-  else
-  {
-    process.env.CORAL_HOME = originalCoralHome
-  }
-
-  for (const dir of tempDirs)
-  {
-    rmSync(dir, { recursive: true, force: true })
-  }
+  restoreCoralHome()
+  await cleanup()
 })
 
 test('appendHistoryEntry persists entries and trims old prompts', () =>

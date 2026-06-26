@@ -1,6 +1,7 @@
 // src/retrieval/indexer.ts
 // project indexing & semantic search orchestration
 
+import { resolve } from 'node:path'
 import { chunkText } from './chunker.js'
 import { collectIndexableFiles } from './files.js'
 import type {
@@ -18,6 +19,20 @@ import { clamp } from '../utils/clamp.js'
 export const DEFAULT_LIMIT = 5
 const MAX_LIMIT = 20
 const EMBED_BATCH_SIZE = 16
+
+interface RefreshOptions
+{
+  force?: boolean
+  onProgress?: (progress: IndexProgress) => void
+}
+
+interface InFlightRefresh
+{
+  force: boolean
+  promise: Promise<IndexStats>
+}
+
+const inFlightRefreshes = new Map<string, InFlightRefresh>()
 
 function clampLimit(limit: number | undefined): number
 {
@@ -50,12 +65,14 @@ export class ProjectIndexer
   )
   {}
 
+  private refreshKey(): string
+  {
+    return `${resolve(this.cwd)}\0${this.embedder.model}`
+  }
+
   private async refresh(
     projectId: number,
-    options: {
-      force?: boolean
-      onProgress?: (progress: IndexProgress) => void
-    } = {}
+    options: RefreshOptions = {}
   ): Promise<IndexStats>
   {
     const { force = false, onProgress } = options
@@ -154,15 +171,50 @@ export class ProjectIndexer
     }
   }
 
-  // build or refresh the index, returning a summary. force re-embeds every
-  // file; onProgress fires once per processed file so callers can show progress
-  async ensureIndexed(options?: {
-    force?: boolean
-    onProgress?: (progress: IndexProgress) => void
-  }): Promise<IndexStats>
+  private async refreshDeduped(
+    options: RefreshOptions = {}
+  ): Promise<IndexStats>
   {
-    const projectId = this.store.ensureProject(this.cwd)
-    return this.refresh(projectId, options)
+    const force = options.force ?? false
+    const key = this.refreshKey()
+
+    // coalesce onto an in-flight refresh for the same project+model; a coalesced
+    // caller shares the original's progress/store/embedder & gets its stats
+    while (true)
+    {
+      const existing = inFlightRefreshes.get(key)
+      if (!existing) break
+
+      const stats = await existing.promise
+      if (!force || existing.force) return stats
+    }
+
+    const promise = (async () =>
+    {
+      const projectId = this.store.ensureProject(this.cwd)
+      return this.refresh(projectId, options)
+    })()
+
+    inFlightRefreshes.set(key, { force, promise })
+
+    try
+    {
+      return await promise
+    }
+    finally
+    {
+      if (inFlightRefreshes.get(key)?.promise === promise)
+      {
+        inFlightRefreshes.delete(key)
+      }
+    }
+  }
+
+  // build or refresh the index, returning a summary. force re-embeds every
+  // file; concurrent refreshes for the same project/model share work
+  async ensureIndexed(options?: RefreshOptions): Promise<IndexStats>
+  {
+    return this.refreshDeduped(options)
   }
 
   async search(query: string, limit?: number): Promise<SearchHit[]>
@@ -170,12 +222,12 @@ export class ProjectIndexer
     const trimmed = query.trim()
     if (!trimmed) return []
 
-    const projectId = this.store.ensureProject(this.cwd)
-    await this.refresh(projectId)
+    await this.refreshDeduped()
 
     const [queryVector] = await this.embedder.embed([trimmed])
     if (!queryVector) return []
 
+    const projectId = this.store.ensureProject(this.cwd)
     return this.store.search(
       projectId,
       this.embedder.model,

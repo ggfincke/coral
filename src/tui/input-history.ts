@@ -5,14 +5,15 @@ import {
   readFileSync,
   appendFileSync,
   writeFileSync,
-  mkdirSync,
   existsSync,
 } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { getCoralHome } from '../utils/coral-home.js'
+import { coralHomePath } from '../utils/coral-home.js'
+import { ensureParentDir } from '../utils/fs.js'
+import { isPlainObject } from '../utils/guards.js'
+import { tryParseJson } from '../utils/json.js'
 
 // maximum entries kept in the history file
-export const MAX_ENTRIES = 500
+const MAX_ENTRIES = 500
 
 export interface HistoryEntry
 {
@@ -23,7 +24,7 @@ export interface HistoryEntry
 
 function historyPath(): string
 {
-  return join(getCoralHome(), 'history.jsonl')
+  return coralHomePath('history.jsonl')
 }
 
 // result of a navigation operation
@@ -57,25 +58,20 @@ export function loadHistory(): HistoryEntry[]
   {
     if (!line.trim()) continue
 
-    try
+    const parsed = tryParseJson(line)
+    if (!isPlainObject(parsed)) continue
+
+    if (
+      typeof parsed.text === 'string' &&
+      typeof parsed.timestamp === 'number'
+    )
     {
-      const parsed = JSON.parse(line) as Record<string, unknown>
-      if (
-        typeof parsed.text === 'string' &&
-        typeof parsed.timestamp === 'number'
-      )
-      {
-        entries.push({
-          text: parsed.text,
-          timestamp: parsed.timestamp,
-          sessionId:
-            typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
-        })
-      }
-    }
-    catch
-    {
-      // skip corrupt lines
+      entries.push({
+        text: parsed.text,
+        timestamp: parsed.timestamp,
+        sessionId:
+          typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+      })
     }
   }
 
@@ -96,7 +92,7 @@ export function loadHistory(): HistoryEntry[]
 export function appendHistoryEntry(entry: HistoryEntry): void
 {
   const path = historyPath()
-  mkdirSync(dirname(path), { recursive: true })
+  ensureParentDir(path)
   appendFileSync(path, JSON.stringify(entry) + '\n', 'utf-8')
 }
 
@@ -104,7 +100,7 @@ export function appendHistoryEntry(entry: HistoryEntry): void
 function writeHistoryFile(entries: HistoryEntry[]): void
 {
   const path = historyPath()
-  mkdirSync(dirname(path), { recursive: true })
+  ensureParentDir(path)
   writeFileSync(
     path,
     entries.map((e) => JSON.stringify(e)).join('\n') + '\n',

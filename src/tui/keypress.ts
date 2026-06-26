@@ -1,8 +1,6 @@
 // src/tui/keypress.ts
 // parse terminal keypresses for Coral's shared input layer
 
-import { Buffer } from 'node:buffer'
-
 const ESC = '\u001b'
 const META_KEY_CODE_RE = new RegExp(`^(?:${ESC})([a-zA-Z0-9])$`)
 const FN_KEY_RE = new RegExp(
@@ -129,31 +127,10 @@ function isCtrlKey(code: string): boolean
   return CTRL_CODES.has(code)
 }
 
-export function parseKeypress(input: string | Buffer = ''): ParsedKey
+export function parseKeypress(input: string = ''): ParsedKey
 {
-  let value = input
+  const value = input
   let parts: RegExpExecArray | null
-
-  if (Buffer.isBuffer(value))
-  {
-    if (value[0] > 127 && value[1] === undefined)
-    {
-      value[0] -= 128
-      value = `\x1b${String(value)}`
-    }
-    else
-    {
-      value = String(value)
-    }
-  }
-  else if (value !== undefined && typeof value !== 'string')
-  {
-    value = String(value)
-  }
-  else if (!value)
-  {
-    value = ''
-  }
 
   const key: ParsedKey = {
     name: '',

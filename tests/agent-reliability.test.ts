@@ -2,95 +2,44 @@
 // loop-level tests for the tool-call reliability layer
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
-import { Agent } from '../src/agent/agent.js'
+import { test } from 'node:test'
 import { subagentTools } from '../src/tools/index.js'
 import { STALL_NUDGE_MESSAGE, MAX_STALL_NUDGES } from '../src/agent/repair.js'
-import type { OllamaMessage } from '../src/types/inference.js'
+import { makeTempDirPool } from './helpers/temp.js'
+import {
+  makeFakeAgent,
+  makeAgentEvents,
+  type FakeChunk,
+} from './helpers/agent-harness.js'
 
-const tempDirs: string[] = []
-
-after(async () =>
-{
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
-})
-
-interface FakeChunk
-{
-  message: Partial<OllamaMessage>
-  done: boolean
-}
-
-type TestAgent = Agent & {
-  client: {
-    startKeepAlive: (model: string) => void
-    chatStream: () => AsyncGenerator<FakeChunk>
-  }
-  messages: OllamaMessage[]
-}
+const { tempDir } = makeTempDirPool()
 
 // build an agent whose client replays one chunk array per model turn
 async function makeAgent(
   turns: FakeChunk[][],
-  options?: ConstructorParameters<typeof Agent>[3]
-): Promise<{ agent: TestAgent; streams: () => number }>
+  options?: Parameters<typeof makeFakeAgent>[2]
+)
 {
-  const dir = await mkdtemp(join(tmpdir(), 'coral-reliability-'))
-  tempDirs.push(dir)
+  const dir = await tempDir('coral-reliability-')
   await writeFile(join(dir, 'package.json'), '{\n  "name": "fixture"\n}\n')
-
-  const agent = new Agent(
-    'fake-model',
-    'http://localhost:11434',
-    dir,
-    options
-  ) as TestAgent
-
-  let streamCount = 0
-  agent.client = {
-    startKeepAlive()
-    {},
-    async *chatStream()
-    {
-      const turn = turns[Math.min(streamCount, turns.length - 1)]!
-      streamCount += 1
-      yield* turn
-    },
-  }
-
-  return { agent, streams: () => streamCount }
+  return makeFakeAgent(dir, turns, options)
 }
 
 // minimal event sink that records calls & results
 function makeEvents(seenCalls: string[], seenResults: string[])
 {
-  return {
-    onToken()
-    {},
-    onToolCall(name: string)
+  return makeAgentEvents({
+    onToolCall(name)
     {
       seenCalls.push(name)
     },
-    onToolResult(name: string, result: string, error: string | undefined)
+    onToolResult(name, _result, error)
     {
       seenResults.push(`${name}:${error ?? 'ok'}`)
     },
-    onToolApproval()
-    {
-      return Promise.resolve(true)
-    },
-    onDone()
-    {},
-    onError(error: Error)
-    {
-      throw error
-    },
-  }
+  })
 }
 
 test('repairs a tool call emitted as text content & dispatches it', async () =>
@@ -205,7 +154,7 @@ test('restricted toolsets cannot reach tools outside their subset', async () =>
       ],
       [{ message: { role: 'assistant', content: 'done' }, done: true }],
     ],
-    { tools: subagentTools, registerSubagent: false }
+    { tools: subagentTools }
   )
 
   const seenResults: string[] = []

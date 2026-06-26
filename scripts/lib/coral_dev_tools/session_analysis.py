@@ -15,7 +15,7 @@ from .report_render import render_counter, render_counter_md
 
 JsonObject = dict[str, Any]
 
-# ! keep in sync w/ src/agent/compaction.ts CHARS_PER_TOKEN
+# ! keep in sync w/ src/utils/limits.ts CHARS_PER_TOKEN
 CHARS_PER_TOKEN = 4
 # ! keep in sync w/ src/session/store.ts SESSION_INDEX_VERSION
 SESSION_INDEX_VERSION = 1
@@ -104,17 +104,36 @@ class HistorySummary:
     session_linked_entries: int
     repeated_prompts: list[tuple[str, int]]
 
-    def to_json(self) -> JsonObject:
+    def to_json(self, *, show_prompts: bool = False) -> JsonObject:
         return {
             "path": self.path,
             "entryCount": self.entry_count,
             "corruptLines": self.corrupt_lines,
             "sessionLinkedEntries": self.session_linked_entries,
-            "repeatedPrompts": [
-                {"text": text, "count": count}
-                for text, count in self.repeated_prompts
-            ],
+            "repeatedPrompts": self.repeated_prompts_to_json(
+                show_prompts=show_prompts
+            ),
         }
+
+    def repeated_prompts_to_json(
+        self,
+        *,
+        show_prompts: bool,
+    ) -> list[JsonObject]:
+        items: list[JsonObject] = []
+        for text, count in self.repeated_prompts:
+            if show_prompts:
+                items.append({"text": text, "count": count})
+            else:
+                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                items.append(
+                    {
+                        "digest": f"sha256:{digest}",
+                        "length": len(text),
+                        "count": count,
+                    }
+                )
+        return items
 
 
 @dataclass(frozen=True)
@@ -132,14 +151,14 @@ class AnalysisReport:
     role_counts: Counter[str] = field(default_factory=Counter)
     issues: list[Issue] = field(default_factory=list)
 
-    def to_json(self) -> JsonObject:
+    def to_json(self, *, show_prompts: bool = False) -> JsonObject:
         return {
             "home": str(self.home),
             "sessionsDir": str(self.sessions_dir),
             "indexPath": str(self.index_path),
             "indexCount": self.index_count,
             "sessionCount": self.session_count,
-            "history": self.history.to_json(),
+            "history": self.history.to_json(show_prompts=show_prompts),
             "sessions": [session.to_json() for session in self.sessions],
             "models": dict(self.models),
             "cwdCounts": dict(self.cwd_counts),

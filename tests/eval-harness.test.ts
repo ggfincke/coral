@@ -2,10 +2,10 @@
 // unit tests for the eval harness graders & aggregation (no live model)
 
 import { strict as assert } from 'node:assert'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { after, describe, it } from 'node:test'
+import { describe, it } from 'node:test'
 import {
   answerContains,
   readJson,
@@ -14,46 +14,17 @@ import {
 } from './scripts/eval/grade.js'
 import { aggregateModel, aggregateTask } from './scripts/eval/harness.js'
 import { taskById } from './scripts/eval/tasks.js'
-import type { ReliabilityStats } from '../src/agent/agent.js'
+import { makeReliabilityStats } from '../src/types/inference.js'
 import type {
   EvalTask,
   RunMetrics,
   RunOutcome,
   TaskResult,
 } from './scripts/eval/types.js'
+import { makeTempDirPool } from './helpers/temp.js'
 
-const tempDirs: string[] = []
-
-after(async () =>
-{
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
-})
-
-async function tempDir(): Promise<string>
-{
-  const dir = await mkdtemp(join(tmpdir(), 'coral-eval-test-'))
-  tempDirs.push(dir)
-  return dir
-}
-
-// zeroed reliability counters; override fields per case
-function stats(overrides: Partial<ReliabilityStats> = {}): ReliabilityStats
-{
-  return {
-    repairedToolCalls: 0,
-    nameRepairs: 0,
-    stallNudges: 0,
-    validationFailures: 0,
-    editRepairs: 0,
-    doomLoopTrips: 0,
-    reprompts: 0,
-    verifyFlags: 0,
-    verifyReprompts: 0,
-    ...overrides,
-  }
-}
+const pool = makeTempDirPool()
+const tempDir = () => pool.tempDir('coral-eval-test-')
 
 // minimal but type-complete RunOutcome; override the fields a case asserts on
 function outcome(overrides: Partial<RunOutcome> = {}): RunOutcome
@@ -61,7 +32,7 @@ function outcome(overrides: Partial<RunOutcome> = {}): RunOutcome
   return {
     toolCallsExecuted: 0,
     toolErrors: 0,
-    reliability: stats(),
+    reliability: makeReliabilityStats(),
     cleanlinessRate: 1,
     promptTokens: 0,
     completionTokens: 0,
@@ -84,7 +55,7 @@ function taskResult(
   const metrics: RunMetrics = {
     toolCallsExecuted: 0,
     toolErrors: 0,
-    reliability: stats(),
+    reliability: makeReliabilityStats(),
     cleanlinessRate: 1,
     promptTokens: 0,
     completionTokens: 0,
@@ -111,6 +82,54 @@ function requireTask(id: string): EvalTask
   assert.ok(task)
   return task
 }
+
+// run the eval CLI in a child process & capture its exit code + stderr. every
+// case here fails during arg parsing, so the harness never reaches a live model
+function runEvalCli(args: string[]): { code: number; stderr: string }
+{
+  try
+  {
+    execFileSync(
+      process.execPath,
+      ['--import', 'tsx', 'tests/scripts/eval/run.ts', ...args],
+      { encoding: 'utf-8', stdio: 'pipe' }
+    )
+    return { code: 0, stderr: '' }
+  }
+  catch (err)
+  {
+    const failure = err as { status?: number; stderr?: string }
+    return { code: failure.status ?? -1, stderr: failure.stderr ?? '' }
+  }
+}
+
+describe('eval CLI argument parsing', () =>
+{
+  it('fails fast on malformed flags, unknown flags, and unknown task ids', () =>
+  {
+    const fractional = runEvalCli(['--reps', '1.5', 'fake-model'])
+    assert.equal(fractional.code, 1)
+    assert.match(fractional.stderr, /--reps must be a positive integer/)
+
+    assert.match(
+      runEvalCli(['--reps', '0', 'fake-model']).stderr,
+      /--reps must be a positive number/
+    )
+    assert.match(
+      runEvalCli(['--think', 'bogus', 'fake-model']).stderr,
+      /--think must be one of/
+    )
+    assert.match(
+      runEvalCli(['--task', 'nope', 'fake-model']).stderr,
+      /unknown task id: nope/
+    )
+    assert.match(
+      runEvalCli(['--bogus', 'fake-model']).stderr,
+      /unknown flag: --bogus/
+    )
+    assert.match(runEvalCli(['--reps']).stderr, /--reps requires a value/)
+  })
+})
 
 describe('answerContains', () =>
 {
@@ -223,7 +242,7 @@ describe('aggregateTask', () =>
         toolCallsExecuted: 2,
         cleanlinessRate: 1,
         tokensPerSecond: 100,
-        reliability: stats({ nameRepairs: 2 }),
+        reliability: makeReliabilityStats({ nameRepairs: 2 }),
       }),
       outcome({
         passed: false,
@@ -231,7 +250,7 @@ describe('aggregateTask', () =>
         toolCallsExecuted: 4,
         cleanlinessRate: 0.5,
         tokensPerSecond: 50,
-        reliability: stats({ nameRepairs: 4 }),
+        reliability: makeReliabilityStats({ nameRepairs: 4 }),
       }),
       outcome({
         passed: true,
@@ -239,7 +258,7 @@ describe('aggregateTask', () =>
         toolCallsExecuted: 6,
         cleanlinessRate: 0.6,
         tokensPerSecond: 0,
-        reliability: stats({ nameRepairs: 0 }),
+        reliability: makeReliabilityStats({ nameRepairs: 0 }),
       }),
     ]
 

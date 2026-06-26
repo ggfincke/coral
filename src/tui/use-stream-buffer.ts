@@ -2,6 +2,7 @@
 // buffered streaming state for assistant text & reasoning
 
 import { useCallback, useRef, useState } from 'react'
+import { clearTimerRef } from './clear-timer-ref.js'
 import type { OutputBlock } from './transcript.js'
 
 export interface StreamBuffer
@@ -57,11 +58,7 @@ export function useStreamBuffer(flushInterval: number): {
 
   const clearFlushTimer = useCallback(() =>
   {
-    if (flushTimerRef.current)
-    {
-      clearTimeout(flushTimerRef.current)
-      flushTimerRef.current = null
-    }
+    clearTimerRef(flushTimerRef)
   }, [])
 
   const scheduleFlush = useCallback(() =>

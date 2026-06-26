@@ -2,6 +2,7 @@
 // tool interface & conversion to Ollama format
 
 import type { OllamaTool, JsonSchema } from '../types/inference.js'
+import type { SubagentRunner } from './subagent.js'
 
 // result returned after tool execution
 export interface ToolResult
@@ -28,6 +29,8 @@ export interface ToolExecutionContext
 {
   cwd: string
   ollamaHost: string
+  allowOutsideWorkspace?: boolean
+  subagentRunner?: SubagentRunner
   signal?: AbortSignal
 }
 

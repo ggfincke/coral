@@ -1,8 +1,10 @@
 // tests/scripts/eval/types.ts
 // shared type contract for the model eval harness
 
-import type { OllamaMessage } from '../../../src/types/inference.js'
-import type { ReliabilityStats } from '../../../src/agent/agent.js'
+import type {
+  OllamaMessage,
+  ReliabilityStats,
+} from '../../../src/types/inference.js'
 
 // one benchmark case: seed a scratch dir, run the agent, then grade the result
 export interface EvalTask

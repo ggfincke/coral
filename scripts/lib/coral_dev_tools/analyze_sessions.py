@@ -72,7 +72,11 @@ def render_report(
     show_prompts: bool,
 ) -> str:
     if output_format == "json":
-        return json.dumps(report.to_json(), indent=2, sort_keys=True)
+        return json.dumps(
+            report.to_json(show_prompts=show_prompts),
+            indent=2,
+            sort_keys=True,
+        )
     if output_format == "md":
         return render_markdown(report, top=top, show_prompts=show_prompts)
     return render_text(report, top=top, show_prompts=show_prompts)

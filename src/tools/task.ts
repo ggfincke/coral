@@ -40,7 +40,7 @@ export const taskTool: Tool = {
       return { output: '', error: 'task requires a non-empty prompt' }
     }
 
-    const runner = getSubagentRunner()
+    const runner = context?.subagentRunner ?? getSubagentRunner()
     if (!runner)
     {
       return { output: '', error: 'Subagents are unavailable in this context' }

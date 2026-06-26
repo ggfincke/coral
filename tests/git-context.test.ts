@@ -2,60 +2,34 @@
 // tests for volatile git workflow context
 
 import { strict as assert } from 'node:assert'
-import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import {
   buildGitContextMessage,
   GIT_CONTEXT_HEADING,
 } from '../src/agent/git-context.js'
+import { makeTempDirPool } from './helpers/temp.js'
+import { HAS_GIT, initTestRepo } from './helpers/git.js'
 
-const tempDirs: string[] = []
-const hasGit = spawnSync('git', ['--version']).status === 0
-
-after(async () =>
-{
-  await Promise.all(
-    tempDirs.map((dir) => rm(dir, { recursive: true, force: true }))
-  )
-})
+const { tempDir } = makeTempDirPool()
 
 test(
   'buildGitContextMessage includes staged, unstaged, and untracked files',
-  { skip: !hasGit },
+  { skip: !HAS_GIT },
   async () =>
   {
-    const dir = await mkdtemp(join(tmpdir(), 'coral-git-context-'))
-    tempDirs.push(dir)
-    assert.equal(spawnSync('git', ['init'], { cwd: dir }).status, 0)
-    assert.equal(
-      spawnSync('git', ['config', 'user.email', 'test@coral.dev'], {
-        cwd: dir,
-      }).status,
-      0
-    )
-    assert.equal(
-      spawnSync('git', ['config', 'user.name', 'Coral Test'], { cwd: dir })
-        .status,
-      0
-    )
+    const dir = await tempDir('coral-git-context-')
+    const run = initTestRepo(dir)
     await writeFile(join(dir, 'tracked.txt'), 'one\n', 'utf-8')
-    assert.equal(spawnSync('git', ['add', '-A'], { cwd: dir }).status, 0)
-    assert.equal(
-      spawnSync('git', ['commit', '-m', 'init'], { cwd: dir }).status,
-      0
-    )
+    assert.equal(run('add', '-A').status, 0)
+    assert.equal(run('commit', '-m', 'init').status, 0)
 
     await writeFile(join(dir, 'tracked.txt'), 'two\n', 'utf-8')
     await writeFile(join(dir, 'staged.txt'), 'staged\n', 'utf-8')
     await writeFile(join(dir, 'untracked.txt'), 'untracked\n', 'utf-8')
-    assert.equal(
-      spawnSync('git', ['add', 'staged.txt'], { cwd: dir }).status,
-      0
-    )
+    assert.equal(run('add', 'staged.txt').status, 0)
 
     const message = await buildGitContextMessage(dir)
 
@@ -76,17 +50,11 @@ test(
 // the repo's cwd, not the test process cwd (which is never mid-merge)
 test(
   'buildGitContextMessage detects an in-progress merge in a non-cwd repo',
-  { skip: !hasGit },
+  { skip: !HAS_GIT },
   async () =>
   {
-    const dir = await mkdtemp(join(tmpdir(), 'coral-git-merge-'))
-    tempDirs.push(dir)
-    const run = (...args: string[]) =>
-      spawnSync('git', args, { cwd: dir, encoding: 'utf-8' })
-
-    assert.equal(run('init').status, 0)
-    assert.equal(run('config', 'user.email', 'test@coral.dev').status, 0)
-    assert.equal(run('config', 'user.name', 'Coral Test').status, 0)
+    const dir = await tempDir('coral-git-merge-')
+    const run = initTestRepo(dir)
 
     await writeFile(join(dir, 'file.txt'), 'base\n', 'utf-8')
     assert.equal(run('add', '-A').status, 0)
@@ -113,17 +81,11 @@ test(
 
 test(
   'buildGitContextMessage reports unknown status when git status fails',
-  { skip: !hasGit },
+  { skip: !HAS_GIT },
   async () =>
   {
-    const dir = await mkdtemp(join(tmpdir(), 'coral-git-status-error-'))
-    tempDirs.push(dir)
-    const run = (...args: string[]) =>
-      spawnSync('git', args, { cwd: dir, encoding: 'utf-8' })
-
-    assert.equal(run('init').status, 0)
-    assert.equal(run('config', 'user.email', 'test@coral.dev').status, 0)
-    assert.equal(run('config', 'user.name', 'Coral Test').status, 0)
+    const dir = await tempDir('coral-git-status-error-')
+    const run = initTestRepo(dir)
 
     await writeFile(join(dir, 'tracked.txt'), 'base\n', 'utf-8')
     assert.equal(run('add', '-A').status, 0)

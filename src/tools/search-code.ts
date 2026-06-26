@@ -11,7 +11,12 @@ import {
   type IndexStore,
   type SearchHit,
 } from '../retrieval/types.js'
-import { isMissingModelError, toErrorMessage } from '../utils/errors.js'
+import { formatAttachedFileBlock } from '../utils/attached-file.js'
+import {
+  isMissingModelError,
+  toErrorMessage,
+  withPullHint,
+} from '../utils/errors.js'
 
 const MAX_SNIPPET_LINES = 12
 const MAX_SNIPPET_CHARS = 1_200
@@ -47,7 +52,10 @@ function formatHits(hits: SearchHit[]): string
     {
       const location = `${hit.path}:${hit.startLine}-${hit.endLine}`
       const score = hit.score.toFixed(3)
-      return `${index + 1}. ${location} (score ${score})\n\`\`\`text\n${formatSnippet(hit.text)}\n\`\`\``
+      const label = `${index + 1}. ${location} (score ${score})`
+      return formatAttachedFileBlock(label, formatSnippet(hit.text), {
+        fence: 'text',
+      })
     })
     .join('\n\n')
 }
@@ -57,7 +65,7 @@ function formatSearchError(embeddingModel: string, message: string): string
   const base = `search_code failed while using embedding model ${embeddingModel}: ${message}`
   if (!isMissingModelError(message)) return base
 
-  return `${base}. If the model is missing, run: ollama pull ${embeddingModel}`
+  return withPullHint(base, embeddingModel, '. ')
 }
 
 export function createSearchCodeTool(dependencies: RetrievalDeps = {}): Tool

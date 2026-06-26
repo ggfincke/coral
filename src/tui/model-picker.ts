@@ -3,6 +3,8 @@
 
 import chalk from 'chalk'
 import type { Model } from '../types/inference.js'
+import { formatBytes } from '../utils/bytes.js'
+import { clamp } from '../utils/clamp.js'
 import { style } from './theme.js'
 import { wrapLines } from './wrap.js'
 
@@ -13,21 +15,6 @@ function parseModifiedAt(value: string): number
 {
   const timestamp = Date.parse(value)
   return Number.isNaN(timestamp) ? 0 : timestamp
-}
-
-function formatSize(size: number): string
-{
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let value = size
-  let unitIndex = 0
-
-  while (value >= 1024 && unitIndex < units.length - 1)
-  {
-    value /= 1024
-    unitIndex += 1
-  }
-
-  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
 }
 
 export function sortModels(models: Model[]): Model[]
@@ -63,12 +50,10 @@ export function buildModelPickerLines(
 
   const wrapWidth = Math.max(width, 16)
   const visibleCount = Math.max(height - 6, 3)
-  const start = Math.max(
+  const start = clamp(
+    selectedIndex - Math.floor(visibleCount / 2),
     0,
-    Math.min(
-      selectedIndex - Math.floor(visibleCount / 2),
-      Math.max(models.length - visibleCount, 0)
-    )
+    Math.max(models.length - visibleCount, 0)
   )
   const end = Math.min(start + visibleCount, models.length)
   const selected = models[Math.min(selectedIndex, models.length - 1)]!
@@ -91,7 +76,7 @@ export function buildModelPickerLines(
   lines.push('')
   lines.push(...wrapLines(chalk.dim(`Selected: ${selected.name}`), wrapWidth))
   lines.push(
-    ...wrapLines(chalk.dim(`Size: ${formatSize(selected.size)}`), wrapWidth)
+    ...wrapLines(chalk.dim(`Size: ${formatBytes(selected.size)}`), wrapWidth)
   )
   lines.push(
     ...wrapLines(chalk.dim(`Modified: ${selected.modified_at}`), wrapWidth)

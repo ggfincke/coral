@@ -2,6 +2,8 @@
 // tests for prompt completion logic & @-mention expansion
 
 import { strict as assert } from 'node:assert'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   applyCompletion,
@@ -15,8 +17,15 @@ import {
   formatMentionNotice,
   parseMentions,
 } from '../src/tui/mentions.js'
-import { isLikelyTextPath } from '../src/tui/file-suggestions.js'
+import {
+  isLikelyTextPath,
+  listProjectFiles,
+} from '../src/tui/file-suggestions.js'
+import { resetPromptFileSuggestions } from '../src/tui/prompt-file-suggestions.js'
 import type { TextFileReadResult } from '../src/utils/file-read.js'
+import { makeTempDirPool } from './helpers/temp.js'
+
+const { tempDir } = makeTempDirPool()
 
 const COMMANDS: CommandSummary[] = [
   { name: 'clear', description: 'clear' },
@@ -99,6 +108,30 @@ test('rankFiles favors basename matches & shorter paths', () =>
     rankFiles('', files).map((item) => item.value),
     files
   )
+})
+
+test('listProjectFiles uses suggestion policy instead of retrieval caps', async () =>
+{
+  const dir = await tempDir('coral-completion-files-')
+  await mkdir(join(dir, 'assets'), { recursive: true })
+  await mkdir(join(dir, 'src'), { recursive: true })
+  await writeFile(join(dir, 'assets', 'logo.png'), 'not suggested', 'utf-8')
+  await writeFile(join(dir, 'src', 'large.ts'), 'x'.repeat(600 * 1024), 'utf-8')
+
+  const files = await listProjectFiles(dir)
+
+  assert.ok(files.includes('src/large.ts'))
+  assert.ok(!files.includes('assets/logo.png'))
+})
+
+test('resetPromptFileSuggestions clears cwd-bound prompt file cache state', () =>
+{
+  assert.deepEqual(resetPromptFileSuggestions(), {
+    files: [],
+    filesRequested: false,
+    selectedIndex: 0,
+    dismissed: false,
+  })
 })
 
 test('applyCompletion splices the choice in, keeping the sigil & adding a space', () =>
@@ -212,6 +245,26 @@ test('buildMentionContext attaches readable files & skips the rest', async () =>
     (await buildMentionContext('no mentions here', read)).context,
     null
   )
+})
+
+test('buildMentionContext skips off-workspace paths when cwd is provided', async () =>
+{
+  const dir = await tempDir('coral-mention-cwd-')
+  const outside = await tempDir('coral-mention-outside-')
+  const outsideFile = join(outside, 'secret.txt')
+  await writeFile(outsideFile, 'secret\n', 'utf-8')
+
+  const expansion = await buildMentionContext(
+    `read @${outsideFile}`,
+    undefined,
+    undefined,
+    dir
+  )
+
+  assert.equal(expansion.context, null)
+  assert.deepEqual(expansion.skipped, [
+    { path: outsideFile, reason: 'outside workspace' },
+  ])
 })
 
 test('buildMentionContext reports a skip reason for each dropped mention', async () =>

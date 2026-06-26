@@ -2,10 +2,12 @@
 // conversation loop w/ tool-use cycling
 
 import { OllamaClient } from '../ollama/client.js'
-import type {
-  OllamaMessage,
-  OllamaToolCall,
-  OllamaTool,
+import {
+  makeReliabilityStats,
+  type OllamaMessage,
+  type OllamaToolCall,
+  type OllamaTool,
+  type ReliabilityStats,
 } from '../types/inference.js'
 import {
   allTools,
@@ -15,10 +17,11 @@ import {
   type ToolExecutionContext,
   type ToolResult,
 } from '../tools/index.js'
-import { setSubagentRunner, type SubagentResult } from '../tools/subagent.js'
+import { type SubagentResult, type SubagentRunner } from '../tools/subagent.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import { setCwd, getCwd } from '../cwd.js'
+import { resolve } from 'node:path'
 import {
   resolvePermissions,
   getToolPolicy,
@@ -71,6 +74,7 @@ import {
 import { validateToolArgs } from './tool-validation.js'
 import { loadProjectConfig } from '../config/project-config.js'
 import { buildGitContextMessage } from './git-context.js'
+import { requiresWorkspacePathApproval } from '../tools/path-policy.js'
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
@@ -96,19 +100,29 @@ const MAX_WORKING_SET_TOKENS = 32_768
 const COMPACTION_SYSTEM_PROMPT =
   'You are a helpful assistant. Produce a concise structured summary of the conversation.'
 
+function mergeReliabilityStats(
+  base: ReliabilityStats | undefined,
+  add: ReliabilityStats
+): ReliabilityStats
+{
+  const merged = makeReliabilityStats()
+  for (const key of Object.keys(merged) as (keyof ReliabilityStats)[])
+  {
+    merged[key] = (base?.[key] ?? 0) + add[key]
+  }
+  return merged
+}
+
+function toolError(error: string): ToolResult
+{
+  return { output: '', error }
+}
+
 interface ToolInvocation
 {
   id: number
   name: string
   args: Record<string, unknown>
-}
-
-interface ReadOnlySubagentRunResult
-{
-  text: string
-  toolCount: number
-  error?: string
-  aborted: boolean
 }
 
 interface ToolOutcomeRecordParams
@@ -201,27 +215,6 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
   })
 }
 
-// reliability-layer counters — how often the agent had to compensate for the
-// model botching a tool call (per-model telemetry for /status)
-export interface ReliabilityStats
-{
-  repairedToolCalls: number
-  nameRepairs: number
-  stallNudges: number
-  validationFailures: number
-  // edits that landed via the whitespace-tolerant fallback after old_string
-  // didn't match the file verbatim
-  editRepairs: number
-  // times the agent paused on a detected doom loop
-  doomLoopTrips: number
-  // corrective reprompts when a call-shaped turn wouldn't parse
-  reprompts: number
-  // edits a self-check flagged as wrong or inconclusive
-  verifyFlags: number
-  // failed self-checks fed back to the model for a fix attempt
-  verifyReprompts: number
-}
-
 // token usage from Ollama's response metrics
 // durations are nanoseconds — Ollama's native unit from prompt_eval_duration / eval_duration
 export interface TokenUsage
@@ -285,9 +278,6 @@ interface AgentOptions
   tools?: Tool[]
   // cap tool-call rounds (bounds subagent cost); undefined = unlimited
   maxIterations?: number
-  // main agents register a subagent runner; subagents pass false so they don't
-  // clobber the parent's runner
-  registerSubagent?: boolean
   // pinned num_ctx inherited from a parent agent — subagents must use the same
   // value so they don't trigger an Ollama runner reload that wipes the KV cache
   numCtx?: number
@@ -305,6 +295,7 @@ export class Agent
   private messages: OllamaMessage[] = []
   private model: string
   private baseUrl?: string
+  private cwd: string
   private permissions: ToolPermissions
   private compactionConfig: CompactionConfig
   private thinkMode: boolean | 'low' | 'medium' | 'high'
@@ -313,6 +304,7 @@ export class Agent
   private ollamaTools: OllamaTool[]
   // name -> tool for O(1) lookup; the toolset is fixed for the agent's lifetime
   private toolsByName: Map<string, Tool>
+  private toolNames: string[]
   private maxIterations?: number
   private estimatedTokenCount = 0
   // number of leading messages that stay byte-stable across compaction — the
@@ -334,21 +326,14 @@ export class Agent
   private compactFailureCount = 0
   private compactionCount = 0
   private lastCompactedAt: string | null = null
-  private reliabilityStats: ReliabilityStats = {
-    repairedToolCalls: 0,
-    nameRepairs: 0,
-    stallNudges: 0,
-    validationFailures: 0,
-    editRepairs: 0,
-    doomLoopTrips: 0,
-    reprompts: 0,
-    verifyFlags: 0,
-    verifyReprompts: 0,
-  }
+  private reliabilityStats: ReliabilityStats = makeReliabilityStats()
+  private telemetryStatsByModel = new Map<string, ReliabilityStats>()
+  private producedModels = new Set<string>()
   private onCompactionCallback?: (result: CompactionResult) => void
   private onCompactionStartCallback?: () => void
   // self-check edits after a clean completion (warn-only); off by default
   private verifyEdits: boolean
+  private subagentRunner: SubagentRunner
 
   constructor(
     model: string,
@@ -359,22 +344,24 @@ export class Agent
   {
     this.model = model
     this.baseUrl = baseUrl
+    this.cwd = resolve(cwd ?? getCwd())
     this.client = new OllamaClient(baseUrl)
     this.thinkMode = options.think ?? true
     this.tools = options.tools ?? allTools
     this.ollamaTools = this.tools.map(toolToOllamaFormat)
     this.toolsByName = new Map(this.tools.map((t) => [t.name, t]))
+    this.toolNames = this.tools.map((t) => t.name)
     this.maxIterations = options.maxIterations
     this.verifyEdits =
       options.verifyEdits ??
-      loadProjectConfig(cwd ?? getCwd()).verify?.enabled ??
+      loadProjectConfig(this.cwd).verify?.enabled ??
       false
 
-    // set the global working directory — all tools resolve paths against this
-    if (cwd) setCwd(cwd)
+    // keep the interactive default in sync w/ explicitly selected sessions
+    if (cwd) setCwd(this.cwd)
 
     // load per-tool permission policies from config unless a caller injects one
-    this.permissions = options.permissions ?? resolvePermissions(getCwd())
+    this.permissions = options.permissions ?? resolvePermissions(this.cwd)
 
     // compaction defaults — can be overridden via setCompactionConfig()
     this.compactionConfig = { ...DEFAULT_COMPACTION_CONFIG }
@@ -395,50 +382,28 @@ export class Agent
     const systemContent = this.buildSystemContent(model)
     this.pushMessage({ role: 'system', content: systemContent })
 
-    // expose this agent as the task-tool subagent runner (closes over this.model
-    // so a later switchModel is reflected automatically)
-    if (options.registerSubagent !== false)
-    {
-      setSubagentRunner((prompt, signal) => this.runSubagent(prompt, signal))
-    }
+    this.subagentRunner = (prompt, signal) =>
+      this.runReadOnlySubagent(prompt, signal)
 
     // track the active model so shutdown can unload it
     this.client.startKeepAlive(model)
-  }
-
-  // run a one-shot research subagent w/ a fresh context & read-only toolset,
-  // returning its final text — shares the parent's loaded model, so never dispose
-  private async runSubagent(
-    prompt: string,
-    signal?: AbortSignal
-  ): Promise<SubagentResult>
-  {
-    const result = await this.runReadOnlySubagent(prompt, signal)
-
-    return {
-      text: result.text,
-      toolCount: result.toolCount,
-      error: result.error,
-    }
   }
 
   // run a bounded read-only subagent & collect its visible output
   private async runReadOnlySubagent(
     prompt: string,
     signal?: AbortSignal
-  ): Promise<ReadOnlySubagentRunResult>
+  ): Promise<SubagentResult>
   {
-    const sub = new Agent(this.model, this.baseUrl, getCwd(), {
+    const sub = new Agent(this.model, this.baseUrl, this.cwd, {
       think: this.thinkMode,
       tools: subagentTools,
       maxIterations: SUBAGENT_MAX_ITERATIONS,
-      registerSubagent: false,
       numCtx: this.numCtx,
       verifyEdits: false,
     })
 
     let text = ''
-    let toolCount = 0
     let error: string | undefined
     await sub.run(
       prompt,
@@ -448,9 +413,7 @@ export class Agent
           text += token
         },
         onToolCall: () =>
-        {
-          toolCount++
-        },
+        {},
         onToolResult: () =>
         {},
         // subagent tools are safe, but config can still gate them; deny anything
@@ -468,7 +431,6 @@ export class Agent
 
     return {
       text: text.trim(),
-      toolCount,
       error,
       aborted: signal?.aborted === true,
     }
@@ -523,11 +485,52 @@ export class Agent
     return this.model
   }
 
+  getCwd(): string
+  {
+    return this.cwd
+  }
+
+  hasProducedTurn(): boolean
+  {
+    return this.producedModels.size > 0
+  }
+
+  getReliabilityTelemetry(): Array<{
+    model: string
+    stats: ReliabilityStats
+  }>
+  {
+    const byModel = new Map(this.telemetryStatsByModel)
+    if (this.producedModels.has(this.model))
+    {
+      byModel.set(
+        this.model,
+        mergeReliabilityStats(byModel.get(this.model), this.reliabilityStats)
+      )
+    }
+
+    return [...byModel.entries()].map(([model, stats]) => ({ model, stats }))
+  }
+
+  private foldCurrentReliability(model: string): void
+  {
+    if (!this.producedModels.has(model)) return
+    this.telemetryStatsByModel.set(
+      model,
+      mergeReliabilityStats(
+        this.telemetryStatsByModel.get(model),
+        this.reliabilityStats
+      )
+    )
+  }
+
   // switch to a different model in-place — keeps conversation history intact
   // unloads the old model, rebuilds the system prompt, & starts keep-alive for the new one
   async switchModel(nextModel: string): Promise<void>
   {
     const previousModel = this.model
+    this.foldCurrentReliability(previousModel)
+    this.reliabilityStats = makeReliabilityStats()
 
     // unload the old model
     await this.client.unloadModel(previousModel)
@@ -537,6 +540,7 @@ export class Agent
     this.model = nextModel
     this.contextWindowSize = 0
     this.numCtx = 0
+    this.contextWindowPromise = undefined
 
     // rebuild the system prompt w/ the new model name
     const systemContent = this.buildSystemContent(nextModel)
@@ -580,7 +584,7 @@ export class Agent
 
   // force conversation compaction & return before/after stats
   // returns null if compaction was skipped (too few messages or summary failed)
-  async forceCompact(): Promise<CompactionResult | null>
+  async forceCompact(signal?: AbortSignal): Promise<CompactionResult | null>
   {
     const beforeTokens = this.estimatedTokenCount
     const beforeMessages = this.messages.length
@@ -608,7 +612,7 @@ export class Agent
     )
     if (toSummarize.length === 0) return null
 
-    const summary = await this.buildCompactionSummary(toSummarize)
+    const summary = await this.buildCompactionSummary(toSummarize, signal)
     if (summary === null) return null
 
     return this.applyCompactedSummary(
@@ -722,13 +726,16 @@ export class Agent
   // working-set well below it (SWA/MLX re-prefills the whole prompt each turn)
   private async resolveContextWindow(): Promise<number>
   {
+    const requestedModel = this.model
     const resolved = await resolvePinnedContextWindow({
-      model: this.model,
-      cwd: getCwd(),
+      model: requestedModel,
+      cwd: this.cwd,
       totalMemBytes: totalmem(),
       showModel: (model) => this.client.showModel(model),
       listModels: () => this.client.listModels(),
     })
+
+    if (this.model !== requestedModel) return this.contextWindowSize
 
     if (resolved)
     {
@@ -775,7 +782,7 @@ export class Agent
   // build the system prompt for a model — same wiring at construct & switch
   private buildSystemContent(model: string): string
   {
-    return buildSystemPrompt({ model, cwd: getCwd(), tools: this.tools })
+    return buildSystemPrompt({ model, cwd: this.cwd, tools: this.tools })
   }
 
   // append volatile repo state to the request only; keep session history stable
@@ -815,12 +822,14 @@ export class Agent
     }
     if (fullThinking) partial.thinking = fullThinking
     this.pushMessage(partial)
+    this.producedModels.add(this.model)
   }
 
   // build a model-generated summary for older messages
   // returns null when the model call fails or yields an empty summary
   private async buildCompactionSummary(
-    messagesToSummarize: OllamaMessage[]
+    messagesToSummarize: OllamaMessage[],
+    signal?: AbortSignal
   ): Promise<string | null>
   {
     const cleaned = stripThinkingForCompaction(messagesToSummarize)
@@ -831,19 +840,23 @@ export class Agent
 
     try
     {
-      for await (const chunk of this.client.chatStream({
-        model: this.model,
-        messages: [
-          {
-            role: 'system',
-            content: COMPACTION_SYSTEM_PROMPT,
-          },
-          { role: 'user', content: compactionPrompt },
-        ],
-        num_ctx: this.numCtx || undefined,
-        num_predict: MAX_SUMMARY_TOKENS,
-      }))
+      for await (const chunk of this.client.chatStream(
+        {
+          model: this.model,
+          messages: [
+            {
+              role: 'system',
+              content: COMPACTION_SYSTEM_PROMPT,
+            },
+            { role: 'user', content: compactionPrompt },
+          ],
+          num_ctx: this.numCtx || undefined,
+          num_predict: MAX_SUMMARY_TOKENS,
+        },
+        signal
+      ))
       {
+        if (signal?.aborted) return null
         if (chunk.message.content)
         {
           summary += chunk.message.content
@@ -960,24 +973,59 @@ export class Agent
     }
   }
 
+  // resolve the effective policy given a precomputed workspace-crossing flag —
+  // an always_allow tool still needs approval when it leaves the workspace
+  private resolveInvocationPolicy(
+    toolName: string,
+    crossesWorkspace: boolean
+  ): ToolPermissions[string]
+  {
+    const policy = getToolPolicy(this.permissions, toolName)
+    if (policy === 'always_allow' && crossesWorkspace)
+    {
+      return 'require_approval'
+    }
+
+    return policy
+  }
+
   // identify approval-free tools that can run out of order internally
   // while keeping the live policy check so approval-gated tools still serialize
-  private canRunToolInParallel(toolName: string): boolean
+  private getInvocationPolicy(
+    toolName: string,
+    args: Record<string, unknown>
+  ): ToolPermissions[string]
   {
-    return (
-      this.getOwnTool(toolName)?.parallelSafe === true &&
-      getToolPolicy(this.permissions, toolName) === 'always_allow'
+    return this.resolveInvocationPolicy(
+      toolName,
+      requiresWorkspacePathApproval(toolName, args, this.cwd)
     )
   }
 
-  // build request-scoped context for tools that need runtime dependencies
+  private canRunToolInParallel(
+    toolName: string,
+    args: Record<string, unknown>
+  ): boolean
+  {
+    return (
+      this.getOwnTool(toolName)?.parallelSafe === true &&
+      this.getInvocationPolicy(toolName, args) === 'always_allow'
+    )
+  }
+
+  // build request-scoped context for tools that need runtime dependencies —
+  // allowOutsideWorkspace is computed once per invocation & threaded in so the
+  // approval decision & execution can't disagree about the workspace boundary
   private buildToolExecutionContext(
+    allowOutsideWorkspace: boolean,
     signal?: AbortSignal
   ): ToolExecutionContext
   {
     return {
-      cwd: getCwd(),
+      cwd: this.cwd,
       ollamaHost: this.baseUrl ?? DEFAULT_OLLAMA_HOST,
+      allowOutsideWorkspace,
+      subagentRunner: this.subagentRunner,
       signal,
     }
   }
@@ -986,18 +1034,13 @@ export class Agent
   private async executeTool(
     toolName: string,
     toolArgs: Record<string, unknown>,
+    allowOutsideWorkspace: boolean,
     signal?: AbortSignal
   ): Promise<ToolResult>
   {
-    const tool = this.getOwnTool(toolName)
-
-    if (!tool)
-    {
-      return {
-        output: '',
-        error: `Unknown tool: ${toolName}`,
-      }
-    }
+    // both serial & parallel dispatch resolve the tool & skip unknown names
+    // before calling executeTool, so resolution here can't miss
+    const tool = this.getOwnTool(toolName)!
 
     // schema-check & coerce args before executing — a friendly error here lets
     // the model retry w/ fixed args instead of hitting a runtime failure
@@ -1005,14 +1048,14 @@ export class Agent
     if (!validation.ok)
     {
       this.reliabilityStats.validationFailures++
-      return { output: '', error: validation.error }
+      return toolError(validation.error)
     }
 
     try
     {
       const result = await tool.execute(
         validation.args,
-        this.buildToolExecutionContext(signal)
+        this.buildToolExecutionContext(allowOutsideWorkspace, signal)
       )
       // a tool that recovered a near-miss call (e.g. whitespace-tolerant edit)
       // counts as a compensation the model made us do
@@ -1021,10 +1064,9 @@ export class Agent
     }
     catch (err)
     {
-      return {
-        output: '',
-        error: `Tool execution failed for ${toolName}: ${toErrorMessage(err)}`,
-      }
+      return toolError(
+        `Tool execution failed for ${toolName}: ${toErrorMessage(err)}`
+      )
     }
   }
 
@@ -1082,7 +1124,10 @@ export class Agent
   }
 
   // two-phase compaction: prune tool results first, then summarize if needed
-  private async compactIfNeeded(volatileTokens = 0): Promise<void>
+  private async compactIfNeeded(
+    volatileTokens = 0,
+    signal?: AbortSignal
+  ): Promise<void>
   {
     const totalTokens = this.estimatedTokenCount + volatileTokens
 
@@ -1146,10 +1191,13 @@ export class Agent
     const beforeTokens = this.estimatedTokenCount
     const beforeMessages = this.messages.length
 
-    const summary = await this.buildCompactionSummary(toSummarize)
+    const summary = await this.buildCompactionSummary(toSummarize, signal)
 
     if (summary === null)
     {
+      // a cancelled summary returns null too — treat it as cancellation, not a
+      // compaction failure, so we don't increment the failure count or trim
+      if (signal?.aborted) return
       this.recordCompactionFailure(beforeTokens, beforeMessages)
       return
     }
@@ -1209,11 +1257,19 @@ export class Agent
         return
       }
 
-      const gitContext = await buildGitContextMessage(getCwd())
+      const gitContext = await buildGitContextMessage(this.cwd)
       const volatileTokens = gitContext ? estimateMessageTokens(gitContext) : 0
 
       // compact conversation if approaching context limits
-      await this.compactIfNeeded(volatileTokens)
+      await this.compactIfNeeded(volatileTokens, signal)
+
+      // a cancellation during compaction must not trim history or start a
+      // request — bail before any further mutation of the message list
+      if (signal?.aborted)
+      {
+        this.finishRun(events)
+        return
+      }
 
       // trim history if it grows too large, preserving system prompt
       if (this.messages.length > MAX_HISTORY)
@@ -1315,13 +1371,11 @@ export class Agent
         return
       }
 
-      const toolNames = this.tools.map((t) => t.name)
-
       // repair pass: recover tool calls the model emitted as text content —
       // the most common local-model failure mode (call-shaped JSON, no call)
       if (toolCalls.length === 0 && fullContent.trim())
       {
-        const repaired = parseToolCallsFromContent(fullContent, toolNames)
+        const repaired = parseToolCallsFromContent(fullContent, this.toolNames)
 
         if (repaired)
         {
@@ -1348,6 +1402,7 @@ export class Agent
         assistantMessage.tool_calls = toolCalls
       }
       this.pushMessage(assistantMessage)
+      this.producedModels.add(this.model)
 
       // no tool calls means the model is done
       if (toolCalls.length === 0)
@@ -1371,7 +1426,7 @@ export class Agent
         if (
           reprompts < MAX_REPROMPTS &&
           fullContent.trim() &&
-          looksLikeAttemptedToolCall(fullContent, toolNames)
+          looksLikeAttemptedToolCall(fullContent, this.toolNames)
         )
         {
           reprompts++
@@ -1435,7 +1490,12 @@ export class Agent
 
         const nextToolName = toolCalls[toolIndex]!.function.name
 
-        if (this.canRunToolInParallel(nextToolName))
+        if (
+          this.canRunToolInParallel(
+            nextToolName,
+            toolCalls[toolIndex]!.function.arguments ?? {}
+          )
+        )
         {
           // collect a run of consecutive parallel-safe calls, each w/ a stable id
           const batch: ToolInvocation[] = []
@@ -1443,7 +1503,15 @@ export class Agent
           while (toolIndex < toolCalls.length)
           {
             const candidate = toolCalls[toolIndex]!
-            if (!this.canRunToolInParallel(candidate.function.name)) break
+            if (
+              !this.canRunToolInParallel(
+                candidate.function.name,
+                candidate.function.arguments ?? {}
+              )
+            )
+            {
+              break
+            }
 
             batch.push({
               id: toolIndex,
@@ -1465,8 +1533,10 @@ export class Agent
           try
           {
             results = await Promise.all(
+              // parallel-eligible tools are always_allow & in-workspace (an
+              // outside path forces require_approval, which can't batch here)
               batch.map((item) =>
-                this.executeTool(item.name, item.args, signal)
+                this.executeTool(item.name, item.args, false, signal)
               )
             )
           }
@@ -1481,7 +1551,7 @@ export class Agent
                 doomLoop,
                 editDiffs,
                 invocation: item,
-                result: { output: '', error: errorMsg },
+                result: toolError(errorMsg),
               })
               if (trip && !doomTrip) doomTrip = trip
             }
@@ -1510,6 +1580,11 @@ export class Agent
         toolIndex++
         const toolName = call.function.name
         const toolArgs = call.function.arguments ?? {}
+        const invocation: ToolInvocation = {
+          id: callId,
+          name: toolName,
+          args: toolArgs,
+        }
         events.onToolCall(toolName, toolArgs, callId)
 
         const tool = this.getOwnTool(toolName)
@@ -1521,15 +1596,21 @@ export class Agent
             toolResults,
             doomLoop,
             editDiffs,
-            invocation: { id: callId, name: toolName, args: toolArgs },
-            result: { output: '', error: errorMsg },
+            invocation,
+            result: toolError(errorMsg),
           })
           if (trip && !doomTrip) doomTrip = trip
           continue
         }
 
-        // check per-tool permission policy
-        const policy = getToolPolicy(this.permissions, toolName)
+        // resolve the workspace-crossing flag once — it drives both the
+        // approval decision below & the execution context, so reuse it
+        const crossesWorkspace = requiresWorkspacePathApproval(
+          toolName,
+          toolArgs,
+          this.cwd
+        )
+        const policy = this.resolveInvocationPolicy(toolName, crossesWorkspace)
 
         if (policy === 'always_deny')
         {
@@ -1539,8 +1620,8 @@ export class Agent
             toolResults,
             doomLoop,
             editDiffs,
-            invocation: { id: callId, name: toolName, args: toolArgs },
-            result: { output: '', error: deniedMsg },
+            invocation,
+            result: toolError(deniedMsg),
             trackDoom: false,
           })
           continue
@@ -1568,8 +1649,8 @@ export class Agent
               toolResults,
               doomLoop,
               editDiffs,
-              invocation: { id: callId, name: toolName, args: toolArgs },
-              result: { output: '', error: errorMsg },
+              invocation,
+              result: toolError(errorMsg),
               trackDoom: false,
             })
 
@@ -1589,21 +1670,26 @@ export class Agent
               toolResults,
               doomLoop,
               editDiffs,
-              invocation: { id: callId, name: toolName, args: toolArgs },
-              result: { output: '', error: rejectedMsg },
+              invocation,
+              result: toolError(rejectedMsg),
               trackDoom: false,
             })
             continue
           }
         }
 
-        const result = await this.executeTool(toolName, toolArgs, signal)
+        const result = await this.executeTool(
+          toolName,
+          toolArgs,
+          crossesWorkspace,
+          signal
+        )
         const trip = this.recordToolOutcome({
           events,
           toolResults,
           doomLoop,
           editDiffs,
-          invocation: { id: callId, name: toolName, args: toolArgs },
+          invocation,
           result,
         })
         if (trip && !doomTrip) doomTrip = trip

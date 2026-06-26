@@ -2,16 +2,9 @@
 // slash command registry, parser, & dispatcher
 
 import chalk from 'chalk'
-import { getCwd } from '../cwd.js'
 import { savePrefs } from '../config/prefs.js'
-import {
-  getTheme,
-  setTheme,
-  style,
-  type Role,
-  type RoleColor,
-} from './theme.js'
-import { findTheme, THEMES } from './themes.js'
+import { getTheme, setTheme, style } from './theme.js'
+import { findTheme } from './themes.js'
 import type { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
 import { listSessions } from '../session/store.js'
@@ -20,16 +13,15 @@ import type { OutputBlock, SystemBlock } from './transcript.js'
 import { runGitCommand } from '../utils/git.js'
 import { copyToClipboard } from '../utils/clipboard.js'
 import { lastAssistantText, lastCodeBlock } from './copy.js'
-import { getTodos, clearTodos, type TodoItem } from '../tools/todo-store.js'
-import { TODO_MARK } from './todo-panel.js'
+import { getTodos, clearTodos } from '../tools/todo-store.js'
 import {
   computeTokensPerSecond,
   formatDurationNs,
   formatFrozenPrefixCoverage,
   formatTokenCount,
   formatTokensPerSecond,
-  pluralizeMessages,
 } from './metrics.js'
+import { pluralize } from '../utils/pluralize.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
   coralHeader,
@@ -40,11 +32,15 @@ import {
   formatManualCompactionResult,
   formatPermissionModeChange,
   formatPermissionsHelp,
+  formatThemeList,
+  formatTodoList,
   formatTuiResumeResolution,
   formatTuiSessionList,
   formatUnknownPermissionMode,
 } from './command-output.js'
+import type { CommandSummary } from './completion.js'
 import { buildIndexer } from '../retrieval/build.js'
+import type { BuiltIndexer } from '../retrieval/build.js'
 import { DEFAULT_EMBEDDING_MODEL, type IndexStore } from '../retrieval/types.js'
 import { formatTelemetry, loadTelemetry } from '../telemetry/store.js'
 
@@ -64,6 +60,16 @@ export interface CommandContext
   reopenModelPicker: () => void
   // switch model in-place (keeps conversation history)
   switchModel: (modelName: string) => Promise<void>
+  // current session working directory
+  getCwd: () => string
+  // abort signal for long-running slash commands
+  signal?: AbortSignal
+  // test seam for index command construction
+  buildIndexer?: (
+    cwd: string,
+    ollamaHost: string,
+    signal?: AbortSignal
+  ) => BuiltIndexer
   // set the permission mode at runtime
   setYolo: (yolo: boolean) => void
   // exit the application
@@ -194,7 +200,7 @@ const clearCommand: Command = {
     ctx.clearSession()
     ctx.pushOutput(
       systemBlock(
-        `Conversation cleared (${pluralizeMessages(cleared)} removed)`
+        `Conversation cleared (${pluralize(cleared, 'message')} removed)`
       )
     )
   },
@@ -216,16 +222,22 @@ const compactCommand: Command = {
 
     ctx.pushOutput(systemBlock('Compacting conversation...'))
 
-    const result = await ctx.agent.forceCompact()
+    const result = await ctx.agent.forceCompact(ctx.signal)
 
     if (!result)
     {
+      if (ctx.signal?.aborted)
+      {
+        ctx.pushOutput(systemBlock('Compaction interrupted'))
+        return
+      }
       ctx.pushOutput(
         systemBlock('Compaction skipped — not enough context to summarize')
       )
       return
     }
 
+    ctx.saveCurrentSession()
     ctx.pushOutput(systemBlock(formatManualCompactionResult(result)))
   },
 }
@@ -237,7 +249,7 @@ const statusCommand: Command = {
   description: 'Show model, session, token usage, & working directory',
   async execute(_args, ctx)
   {
-    const cwd = getCwd()
+    const cwd = ctx.getCwd()
     const model = ctx.activeModel
     const tokens = ctx.agent.getEstimatedTokens()
     const messages = ctx.agent.getMessageCount()
@@ -493,6 +505,7 @@ const modelCommand: Command = {
     try
     {
       await ctx.switchModel(resolvedModel)
+      ctx.saveCurrentSession()
       ctx.pushOutput(
         systemBlock(`Switched model: ${previousModel} → ${resolvedModel}`)
       )
@@ -587,36 +600,6 @@ const verifyCommand: Command = {
 
 // ── /theme ─────────────────────────────────────────────────────────────
 
-// colored swatch dot rendered in a specific theme's own palette
-function swatch(color: RoleColor): string
-{
-  return 'ansi' in color
-    ? chalk[color.ansi]('●')
-    : chalk.rgb(color.r, color.g, color.b)('●')
-}
-
-const SWATCH_ROLES: Role[] = ['primary', 'accent', 'user', 'code', 'muted']
-
-function formatThemeList(): string
-{
-  const current = getTheme()
-  const maxName = Math.max(...THEMES.map((theme) => theme.name.length))
-  const lines: string[] = [coralHeader('themes'), '']
-
-  for (const theme of THEMES)
-  {
-    const dots = SWATCH_ROLES.map((role) => swatch(theme.roles[role])).join(' ')
-    const marker = theme === current ? style('primary')('›') : ' '
-    lines.push(
-      `${marker} ${dots}  ${theme.name.padEnd(maxName)}  ${chalk.dim(theme.description)}`
-    )
-  }
-
-  lines.push('')
-  lines.push(chalk.dim(`Switch with ${style('user')('/theme <name>')}`))
-  return lines.join('\n')
-}
-
 const themeCommand: Command = {
   name: 'theme',
   description: 'Show or switch the color theme',
@@ -658,7 +641,7 @@ const diffCommand: Command = {
   description: 'Show git diff of working directory',
   async execute(_args, ctx)
   {
-    const cwd = getCwd()
+    const cwd = ctx.getCwd()
 
     const result = await runGitCommand(['diff'], cwd, {
       allowStdoutOnError: true,
@@ -726,25 +709,12 @@ const copyCommand: Command = {
     }
 
     const lineCount = payload.split('\n').length
-    const detail = lineCount === 1 ? '1 line' : `${lineCount} lines`
+    const detail = pluralize(lineCount, 'line')
     ctx.pushOutput(systemBlock(`Copied last ${label} to clipboard (${detail})`))
   },
 }
 
 // ── /todo ──────────────────────────────────────────────────────────────
-
-// render the live task list w/ the same marks as the panel
-function formatTodoList(todos: TodoItem[]): string
-{
-  const lines: string[] = [coralHeader('tasks'), '']
-  for (const todo of todos)
-  {
-    const text = `${TODO_MARK[todo.status]} ${todo.content}`
-    const row = todo.status === 'completed' ? chalk.strikethrough(text) : text
-    lines.push(`  ${row}`)
-  }
-  return lines.join('\n')
-}
 
 const todoCommand: Command = {
   name: 'todo',
@@ -815,7 +785,7 @@ const indexCommand: Command = {
     }
 
     const force = arg === 'rebuild' || arg === 'force'
-    const cwd = getCwd()
+    const cwd = ctx.getCwd()
     let store: IndexStore | undefined
     let embeddingModel = DEFAULT_EMBEDDING_MODEL
 
@@ -824,7 +794,8 @@ const indexCommand: Command = {
 
     try
     {
-      const built = buildIndexer(cwd, ctx.host)
+      const build = ctx.buildIndexer ?? buildIndexer
+      const built = build(cwd, ctx.host, ctx.signal)
       store = built.store
       embeddingModel = built.embeddingModel
 
@@ -894,6 +865,7 @@ const resumeCommand: Command = {
       requestedId: args,
       currentSessionId: ctx.sessionLabelId,
       allowPrefix: true,
+      requireExistingCwd: true,
     })
 
     if (target.type !== 'target')
@@ -974,7 +946,7 @@ const newCommand: Command = {
       parts.push(`Session ${savedId} saved`)
     }
     parts.push(
-      `New conversation started (${pluralizeMessages(cleared)} cleared)`
+      `New conversation started (${pluralize(cleared, 'message')} cleared)`
     )
 
     ctx.pushOutput(systemBlock(parts.join(' · ')))
@@ -1006,7 +978,7 @@ const commands: Command[] = [
 ]
 
 // command name + description pairs for prompt autocomplete
-export function commandCompletions(): { name: string; description: string }[]
+export function commandCompletions(): CommandSummary[]
 {
   return commands.map((cmd) => ({
     name: cmd.name,

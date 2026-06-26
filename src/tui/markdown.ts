@@ -4,14 +4,9 @@
 import chalk from 'chalk'
 import { highlight, supportsLanguage } from 'cli-highlight'
 import { lexer, type Token, type Tokens } from 'marked'
-import stripAnsi from 'strip-ansi'
 import { codeSpanStyle, headingStyle, style } from './theme.js'
-
-function padAnsiEnd(value: string, width: number): string
-{
-  const visibleLength = stripAnsi(value).length
-  return value + ' '.repeat(Math.max(width - visibleLength, 0))
-}
+import { padEnd, visibleWidth } from './wrap.js'
+import { sanitizeUntrustedText } from './sanitize.js'
 
 function prefixLines(
   lines: string[],
@@ -109,8 +104,8 @@ function renderTable(token: Tokens.Table, indent: number): string[]
   )
   const widths = header.map((cell, index) =>
   {
-    const cellWidths = rows.map((row) => stripAnsi(row[index] ?? '').length)
-    return Math.max(stripAnsi(cell).length, ...cellWidths, 1)
+    const cellWidths = rows.map((row) => visibleWidth(row[index] ?? ''))
+    return Math.max(visibleWidth(cell), ...cellWidths, 1)
   })
 
   const separator = chalk.dim(
@@ -119,7 +114,7 @@ function renderTable(token: Tokens.Table, indent: number): string[]
   const renderRow = (cells: string[]) =>
     pad +
     cells
-      .map((cell, index) => padAnsiEnd(cell, widths[index] ?? 1))
+      .map((cell, index) => padEnd(cell, widths[index] ?? 1))
       .join(chalk.dim(' │ '))
 
   return [
@@ -184,7 +179,7 @@ function renderBlock(token: Token, indent: number): string[]
           pad +
             chalk.dim(
               (token.depth === 1 ? '=' : '-').repeat(
-                Math.max(stripAnsi(text).length, 8)
+                Math.max(visibleWidth(text), 8)
               )
             ),
         ]
@@ -245,6 +240,7 @@ function renderBlocks(tokens: Token[], indent: number): string[]
 
 export function renderMarkdownToAnsi(markdown: string): string
 {
-  if (!markdown.trim()) return ''
-  return renderBlocks(lexer(markdown), 0).join('\n')
+  const sanitized = sanitizeUntrustedText(markdown)
+  if (!sanitized.trim()) return ''
+  return renderBlocks(lexer(sanitized), 0).join('\n')
 }
