@@ -1,13 +1,20 @@
 // src/session/store.ts
 // session persistence — save & resume conversations to/from disk
 
-import { mkdirSync, readdirSync } from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { OllamaMessage } from '../types/inference.js'
 import { isTodoStatus, type TodoItem } from '../tools/todo-store.js'
+import type { UndoTurn } from '../types/undo.js'
+import {
+  hydrateUndoState,
+  serializeUndoState,
+  type PersistedUndoTurn,
+} from './undo-state.js'
 import { coralHomePath } from '../utils/coral-home.js'
 import { ellipsize } from '../utils/ellipsize.js'
+import { ensurePrivateDir } from '../utils/fs.js'
 import { isPlainObject } from '../utils/guards.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
 
@@ -55,6 +62,19 @@ export interface SessionData
   messages: OllamaMessage[]
   // task list snapshot so /resume restores the todo panel
   todos?: TodoItem[]
+  // undo records for live-tail turns that can still be reverted
+  undo?: UndoTurn[]
+  // redo records for turns undone from the live tail
+  redo?: UndoTurn[]
+}
+
+interface SessionFileData
+{
+  meta: SessionMeta
+  messages: OllamaMessage[]
+  todos?: TodoItem[]
+  undo?: PersistedUndoTurn[]
+  redo?: PersistedUndoTurn[]
 }
 
 interface SessionIndexFile
@@ -99,6 +119,13 @@ function isOllamaMessage(value: unknown): value is OllamaMessage
     return false
   }
   if (typeof value.content !== 'string') return false
+  if (
+    value.displayContent !== undefined &&
+    typeof value.displayContent !== 'string'
+  )
+  {
+    return false
+  }
   if (value.thinking !== undefined && typeof value.thinking !== 'string')
   {
     return false
@@ -123,6 +150,49 @@ function isTodoItem(value: unknown): value is TodoItem
   if (!isPlainObject(value)) return false
   if (typeof value.content !== 'string' || !value.content.trim()) return false
   return typeof value.status === 'string' && isTodoStatus(value.status)
+}
+
+function isUndoFileChange(value: unknown): boolean
+{
+  if (!isPlainObject(value)) return false
+  if (typeof value.path !== 'string' || !value.path) return false
+  if (value.before !== null && typeof value.before !== 'string') return false
+  return typeof value.after === 'string'
+}
+
+function isUndoTodoChange(value: unknown): boolean
+{
+  if (!isPlainObject(value)) return false
+  return (
+    Array.isArray(value.before) &&
+    value.before.every(isTodoItem) &&
+    Array.isArray(value.after) &&
+    value.after.every(isTodoItem)
+  )
+}
+
+function isPersistedUndoTurn(value: unknown): value is PersistedUndoTurn
+{
+  if (!isPlainObject(value)) return false
+  if (!isNonNegativeInteger(value.startIndex)) return false
+  if (!isNonNegativeInteger(value.endIndex)) return false
+  if (Number(value.endIndex) < Number(value.startIndex)) return false
+  if (typeof value.userMessage !== 'string') return false
+  if (value.messages !== undefined)
+  {
+    if (
+      !Array.isArray(value.messages) ||
+      !value.messages.every(isOllamaMessage)
+    )
+    {
+      return false
+    }
+  }
+  if (!Array.isArray(value.changes) || !value.changes.every(isUndoFileChange))
+  {
+    return false
+  }
+  return value.todoChange === undefined || isUndoTodoChange(value.todoChange)
 }
 
 function isSessionMeta(value: unknown): value is SessionMeta
@@ -153,7 +223,7 @@ function isSessionMeta(value: unknown): value is SessionMeta
   return true
 }
 
-function isSessionData(value: unknown): value is SessionData
+function isSessionFileData(value: unknown): value is SessionFileData
 {
   if (!isPlainObject(value)) return false
   if (!isSessionMeta(value.meta)) return false
@@ -166,10 +236,46 @@ function isSessionData(value: unknown): value is SessionData
   }
   if (value.todos !== undefined)
   {
-    return Array.isArray(value.todos) && value.todos.every(isTodoItem)
+    if (!Array.isArray(value.todos) || !value.todos.every(isTodoItem))
+    {
+      return false
+    }
+  }
+  if (value.undo !== undefined)
+  {
+    if (!Array.isArray(value.undo) || !value.undo.every(isPersistedUndoTurn))
+    {
+      return false
+    }
+  }
+  if (value.redo !== undefined)
+  {
+    if (!Array.isArray(value.redo) || !value.redo.every(isPersistedUndoTurn))
+    {
+      return false
+    }
   }
 
   return true
+}
+
+function hydrateSessionData(file: SessionFileData): SessionData
+{
+  const undoState = hydrateUndoState(file.messages, file.undo, file.redo)
+  return {
+    meta: file.meta,
+    messages: file.messages,
+    todos: file.todos,
+    undo: file.undo === undefined ? undefined : undoState.undo,
+    redo: file.redo === undefined ? undefined : undoState.redo,
+  }
+}
+
+function readSessionData(path: string): SessionData | undefined
+{
+  const file = readJsonObjectFile<SessionFileData>(path)
+  if (!isSessionFileData(file)) return undefined
+  return hydrateSessionData(file)
 }
 
 // extract a title from the first user message
@@ -178,14 +284,15 @@ function extractTitle(messages: OllamaMessage[]): string
   const firstUser = messages.find((m) => m.role === 'user')
   if (!firstUser) return '(empty session)'
 
-  const text = firstUser.content.trim()
+  const text = (firstUser.displayContent ?? firstUser.content).trim()
   return ellipsize(text, 80)
 }
 
 // ensure the sessions directory exists
 function ensureDir(): void
 {
-  mkdirSync(sessionsDir(), { recursive: true })
+  ensurePrivateDir(coralHomePath())
+  ensurePrivateDir(sessionsDir())
 }
 
 // get the directory where sessions live
@@ -243,8 +350,8 @@ function rebuildSessionIndex(): SessionMeta[]
     const id = file.slice(0, -'.json'.length)
     if (!isValidSessionId(id)) continue
 
-    const session = readJsonObjectFile<SessionData>(join(dir, file))
-    if (isSessionData(session) && session.meta.id === id)
+    const session = readSessionData(join(dir, file))
+    if (session && session.meta.id === id)
     {
       sessions.push(session.meta)
     }
@@ -296,7 +403,20 @@ function countConversationMessages(messages: OllamaMessage[]): number
 function writeSessionData(session: SessionData): void
 {
   ensureDir()
-  writeJsonFile(sessionPath(session.meta.id), session)
+  const undoState = serializeUndoState(
+    session.messages,
+    session.undo ?? [],
+    session.redo ?? []
+  )
+  const file: SessionFileData = {
+    meta: session.meta,
+    messages: session.messages,
+    todos: session.todos,
+    undo: session.undo === undefined ? undefined : undoState.undo,
+    redo: session.redo === undefined ? undefined : undoState.redo,
+  }
+
+  writeJsonFile(sessionPath(session.meta.id), file)
   upsertSessionIndex(session.meta)
 }
 
@@ -305,7 +425,9 @@ export function createSession(
   model: string,
   cwd: string,
   messages: OllamaMessage[],
-  todos: TodoItem[] = []
+  todos: TodoItem[] = [],
+  undo: UndoTurn[] = [],
+  redo: UndoTurn[] = []
 ): SessionMeta
 {
   ensureDir()
@@ -322,7 +444,7 @@ export function createSession(
     messageCount: countConversationMessages(messages),
   }
 
-  writeSessionData({ meta, messages, todos })
+  writeSessionData({ meta, messages, todos, undo, redo })
 
   return meta
 }
@@ -334,7 +456,9 @@ export function saveSession(
   cwd: string,
   messages: OllamaMessage[],
   metaHint?: SessionMetaHint,
-  todos: TodoItem[] = []
+  todos: TodoItem[] = [],
+  undo: UndoTurn[] = [],
+  redo: UndoTurn[] = []
 ): SessionMeta
 {
   if (!isValidSessionId(id))
@@ -360,7 +484,7 @@ export function saveSession(
     lastCompactedAt: metaHint?.lastCompactedAt ?? indexedMeta?.lastCompactedAt,
   }
 
-  writeSessionData({ meta, messages, todos })
+  writeSessionData({ meta, messages, todos, undo, redo })
 
   return meta
 }
@@ -370,8 +494,8 @@ export function loadSession(id: string): SessionData | undefined
 {
   if (!isValidSessionId(id)) return undefined
 
-  const session = readJsonObjectFile<SessionData>(sessionPath(id))
-  if (!isSessionData(session)) return undefined
+  const session = readSessionData(sessionPath(id))
+  if (!session) return undefined
   if (session.meta.id !== id) return undefined
   return session
 }
@@ -390,8 +514,8 @@ export function renameSession(
 {
   if (!isValidSessionId(id)) return undefined
 
-  const session = readJsonObjectFile<SessionData>(sessionPath(id))
-  if (!isSessionData(session)) return undefined
+  const session = readSessionData(sessionPath(id))
+  if (!session) return undefined
 
   session.meta.title = title
   session.meta.updatedAt = new Date().toISOString()

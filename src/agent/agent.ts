@@ -20,6 +20,7 @@ import {
 import { type SubagentResult, type SubagentRunner } from '../tools/subagent.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import { buildSystemPrompt } from './system-prompt.js'
+import { projectContextBudgetForWindow } from './context.js'
 import { setCwd, getCwd } from '../cwd.js'
 import { resolve } from 'node:path'
 import {
@@ -71,16 +72,30 @@ import {
   MAX_VERIFY_REPROMPTS,
   type VerificationResult,
 } from './verify.js'
+import {
+  cloneTodoItems,
+  cloneUndoTurn,
+  cloneMessages,
+  type UndoFileChange,
+  type UndoResult,
+  type UndoTodoChange,
+  type UndoTurn,
+} from '../types/undo.js'
+import { applyFileChanges, revertFileChanges } from './undo.js'
 import { validateToolArgs } from './tool-validation.js'
 import { loadProjectConfig } from '../config/project-config.js'
 import { buildGitContextMessage } from './git-context.js'
 import { requiresWorkspacePathApproval } from '../tools/path-policy.js'
+import { setTodos, type TodoItem } from '../tools/todo-store.js'
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
 
 // cap tool-call rounds for a research subagent so it can't loop unbounded
 const SUBAGENT_MAX_ITERATIONS = 24
+
+// keep session undo state bounded; records can include file text snapshots
+const MAX_UNDO_TURNS = 10
 
 // hard ceiling on tokens generated per turn (incl. thinking). bounds a single
 // decode so a runaway gemma reasoner can't stream for tens of minutes. the main
@@ -131,9 +146,17 @@ interface ToolOutcomeRecordParams
   toolResults: OllamaMessage[]
   doomLoop: DoomLoopDetector
   editDiffs: string[]
+  fileChanges: UndoFileChange[]
+  todoChange: TodoChangeTracker
   invocation: ToolInvocation
   result: ToolResult
   trackDoom?: boolean
+}
+
+interface TodoChangeTracker
+{
+  before: TodoItem[] | null
+  after: TodoItem[] | null
 }
 
 // merge streamed tool call chunks into a stable ordered list
@@ -215,6 +238,29 @@ function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
   })
 }
 
+function cloneUndoStack(stack: UndoTurn[]): UndoTurn[]
+{
+  return stack.map(cloneUndoTurn)
+}
+
+function modelRequestMessage(message: OllamaMessage): OllamaMessage
+{
+  const requestMessage = { ...message }
+  delete requestMessage.displayContent
+  return requestMessage
+}
+
+function finalizedTodoChange(
+  change: TodoChangeTracker
+): UndoTodoChange | undefined
+{
+  if (!change.before || !change.after) return undefined
+  return {
+    before: cloneTodoItems(change.before),
+    after: cloneTodoItems(change.after),
+  }
+}
+
 // token usage from Ollama's response metrics
 // durations are nanoseconds — Ollama's native unit from prompt_eval_duration / eval_duration
 export interface TokenUsage
@@ -288,6 +334,11 @@ interface AgentOptions
   permissions?: ToolPermissions
 }
 
+interface AgentRunOptions
+{
+  displayContent?: string
+}
+
 // * Conversation agent w/ tool dispatch
 export class Agent
 {
@@ -329,6 +380,8 @@ export class Agent
   private reliabilityStats: ReliabilityStats = makeReliabilityStats()
   private telemetryStatsByModel = new Map<string, ReliabilityStats>()
   private producedModels = new Set<string>()
+  private undoStack: UndoTurn[] = []
+  private redoStack: UndoTurn[] = []
   private onCompactionCallback?: (result: CompactionResult) => void
   private onCompactionStartCallback?: () => void
   // self-check edits after a clean completion (warn-only); off by default
@@ -470,6 +523,7 @@ export class Agent
     this.messages = [currentSystem!, ...nonSystem]
     // recover the frozen-prefix boundary from the leading summary blocks
     this.frozenPrefixLength = countFrozenPrefix(this.messages)
+    this.clearUndoRedoStacks()
     this.rebuildTokenEstimate()
   }
 
@@ -477,6 +531,112 @@ export class Agent
   getMessages(): OllamaMessage[]
   {
     return [...this.messages]
+  }
+
+  // restore undo records from a saved session; invalid records are ignored by
+  // the session parser before this point
+  restoreUndoStack(
+    undoStack: UndoTurn[] = [],
+    redoStack: UndoTurn[] = []
+  ): void
+  {
+    this.undoStack = cloneUndoStack(undoStack).slice(-MAX_UNDO_TURNS)
+    this.redoStack = cloneUndoStack(redoStack).slice(-MAX_UNDO_TURNS)
+  }
+
+  getUndoStack(): UndoTurn[]
+  {
+    return cloneUndoStack(this.undoStack)
+  }
+
+  getRedoStack(): UndoTurn[]
+  {
+    return cloneUndoStack(this.redoStack)
+  }
+
+  async undoLastTurn(): Promise<UndoResult>
+  {
+    const turn = this.undoStack.at(-1)
+    if (!turn)
+    {
+      return { ok: false, message: 'Nothing to undo' }
+    }
+    if (
+      turn.endIndex !== this.messages.length ||
+      turn.startIndex < this.frozenPrefixLength ||
+      this.messages[turn.startIndex]?.role !== 'user' ||
+      this.messages[turn.startIndex]?.content !== turn.userMessage
+    )
+    {
+      this.clearUndoRedoStacks()
+      return {
+        ok: false,
+        message: 'Cannot undo after compaction or history changes',
+      }
+    }
+
+    const reverted = await revertFileChanges(turn.changes, { cwd: this.cwd })
+    if (!reverted.ok)
+    {
+      return { ok: false, message: reverted.error }
+    }
+
+    if (turn.todoChange) setTodos(cloneTodoItems(turn.todoChange.before))
+
+    const removedMessages = this.messages.length - turn.startIndex
+    this.messages = this.messages.slice(0, turn.startIndex)
+    const undone = this.undoStack.pop()
+    if (undone)
+    {
+      this.redoStack.push({
+        ...undone,
+        startIndex: this.messages.length,
+        endIndex: this.messages.length + undone.messages.length,
+      })
+      this.redoStack = this.redoStack.slice(-MAX_UNDO_TURNS)
+    }
+    this.rebuildTokenEstimate()
+
+    return {
+      ok: true,
+      message: 'Undid last turn',
+      removedMessages,
+      changedFiles: reverted.changedFiles,
+    }
+  }
+
+  async redoLastTurn(): Promise<UndoResult>
+  {
+    const turn = this.redoStack.at(-1)
+    if (!turn)
+    {
+      return { ok: false, message: 'Nothing to redo' }
+    }
+
+    const applied = await applyFileChanges(turn.changes, { cwd: this.cwd })
+    if (!applied.ok)
+    {
+      return { ok: false, message: applied.error }
+    }
+
+    if (turn.todoChange) setTodos(cloneTodoItems(turn.todoChange.after))
+
+    const startIndex = this.messages.length
+    this.pushMessages(turn.messages)
+    this.redoStack.pop()
+    this.undoStack.push({
+      ...turn,
+      startIndex,
+      endIndex: this.messages.length,
+    })
+    this.undoStack = this.undoStack.slice(-MAX_UNDO_TURNS)
+
+    return {
+      ok: true,
+      message: 'Redid last turn',
+      restoredMessages: turn.messages.length,
+      changedFiles: applied.changedFiles,
+    }
   }
 
   // get the model name
@@ -544,21 +704,7 @@ export class Agent
 
     // rebuild the system prompt w/ the new model name
     const systemContent = this.buildSystemContent(nextModel)
-
-    // replace messages[0] (the system prompt) in-place
-    if (this.messages.length > 0 && this.messages[0]!.role === 'system')
-    {
-      const oldTokens = estimateMessageTokens(this.messages[0]!)
-      this.messages[0] = { role: 'system', content: systemContent }
-      const newTokens = estimateMessageTokens(this.messages[0]!)
-      this.estimatedTokenCount += newTokens - oldTokens
-    }
-    else
-    {
-      // shouldn't happen, but handle gracefully
-      this.messages.unshift({ role: 'system', content: systemContent })
-      this.rebuildTokenEstimate()
-    }
+    this.replaceSystemPrompt(systemContent)
 
     // start keep-alive for the new model
     this.client.startKeepAlive(nextModel)
@@ -578,6 +724,7 @@ export class Agent
     const cleared = this.messages.length - 1
     this.messages = [systemMsg]
     this.frozenPrefixLength = 1
+    this.clearUndoRedoStacks()
     this.rebuildTokenEstimate()
     return cleared
   }
@@ -707,33 +854,39 @@ export class Agent
   // pin it as num_ctx for the session. safe to call multiple times — only the
   // first resolution does work. capping keeps KV-cache memory bounded;
   // compaction targets the smaller MAX_WORKING_SET_TOKENS, not the full window
-  async fetchContextWindow(): Promise<number>
+  async fetchContextWindow(signal?: AbortSignal): Promise<number>
   {
     if (this.contextWindowSize > 0) return this.contextWindowSize
 
     // share one in-flight request; clear the memo on settle so a transient
     // failure (numCtx still 0) retries on the next call instead of sticking
-    this.contextWindowPromise ??= this.resolveContextWindow().finally(() =>
-    {
-      this.contextWindowPromise = undefined
-    })
+    this.contextWindowPromise ??= this.resolveContextWindow(signal).finally(
+      () =>
+      {
+        this.contextWindowPromise = undefined
+      }
+    )
 
-    return this.contextWindowPromise
+    return raceAbort(this.contextWindowPromise, signal)
   }
 
   // resolve the context window once: size it to the memory budget, cap to the
   // native window & any user override, pin it as num_ctx, & cap the compaction
   // working-set well below it (SWA/MLX re-prefills the whole prompt each turn)
-  private async resolveContextWindow(): Promise<number>
+  private async resolveContextWindow(signal?: AbortSignal): Promise<number>
   {
     const requestedModel = this.model
-    const resolved = await resolvePinnedContextWindow({
-      model: requestedModel,
-      cwd: this.cwd,
-      totalMemBytes: totalmem(),
-      showModel: (model) => this.client.showModel(model),
-      listModels: () => this.client.listModels(),
-    })
+    const resolved = await resolvePinnedContextWindow(
+      {
+        model: requestedModel,
+        cwd: this.cwd,
+        totalMemBytes: totalmem(),
+        showModel: (model, requestSignal) =>
+          this.client.showModel(model, requestSignal),
+        listModels: (requestSignal) => this.client.listModels(requestSignal),
+      },
+      signal
+    )
 
     if (this.model !== requestedModel) return this.contextWindowSize
 
@@ -745,6 +898,7 @@ export class Agent
         ...this.compactionConfig,
         contextWindow: Math.min(resolved.contextWindow, MAX_WORKING_SET_TOKENS),
       }
+      this.replaceSystemPrompt(this.buildSystemContent(this.model))
     }
 
     return this.contextWindowSize
@@ -779,10 +933,66 @@ export class Agent
     this.onCompactionStartCallback = undefined
   }
 
+  private recordUndoTurn(
+    startMessage: OllamaMessage,
+    userMessage: string,
+    changes: UndoFileChange[],
+    todoChange?: UndoTodoChange
+  ): void
+  {
+    const startIndex = this.messages.indexOf(startMessage)
+    if (startIndex < this.frozenPrefixLength) return
+    if (startIndex < 0 || startIndex >= this.messages.length) return
+
+    this.undoStack.push({
+      startIndex,
+      endIndex: this.messages.length,
+      userMessage,
+      messages: cloneMessages(this.messages.slice(startIndex)),
+      changes: changes.map((change) => ({ ...change })),
+      todoChange: todoChange
+        ? {
+            before: cloneTodoItems(todoChange.before),
+            after: cloneTodoItems(todoChange.after),
+          }
+        : undefined,
+    })
+    this.undoStack = this.undoStack.slice(-MAX_UNDO_TURNS)
+    this.redoStack = []
+  }
+
+  private clearUndoRedoStacks(): void
+  {
+    this.undoStack = []
+    this.redoStack = []
+  }
+
   // build the system prompt for a model — same wiring at construct & switch
   private buildSystemContent(model: string): string
   {
-    return buildSystemPrompt({ model, cwd: this.cwd, tools: this.tools })
+    return buildSystemPrompt({
+      model,
+      cwd: this.cwd,
+      tools: this.tools,
+      projectContextBudget: projectContextBudgetForWindow(
+        this.contextWindowSize
+      ),
+    })
+  }
+
+  private replaceSystemPrompt(systemContent: string): void
+  {
+    if (this.messages.length > 0 && this.messages[0]!.role === 'system')
+    {
+      const oldTokens = estimateMessageTokens(this.messages[0]!)
+      this.messages[0] = { role: 'system', content: systemContent }
+      const newTokens = estimateMessageTokens(this.messages[0]!)
+      this.estimatedTokenCount += newTokens - oldTokens
+      return
+    }
+
+    this.messages.unshift({ role: 'system', content: systemContent })
+    this.rebuildTokenEstimate()
   }
 
   // append volatile repo state to the request only; keep session history stable
@@ -790,7 +1000,8 @@ export class Agent
     gitContext: OllamaMessage | null
   ): OllamaMessage[]
   {
-    return gitContext ? [...this.messages, gitContext] : this.messages
+    const messages = gitContext ? [...this.messages, gitContext] : this.messages
+    return messages.map(modelRequestMessage)
   }
 
   // include request-only context in budget checks & usage display
@@ -886,6 +1097,7 @@ export class Agent
   {
     this.messages = buildCompactedMessages(frozenPrefix, summary, toKeep)
     this.frozenPrefixLength = frozenPrefix.length + 1
+    this.clearUndoRedoStacks()
     this.rebuildTokenEstimate()
 
     this.compactionCount++
@@ -916,6 +1128,7 @@ export class Agent
         ? []
         : this.messages.slice(this.frozenPrefixLength).slice(-liveBudget)
     this.messages = [...frozen, ...recent]
+    this.clearUndoRedoStacks()
     this.rebuildTokenEstimate()
   }
 
@@ -1102,6 +1315,8 @@ export class Agent
     toolResults,
     doomLoop,
     editDiffs,
+    fileChanges,
+    todoChange,
     invocation,
     result,
     trackDoom = true,
@@ -1118,6 +1333,12 @@ export class Agent
       this.buildToolMessage(invocation.name, result.output, result.error)
     )
     if (result.diff) editDiffs.push(result.diff)
+    if (result.change) fileChanges.push(result.change)
+    if (result.todoChange)
+    {
+      todoChange.before ??= cloneTodoItems(result.todoChange.before)
+      todoChange.after = cloneTodoItems(result.todoChange.after)
+    }
     if (!trackDoom) return null
 
     return doomLoop.record(invocation.name, invocation.args, result.error)
@@ -1217,16 +1438,44 @@ export class Agent
   async run(
     userMessage: string,
     events: AgentEvents,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options: AgentRunOptions = {}
   ): Promise<void>
   {
     // resolve the num_ctx pin before the first request so every turn (incl. the
     // first) hits the runner w/ the same num_ctx — otherwise turn 1 loads at
     // the Modelfile default & turn 2 reloads, wiping the KV cache. no-op once
     // resolved & instant for subagents (they inherit a pinned window)
-    await this.fetchContextWindow()
+    try
+    {
+      await this.fetchContextWindow(signal)
+    }
+    catch (err)
+    {
+      if (signal?.aborted)
+      {
+        this.finishRun(events)
+        return
+      }
+      events.onError(toError(err))
+      return
+    }
 
-    this.pushMessage({ role: 'user', content: userMessage })
+    if (signal?.aborted)
+    {
+      this.finishRun(events)
+      return
+    }
+
+    const runStartMessage: OllamaMessage = {
+      role: 'user',
+      content: userMessage,
+    }
+    if (options.displayContent !== undefined)
+    {
+      runStartMessage.displayContent = options.displayContent
+    }
+    this.pushMessage(runStartMessage)
 
     // store compaction callbacks so compactIfNeeded() can invoke them
     this.onCompactionCallback = events.onCompaction
@@ -1240,12 +1489,29 @@ export class Agent
     const doomLoop = new DoomLoopDetector()
     // diffs from edit-producing tools this run — fed to the self-check
     const editDiffs: string[] = []
+    const fileChanges: UndoFileChange[] = []
+    const todoChange: TodoChangeTracker = { before: null, after: null }
+    let undoRecorded = false
+    const finish = () =>
+    {
+      if (!undoRecorded)
+      {
+        this.recordUndoTurn(
+          runStartMessage,
+          userMessage,
+          fileChanges,
+          finalizedTodoChange(todoChange)
+        )
+        undoRecorded = true
+      }
+      this.finishRun(events)
+    }
     while (true)
     {
       // check for abort before each iteration
       if (signal?.aborted)
       {
-        this.finishRun(events)
+        finish()
         return
       }
 
@@ -1253,7 +1519,7 @@ export class Agent
       iterations++
       if (this.maxIterations !== undefined && iterations > this.maxIterations)
       {
-        this.finishRun(events)
+        finish()
         return
       }
 
@@ -1267,7 +1533,7 @@ export class Agent
       // request — bail before any further mutation of the message list
       if (signal?.aborted)
       {
-        this.finishRun(events)
+        finish()
         return
       }
 
@@ -1354,7 +1620,7 @@ export class Agent
         {
           // record whatever we streamed so far as a partial message
           this.recordPartialOnAbort(fullContent, fullThinking)
-          this.finishRun(events)
+          finish()
           return
         }
 
@@ -1367,7 +1633,7 @@ export class Agent
       if (signal?.aborted)
       {
         this.recordPartialOnAbort(fullContent, fullThinking)
-        this.finishRun(events)
+        finish()
         return
       }
 
@@ -1470,7 +1736,7 @@ export class Agent
           }
         }
 
-        this.finishRun(events)
+        finish()
         return
       }
 
@@ -1550,6 +1816,8 @@ export class Agent
                 toolResults,
                 doomLoop,
                 editDiffs,
+                fileChanges,
+                todoChange,
                 invocation: item,
                 result: toolError(errorMsg),
               })
@@ -1566,6 +1834,8 @@ export class Agent
               toolResults,
               doomLoop,
               editDiffs,
+              fileChanges,
+              todoChange,
               invocation: item,
               result,
             })
@@ -1596,6 +1866,8 @@ export class Agent
             toolResults,
             doomLoop,
             editDiffs,
+            fileChanges,
+            todoChange,
             invocation,
             result: toolError(errorMsg),
           })
@@ -1620,6 +1892,8 @@ export class Agent
             toolResults,
             doomLoop,
             editDiffs,
+            fileChanges,
+            todoChange,
             invocation,
             result: toolError(deniedMsg),
             trackDoom: false,
@@ -1649,6 +1923,8 @@ export class Agent
               toolResults,
               doomLoop,
               editDiffs,
+              fileChanges,
+              todoChange,
               invocation,
               result: toolError(errorMsg),
               trackDoom: false,
@@ -1670,6 +1946,8 @@ export class Agent
               toolResults,
               doomLoop,
               editDiffs,
+              fileChanges,
+              todoChange,
               invocation,
               result: toolError(rejectedMsg),
               trackDoom: false,
@@ -1689,6 +1967,8 @@ export class Agent
           toolResults,
           doomLoop,
           editDiffs,
+          fileChanges,
+          todoChange,
           invocation,
           result,
         })
@@ -1720,7 +2000,7 @@ export class Agent
 
       if (abortedDuringTools)
       {
-        this.finishRun(events)
+        finish()
         return
       }
 
@@ -1739,13 +2019,13 @@ export class Agent
         }
         catch
         {
-          this.finishRun(events)
+          finish()
           return
         }
 
         if (!proceed)
         {
-          this.finishRun(events)
+          finish()
           return
         }
         // fresh streak required before tripping again
