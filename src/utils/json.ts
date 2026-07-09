@@ -1,7 +1,7 @@
 // src/utils/json.ts
 // JSON parse & file helpers
 
-import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { isPlainObject } from './guards.js'
 import { ensureParentDir } from './fs.js'
 
@@ -47,6 +47,10 @@ export function writeJsonFile(path: string, value: unknown): void
 {
   ensureParentDir(path)
   const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf-8')
+  writeFileSync(tmp, JSON.stringify(value, null, 2), {
+    encoding: 'utf-8',
+    mode: 0o600,
+  })
+  if (process.platform !== 'win32') chmodSync(tmp, 0o600)
   renameSync(tmp, path)
 }

@@ -56,6 +56,8 @@ export function useSessionPersistence(resumeSessionId?: string): {
       const model = agent.getModel()
       const cwd = agent.getCwd()
       const todos = getTodos()
+      const undo = agent.getUndoStack()
+      const redo = agent.getRedoStack()
       const metaHint = {
         compactionCount: agent.getCompactionCount(),
         lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
@@ -74,9 +76,11 @@ export function useSessionPersistence(resumeSessionId?: string): {
             cwd,
             messages,
             metaHint,
-            todos
+            todos,
+            undo,
+            redo
           )
-        : createSession(model, cwd, messages, todos)
+        : createSession(model, cwd, messages, todos, undo, redo)
 
       sessionIdRef.current = meta.id
       sessionMetaRef.current = meta
