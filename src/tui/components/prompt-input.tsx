@@ -42,6 +42,7 @@ export interface PromptInputProps
   onScrollDown: () => void
   onToggleThinking: () => void
   onTogglePermissions: () => void
+  onOpenPalette: () => void
   onHistoryUp: () => void
   onHistoryDown: () => void
 }
@@ -77,6 +78,7 @@ export default function PromptInput({
   onScrollDown,
   onToggleThinking,
   onTogglePermissions,
+  onOpenPalette,
   onHistoryUp,
   onHistoryDown,
 }: PromptInputProps)
@@ -294,6 +296,11 @@ export default function PromptInput({
         onTogglePermissions()
         return
       }
+      if (isCtrlLetter(input, key, 'p'))
+      {
+        onOpenPalette()
+        return
+      }
       if (key.escape)
       {
         onEscape()
@@ -361,6 +368,7 @@ export default function PromptInput({
       onHistoryDown,
       onHistoryUp,
       onInterrupt,
+      onOpenPalette,
       onPageDown,
       onPageUp,
       onScrollDown,

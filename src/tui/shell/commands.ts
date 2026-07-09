@@ -47,6 +47,24 @@ import {
 } from '../../retrieval/types.js'
 import { formatTelemetry, loadTelemetry } from '../../telemetry/store.js'
 
+export type KeybindingAction =
+  | 'toggle-thinking'
+  | 'toggle-permissions'
+  | 'page-up'
+  | 'page-down'
+
+export interface KeybindingSummary
+{
+  keys: string
+  description: string
+  action?: KeybindingAction
+}
+
+export interface CommandInfo extends CommandSummary
+{
+  aliases: string[]
+}
+
 // context passed to every command — provides access to app state & setters
 export interface CommandContext
 {
@@ -59,6 +77,8 @@ export interface CommandContext
   pushOutput: (...blocks: OutputBlock[]) => void
   // clear the transcript & reset conversation state
   clearSession: () => void
+  // rebuild transcript from agent history after undo/redo changes
+  rebuildTranscript: () => void
   // reopen the model picker
   reopenModelPicker: () => void
   // switch model in-place (keeps conversation history)
@@ -95,6 +115,39 @@ interface Command
   description: string
   execute: (args: string, ctx: CommandContext) => void | Promise<void>
 }
+
+const keybindings: KeybindingSummary[] = [
+  {
+    keys: 'ctrl+p',
+    description: 'Open command palette',
+  },
+  {
+    keys: 'ctrl+y',
+    description: 'Toggle permission mode (ask / yolo)',
+    action: 'toggle-permissions',
+  },
+  {
+    keys: 'ctrl+t',
+    description: 'Toggle thinking/reasoning visibility',
+    action: 'toggle-thinking',
+  },
+  {
+    keys: 'ctrl+c',
+    description: 'Interrupt generation (or exit when idle)',
+  },
+  {
+    keys: 'esc',
+    description: 'Interrupt generation (or exit when idle)',
+  },
+  {
+    keys: '↑↓',
+    description: 'Navigate input history',
+  },
+  {
+    keys: 'pgup/dn',
+    description: 'Page through transcript',
+  },
+]
 
 // result of parsing a slash command from input
 interface ParsedCommand
@@ -163,24 +216,12 @@ const helpCommand: Command = {
     lines.push('')
     lines.push(`${style('muted')('— keybindings')}`)
     lines.push('')
-    lines.push(
-      `  ${style('user')('ctrl+y')}   ${chalk.dim('Toggle permission mode (ask / yolo)')}`
-    )
-    lines.push(
-      `  ${style('user')('ctrl+t')}   ${chalk.dim('Toggle thinking/reasoning visibility')}`
-    )
-    lines.push(
-      `  ${style('user')('ctrl+c')}   ${chalk.dim('Interrupt generation (or exit when idle)')}`
-    )
-    lines.push(
-      `  ${style('user')('esc')}      ${chalk.dim('Interrupt generation (or exit when idle)')}`
-    )
-    lines.push(
-      `  ${style('user')('↑↓')}       ${chalk.dim('Navigate input history')}`
-    )
-    lines.push(
-      `  ${style('user')('pgup/dn')}  ${chalk.dim('Page through transcript')}`
-    )
+    for (const binding of keybindings)
+    {
+      lines.push(
+        `  ${style('user')(binding.keys.padEnd(8))} ${chalk.dim(binding.description)}`
+      )
+    }
 
     lines.push('')
     lines.push(
@@ -637,6 +678,70 @@ const themeCommand: Command = {
   },
 }
 
+// ── /undo & /redo ─────────────────────────────────────────────────────
+
+function formatUndoResult(result: {
+  message: string
+  removedMessages?: number
+  restoredMessages?: number
+  changedFiles?: number
+}): string
+{
+  const details: string[] = []
+  if (result.removedMessages !== undefined)
+  {
+    details.push(`${pluralize(result.removedMessages, 'message')} removed`)
+  }
+  if (result.restoredMessages !== undefined)
+  {
+    details.push(`${pluralize(result.restoredMessages, 'message')} restored`)
+  }
+  if (result.changedFiles !== undefined)
+  {
+    details.push(`${pluralize(result.changedFiles, 'file')} updated`)
+  }
+
+  return details.length > 0
+    ? `${result.message} (${details.join(', ')})`
+    : result.message
+}
+
+const undoCommand: Command = {
+  name: 'undo',
+  description: 'Undo the last turn & revert captured file edits',
+  async execute(_args, ctx)
+  {
+    const result = await ctx.agent.undoLastTurn()
+    if (!result.ok)
+    {
+      ctx.pushOutput(systemBlock(result.message))
+      return
+    }
+
+    ctx.rebuildTranscript()
+    ctx.saveCurrentSession()
+    ctx.pushOutput(systemBlock(formatUndoResult(result)))
+  },
+}
+
+const redoCommand: Command = {
+  name: 'redo',
+  description: 'Redo the last undone turn & reapply captured edits',
+  async execute(_args, ctx)
+  {
+    const result = await ctx.agent.redoLastTurn()
+    if (!result.ok)
+    {
+      ctx.pushOutput(systemBlock(result.message))
+      return
+    }
+
+    ctx.rebuildTranscript()
+    ctx.saveCurrentSession()
+    ctx.pushOutput(systemBlock(formatUndoResult(result)))
+  },
+}
+
 // ── /diff ──────────────────────────────────────────────────────────────
 
 const diffCommand: Command = {
@@ -968,6 +1073,8 @@ const commands: Command[] = [
   permissionsCommand,
   verifyCommand,
   themeCommand,
+  undoCommand,
+  redoCommand,
   diffCommand,
   copyCommand,
   todoCommand,
@@ -983,10 +1090,25 @@ const commands: Command[] = [
 // command name + description pairs for prompt autocomplete
 export function commandCompletions(): CommandSummary[]
 {
-  return commands.map((cmd) => ({
+  return commandInfos().map((cmd) => ({
     name: cmd.name,
     description: cmd.description,
+    aliases: cmd.aliases,
   }))
+}
+
+export function commandInfos(): CommandInfo[]
+{
+  return commands.map((cmd) => ({
+    name: cmd.name,
+    aliases: cmd.aliases ?? [],
+    description: cmd.description,
+  }))
+}
+
+export function keybindingInfos(): KeybindingSummary[]
+{
+  return keybindings.map((binding) => ({ ...binding }))
 }
 
 // dispatch a slash command from user input
