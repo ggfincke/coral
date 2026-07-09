@@ -132,10 +132,31 @@ test('write_file overwrites oversized targets without previewing old content', a
 
   assert.equal(result.error, undefined)
   assert.equal(result.diff, undefined)
+  assert.equal(result.change, undefined)
   assert.match(result.output, /Wrote 6 B/)
   assert.match(result.output, /Diff skipped:/)
   assert.match(result.output, /exceeds 1\.0 MB read limit/)
   assert.equal(await readFile(target, 'utf-8'), 'small\n')
+})
+
+test('write_file records created-file undo metadata', async () =>
+{
+  const dir = await tempDir('coral-write-change-')
+  const target = join(dir, 'created.txt')
+
+  setCwd(dir)
+  const result = await writeTool.execute({
+    path: 'created.txt',
+    content: 'hello\n',
+  })
+
+  assert.equal(result.error, undefined)
+  assert.deepEqual(result.change, {
+    path: target,
+    before: null,
+    after: 'hello\n',
+  })
+  assert.equal(await readFile(target, 'utf-8'), 'hello\n')
 })
 
 test('edit_file changes disk, returns a diff, and leaves misses untouched', async () =>
@@ -157,6 +178,11 @@ test('edit_file changes disk, returns a diff, and leaves misses untouched', asyn
   })
 
   assert.equal(edited.error, undefined)
+  assert.deepEqual(edited.change, {
+    path: target,
+    before: 'export function label() {\n  return "old"\n}\n',
+    after: 'export function label() {\n  return "new"\n}\n',
+  })
   assert.match(edited.output, /replaced 1 occurrence/)
   assert.ok((edited.diff ?? '').includes('-  return "old"'))
   assert.ok((edited.diff ?? '').includes('+  return "new"'))

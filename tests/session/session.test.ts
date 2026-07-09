@@ -2,11 +2,13 @@
 // tests for session persistence
 
 import { strict as assert } from 'node:assert'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, beforeEach, test } from 'node:test'
 import type { OllamaMessage } from '../../src/types/inference.js'
 import type { TodoItem } from '../../src/tools/todo-store.js'
+import type { UndoTurn } from '../../src/types/undo.js'
+import { serializeUndoState } from '../../src/session/undo-state.js'
 import {
   createSession,
   saveSession,
@@ -115,9 +117,155 @@ test('createSession and saveSession round-trip the todo list', () =>
   assert.deepEqual(reloaded.todos, nextTodos)
 })
 
-test('loadSession tolerates legacy session files without a todos field', async () =>
+test('createSession and saveSession round-trip undo and redo stacks', async () =>
 {
-  // simulate a pre-todos session file — no todos key on disk
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System' },
+    { role: 'user', content: 'Create file' },
+    { role: 'assistant', content: 'Done' },
+  ]
+  const undo: UndoTurn[] = [
+    {
+      startIndex: 1,
+      endIndex: 3,
+      userMessage: 'Create file',
+      messages: messages.slice(1),
+      changes: [{ path: '/tmp/file.txt', before: null, after: 'hello\n' }],
+      todoChange: {
+        before: [{ content: 'old todo', status: 'pending' }],
+        after: [{ content: 'new todo', status: 'in_progress' }],
+      },
+    },
+  ]
+  const redo: UndoTurn[] = [
+    {
+      startIndex: 1,
+      endIndex: 3,
+      userMessage: 'Edit file',
+      messages: [
+        { role: 'user', content: 'Edit file' },
+        { role: 'assistant', content: 'Edited' },
+      ],
+      changes: [
+        { path: '/tmp/file.txt', before: 'hello\n', after: 'goodbye\n' },
+      ],
+    },
+  ]
+
+  const meta = createSession(
+    'test-model',
+    '/tmp/undo',
+    messages,
+    [],
+    undo,
+    redo
+  )
+  const loaded = loadSession(meta.id)
+  const raw = JSON.parse(
+    await readFile(
+      join(process.env.CORAL_HOME!, 'sessions', `${meta.id}.json`),
+      'utf-8'
+    )
+  ) as {
+    undo: Array<{ messages?: unknown }>
+    redo: Array<{ messages?: unknown }>
+  }
+
+  assert.ok(loaded)
+  assert.equal(raw.undo[0]?.messages, undefined)
+  assert.ok(Array.isArray(raw.redo[0]?.messages))
+  assert.deepEqual(loaded.undo, undo)
+  assert.deepEqual(loaded.redo, redo)
+
+  const nextUndo = undo.map((turn) => ({ ...turn, userMessage: 'Updated' }))
+  saveSession(
+    meta.id,
+    'test-model',
+    '/tmp/undo',
+    messages,
+    undefined,
+    [],
+    nextUndo,
+    []
+  )
+  const reloaded = loadSession(meta.id)
+
+  assert.ok(reloaded)
+  assert.deepEqual(reloaded.undo, nextUndo)
+  assert.deepEqual(reloaded.redo, [])
+})
+
+test('serializeUndoState caps persisted undo records by whole newest turns', () =>
+{
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System' },
+    { role: 'user', content: 'Large turn' },
+    { role: 'assistant', content: 'Done' },
+    { role: 'user', content: 'Small turn' },
+    { role: 'assistant', content: 'Done' },
+  ]
+  const largeTurn: UndoTurn = {
+    startIndex: 1,
+    endIndex: 3,
+    userMessage: 'Large turn',
+    messages: messages.slice(1, 3),
+    changes: [
+      { path: '/tmp/a.txt', before: null, after: 'x'.repeat(1_000) },
+      { path: '/tmp/b.txt', before: null, after: 'y'.repeat(1_000) },
+    ],
+  }
+  const smallTurn: UndoTurn = {
+    startIndex: 3,
+    endIndex: 5,
+    userMessage: 'Small turn',
+    messages: messages.slice(3, 5),
+    changes: [{ path: '/tmp/c.txt', before: null, after: 'ok\n' }],
+  }
+
+  const capped = serializeUndoState(messages, [largeTurn, smallTurn], [], {
+    byteCap: 500,
+  })
+  const tinyCap = serializeUndoState(messages, [smallTurn], [], {
+    byteCap: 20,
+  })
+
+  assert.deepEqual(
+    capped.undo.map((turn) => turn.userMessage),
+    ['Small turn']
+  )
+  assert.deepEqual(capped.undo[0]?.changes, smallTurn.changes)
+  assert.deepEqual(tinyCap.undo, [])
+})
+
+test(
+  'session JSON and containing directories use private POSIX modes',
+  { skip: process.platform === 'win32' },
+  async () =>
+  {
+    const meta = createSession('test-model', '/tmp/private', [
+      { role: 'system', content: 'System' },
+      { role: 'user', content: 'Private state' },
+    ])
+    const homeMode = (await stat(process.env.CORAL_HOME!)).mode & 0o777
+    const sessionsMode =
+      (await stat(join(process.env.CORAL_HOME!, 'sessions'))).mode & 0o777
+    const sessionMode =
+      (await stat(join(process.env.CORAL_HOME!, 'sessions', `${meta.id}.json`)))
+        .mode & 0o777
+    const indexMode =
+      (await stat(join(process.env.CORAL_HOME!, 'sessions', 'index.json')))
+        .mode & 0o777
+
+    assert.equal(homeMode, 0o700)
+    assert.equal(sessionsMode, 0o700)
+    assert.equal(sessionMode, 0o600)
+    assert.equal(indexMode, 0o600)
+  }
+)
+
+test('loadSession tolerates legacy session files without local-state fields', async () =>
+{
+  // simulate a pre-todos/undo session file — no local-state keys on disk
   const dir = join(process.env.CORAL_HOME!, 'sessions')
   await mkdir(dir, { recursive: true })
   const legacy = {
@@ -130,6 +278,8 @@ test('loadSession tolerates legacy session files without a todos field', async (
 
   assert.ok(loaded)
   assert.equal(loaded.todos, undefined)
+  assert.equal(loaded.undo, undefined)
+  assert.equal(loaded.redo, undefined)
 })
 
 test('loadSession treats objectless JSON session files as missing', async () =>

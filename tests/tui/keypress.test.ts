@@ -31,3 +31,11 @@ test('parseKeypress decodes word-navigation escape sequences', () =>
   assert.equal(naturalRight.name, 'right')
   assert.equal(naturalRight.meta, true)
 })
+
+test('parseKeypress decodes ctrl+p for the command palette', () =>
+{
+  const key = parseKeypress('\x10')
+
+  assert.equal(key.name, 'p')
+  assert.equal(key.ctrl, true)
+})

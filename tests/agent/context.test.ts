@@ -5,7 +5,10 @@ import { strict as assert } from 'node:assert'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { gatherProjectContext } from '../../src/agent/context.js'
+import {
+  gatherProjectContext,
+  projectContextBudgetForWindow,
+} from '../../src/agent/context.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 
 const { tempDir } = makeTempDirPool()
@@ -51,4 +54,23 @@ test('gatherProjectContext truncates oversized context files', async () =>
 
   assert.match(ctx, /truncated/)
   assert.ok(ctx.length < bigContent.length)
+})
+
+test('projectContextBudgetForWindow scales and clamps the injected budget', () =>
+{
+  assert.equal(projectContextBudgetForWindow(0), 16_384)
+  assert.equal(projectContextBudgetForWindow(8_192), 4_096)
+  assert.equal(projectContextBudgetForWindow(32_768), 16_384)
+  assert.equal(projectContextBudgetForWindow(262_144), 32_768)
+})
+
+test('gatherProjectContext respects an explicit total budget', async () =>
+{
+  const dir = await tempProject()
+  await writeFile(join(dir, '.coral.md'), 'x'.repeat(600))
+
+  const ctx = gatherProjectContext(dir, { maxTotalChars: 300 })
+
+  assert.match(ctx, /truncated to fit budget/)
+  assert.ok(ctx.length < 800)
 })

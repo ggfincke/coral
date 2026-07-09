@@ -10,6 +10,7 @@ import {
   sliceViewport,
   type OutputBlock,
 } from '../../src/tui/transcript/transcript.js'
+import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
 import {
   buildApprovalBox,
   buildConfirmBox,
@@ -58,6 +59,8 @@ function makeCommandContext(
     sessionLabelId: 'abcd1234',
     pushOutput: (...blocks) => output.push(...blocks),
     clearSession()
+    {},
+    rebuildTranscript()
     {},
     reopenModelPicker()
     {},
@@ -112,6 +115,28 @@ test('buildTranscriptLines renders conversation and tool results in scrollable o
   assert.ok(lines.some((line) => line.includes('file contents here')))
   assert.equal(topViewport[0], lines[0])
   assert.equal(liveViewport.at(-1), lines.at(-1))
+})
+
+test('buildRestoredBlocks uses displayContent for restored user messages', () =>
+{
+  const blocks = buildRestoredBlocks([
+    { role: 'system', content: 'System' },
+    {
+      role: 'user',
+      content: 'clean prompt\n\n<attached file context>',
+      displayContent: 'clean prompt',
+    },
+    { role: 'assistant', content: 'done' },
+  ])
+
+  assert.deepEqual(blocks[0], { type: 'user', content: 'clean prompt' })
+  assert.equal(
+    blocks.some(
+      (block) =>
+        block.type === 'user' && block.content.includes('attached file context')
+    ),
+    false
+  )
 })
 
 test('buildTranscriptLines hides saved reasoning while preserving a live hint', () =>
@@ -429,6 +454,82 @@ test('dispatchCommand does not save interrupted manual compaction', async () =>
   )
   assert.ok(rendered.includes('Compaction interrupted'))
   assert.ok(!rendered.includes('Context compacted'))
+})
+
+test('dispatchCommand handles undo and redo transcript rebuilds', async () =>
+{
+  const output: OutputBlock[] = []
+  let rebuilds = 0
+  let saves = 0
+  const ctx = makeCommandContext(
+    {
+      undoLastTurn: async () => ({
+        ok: true,
+        message: 'Undid last turn',
+        removedMessages: 3,
+        changedFiles: 1,
+      }),
+      redoLastTurn: async () => ({
+        ok: true,
+        message: 'Redid last turn',
+        restoredMessages: 3,
+        changedFiles: 1,
+      }),
+    } as Partial<Agent>,
+    output
+  )
+  ctx.rebuildTranscript = () =>
+  {
+    rebuilds += 1
+  }
+  ctx.saveCurrentSession = () =>
+  {
+    saves += 1
+    return 'abcd1234'
+  }
+
+  assert.equal(await dispatchCommand('/undo', ctx), true)
+  assert.equal(await dispatchCommand('/redo', ctx), true)
+
+  assert.equal(rebuilds, 2)
+  assert.equal(saves, 2)
+  const rendered = plain(
+    output
+      .filter(
+        (block): block is Extract<OutputBlock, { type: 'system' }> =>
+          block.type === 'system'
+      )
+      .map((block) => block.content)
+  )
+  assert.ok(
+    rendered.includes('Undid last turn (3 messages removed, 1 file updated)')
+  )
+  assert.ok(
+    rendered.includes('Redid last turn (3 messages restored, 1 file updated)')
+  )
+})
+
+test('dispatchCommand reports empty undo stack without saving', async () =>
+{
+  const output: OutputBlock[] = []
+  let saves = 0
+  const ctx = makeCommandContext(
+    {
+      undoLastTurn: async () => ({ ok: false, message: 'Nothing to undo' }),
+    } as Partial<Agent>,
+    output
+  )
+  ctx.saveCurrentSession = () =>
+  {
+    saves += 1
+    return 'abcd1234'
+  }
+
+  assert.equal(await dispatchCommand('/undo', ctx), true)
+  assert.equal(saves, 0)
+  assert.ok(
+    plain(output.map((block) => block.content)).includes('Nothing to undo')
+  )
 })
 
 test('dispatchCommand passes the command abort signal into /index', async () =>

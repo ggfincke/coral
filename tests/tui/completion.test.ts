@@ -97,6 +97,22 @@ test('rankCommands puts prefix matches first & honors the cap', () =>
   assert.equal(rankCommands('', COMMANDS).length, COMMANDS.length)
 })
 
+test('rankCommands matches aliases but inserts canonical command names', () =>
+{
+  const ranked = rankCommands('perms', [
+    {
+      name: 'permissions',
+      aliases: ['perms'],
+      description: 'set permission mode',
+    },
+  ])
+
+  assert.deepEqual(
+    ranked.map((item) => item.value),
+    ['permissions']
+  )
+})
+
 test('rankFiles favors basename matches & shorter paths', () =>
 {
   const files = ['lib/button.ts', 'src/app.ts', 'src/tui/app.tsx']

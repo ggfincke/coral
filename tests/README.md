@@ -14,7 +14,7 @@ We focus on testing critical pure-function logic that, if broken, would cause si
 - **Ollama Client**: Request/response serialization, ndjson stream parsing, error handling
 - **Path Resolution**: CWD-relative path handling across tools
 - **TUI Logic**: Critical prompt editing, keypress parsing, transcript rendering, and session restoration helpers
-- **Persistence**: Session and prompt-history storage, including isolated test homes
+- **Persistence**: Session, prompt-history, undo/redo, and local telemetry storage, including isolated test homes
 
 We intentionally do not test:
 
