@@ -4,6 +4,7 @@
 import type { Tool, ToolResult } from './tool.js'
 import { pluralize } from '../utils/pluralize.js'
 import {
+  getTodos,
   setTodos,
   STATUS_MARK,
   validateTodoList,
@@ -15,6 +16,11 @@ function renderTodos(todos: TodoItem[]): string
 {
   if (todos.length === 0) return 'Cleared the task list'
   return todos.map((t) => `${STATUS_MARK[t.status]} ${t.content}`).join('\n')
+}
+
+function cloneTodos(todos: TodoItem[]): TodoItem[]
+{
+  return todos.map((todo) => ({ ...todo }))
 }
 
 export const todoWriteTool: Tool = {
@@ -53,7 +59,14 @@ export const todoWriteTool: Tool = {
       return { output: '', error: result.error }
     }
 
+    const before = cloneTodos(getTodos())
     setTodos(result.todos)
-    return { output: renderTodos(result.todos) }
+    return {
+      output: renderTodos(result.todos),
+      todoChange: {
+        before,
+        after: cloneTodos(result.todos),
+      },
+    }
   },
 }

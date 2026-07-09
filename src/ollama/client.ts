@@ -16,6 +16,8 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' } as const
 const THINK_FALLBACK_STATUS = new Set([400, 404, 422])
 type ThinkSupport = 'unknown' | 'supported' | 'unsupported'
 
+type ChatMessage = ChatRequest['messages'][number]
+
 interface JsonRequestOptions
 {
   method?: string
@@ -33,6 +35,13 @@ function throwApiError(status: number, body: string): never
 function formatConnectionError(baseUrl: string, detail: string): string
 {
   return `Cannot reach Ollama at ${baseUrl}: ${detail}`
+}
+
+function wireMessage(message: ChatMessage): ChatMessage
+{
+  const body = { ...message }
+  delete body.displayContent
+  return body
 }
 
 // read an exact numeric key from an Ollama model_info map
@@ -87,9 +96,10 @@ export class OllamaClient
     // ! never add a `format` field to tool-bearing requests — it silently
     // ! empties tool_calls (ollama#8095)
     // num_ctx is a top-level convenience field — Ollama expects it under options
-    const { num_ctx, num_predict, ...rest } = request
+    const { num_ctx, num_predict, messages, ...rest } = request
     const body: Record<string, unknown> = {
       ...rest,
+      messages: messages.map(wireMessage),
       keep_alive: request.keep_alive ?? DEFAULT_KEEP_ALIVE,
       stream: true,
     }
@@ -272,12 +282,12 @@ export class OllamaClient
   }
 
   // fetch model details (context window, KV dims, etc.) from the Ollama instance
-  async showModel(model: string): Promise<ModelInfo>
+  async showModel(model: string, signal?: AbortSignal): Promise<ModelInfo>
   {
     const data = await this.jsonRequest<{
       model_info?: Record<string, unknown>
       parameters?: string
-    }>('/api/show', { body: { model } })
+    }>('/api/show', { body: { model }, signal })
 
     const info = data.model_info ?? {}
     const arch =
@@ -318,9 +328,11 @@ export class OllamaClient
   }
 
   // fetch available models from the Ollama instance
-  async listModels(): Promise<Model[]>
+  async listModels(signal?: AbortSignal): Promise<Model[]>
   {
-    const data = await this.jsonRequest<{ models: Model[] }>('/api/tags')
+    const data = await this.jsonRequest<{ models: Model[] }>('/api/tags', {
+      signal,
+    })
     return data.models
   }
 

@@ -12,7 +12,23 @@ import { toErrorMessage } from '../utils/errors.js'
 import {
   formatDiffSkipMessage,
   readOptionalPreviousTextFile,
+  TEXT_FILE_READ_LIMIT_BYTES,
 } from '../utils/file-read.js'
+
+function undoChangeFor(
+  path: string,
+  before: Awaited<ReturnType<typeof readOptionalPreviousTextFile>>,
+  after: string
+): ToolResult['change']
+{
+  if (!before.ok) return undefined
+  if (after.length > TEXT_FILE_READ_LIMIT_BYTES) return undefined
+  return {
+    path,
+    before: before.existed ? before.content : null,
+    after,
+  }
+}
 
 export const writeTool: Tool = {
   name: 'write_file',
@@ -56,6 +72,7 @@ export const writeTool: Tool = {
       return {
         output,
         diff: computeDiff(before.content, content) ?? undefined,
+        change: undoChangeFor(path, before, content),
       }
     }
     catch (err)

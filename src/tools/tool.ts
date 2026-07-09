@@ -3,6 +3,7 @@
 
 import type { OllamaTool, JsonSchema } from '../types/inference.js'
 import type { SubagentRunner } from './subagent.js'
+import type { UndoFileChange, UndoTodoChange } from '../types/undo.js'
 
 // result returned after tool execution
 export interface ToolResult
@@ -11,6 +12,11 @@ export interface ToolResult
   error?: string
   // unified diff of a file change — TUI display only, never sent to the model
   diff?: string
+  // reversible file mutation used by /undo; omitted when previous state is
+  // unavailable or the tool did not change a file
+  change?: UndoFileChange
+  // reversible local-state mutation used by /undo for non-file Coral state
+  todoChange?: UndoTodoChange
   // tool recovered from a near-miss call (e.g. a whitespace-tolerant edit match);
   // the agent folds this into ReliabilityStats
   repaired?: boolean

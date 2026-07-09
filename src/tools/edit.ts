@@ -9,6 +9,7 @@ import { getCwd } from '../cwd.js'
 import { applyEdit, computeDiff, describeEditMiss } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { pluralize } from '../utils/pluralize.js'
+import { TEXT_FILE_READ_LIMIT_BYTES } from '../utils/file-read.js'
 
 export const editTool: Tool = {
   name: 'edit_file',
@@ -102,6 +103,10 @@ export const editTool: Tool = {
     return {
       output: `Edited ${path}: replaced ${pluralize(replaced, 'occurrence')} (${oldString.length} chars → ${newString.length} chars)${note}`,
       diff: computeDiff(content, updated) ?? undefined,
+      change:
+        updated.length <= TEXT_FILE_READ_LIMIT_BYTES
+          ? { path, before: content, after: updated }
+          : undefined,
       repaired: fuzzy,
     }
   },
