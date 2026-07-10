@@ -16,6 +16,7 @@ import {
   estimateTotalTokens,
   FROZEN_SUMMARY_MARKER,
 } from '../../src/agent/compaction.js'
+import { TEXT_FILE_READ_LIMIT_BYTES } from '../../src/utils/file-read.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 import { HAS_GIT, initTestRepo } from '../helpers/git.js'
 import {
@@ -374,6 +375,335 @@ test('Agent clears redo after a divergent turn', async () =>
   assert.equal(redo.ok, false)
   assert.match(redo.message, /Nothing to redo/)
   assert.equal(existsSync(target), false)
+})
+
+test('Agent records undo when a later stream errors after a write', async () =>
+{
+  const dir = await tempDir('coral-agent-stream-err-')
+  const target = join(dir, 'created.txt')
+  let streamCalls = 0
+  const { agent } = makeFakeAgent(dir, async function* ()
+  {
+    streamCalls += 1
+    if (streamCalls === 1)
+    {
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 0,
+                name: 'write_file',
+                arguments: { path: 'created.txt', content: 'hello\n' },
+              },
+            },
+          ],
+        },
+        done: true,
+      }
+      return
+    }
+    throw new Error('ollama disconnected')
+  })
+
+  let seenError: Error | undefined
+  let doneCalled = false
+  await agent.run(
+    'create a file',
+    makeAgentEvents({
+      onDone()
+      {
+        doneCalled = true
+      },
+      onError(error)
+      {
+        seenError = error
+      },
+    })
+  )
+
+  assert.equal(doneCalled, true)
+  assert.match(seenError?.message ?? '', /ollama disconnected/)
+  assert.equal(await readFile(target, 'utf-8'), 'hello\n')
+  assert.ok(agent.getUndoStack().length >= 1)
+
+  const undo = await agent.undoLastTurn()
+  assert.equal(undo.ok, true)
+  assert.equal(existsSync(target), false)
+})
+
+test('Agent compaction clears undo stacks', async () =>
+{
+  const dir = await tempDir('coral-agent-compact-undo-')
+  const target = join(dir, 'created.txt')
+  const { agent } = makeFakeAgent(dir, [
+    [
+      {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 0,
+                name: 'write_file',
+                arguments: { path: 'created.txt', content: 'hello\n' },
+              },
+            },
+          ],
+        },
+        done: true,
+      },
+    ],
+    [{ message: { role: 'assistant', content: 'done' }, done: true }],
+  ])
+
+  await agent.run('create a file', makeAgentEvents())
+  assert.ok(agent.getUndoStack().length >= 1)
+
+  agent.client = {
+    startKeepAlive()
+    {},
+    async *chatStream()
+    {
+      yield {
+        message: { role: 'assistant', content: 'summary of prior work' },
+        done: true,
+      }
+    },
+  } as TestAgent['client']
+
+  const compacted = await agent.forceCompact()
+  assert.ok(compacted)
+  assert.equal(agent.getUndoStack().length, 0)
+  assert.equal(agent.getRedoStack().length, 0)
+
+  const undo = await agent.undoLastTurn()
+  assert.equal(undo.ok, false)
+  assert.match(undo.message, /Nothing to undo/)
+  assert.equal(await readFile(target, 'utf-8'), 'hello\n')
+})
+
+test('Agent stale undo anchor clears both stacks', async () =>
+{
+  const dir = await tempDir('coral-agent-stale-undo-')
+  const target = join(dir, 'created.txt')
+  const { agent } = makeFakeAgent(dir, [
+    [
+      {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 0,
+                name: 'write_file',
+                arguments: { path: 'created.txt', content: 'hello\n' },
+              },
+            },
+          ],
+        },
+        done: true,
+      },
+    ],
+    [{ message: { role: 'assistant', content: 'done' }, done: true }],
+  ])
+
+  await agent.run('create a file', makeAgentEvents())
+  assert.ok(agent.getUndoStack().length >= 1)
+
+  // seed redo as well, then desync history so undo's live-tail check fails
+  const undone = await agent.undoLastTurn()
+  assert.equal(undone.ok, true)
+  const redone = await agent.redoLastTurn()
+  assert.equal(redone.ok, true)
+  assert.ok(agent.getUndoStack().length >= 1)
+
+  agent.messages.push({ role: 'user', content: 'external history change' })
+
+  const undo = await agent.undoLastTurn()
+  assert.equal(undo.ok, false)
+  assert.match(undo.message, /Cannot undo after compaction or history changes/)
+  assert.equal(agent.getUndoStack().length, 0)
+  assert.equal(agent.getRedoStack().length, 0)
+  assert.equal(await readFile(target, 'utf-8'), 'hello\n')
+})
+
+test('Agent refuses redo when history tip no longer matches', async () =>
+{
+  const dir = await tempDir('coral-agent-stale-redo-')
+  const target = join(dir, 'created.txt')
+  const { agent } = makeFakeAgent(dir, [
+    [
+      {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 0,
+                name: 'write_file',
+                arguments: { path: 'created.txt', content: 'hello\n' },
+              },
+            },
+          ],
+        },
+        done: true,
+      },
+    ],
+    [{ message: { role: 'assistant', content: 'done' }, done: true }],
+  ])
+
+  await agent.run('create a file', makeAgentEvents())
+  const undo = await agent.undoLastTurn()
+  assert.equal(undo.ok, true)
+  assert.ok(agent.getRedoStack().length >= 1)
+  assert.equal(existsSync(target), false)
+
+  // append without clearing redo — tip no longer matches redo startIndex
+  agent.messages.push({ role: 'user', content: 'external history change' })
+
+  const redo = await agent.redoLastTurn()
+  assert.equal(redo.ok, false)
+  assert.match(redo.message, /Cannot redo after compaction or history changes/)
+  assert.equal(agent.getUndoStack().length, 0)
+  assert.equal(agent.getRedoStack().length, 0)
+  assert.equal(existsSync(target), false)
+})
+
+test('Agent mid-run trim preserves current-turn undo recording', async () =>
+{
+  const dir = await tempDir('coral-agent-mid-trim-')
+  const target = join(dir, 'created.txt')
+  // fill to MAX_HISTORY so the run's user push + tool loop trip mid-run trim
+  const prior = Array.from({ length: 99 }, (_unused, index) => ({
+    role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+    content: `prior ${index}`,
+  }))
+  let streamCalls = 0
+  const { agent } = makeFakeAgent(dir, async function* ()
+  {
+    streamCalls += 1
+    // many list_files rounds grow history past the live window
+    if (streamCalls <= 40)
+    {
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 0,
+                name: 'list_files',
+                arguments: { path: '.' },
+              },
+            },
+          ],
+        },
+        done: true,
+      }
+      return
+    }
+    if (streamCalls === 41)
+    {
+      yield {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 0,
+                name: 'write_file',
+                arguments: { path: 'created.txt', content: 'kept\n' },
+              },
+            },
+          ],
+        },
+        done: true,
+      }
+      return
+    }
+    yield {
+      message: { role: 'assistant', content: 'done after trim' },
+      done: true,
+    }
+  })
+  agent.restoreMessages([{ role: 'system', content: 'System' }, ...prior])
+  agent.restoreUndoStack([
+    {
+      startIndex: 1,
+      endIndex: 2,
+      userMessage: 'prior',
+      messages: [
+        { role: 'user', content: 'prior' },
+        { role: 'assistant', content: 'old' },
+      ],
+      changes: [],
+    },
+  ])
+
+  await agent.run('create after trim', makeAgentEvents())
+
+  assert.equal(await readFile(target, 'utf-8'), 'kept\n')
+  const stack = agent.getUndoStack()
+  assert.equal(stack.length, 1)
+  assert.equal(stack[0]?.userMessage, 'create after trim')
+  assert.equal(stack[0]?.changes.length, 1)
+  assert.ok(agent.getMessages().some((m) => m.content === 'create after trim'))
+
+  const undo = await agent.undoLastTurn()
+  assert.equal(undo.ok, true)
+  assert.equal(existsSync(target), false)
+})
+
+test('Agent refuses oversized write_file without disk mutation or undo capture', async () =>
+{
+  const dir = await tempDir('coral-agent-big-write-')
+  const target = join(dir, 'huge.txt')
+  const { agent } = makeFakeAgent(dir, [
+    [
+      {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: {
+                index: 0,
+                name: 'write_file',
+                arguments: {
+                  path: 'huge.txt',
+                  content: 'q'.repeat(TEXT_FILE_READ_LIMIT_BYTES + 1),
+                },
+              },
+            },
+          ],
+        },
+        done: true,
+      },
+    ],
+    [{ message: { role: 'assistant', content: 'gave up' }, done: true }],
+  ])
+
+  await agent.run('write a huge file', makeAgentEvents())
+
+  assert.equal(existsSync(target), false)
+  const stack = agent.getUndoStack()
+  assert.equal(stack.length, 1)
+  assert.equal(stack[0]?.changes.length, 0)
 })
 
 test('Agent undo and redo restore todo_write state', async () =>

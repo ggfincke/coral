@@ -8,7 +8,10 @@ import { after, beforeEach, test } from 'node:test'
 import type { OllamaMessage } from '../../src/types/inference.js'
 import type { TodoItem } from '../../src/tools/todo-store.js'
 import type { UndoTurn } from '../../src/types/undo.js'
-import { serializeUndoState } from '../../src/session/undo-state.js'
+import {
+  MAX_UNDO_TURNS,
+  serializeUndoState,
+} from '../../src/session/undo-state.js'
 import {
   createSession,
   saveSession,
@@ -235,6 +238,37 @@ test('serializeUndoState caps persisted undo records by whole newest turns', () 
   )
   assert.deepEqual(capped.undo[0]?.changes, smallTurn.changes)
   assert.deepEqual(tinyCap.undo, [])
+})
+
+test('serializeUndoState applies MAX_UNDO_TURNS before the byte cap', () =>
+{
+  const messages: OllamaMessage[] = [{ role: 'system', content: 'System' }]
+  const turns: UndoTurn[] = []
+  for (let i = 0; i < MAX_UNDO_TURNS + 3; i++)
+  {
+    const startIndex = 1 + i * 2
+    const endIndex = startIndex + 2
+    messages.push(
+      { role: 'user', content: `Turn ${i}` },
+      { role: 'assistant', content: 'Done' }
+    )
+    turns.push({
+      startIndex,
+      endIndex,
+      userMessage: `Turn ${i}`,
+      messages: messages.slice(startIndex, endIndex),
+      changes: [{ path: `/tmp/t${i}.txt`, before: null, after: 'ok\n' }],
+    })
+  }
+
+  const persisted = serializeUndoState(messages, turns, [])
+
+  assert.equal(persisted.undo.length, MAX_UNDO_TURNS)
+  assert.equal(persisted.undo[0]?.userMessage, `Turn ${3}`)
+  assert.equal(
+    persisted.undo.at(-1)?.userMessage,
+    `Turn ${MAX_UNDO_TURNS + 2}`
+  )
 })
 
 test(

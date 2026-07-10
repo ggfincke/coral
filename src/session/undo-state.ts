@@ -5,11 +5,14 @@ import type { OllamaMessage } from '../types/inference.js'
 import {
   cloneMessages,
   cloneTodoItems,
+  isUndoTurnAligned,
   type UndoFileChange,
   type UndoTodoChange,
   type UndoTurn,
 } from '../types/undo.js'
 
+// two-layer undo bounds: count caps live memory; byte cap caps disk snapshots
+export const MAX_UNDO_TURNS = 10
 export const DEFAULT_PERSISTED_UNDO_BYTE_CAP = 8 * 1024 * 1024
 
 export interface PersistedUndoTurn
@@ -37,6 +40,7 @@ export interface HydratedUndoState
 interface SerializeOptions
 {
   byteCap?: number
+  maxTurns?: number
 }
 
 function cloneChanges(changes: UndoFileChange[]): UndoFileChange[]
@@ -50,17 +54,6 @@ function cloneTodoChange(change: UndoTodoChange): UndoTodoChange
     before: cloneTodoItems(change.before),
     after: cloneTodoItems(change.after),
   }
-}
-
-function turnCanHydrateFromMessages(
-  messages: OllamaMessage[],
-  turn: Pick<UndoTurn, 'startIndex' | 'endIndex' | 'userMessage'>
-): boolean
-{
-  if (turn.startIndex < 0 || turn.endIndex < turn.startIndex) return false
-  if (turn.endIndex > messages.length) return false
-  const first = messages[turn.startIndex]
-  return first?.role === 'user' && first.content === turn.userMessage
 }
 
 function serializeTurn(
@@ -113,6 +106,12 @@ function capState(
   return state
 }
 
+function sliceNewestTurns(turns: UndoTurn[], maxTurns: number): UndoTurn[]
+{
+  if (!Number.isFinite(maxTurns) || maxTurns < 0) return turns
+  return turns.slice(-maxTurns)
+}
+
 export function serializeUndoState(
   messages: OllamaMessage[],
   undo: UndoTurn[],
@@ -120,11 +119,18 @@ export function serializeUndoState(
   options: SerializeOptions = {}
 ): PersistedUndoState
 {
+  const maxTurns = options.maxTurns ?? MAX_UNDO_TURNS
+  const cappedUndo = sliceNewestTurns(undo, maxTurns)
+  const cappedRedo = sliceNewestTurns(redo, maxTurns)
+
   const state: PersistedUndoState = {
-    undo: undo.map((turn) =>
-      serializeTurn(turn, !turnCanHydrateFromMessages(messages, turn))
+    undo: cappedUndo.map((turn) =>
+      serializeTurn(
+        turn,
+        !isUndoTurnAligned(messages, turn)
+      )
     ),
-    redo: redo.map((turn) => serializeTurn(turn, true)),
+    redo: cappedRedo.map((turn) => serializeTurn(turn, true)),
   }
 
   return capState(state, options.byteCap ?? DEFAULT_PERSISTED_UNDO_BYTE_CAP)
@@ -148,7 +154,7 @@ export function hydrateUndoTurn(
   }
 
   if (requirePersistedMessages) return undefined
-  if (!turnCanHydrateFromMessages(messages, turn)) return undefined
+  if (!isUndoTurnAligned(messages, turn)) return undefined
 
   const hydrated: UndoTurn = {
     ...turn,

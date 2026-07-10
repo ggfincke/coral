@@ -76,11 +76,13 @@ import {
   cloneTodoItems,
   cloneUndoTurn,
   cloneMessages,
+  isUndoTurnAligned,
   type UndoFileChange,
   type UndoResult,
   type UndoTodoChange,
   type UndoTurn,
 } from '../types/undo.js'
+import { MAX_UNDO_TURNS } from '../session/undo-state.js'
 import { applyFileChanges, revertFileChanges } from './undo.js'
 import { validateToolArgs } from './tool-validation.js'
 import { loadProjectConfig } from '../config/project-config.js'
@@ -93,9 +95,6 @@ const MAX_HISTORY = 100
 
 // cap tool-call rounds for a research subagent so it can't loop unbounded
 const SUBAGENT_MAX_ITERATIONS = 24
-
-// keep session undo state bounded; records can include file text snapshots
-const MAX_UNDO_TURNS = 10
 
 // hard ceiling on tokens generated per turn (incl. thinking). bounds a single
 // decode so a runaway gemma reasoner can't stream for tens of minutes. the main
@@ -382,6 +381,8 @@ export class Agent
   private producedModels = new Set<string>()
   private undoStack: UndoTurn[] = []
   private redoStack: UndoTurn[] = []
+  // active run's user message — mid-run trim must keep this for undo recording
+  private activeRunStartMessage?: OllamaMessage
   private onCompactionCallback?: (result: CompactionResult) => void
   private onCompactionStartCallback?: () => void
   // self-check edits after a clean completion (warn-only); off by default
@@ -554,6 +555,15 @@ export class Agent
     return cloneUndoStack(this.redoStack)
   }
 
+  // hand stacks to serialize w/ one clone boundary (avoid getUndo/getRedo double-clone)
+  exportUndoStateForPersistence(): { undo: UndoTurn[]; redo: UndoTurn[] }
+  {
+    return {
+      undo: this.undoStack,
+      redo: this.redoStack,
+    }
+  }
+
   async undoLastTurn(): Promise<UndoResult>
   {
     const turn = this.undoStack.at(-1)
@@ -562,10 +572,10 @@ export class Agent
       return { ok: false, message: 'Nothing to undo' }
     }
     if (
-      turn.endIndex !== this.messages.length ||
-      turn.startIndex < this.frozenPrefixLength ||
-      this.messages[turn.startIndex]?.role !== 'user' ||
-      this.messages[turn.startIndex]?.content !== turn.userMessage
+      !isUndoTurnAligned(this.messages, turn, {
+        requireLiveTail: true,
+        frozenPrefixLength: this.frozenPrefixLength,
+      })
     )
     {
       this.clearUndoRedoStacks()
@@ -611,6 +621,18 @@ export class Agent
     if (!turn)
     {
       return { ok: false, message: 'Nothing to redo' }
+    }
+    // tip must still be the append point undo recorded; refuse on desync
+    if (
+      turn.startIndex !== this.messages.length ||
+      turn.startIndex < this.frozenPrefixLength
+    )
+    {
+      this.clearUndoRedoStacks()
+      return {
+        ok: false,
+        message: 'Cannot redo after compaction or history changes',
+      }
     }
 
     const applied = await applyFileChanges(turn.changes, { cwd: this.cwd })
@@ -798,6 +820,15 @@ export class Agent
       promptEvalDurationNs: this.totalPromptEvalDurationNs,
       evalDurationNs: this.totalEvalDurationNs,
     }
+  }
+
+  // zero cumulative usage counters — used after undo/redo so /status matches live history
+  resetTokenUsage(): void
+  {
+    this.totalPromptTokens = 0
+    this.totalCompletionTokens = 0
+    this.totalPromptEvalDurationNs = 0
+    this.totalEvalDurationNs = 0
   }
 
   // get the total number of successful compaction events this session
@@ -1116,17 +1147,34 @@ export class Agent
   }
 
   // trim to recent history while keeping the frozen prefix (system + summaries)
-  // intact — only the live tail is dropped, so the cached prefix survives
+  // intact — only the live tail is dropped, so the cached prefix survives.
+  // when a run is open, keep from activeRunStartMessage through the tip so
+  // finish() can still record the current turn (may briefly exceed MAX_HISTORY)
   private trimHistoryToMax(): void
   {
     const frozen = this.messages.slice(0, this.frozenPrefixLength)
     const liveBudget = Math.max(MAX_HISTORY - this.frozenPrefixLength, 0)
     // guard: slice(-0) returns the whole array, so an empty budget must short
     // out explicitly rather than keeping the entire live tail
-    const recent =
+    let recent =
       liveBudget === 0
         ? []
         : this.messages.slice(this.frozenPrefixLength).slice(-liveBudget)
+
+    const preserve = this.activeRunStartMessage
+    if (preserve)
+    {
+      const preserveIndex = this.messages.indexOf(preserve)
+      if (preserveIndex >= this.frozenPrefixLength)
+      {
+        const fromPreserve = this.messages.slice(preserveIndex)
+        if (recent.indexOf(preserve) < 0)
+        {
+          recent = fromPreserve
+        }
+      }
+    }
+
     this.messages = [...frozen, ...recent]
     this.clearUndoRedoStacks()
     this.rebuildTokenEstimate()
@@ -1476,6 +1524,7 @@ export class Agent
       runStartMessage.displayContent = options.displayContent
     }
     this.pushMessage(runStartMessage)
+    this.activeRunStartMessage = runStartMessage
 
     // store compaction callbacks so compactIfNeeded() can invoke them
     this.onCompactionCallback = events.onCompaction
@@ -1496,6 +1545,18 @@ export class Agent
     {
       if (!undoRecorded)
       {
+        // defense in depth: trim should preserve the anchor; warn if it did not
+        if (
+          fileChanges.length > 0 &&
+          this.messages.indexOf(runStartMessage) < 0
+        )
+        {
+          this.pushMessage({
+            role: 'system',
+            content:
+              'Warning: undo could not record this turn\'s file changes after history trim',
+          })
+        }
         this.recordUndoTurn(
           runStartMessage,
           userMessage,
@@ -1504,6 +1565,7 @@ export class Agent
         )
         undoRecorded = true
       }
+      this.activeRunStartMessage = undefined
       this.finishRun(events)
     }
     while (true)
@@ -1537,7 +1599,8 @@ export class Agent
         return
       }
 
-      // trim history if it grows too large, preserving system prompt
+      // trim history if it grows too large, preserving system prompt &
+      // the active run's user message so current-turn undo stays recordable
       if (this.messages.length > MAX_HISTORY)
       {
         this.trimHistoryToMax()
@@ -1624,7 +1687,9 @@ export class Agent
           return
         }
 
-        this.clearCompactionCallbacks()
+        // record undo for any disk mutations already done this run, then
+        // surface the error (finish clears compaction callbacks via finishRun)
+        finish()
         events.onError(toError(err))
         return
       }

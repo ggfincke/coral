@@ -41,6 +41,29 @@ export function cloneTodoItems(todos: TodoItem[]): TodoItem[]
   return todos.map((todo) => ({ ...todo }))
 }
 
+export interface UndoTurnAlignmentOptions
+{
+  // live undo requires the turn to still be the message-history tip
+  requireLiveTail?: boolean
+  // refuse turns that start inside the frozen compaction prefix
+  frozenPrefixLength?: number
+}
+
+// shared alignment for live undo (strict) & session hydrate (relaxed)
+export function isUndoTurnAligned(
+  messages: OllamaMessage[],
+  turn: Pick<UndoTurn, 'startIndex' | 'endIndex' | 'userMessage'>,
+  options: UndoTurnAlignmentOptions = {}
+): boolean
+{
+  if (turn.startIndex < 0 || turn.endIndex < turn.startIndex) return false
+  if (turn.endIndex > messages.length) return false
+  if (options.requireLiveTail && turn.endIndex !== messages.length) return false
+  if (turn.startIndex < (options.frozenPrefixLength ?? 0)) return false
+  const first = messages[turn.startIndex]
+  return first?.role === 'user' && first.content === turn.userMessage
+}
+
 export function cloneMessages(messages: OllamaMessage[]): OllamaMessage[]
 {
   return messages.map((message) =>
