@@ -110,3 +110,19 @@ test('buildPaletteLines renders query, selected marker, and disabled hint', () =
   assert.match(rendered, /\/sessions/)
   assert.match(rendered, /press key/)
 })
+
+test('buildPaletteLines keeps the selected entry visible in short viewports', () =>
+{
+  const entries = buildPaletteEntries(commands, keybindings)
+  const lines = buildPaletteLines({
+    entries,
+    query: '',
+    selectedIndex: entries.length - 1,
+    width: 36,
+    height: 4,
+  })
+  const rendered = plain(lines)
+
+  assert.match(rendered, /› ctrl\+y/)
+  assert.doesNotMatch(rendered, /› \/status/)
+})

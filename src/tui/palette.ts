@@ -238,16 +238,40 @@ export function buildPaletteLines(opts: PaletteLinesOptions): string[]
     return lines.slice(0, height)
   }
 
-  const visible = opts.entries.slice(
-    0,
-    Math.min(opts.entries.length, height - lines.length)
+  const availableHeight = height - lines.length
+  const selectedIndex = Math.min(
+    Math.max(opts.selectedIndex, 0),
+    opts.entries.length - 1
   )
-  const selectedIndex = Math.min(opts.selectedIndex, visible.length - 1)
+  const formattedEntries = opts.entries.map((entry, index) =>
+    formatEntry(entry, index === selectedIndex, width)
+  )
 
-  for (const [index, entry] of visible.entries())
+  let startIndex = 0
+  let usedHeight = formattedEntries
+    .slice(0, selectedIndex + 1)
+    .reduce((total, entryLines) => total + entryLines.length, 0)
+
+  while (usedHeight > availableHeight && startIndex < selectedIndex)
   {
-    lines.push(...formatEntry(entry, index === selectedIndex, width))
+    usedHeight -= formattedEntries[startIndex]!.length
+    startIndex++
   }
 
-  return lines.slice(0, height)
+  let endIndex = selectedIndex + 1
+  while (
+    endIndex < formattedEntries.length &&
+    usedHeight + formattedEntries[endIndex]!.length <= availableHeight
+  )
+  {
+    usedHeight += formattedEntries[endIndex]!.length
+    endIndex++
+  }
+
+  const visibleLines = formattedEntries
+    .slice(startIndex, endIndex)
+    .flat()
+    .slice(0, availableHeight)
+  lines.push(...visibleLines)
+  return lines
 }
