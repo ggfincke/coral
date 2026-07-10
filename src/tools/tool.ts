@@ -4,6 +4,7 @@
 import type { OllamaTool, JsonSchema } from '../types/inference.js'
 import type { SubagentRunner } from './subagent.js'
 import type { UndoFileChange, UndoTodoChange } from '../types/undo.js'
+import type { CodeIntelService } from '../lsp/client.js'
 
 // result returned after tool execution
 export interface ToolResult
@@ -37,6 +38,7 @@ export interface ToolExecutionContext
   ollamaHost: string
   allowOutsideWorkspace?: boolean
   subagentRunner?: SubagentRunner
+  codeIntel?: CodeIntelService
   signal?: AbortSignal
 }
 

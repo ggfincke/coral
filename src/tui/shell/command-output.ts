@@ -197,13 +197,13 @@ export function formatPermissionsHelp(yolo: boolean): string
 {
   const current = yolo ? 'yolo' : 'ask'
   const description = yolo
-    ? 'auto-approve all tool calls'
+    ? 'auto-approve gated calls; always_deny stays blocked'
     : 'prompt before writes & shell commands'
 
   return (
     `Permission mode: ${chalk.bold(current)} (${description})\n\n` +
     `  ${style('user')('/permissions ask')}   — prompt before writes & shell commands\n` +
-    `  ${style('user')('/permissions yolo')}  — auto-approve all tool calls\n` +
+    `  ${style('user')('/permissions yolo')}  — auto-approve gated calls; denies stay blocked\n` +
     `  ${chalk.dim('ctrl+y')}             — quick toggle`
   )
 }
@@ -211,7 +211,7 @@ export function formatPermissionsHelp(yolo: boolean): string
 export function formatPermissionModeChange(yolo: boolean): string
 {
   return yolo
-    ? `Permission mode → ${style('warning').bold('yolo')} (all tool calls auto-approved)`
+    ? `Permission mode → ${style('warning').bold('yolo')} (all tool calls auto-approved) — applies only to approval-gated tools; configured always_deny tools stay blocked`
     : `Permission mode → ${chalk.bold('ask')} (prompt before writes & shell commands)`
 }
 

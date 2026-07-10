@@ -263,7 +263,7 @@ const statusCommand: Command = {
     const messages = ctx.agent.getMessageCount()
     const session = ctx.sessionLabelId ?? '(unsaved)'
     const permissions = ctx.yolo
-      ? 'yolo (auto-approve all)'
+      ? 'yolo (auto-approve gated; denies stay blocked)'
       : 'ask (prompt before writes)'
     const gitBranch = await getGitBranch(cwd)
     const usage = ctx.agent.getTokenUsage()

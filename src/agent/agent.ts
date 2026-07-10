@@ -89,6 +89,7 @@ import { loadProjectConfig } from '../config/project-config.js'
 import { buildGitContextMessage } from './git-context.js'
 import { requiresWorkspacePathApproval } from '../tools/path-policy.js'
 import { setTodos, type TodoItem } from '../tools/todo-store.js'
+import { TypeScriptCodeIntel, type CodeIntelService } from '../lsp/client.js'
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
@@ -331,6 +332,8 @@ interface AgentOptions
   verifyEdits?: boolean
   // override local/user tool policy; eval harnesses need reproducible defaults
   permissions?: ToolPermissions
+  // share the interactive Agent's lazy LSP client w/ read-only subagents
+  codeIntel?: CodeIntelService
 }
 
 interface AgentRunOptions
@@ -388,6 +391,8 @@ export class Agent
   // self-check edits after a clean completion (warn-only); off by default
   private verifyEdits: boolean
   private subagentRunner: SubagentRunner
+  private codeIntel: CodeIntelService
+  private ownsCodeIntel: boolean
 
   constructor(
     model: string,
@@ -410,6 +415,8 @@ export class Agent
       options.verifyEdits ??
       loadProjectConfig(this.cwd).verify?.enabled ??
       false
+    this.codeIntel = options.codeIntel ?? new TypeScriptCodeIntel(this.cwd)
+    this.ownsCodeIntel = options.codeIntel === undefined
 
     // keep the interactive default in sync w/ explicitly selected sessions
     if (cwd) setCwd(this.cwd)
@@ -455,6 +462,7 @@ export class Agent
       maxIterations: SUBAGENT_MAX_ITERATIONS,
       numCtx: this.numCtx,
       verifyEdits: false,
+      codeIntel: this.codeIntel,
     })
 
     let text = ''
@@ -511,7 +519,14 @@ export class Agent
   // stop client background work & unload the active model
   async dispose(): Promise<void>
   {
-    await this.client.unloadModel(this.model)
+    try
+    {
+      if (this.ownsCodeIntel) await this.codeIntel.dispose()
+    }
+    finally
+    {
+      await this.client.unloadModel(this.model)
+    }
   }
 
   // restore conversation from a previous session's messages
@@ -1287,6 +1302,7 @@ export class Agent
       ollamaHost: this.baseUrl ?? DEFAULT_OLLAMA_HOST,
       allowOutsideWorkspace,
       subagentRunner: this.subagentRunner,
+      codeIntel: this.codeIntel,
       signal,
     }
   }

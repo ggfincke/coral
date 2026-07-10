@@ -22,12 +22,15 @@ const { version } = require('../../package.json') as { version: string }
 
 const program = new Command()
   .name('coral')
-  .description('A CLI/TUI coding agent for Ollama')
+  .description('A local-first CLI/TUI coding agent for Ollama')
   .version(version)
   .option('-m, --model <model>', 'Ollama model to use')
   .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
   .option('--no-think', 'disable streamed reasoning requests')
-  .option('--yolo', 'skip all tool approval prompts (auto-accept everything)')
+  .option(
+    '--yolo',
+    'auto-approve approval-gated calls (always_deny remains blocked)'
+  )
   .option('--resume', 'resume the most recent session')
   .option('--session <id>', 'resume a specific session by ID')
   .option('--sessions', 'list saved sessions & exit')

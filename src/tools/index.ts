@@ -21,6 +21,7 @@ import {
 } from './git.js'
 import { taskTool } from './task.js'
 import { todoWriteTool } from './todo.js'
+import { codeIntelTool } from './code-intel.js'
 
 // all available tools
 export const allTools: Tool[] = [
@@ -31,6 +32,7 @@ export const allTools: Tool[] = [
   globTool,
   listFilesTool,
   searchCodeTool,
+  codeIntelTool,
   bashTool,
   gitStatusTool,
   gitDiffTool,

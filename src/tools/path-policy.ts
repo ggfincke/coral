@@ -13,6 +13,7 @@ const WORKSPACE_PATH_TOOLS = new Set([
   'grep',
   'glob',
   'list_files',
+  'code_intel',
 ])
 
 interface ResolvedToolPath
@@ -36,7 +37,7 @@ function toolPathArg(
   if (!WORKSPACE_PATH_TOOLS.has(toolName)) return undefined
 
   const path = typeof args.path === 'string' ? args.path : undefined
-  if (toolName === 'read_file') return path
+  if (toolName === 'read_file' || toolName === 'code_intel') return path
   return path ?? '.'
 }
 

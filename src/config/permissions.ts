@@ -21,6 +21,7 @@ const DEFAULT_TOOL_POLICIES: ToolPermissions = {
   git_diff: 'always_allow',
   git_log: 'always_allow',
   search_code: 'always_allow',
+  code_intel: 'always_allow',
   git_add: 'require_approval',
   git_commit: 'require_approval',
   git_switch: 'require_approval',
