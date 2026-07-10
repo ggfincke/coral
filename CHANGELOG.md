@@ -9,101 +9,220 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Undo / redo for live turns:** `/undo` and `/redo` revert or replay the last
-  live-tail turn's captured `write_file` / `edit_file` snapshots when disk still
-  matches Coral's recorded state. Metadata persists with sessions (turn + byte
-  caps). Snapshots under `~/.coral/sessions/` can duplicate file contents incl.
-  secrets — treat like the workspace (`0600`). Outside-workspace writes still
-  run but are not undoable.
-- **Command palette:** `Ctrl+P` opens a fuzzy palette over slash commands and
-  keybindings; command entries use the same dispatcher as typed input.
-- **Dynamic project-context budget:** auto-loaded startup context sizes from the
-  pinned `num_ctx` window instead of a fixed 16 KB cap.
-- **Per-model reliability telemetry:** fold `/status` repair counters into
-  `~/.coral/telemetry.json` on dispose (after a real turn); `/telemetry` prints
-  lifetime totals. v0.11.0 is the baseline epoch.
-- **Eval harness `--save-telemetry`:** fold per-model eval reliability counters
-  into `~/.coral/eval-telemetry.json` (separate from interactive telemetry).
-- **Capped model-facing errors:** truncate oversized tool-error text in model
-  history (UI still gets the full error) and summarize long arg-validation lists.
+- **Undo / redo for live turns:** `/undo` removes the last live-tail turn and
+  reverts captured `write_file` / `edit_file` snapshots when the current disk
+  still matches Coral's recorded post-edit state. `/redo` replays the last
+  undone turn and reapplies the captured snapshots after the same safety check.
+  Undo/redo metadata persists with sessions and is bounded to recent turns so
+  saved sessions do not grow without limit.
+- **Command palette:** `Ctrl+P` opens a fuzzy command palette over slash
+  commands and keybindings. Command entries run through the same slash-command
+  dispatcher as typed input; supported keybinding entries trigger their existing
+  TUI callbacks.
+- **Dynamic project-context injection budget:** startup project context now
+  sizes its auto-loaded file budget from the pinned `num_ctx` window instead of
+  using a fixed 16 KB cap. The agent rebuilds the system prompt after the async
+  context-window resolution so the first model request uses the model-aware
+  budget.
+- **Per-model reliability telemetry persists across sessions:** the
+  reliability-layer counters (`/status` "Repairs" line) are now folded into
+  `~/.coral/telemetry.json`, keyed by model, when an agent is disposed — so a
+  model's lifetime tool-call repairs, edit fixes, reprompts, doom-loop trips,
+  and verify flags accumulate across sessions instead of resetting each run.
+  The fold happens once per agent lifetime and only after the model has
+  produced a turn, so picker churn doesn't inflate the counts. A new
+  `/telemetry` command prints the per-model lifetime totals. This makes v0.11.0
+  the baseline epoch for tracking whether a model gets more or less reliable
+  over time.
+- **Eval harness `--save-telemetry`:** running the eval harness with
+  `--save-telemetry` now sums each model's reliability counters across every rep
+  and task into one entry and folds it into `~/.coral/eval-telemetry.json`, so
+  benchmark reliability becomes longitudinal across runs instead of dying with
+  the process. The eval store is kept separate from the interactive
+  `~/.coral/telemetry.json` that `/telemetry` reads, so synthetic benchmark
+  counters never swamp the real-usage signal. After a saving run the cumulative
+  lifetime view prints below the per-run report (suppressed under `--json`).
+- **Cap model-facing error text:** the text fed back to the model on a tool
+  failure is now bounded the same way tool output already was. An oversized
+  error string (e.g. a multi-KB stack trace) is truncated in the model history,
+  and the pre-dispatch validator now shows the first eight argument problems
+  plus a "plus N more" summary instead of an unbounded list — keeping the
+  trailing fix instruction intact. This stops a weak local model from stalling
+  or hallucinating on feedback larger than its own request. The full error still
+  reaches the UI; only the model's history copy is capped.
 
 ### Changed
 
-- **Semantic index & `@`-mentions respect `.gitignore`:** prefer
-  `git ls-files --cached --others --exclude-standard`; fall back to the
-  ignore-aware walk outside a git repo.
-- **Project `.coral.json` permissions are tighten-only:** a project config can
-  only make tool policy stricter than user/default, never looser.
+- **Semantic index & `@`-mentions now respect `.gitignore`:** project file
+  discovery prefers `git ls-files --cached --others --exclude-standard`, so
+  git-ignored files no longer land in the semantic index or the `@`-mention
+  picker (previously a raw filesystem walk indexed them). Outside a git repo it
+  falls back to the ignore-aware filesystem walk.
+- **Project `.coral.json` permissions are tighten-only:** a project-level
+  permission config can now only make a tool's policy stricter than the
+  user/default policy, never looser. A repo can tighten `always_allow` to
+  `require_approval`/`always_deny`, but a project asking for `always_allow` on a
+  tool the user left at `require_approval` is ignored — so cloning an untrusted
+  repo can't silently widen what its config auto-approves.
 
 ### Fixed
 
-- **Undo/redo safety:** revalidate workspace/symlink boundaries on replay, roll
-  back partial failures, restore todos, fail closed when an in-workspace write
-  can't be snapshotted, keep mid-run turns recordable, refuse desynced `/redo`,
-  and persist undo under private modes with turn + byte caps.
-- **TUI lifecycle polish:** clean `@`-mention display after undo/redo, reset
-  token gauges on undo/redo, announce cleared undo on compaction, abortable
-  context-window lookup, palette `j`/`k` as filter text, shared keybinding
-  registry for `/help` + palette + prompt.
-- **Per-turn latency on large sliding-window contexts:** bound decode with
-  `num_predict`, and compact to a fixed 32k working-set budget instead of a
-  fraction of a huge pinned `num_ctx` (avoids multi-minute SWA/MLX prefills).
+- **Undo/redo safety hardening:** replay now revalidates workspace and symlink
+  boundaries before mutating files, rolls back earlier file changes when a later
+  undo/redo write fails, restores `todo_write` state, records mutations when a
+  later stream errors without also signaling clean completion, and applies the
+  file-capture ceiling to UTF-8 bytes. Persisted undo state omits duplicate live
+  transcript messages, drops whole oldest records under an aggregate byte cap,
+  and writes Coral session JSON under private POSIX modes.
+- **TUI lifecycle polish:** restored and redone `@`-mention prompts now display
+  the clean user text instead of model-facing attachment context, context-window
+  metadata lookup is abortable before the first chat request starts, and the
+  command palette accepts literal `j`/`k` filter text while keeping the selected
+  command visible and aligned with Enter in constrained viewports.
+- **Per-turn latency on large sliding-window contexts:** a single model call
+  could stall for tens of minutes deep into a long session. Two causes, both
+  fixed. First, the generate path sent no token ceiling, so a runaway reasoner
+  could decode thinking until it filled the entire window — requests now send a
+  bounded `num_predict` (a tighter ceiling for the one-shot compaction summary).
+  Second, compaction triggered at a fraction of the pinned `num_ctx`, so on a
+  model pinned to a very large native window (e.g. `gemma4` at 262144) the live
+  context was allowed to grow toward ~196k tokens before compacting — and a
+  sliding-window model on the MLX engine re-prefills the whole prompt every turn
+  with no KV-cache reuse, so each turn paid a full prefill of that context.
+  Compaction now targets a fixed working-set budget (`MAX_WORKING_SET_TOKENS`,
+  32k) decoupled from `num_ctx`, keeping the re-prefilled context small while the
+  window stays maxed. Together these bound both the decode and prefill cost of a
+  single turn.
 
 ## [0.11.0] - 2026-06-21
 
 ### Added
 
-- **Whitespace-tolerant `edit_file`:** fall back to indentation/CRLF-tolerant
-  block match when `old_string` misses verbatim; re-indent onto the file, refuse
-  ambiguous matches, share resolution with the approval preview, and count
-  recoveries as `edit-fix` in `/status`.
-- **Prompt completion + `@`-file mentions:** `/` command autocomplete and `@`
-  fuzzy file picker; selected mentions are pre-read into model context on submit
-  (budget-capped; transcript stays clean).
-- **Todo session persistence + `/todo`:** persist the task list with the
-  session; `/todo` / `/todo clear` and strikethrough completed items.
-- **`/index` command:** build or rebuild the semantic code index on demand with
-  progress and a re-entrancy guard.
-- **`/status` frozen-prefix coverage:** report frozen-prefix tokens, % of pinned
-  window, and summary-block count after compaction ("kept stable", not a cache
-  hit — SWA/MLX still re-prefill).
-- **`/copy` command:** copy the last assistant reply (`/copy code` for the last
-  fenced block) via the platform clipboard CLI.
-- **Eval harness:** `npm run eval -- <model...>` runs 6 deterministic coding
-  tasks against live Ollama and reports completion, tool-call cleanliness, and
-  throughput (`--reps`, `--json`, `--task`, `--host`).
-- **Cache-friendly compaction:** keep a byte-stable prefix (system + frozen
-  summaries) and only summarize the live tail; add
-  `npm run bench:compaction -- <model>` to measure prefix reuse.
-- **Pinned `num_ctx`:** send a constant per-session context window on every
-  request (default cap 32K; `.coral.json` `context.maxNumCtx` or `CORAL_NUM_CTX`).
-- **Semantic code search MVP:** read-only `search_code` via local Ollama
-  embeddings, source chunking, and a SQLite project index (`nomic-embed-text`).
-- **Tool-call reliability layer:** recover text-emitted tool calls, canonicalize
-  tool-name variants, nudge empty turns, validate/coerce args, and surface
+- **Whitespace-tolerant `edit_file`:** when `old_string` doesn't match the file
+  verbatim, `edit_file` now falls back to a block match that ignores
+  per-line indentation, trailing whitespace, and CRLF/LF drift — the single
+  most common way a small local model botches an edit. The replacement is
+  re-indented onto the file's own indentation, so the fix lands correctly even
+  when the model copied the wrong leading whitespace. The fallback refuses an
+  ambiguous match (more than one normalized hit without `replace_all`) so a loose
+  match can never edit the wrong block, and the approval-box preview reflects the
+  fuzzy-resolved target (preview and execution share the same `applyEdit`, so
+  they can't drift). A recovered edit is reported back to the model as matched on
+  normalized whitespace (so it copies exact text next time) and counted in a new
+  `edit-fix` reliability counter surfaced in `/status` (and the eval harness's
+  compensation rate). On a genuine miss the error now points at where
+  `old_string`'s first line does or doesn't appear in the file instead of a bare
+  "not found".
+- **Prompt completion + `@`-file mentions:** typing `/` opens a live
+  command-autocomplete menu (prefix-ranked, Tab/Enter to accept, arrows to
+  move, Esc to dismiss); typing `@` opens a fuzzy file picker over the
+  ignore-aware project tree (binary files filtered out), with quoted-path
+  support for names with spaces. Selecting an `@`-mention inserts the path and,
+  on submit, pre-reads each mentioned file into the model's context (transcript
+  still shows the clean prompt) so a small-context model gets the right code
+  without burning its window on blind `grep`. Pre-reads are bounded by a shared
+  budget (the same scale as one large tool result), so `@`-mentions can never
+  overflow the window; files past the budget are head-truncated or skipped, and
+  any truncated/skipped/missing/binary mention is reported in a one-line
+  transcript note instead of vanishing silently. Pure completion logic lives in
+  `src/tui/completion.ts` and mention parsing/expansion in `src/tui/mentions.ts`,
+  both unit-tested.
+- **Todo session persistence + `/todo`:** the task list now persists with the
+  session, so `/resume` restores it (and re-renders the panel) instead of
+  dropping it. Adds a `/todo` command (view the list, `/todo clear` to clear &
+  flush) and strikethrough styling for completed items in the live panel.
+- **`/index` command:** build or refresh the semantic code index on demand
+  (`/index`, or `/index rebuild` to force a full re-embed) with throttled
+  first-build progress in the transcript, instead of waiting for the first
+  `search_code` to index lazily. A re-entrancy guard blocks overlapping builds.
+- **`/status` frozen-prefix coverage:** `/status` now reports how much of the
+  context Coral keeps byte-stable across compaction (frozen prefix tokens, % of
+  the pinned window, & summary-block count) once compaction has run. Honest
+  bookkeeping only — SWA/MLX models (default Gemma) re-prefill regardless, so
+  it's labeled "kept stable", not a measured cache hit.
+- **`/copy` command:** `/copy` copies the last assistant response to the system
+  clipboard & `/copy code` copies its last fenced code block. Uses the platform's
+  native clipboard CLI (`pbcopy` / `clip` / `wl-copy` / `xclip` / `xsel`) with no
+  new dependency; extraction helpers live in `src/tui/copy.ts`.
+- **Eval harness:** add a live-model benchmark (`npm run eval -- <model...>`)
+  that drives a real Ollama model through 6 deterministic coding tasks
+  (read-report, single-edit, create-file, search-multi-edit, build-run,
+  bug-fix-verify) in throwaway temp dirs & reports per-model task completion,
+  tool-call cleanliness (clean calls vs. reliability-layer compensations), &
+  throughput — so model selection & reliability tuning become data-driven
+  instead of vibes. Supports `--reps`, `--json`, repeatable `--task <id>`, &
+  `--host`; see `tests/scripts/eval/README.md`.
+- **Cache-friendly compaction:** compaction now keeps a byte-stable prefix
+  (system prompt + append-only frozen summary blocks) and only ever summarizes,
+  prunes, or trims the live tail, so llama.cpp reuses its KV cache through the
+  prefix instead of re-prefilling the whole context after every compaction.
+  Frozen summaries are appended, not re-summarized turn to turn, so there's no
+  per-compaction summary-of-summary drift; only when they exceed a cap do they
+  consolidate into a single block (and `/compact` always consolidates). Adds a
+  `tests/scripts/bench-compaction.ts` harness
+  (`npm run bench:compaction -- <model>`) that measures prefix reuse on a live
+  model and flags SWA/MLX models where reuse is currently a no-op.
+- **Pinned `num_ctx`:** the resolved context window is now sent as
+  `options.num_ctx` on every request and held constant per session (inherited by
+  subagents), so Ollama never reloads the runner mid-session — and the window is
+  capped (default 32K, override via `.coral.json` `context.maxNumCtx` or
+  `CORAL_NUM_CTX`) so compaction thresholds match what the server actually
+  allocates instead of the model's architectural maximum.
+- **Semantic code search MVP:** add a read-only `search_code` tool backed by
+  local Ollama embeddings, deterministic source chunking, & a SQLite project
+  index under Coral local state. The MVP lazily indexes the current project on
+  first use, respects Coral's ignored-entry policy, defaults to
+  `nomic-embed-text`, and exposes clean embedder/index-store seams for later
+  vector extensions or alternate providers.
+- **Tool-call reliability layer:** recover tool calls emitted as text content
+  (the most common local-model failure), canonicalize hallucinated tool-name
+  variants (`Read_File` -> `read_file`), nudge fully empty turns (capped at 2
+  per run), validate & coerce tool args against each tool's JSON schema before
+  execution w/ model-friendly retry errors, & surface repair/nudge/validation
   counters in `/status`.
-- `format` on `ChatRequest` for tool-free structured output (never combined with
-  `tools` — Ollama drops tool calls when both are set).
-- **Diff display for file edits:** colored unified diffs in the transcript and
-  approval box (`diff` / jsdiff).
-- **Git workflow context:** inject a capped volatile git snapshot per request;
-  add approval-gated `git_switch`.
+- `format` field on `ChatRequest` for tool-free structured-output calls.
+  Never combined w/ `tools` — Ollama silently drops tool calls when both are
+  set (ollama/ollama#8095), so constrained decoding of tool calls is not
+  viable upstream.
+- **Diff display for file edits:** after `write_file`/`edit_file`, the
+  transcript shows a colored unified diff (line-number gutter, 3 context
+  lines, large diffs truncated w/ a summary marker) instead of the plain
+  result line, & the approval box renders the exact pending change before
+  authorization. New `diff` (jsdiff) dependency for diff generation.
+- **Git workflow context:** inject a capped, volatile git snapshot into each
+  model request so branch, upstream, operation state, staged/unstaged/untracked
+  files, diff stats, & recent commits are visible without rewriting the stable
+  system prompt. Adds approval-gated `git_switch` for structured branch
+  switching/creation.
 
 ### Changed
 
-- **Self-check now self-corrects:** on verify FAIL, give the model one bounded
-  fix/justify chance when `/verify` is on; report `verify-fix` in `/status`.
-- Tool dispatch resolves from the agent's own toolset, so restricted subagents
-  cannot reach tools outside their subset.
-- Commit workflow guidance treats untracked files as part of the current diff
-  unless narrowed, and requires explicit staging + a status check.
+- **Self-check now self-corrects:** when the post-edit verify pass returns a
+  FAIL, the agent feeds the reason back to the model and gives it one bounded
+  chance to fix the changes (`MAX_VERIFY_REPROMPTS`), instead of only warning
+  and finishing. A fresh self-check reviews the fix on the next finish, so the
+  surfaced verdict is always the final one; the reprompt asks the model to fix
+  _or_ briefly justify, so a weak reviewer's false FAIL doesn't force a needless
+  edit. Inconclusive verdicts still don't loop, the loop only runs when
+  `/verify` is on, and `/status` reports a `verify-fix` counter. Closes the
+  warn-only gap left by the verify MVP.
+- Tool dispatch now resolves tools from the agent's own toolset instead of the
+  global registry, so restricted toolsets (e.g. read-only subagents) can no
+  longer reach tools outside their subset.
+- Commit workflow guidance now treats untracked files as part of "current diff"
+  unless narrowed, requires explicit path staging for grouped commits, and
+  requires a status check before claiming commit work is complete.
 
 ### Fixed
 
-- **Subagent abort threading:** `task` forwards the run `AbortSignal` so
-  Escape / Ctrl+C stops an in-flight subagent at the next round boundary.
-- `/diff` keeps git-diff coloring and line-number gutter (no longer dimmed by
-  the system block).
+- **Subagent abort threading:** the `task` tool now forwards the run's
+  `AbortSignal` to the subagent runner, so `Escape` / `Ctrl+C` interrupts an
+  in-flight subagent at its next round boundary instead of running until the
+  `maxIterations` cap. The signal was already plumbed end-to-end everywhere
+  except the `task` tool itself.
+- `/diff` output now renders w/ proper git-diff coloring & a line-number
+  gutter — its colors were previously clobbered by the system block's dim
+  styling.
 
 ## [0.10.0] - 2026-06-11
 
