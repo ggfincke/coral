@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-10
+
 ### Added
 
+- **TypeScript/JavaScript code intelligence:** add one read-only `code_intel`
+  tool for definitions, references, hover/type information, and per-file
+  diagnostics across TypeScript and JavaScript source variants. Coral lazily
+  starts a bundled `typescript-language-server` with its pinned TypeScript
+  runtime, shares the process with read-only subagents, keeps documents synced
+  from disk, bounds formatted results, supports request cancellation/timeouts,
+  and shuts the server down with its owning Agent. Other languages and mutating
+  LSP operations remain deferred.
 - **Undo / redo for live turns:** `/undo` removes the last live-tail turn and
   reverts captured `write_file` / `edit_file` snapshots when the current disk
   still matches Coral's recorded post-edit state. `/redo` replays the last
@@ -53,6 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Node 24 and TypeScript 7 toolchain:** Coral now requires Node.js 24 or newer,
+  builds and typechecks with TypeScript 7, and runs CI on the same Node baseline.
+  TypeScript 6 is a runtime dependency for bundled code intelligence and remains
+  compatible with the current lint parser.
+- **Publish only the runnable package:** npm package contents now use an explicit
+  allowlist for `dist/`, the README, and the changelog instead of inheriting the
+  checkout's local excludes. This keeps source, tests, internal audits, and the
+  git-excluded reference projects out of release artifacts.
 - **Semantic index & `@`-mentions now respect `.gitignore`:** project file
   discovery prefers `git ls-files --cached --others --exclude-standard`, so
   git-ignored files no longer land in the semantic index or the `@`-mention
@@ -67,6 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Accurate yolo-mode guidance:** CLI, status, and `/permissions` text now say
+  that yolo auto-approves approval-gated calls without overriding configured
+  `always_deny` policies.
 - **Undo/redo safety hardening:** replay now revalidates workspace and symlink
   boundaries before mutating files, rolls back earlier file changes when a later
   undo/redo write fails, restores `todo_write` state, records mutations when a
@@ -93,6 +114,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   32k) decoupled from `num_ctx`, keeping the re-prefilled context small while the
   window stays maxed. Together these bound both the decode and prefill cost of a
   single turn.
+
+### Security
+
+- **Workspace boundaries for file, search, and code-intelligence tools:** reads,
+  writes, edits, greps, globs, directory listings, and code-intelligence queries
+  outside the active workspace now require explicit approval even when the tool
+  is otherwise auto-allowed. Symlink paths that escape the workspace fail closed
+  instead of following the target.
 
 ## [0.11.0] - 2026-06-21
 
@@ -164,10 +193,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model and flags SWA/MLX models where reuse is currently a no-op.
 - **Pinned `num_ctx`:** the resolved context window is now sent as
   `options.num_ctx` on every request and held constant per session (inherited by
-  subagents), so Ollama never reloads the runner mid-session — and the window is
-  capped (default 32K, override via `.coral.json` `context.maxNumCtx` or
-  `CORAL_NUM_CTX`) so compaction thresholds match what the server actually
-  allocates instead of the model's architectural maximum.
+  subagents), so Ollama never reloads the runner mid-session. Coral pins the
+  largest window that fits its memory budget (75% of unified RAM minus model
+  weights and a 6 GB reserve), capped by the model's native window; `.coral.json`
+  `context.maxNumCtx` and `CORAL_NUM_CTX` act as optional ceilings.
 - **Semantic code search MVP:** add a read-only `search_code` tool backed by
   local Ollama embeddings, deterministic source chunking, & a SQLite project
   index under Coral local state. The MVP lazily indexes the current project on
@@ -466,6 +495,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
+[Unreleased]: https://github.com/ggfincke/coral/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/ggfincke/coral/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/ggfincke/coral/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/ggfincke/coral/compare/be8b243...1e4817e
 [0.9.0]: https://github.com/ggfincke/coral/compare/34766ce...be8b243

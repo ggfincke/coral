@@ -5,8 +5,8 @@ Repo maintenance and research tooling for Coral.
 ## Toolchain
 
 Coral requires Node.js 24 or newer. Its build and typecheck scripts explicitly
-run TypeScript 7. TypeScript 6 remains installed only for `typescript-eslint`
-until that parser supports TypeScript 7.
+run TypeScript 7. TypeScript 6 is a runtime dependency for the bundled
+TypeScript language server and remains compatible with `typescript-eslint`.
 
 ## Dev tools
 

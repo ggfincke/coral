@@ -1,8 +1,21 @@
 {
   "name": "coral",
-  "version": "0.11.0",
-  "description": "A CLI/TUI coding agent for Ollama",
+  "version": "0.12.0",
+  "description": "A local-first CLI/TUI coding agent for Ollama",
   "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggfincke/coral.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ggfincke/coral/issues"
+  },
+  "homepage": "https://github.com/ggfincke/coral#readme",
   "engines": {
     "node": ">=24"
   },
@@ -15,6 +28,8 @@
     "typecheck:scripts": "node node_modules/typescript-7/bin/tsc -p tsconfig.scripts.json",
     "dev": "tsx src/cli/main.tsx",
     "start": "node dist/cli/main.js",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepack": "npm run clean && npm run build",
     "test": "node --import tsx --test 'tests/**/*.test.ts'",
     "bench:compaction": "tsx tests/scripts/bench-compaction.ts",
     "eval": "tsx tests/scripts/eval/run.ts",
