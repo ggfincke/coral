@@ -61,13 +61,13 @@
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^17.6.0",
-    "prettier": "^3.8.4",
-    "prettier-plugin-brace-style": "^0.10.1",
-    "tsx": "^4.22.4",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.4",
+    "prettier-plugin-brace-style": "^0.10.2",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3",
     "typescript-7": "npm:typescript@^7.0.2",
-    "typescript-eslint": "^8.61.1"
+    "typescript-eslint": "^8.62.1"
   },
   "allowScripts": {
     "better-sqlite3@12.11.1": true,

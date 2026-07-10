@@ -8,8 +8,7 @@ import { tryParseJson } from '../utils/json.js'
 import { isPlainObject } from '../utils/guards.js'
 
 export type ValidationResult =
-  | { ok: true; args: Record<string, unknown> }
-  | { ok: false; error: string }
+  { ok: true; args: Record<string, unknown> } | { ok: false; error: string }
 
 // keep validation feedback model-friendly — a long list of problems makes weak
 // models halt or hallucinate, so show the first few & summarize the rest

@@ -2,10 +2,7 @@
 // shared keybinding registry for help, palette, & prompt handlers
 
 export type KeybindingAction =
-  | 'toggle-thinking'
-  | 'toggle-permissions'
-  | 'page-up'
-  | 'page-down'
+  'toggle-thinking' | 'toggle-permissions' | 'page-up' | 'page-down'
 
 export interface KeybindingSummary
 {

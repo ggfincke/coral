@@ -439,14 +439,17 @@ export default function App({
   const saveCurrentSession = useCallback((): string | null =>
   {
     const currentAgent = agentRef.current
-    if (!currentAgent || currentAgent.getMessageCount() === 0) return null
+    if (!currentAgent) return null
+    // skip new empty sessions; persist existing sessions emptied by undo
+    if (currentAgent.getMessageCount() === 0 && !sessionIdRef.current)
+      return null
     const meta = persistSession(currentAgent)
     if (meta)
     {
       setSessionLabelId(meta.id)
     }
     return meta?.id ?? null
-  }, [persistSession])
+  }, [persistSession, sessionIdRef])
 
   // rename the current session's title & update cached meta
   const renameCurrentSession = useCallback(
