@@ -10,6 +10,7 @@ import {
   isParsedControlFragment,
   type CoralKey,
 } from '../hooks/use-coral-input.js'
+import { matchPromptKeybinding } from '../keybindings.js'
 import { applyPromptEdit } from '../prompt/prompt-edit.js'
 import {
   applyCompletion,
@@ -52,12 +53,6 @@ interface CursorState
   value: string
   cursorOffset: number
   cursorWidth: number
-}
-
-// ctrl + a specific letter; pass the letter pre-lowercased
-function isCtrlLetter(input: string, key: CoralKey, letter: string): boolean
-{
-  return key.ctrl && input.toLowerCase() === letter
 }
 
 export default function PromptInput({
@@ -256,16 +251,6 @@ export default function PromptInput({
         }
       }
 
-      if (key.pageUp)
-      {
-        onPageUp()
-        return
-      }
-      if (key.pageDown)
-      {
-        onPageDown()
-        return
-      }
       if (key.wheelUp)
       {
         onScrollUp()
@@ -286,17 +271,29 @@ export default function PromptInput({
         onHistoryDown()
         return
       }
-      if (isCtrlLetter(input, key, 't'))
+
+      const binding = matchPromptKeybinding(input, key)
+      if (binding === 'page-up')
+      {
+        onPageUp()
+        return
+      }
+      if (binding === 'page-down')
+      {
+        onPageDown()
+        return
+      }
+      if (binding === 'toggle-thinking')
       {
         onToggleThinking()
         return
       }
-      if (isCtrlLetter(input, key, 'y'))
+      if (binding === 'toggle-permissions')
       {
         onTogglePermissions()
         return
       }
-      if (isCtrlLetter(input, key, 'p'))
+      if (binding === 'open-palette')
       {
         onOpenPalette()
         return

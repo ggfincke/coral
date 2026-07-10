@@ -46,19 +46,13 @@ import {
   type IndexStore,
 } from '../../retrieval/types.js'
 import { formatTelemetry, loadTelemetry } from '../../telemetry/store.js'
+import {
+  keybindingInfos as sharedKeybindingInfos,
+  type KeybindingAction,
+  type KeybindingSummary,
+} from '../keybindings.js'
 
-export type KeybindingAction =
-  | 'toggle-thinking'
-  | 'toggle-permissions'
-  | 'page-up'
-  | 'page-down'
-
-export interface KeybindingSummary
-{
-  keys: string
-  description: string
-  action?: KeybindingAction
-}
+export type { KeybindingAction, KeybindingSummary }
 
 export interface CommandInfo extends CommandSummary
 {
@@ -79,6 +73,8 @@ export interface CommandContext
   clearSession: () => void
   // rebuild transcript from agent history after undo/redo changes
   rebuildTranscript: () => void
+  // zero TUI + agent cumulative token gauges (match resume after undo/redo)
+  resetTokenUsage: () => void
   // reopen the model picker
   reopenModelPicker: () => void
   // switch model in-place (keeps conversation history)
@@ -115,39 +111,6 @@ interface Command
   description: string
   execute: (args: string, ctx: CommandContext) => void | Promise<void>
 }
-
-const keybindings: KeybindingSummary[] = [
-  {
-    keys: 'ctrl+p',
-    description: 'Open command palette',
-  },
-  {
-    keys: 'ctrl+y',
-    description: 'Toggle permission mode (ask / yolo)',
-    action: 'toggle-permissions',
-  },
-  {
-    keys: 'ctrl+t',
-    description: 'Toggle thinking/reasoning visibility',
-    action: 'toggle-thinking',
-  },
-  {
-    keys: 'ctrl+c',
-    description: 'Interrupt generation (or exit when idle)',
-  },
-  {
-    keys: 'esc',
-    description: 'Interrupt generation (or exit when idle)',
-  },
-  {
-    keys: '↑↓',
-    description: 'Navigate input history',
-  },
-  {
-    keys: 'pgup/dn',
-    description: 'Page through transcript',
-  },
-]
 
 // result of parsing a slash command from input
 interface ParsedCommand
@@ -216,7 +179,7 @@ const helpCommand: Command = {
     lines.push('')
     lines.push(`${style('muted')('— keybindings')}`)
     lines.push('')
-    for (const binding of keybindings)
+    for (const binding of sharedKeybindingInfos())
     {
       lines.push(
         `  ${style('user')(binding.keys.padEnd(8))} ${chalk.dim(binding.description)}`
@@ -281,6 +244,7 @@ const compactCommand: Command = {
       return
     }
 
+    ctx.rebuildTranscript()
     ctx.saveCurrentSession()
     ctx.pushOutput(systemBlock(formatManualCompactionResult(result)))
   },
@@ -708,7 +672,8 @@ function formatUndoResult(result: {
 
 const undoCommand: Command = {
   name: 'undo',
-  description: 'Undo the last turn & revert captured file edits',
+  description:
+    'Undo the last turn & revert captured file edits (session snapshots under ~/.coral/sessions/ can duplicate file contents incl. secrets — treat like the workspace)',
   async execute(_args, ctx)
   {
     const result = await ctx.agent.undoLastTurn()
@@ -719,6 +684,7 @@ const undoCommand: Command = {
     }
 
     ctx.rebuildTranscript()
+    ctx.resetTokenUsage()
     ctx.saveCurrentSession()
     ctx.pushOutput(systemBlock(formatUndoResult(result)))
   },
@@ -737,6 +703,7 @@ const redoCommand: Command = {
     }
 
     ctx.rebuildTranscript()
+    ctx.resetTokenUsage()
     ctx.saveCurrentSession()
     ctx.pushOutput(systemBlock(formatUndoResult(result)))
   },
@@ -1108,7 +1075,7 @@ export function commandInfos(): CommandInfo[]
 
 export function keybindingInfos(): KeybindingSummary[]
 {
-  return keybindings.map((binding) => ({ ...binding }))
+  return sharedKeybindingInfos()
 }
 
 // dispatch a slash command from user input

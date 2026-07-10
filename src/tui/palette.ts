@@ -4,11 +4,8 @@
 import chalk from 'chalk'
 import { style } from './theme.js'
 import { wrapLines } from './wrap.js'
-import type {
-  CommandInfo,
-  KeybindingAction,
-  KeybindingSummary,
-} from './shell/commands.js'
+import type { CommandInfo } from './shell/commands.js'
+import type { KeybindingAction, KeybindingSummary } from './keybindings.js'
 
 export type PaletteEntryKind = 'command' | 'keybinding'
 
