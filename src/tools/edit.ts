@@ -7,6 +7,7 @@ import { readFileGuarded } from './file-utils.js'
 import { checkWorkspacePath } from './path-policy.js'
 import { getCwd } from '../cwd.js'
 import { applyEdit, computeDiff, describeEditMiss } from '../utils/diff.js'
+import { formatBytes } from '../utils/bytes.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { pluralize } from '../utils/pluralize.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../utils/file-read.js'
@@ -39,6 +40,7 @@ export const editTool: Tool = {
     const oldString = args.old_string as string
     const newString = args.new_string as string
     const replaceAll = (args.replace_all as boolean) ?? false
+    const allowOutside = context?.allowOutsideWorkspace === true
 
     if (!oldString)
     {
@@ -55,7 +57,7 @@ export const editTool: Tool = {
     const allowed = await checkWorkspacePath(
       cwd,
       args.path as string | undefined,
-      context?.allowOutsideWorkspace === true
+      allowOutside
     )
     if (!allowed.ok) return { output: '', error: allowed.error }
 
@@ -80,6 +82,17 @@ export const editTool: Tool = {
       }
     }
     const updated = result.after
+    // fail closed for in-workspace edits; outside-workspace skips undo capture
+    if (!allowOutside && updated.length > TEXT_FILE_READ_LIMIT_BYTES)
+    {
+      return {
+        output: '',
+        error:
+          `Refusing to edit ${path}: result would be ` +
+          `${formatBytes(updated.length)}, exceeds ` +
+          `${formatBytes(TEXT_FILE_READ_LIMIT_BYTES)} undo capture limit`,
+      }
+    }
 
     try
     {
@@ -100,13 +113,18 @@ export const editTool: Tool = {
     const note = fuzzy
       ? ' (old_string matched on normalized whitespace, not verbatim — copy exact text next time)'
       : ''
+    const outsideNote = allowOutside
+      ? ' (not undoable (outside workspace))'
+      : ''
     return {
-      output: `Edited ${path}: replaced ${pluralize(replaced, 'occurrence')} (${oldString.length} chars → ${newString.length} chars)${note}`,
+      output:
+        `Edited ${path}: replaced ${pluralize(replaced, 'occurrence')} ` +
+        `(${oldString.length} chars → ${newString.length} chars)${note}${outsideNote}`,
       diff: computeDiff(content, updated) ?? undefined,
-      change:
-        updated.length <= TEXT_FILE_READ_LIMIT_BYTES
-          ? { path, before: content, after: updated }
-          : undefined,
+      // approved outside-workspace edits are never undo-captured
+      ...(allowOutside
+        ? {}
+        : { change: { path, before: content, after: updated } }),
       repaired: fuzzy,
     }
   },
