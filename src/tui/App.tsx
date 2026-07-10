@@ -419,6 +419,13 @@ export default function App({
     setScrollOffset(0)
   }, [])
 
+  // zero header gauges & agent cumulative counters (match resume after undo/redo)
+  const resetTokenUsage = useCallback(() =>
+  {
+    setTokenUsage(EMPTY_TOKEN_USAGE)
+    agentRef.current?.resetTokenUsage()
+  }, [])
+
   // fetch context window size from Ollama & update state
   const fetchContextWindowForAgent = useCallback((agentInstance: Agent) =>
   {
@@ -979,6 +986,7 @@ export default function App({
         },
         clearSession,
         rebuildTranscript,
+        resetTokenUsage,
         reopenModelPicker,
         switchModel,
         setYolo,
@@ -1013,6 +1021,7 @@ export default function App({
       rebuildTranscript,
       renameCurrentSession,
       reopenModelPicker,
+      resetTokenUsage,
       resumeSessionById,
       saveCurrentSession,
       sessionLabelId,
@@ -1266,6 +1275,8 @@ export default function App({
           },
           onCompaction(result)
           {
+            // rebuild from agent messages so the UI matches cleared undo stacks
+            rebuildTranscript()
             setOutput((prev) => [
               ...prev,
               { type: 'system', content: formatAutoCompactionResult(result) },
@@ -1319,6 +1330,7 @@ export default function App({
       commandRunning,
       consumeBufferedBlocks,
       persistSession,
+      rebuildTranscript,
       resetAnimation,
       resetStreamBuffer,
       runStage,

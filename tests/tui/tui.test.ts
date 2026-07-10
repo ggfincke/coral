@@ -62,6 +62,8 @@ function makeCommandContext(
     {},
     rebuildTranscript()
     {},
+    resetTokenUsage()
+    {},
     reopenModelPicker()
     {},
     switchModel: async () =>
@@ -343,8 +345,21 @@ test('permission and compaction formatters preserve command copy', () =>
     )
   )
   assert.ok(
+    plain(formatManualCompactionResult(compacted)).includes(
+      'Undo history cleared'
+    )
+  )
+  assert.ok(
     plain(formatAutoCompactionResult(pruned)).includes(
       'Auto-pruned 2 old tool results'
+    )
+  )
+  assert.ok(
+    !plain(formatAutoCompactionResult(pruned)).includes('Undo history cleared')
+  )
+  assert.ok(
+    plain(formatAutoCompactionResult(compacted)).includes(
+      'Undo history cleared'
     )
   )
 })
@@ -375,6 +390,7 @@ test('dispatchCommand persists after successful manual compaction', async () =>
   }
   const output: OutputBlock[] = []
   let saves = 0
+  let rebuilds = 0
 
   const ctx = makeCommandContext(
     {
@@ -388,9 +404,14 @@ test('dispatchCommand persists after successful manual compaction', async () =>
     saves += 1
     return 'abcd1234'
   }
+  ctx.rebuildTranscript = () =>
+  {
+    rebuilds += 1
+  }
 
   assert.equal(await dispatchCommand('/compact', ctx), true)
   assert.equal(saves, 1)
+  assert.equal(rebuilds, 1)
   assert.ok(
     plain(
       output
@@ -399,7 +420,7 @@ test('dispatchCommand persists after successful manual compaction', async () =>
             block.type === 'system'
         )
         .map((block) => block.content)
-    ).includes('Context compacted')
+    ).includes('Undo history cleared')
   )
 })
 
@@ -460,6 +481,7 @@ test('dispatchCommand handles undo and redo transcript rebuilds', async () =>
 {
   const output: OutputBlock[] = []
   let rebuilds = 0
+  let gaugeResets = 0
   let saves = 0
   const ctx = makeCommandContext(
     {
@@ -482,6 +504,10 @@ test('dispatchCommand handles undo and redo transcript rebuilds', async () =>
   {
     rebuilds += 1
   }
+  ctx.resetTokenUsage = () =>
+  {
+    gaugeResets += 1
+  }
   ctx.saveCurrentSession = () =>
   {
     saves += 1
@@ -492,6 +518,7 @@ test('dispatchCommand handles undo and redo transcript rebuilds', async () =>
   assert.equal(await dispatchCommand('/redo', ctx), true)
 
   assert.equal(rebuilds, 2)
+  assert.equal(gaugeResets, 2)
   assert.equal(saves, 2)
   const rendered = plain(
     output

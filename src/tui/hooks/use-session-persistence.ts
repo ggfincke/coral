@@ -56,8 +56,7 @@ export function useSessionPersistence(resumeSessionId?: string): {
       const model = agent.getModel()
       const cwd = agent.getCwd()
       const todos = getTodos()
-      const undo = agent.getUndoStack()
-      const redo = agent.getRedoStack()
+      const { undo, redo } = agent.exportUndoStateForPersistence()
       const metaHint = {
         compactionCount: agent.getCompactionCount(),
         lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
