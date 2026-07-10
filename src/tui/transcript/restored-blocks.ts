@@ -29,7 +29,10 @@ export function buildRestoredBlocks(messages: OllamaMessage[]): OutputBlock[]
 
     if (msg.role === 'user')
     {
-      restoredBlocks.push({ type: 'user', content: msg.content })
+      restoredBlocks.push({
+        type: 'user',
+        content: msg.displayContent ?? msg.content,
+      })
       continue
     }
 

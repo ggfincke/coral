@@ -3,13 +3,16 @@
   "version": "0.11.0",
   "description": "A CLI/TUI coding agent for Ollama",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "coral": "./dist/cli/main.js"
   },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
-    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
+    "build": "node node_modules/typescript-7/bin/tsc",
+    "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
+    "typecheck:scripts": "node node_modules/typescript-7/bin/tsc -p tsconfig.scripts.json",
     "dev": "tsx src/cli/main.tsx",
     "start": "node dist/cli/main.js",
     "test": "node --import tsx --test 'tests/**/*.test.ts'",
@@ -53,17 +56,18 @@
   "devDependencies": {
     "@eslint/js": "^9.39.4",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^25.9.3",
+    "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",
     "eslint": "^9.39.4",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^17.6.0",
-    "prettier": "^3.8.4",
-    "prettier-plugin-brace-style": "^0.10.1",
-    "tsx": "^4.22.4",
+    "globals": "^17.7.0",
+    "prettier": "^3.9.4",
+    "prettier-plugin-brace-style": "^0.10.2",
+    "tsx": "^4.23.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.61.1"
+    "typescript-7": "npm:typescript@^7.0.2",
+    "typescript-eslint": "^8.62.1"
   },
   "allowScripts": {
     "better-sqlite3@12.11.1": true,

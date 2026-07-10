@@ -334,6 +334,45 @@ test('showModel includes Ollama API error bodies', async () =>
   )
 })
 
+test('metadata requests pass the abort signal to fetch', async () =>
+{
+  const controller = new AbortController()
+  const seenSignals: Array<AbortSignal | null | undefined> = []
+
+  await withFetch(
+    async (input, init) =>
+    {
+      seenSignals.push(init?.signal)
+      const url = String(input)
+      if (url.endsWith('/api/show'))
+      {
+        return new Response(
+          JSON.stringify({
+            model_info: {
+              'general.architecture': 'gemma',
+              'gemma.context_length': 8192,
+            },
+          }),
+          { headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+
+      return new Response(JSON.stringify({ models: [] }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    },
+    async () =>
+    {
+      const client = new OllamaClient('http://ollama.test')
+
+      await client.showModel('fake-model', controller.signal)
+      await client.listModels(controller.signal)
+
+      assert.deepEqual(seenSignals, [controller.signal, controller.signal])
+    }
+  )
+})
+
 test('embed translates fetch failures with host context', async () =>
 {
   await withFetch(

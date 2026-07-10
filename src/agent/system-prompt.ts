@@ -74,11 +74,14 @@ export function buildSystemPrompt(ctx: {
   model: string
   cwd: string
   tools: Tool[]
+  projectContextBudget?: number
 }): string
 {
   const toolBlock = formatTools(ctx.tools)
   const projectContext = formatProjectContext(ctx.cwd)
-  const injectedContext = gatherProjectContext(ctx.cwd)
+  const injectedContext = gatherProjectContext(ctx.cwd, {
+    maxTotalChars: ctx.projectContextBudget,
+  })
 
   let prompt = `You are Coral, a local coding agent running via Ollama. You help developers by reading code, editing files, running shell commands, & answering questions about codebases.
 

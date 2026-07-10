@@ -38,6 +38,7 @@ export interface CommandSummary
 {
   name: string
   description: string
+  aliases?: string[]
 }
 
 const MAX_RESULTS = 8
@@ -119,7 +120,10 @@ export function rankCommands(
     {
       prefix.push(item)
     }
-    else if (name.includes(query))
+    else if (
+      name.includes(query) ||
+      command.aliases?.some((alias) => alias.toLowerCase().includes(query))
+    )
     {
       substring.push(item)
     }

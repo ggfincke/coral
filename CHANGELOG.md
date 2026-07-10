@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Undo / redo for live turns:** `/undo` removes the last live-tail turn and
+  reverts captured `write_file` / `edit_file` snapshots when the current disk
+  still matches Coral's recorded post-edit state. `/redo` replays the last
+  undone turn and reapplies the captured snapshots after the same safety check.
+  Undo/redo metadata persists with sessions and is bounded to recent turns so
+  saved sessions do not grow without limit.
+- **Command palette:** `Ctrl+P` opens a fuzzy command palette over slash
+  commands and keybindings. Command entries run through the same slash-command
+  dispatcher as typed input; supported keybinding entries trigger their existing
+  TUI callbacks.
+- **Dynamic project-context injection budget:** startup project context now
+  sizes its auto-loaded file budget from the pinned `num_ctx` window instead of
+  using a fixed 16 KB cap. The agent rebuilds the system prompt after the async
+  context-window resolution so the first model request uses the model-aware
+  budget.
 - **Per-model reliability telemetry persists across sessions:** the
   reliability-layer counters (`/status` "Repairs" line) are now folded into
   `~/.coral/telemetry.json`, keyed by model, when an agent is disposed — so a
@@ -52,6 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Undo/redo safety hardening:** replay now revalidates workspace and symlink
+  boundaries before mutating files, rolls back earlier file changes when a later
+  undo/redo write fails, restores `todo_write` state, records mutations when a
+  later stream errors without also signaling clean completion, and applies the
+  file-capture ceiling to UTF-8 bytes. Persisted undo state omits duplicate live
+  transcript messages, drops whole oldest records under an aggregate byte cap,
+  and writes Coral session JSON under private POSIX modes.
+- **TUI lifecycle polish:** restored and redone `@`-mention prompts now display
+  the clean user text instead of model-facing attachment context, context-window
+  metadata lookup is abortable before the first chat request starts, and the
+  command palette accepts literal `j`/`k` filter text while keeping the selected
+  command visible and aligned with Enter in constrained viewports.
 - **Per-turn latency on large sliding-window contexts:** a single model call
   could stall for tens of minutes deep into a long session. Two causes, both
   fixed. First, the generate path sent no token ceiling, so a runaway reasoner

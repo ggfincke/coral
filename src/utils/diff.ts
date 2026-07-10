@@ -80,8 +80,7 @@ export type ApplyEditResult =
     }
 
 export type ToolDiffPreview =
-  | { kind: 'diff'; diff: string }
-  | { kind: 'message'; message: string }
+  { kind: 'diff'; diff: string } | { kind: 'message'; message: string }
 
 export interface ToolDiffPreviewOptions
 {

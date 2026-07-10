@@ -36,6 +36,15 @@ const { tempDir, cleanup } = makeTempDirPool({ autoCleanup: false })
 const originalCwd = process.cwd()
 const hasRipgrep = spawnSync('rg', ['--version']).status === 0
 
+function oversizedUtf8Text(): string
+{
+  const character = '€'
+  const count = Math.floor(
+    TEXT_FILE_READ_LIMIT_BYTES / Buffer.byteLength(character, 'utf-8')
+  )
+  return character.repeat(count + 1)
+}
+
 after(async () =>
 {
   setCwd(originalCwd)
@@ -118,11 +127,12 @@ test(
   }
 )
 
-test('write_file overwrites oversized targets without previewing old content', async () =>
+test('write_file refuses oversized existing targets without mutating disk', async () =>
 {
   const dir = await tempDir('coral-write-big-')
   const target = join(dir, 'big.txt')
-  await writeFile(target, 'x'.repeat(TEXT_FILE_READ_LIMIT_BYTES + 1), 'utf-8')
+  const previous = 'x'.repeat(TEXT_FILE_READ_LIMIT_BYTES + 1)
+  await writeFile(target, previous, 'utf-8')
 
   setCwd(dir)
   const result = await writeTool.execute({
@@ -130,12 +140,74 @@ test('write_file overwrites oversized targets without previewing old content', a
     content: 'small\n',
   })
 
+  assert.match(result.error ?? '', /cannot capture undo snapshot/)
+  assert.match(result.error ?? '', /exceeds 1\.0 MB/)
+  assert.equal(result.change, undefined)
+  assert.equal(await readFile(target, 'utf-8'), previous)
+})
+
+test('write_file refuses oversized content without mutating disk', async () =>
+{
+  const dir = await tempDir('coral-write-big-content-')
+  const target = join(dir, 'out.txt')
+  const content = oversizedUtf8Text()
+
+  assert.ok(content.length < TEXT_FILE_READ_LIMIT_BYTES)
+  assert.ok(Buffer.byteLength(content, 'utf-8') > TEXT_FILE_READ_LIMIT_BYTES)
+
+  setCwd(dir)
+  const result = await writeTool.execute({
+    path: 'out.txt',
+    content,
+  })
+
+  assert.match(result.error ?? '', /undo capture limit/)
+  assert.equal(result.change, undefined)
+  assert.equal(existsSync(target), false)
+})
+
+test('write_file records created-file undo metadata', async () =>
+{
+  const dir = await tempDir('coral-write-change-')
+  const target = join(dir, 'created.txt')
+
+  setCwd(dir)
+  const result = await writeTool.execute({
+    path: 'created.txt',
+    content: 'hello\n',
+  })
+
   assert.equal(result.error, undefined)
-  assert.equal(result.diff, undefined)
-  assert.match(result.output, /Wrote 6 B/)
-  assert.match(result.output, /Diff skipped:/)
-  assert.match(result.output, /exceeds 1\.0 MB read limit/)
-  assert.equal(await readFile(target, 'utf-8'), 'small\n')
+  assert.deepEqual(result.change, {
+    path: target,
+    before: null,
+    after: 'hello\n',
+  })
+  assert.equal(await readFile(target, 'utf-8'), 'hello\n')
+})
+
+test('edit_file refuses oversized results without mutating disk', async () =>
+{
+  const dir = await tempDir('coral-edit-big-')
+  const target = join(dir, 'grow.txt')
+  const replacement = oversizedUtf8Text()
+  await writeFile(target, 'seed\n', 'utf-8')
+
+  assert.ok(replacement.length < TEXT_FILE_READ_LIMIT_BYTES)
+  assert.ok(
+    Buffer.byteLength(replacement, 'utf-8') > TEXT_FILE_READ_LIMIT_BYTES
+  )
+
+  setCwd(dir)
+  const result = await editTool.execute({
+    path: 'grow.txt',
+    old_string: 'seed\n',
+    new_string: replacement,
+  })
+
+  assert.match(result.error ?? '', /undo capture limit/)
+  assert.equal(result.change, undefined)
+  assert.equal(await readFile(target, 'utf-8'), 'seed\n')
 })
 
 test('edit_file changes disk, returns a diff, and leaves misses untouched', async () =>
@@ -157,6 +229,11 @@ test('edit_file changes disk, returns a diff, and leaves misses untouched', asyn
   })
 
   assert.equal(edited.error, undefined)
+  assert.deepEqual(edited.change, {
+    path: target,
+    before: 'export function label() {\n  return "old"\n}\n',
+    after: 'export function label() {\n  return "new"\n}\n',
+  })
   assert.match(edited.output, /replaced 1 occurrence/)
   assert.ok((edited.diff ?? '').includes('-  return "old"'))
   assert.ok((edited.diff ?? '').includes('+  return "new"'))
@@ -230,11 +307,28 @@ test('write and edit tools deny off-workspace paths without approval', async () 
       allowOutsideWorkspace: true,
     }
   )
+  const editAllowed = await editTool.execute(
+    {
+      path: outsideFile,
+      old_string: 'approved',
+      new_string: 'edited',
+    },
+    {
+      cwd: dir,
+      ollamaHost: 'http://localhost:11434',
+      allowOutsideWorkspace: true,
+    }
+  )
 
   assert.match(writeDenied.error ?? '', /outside workspace/)
   assert.match(editDenied.error ?? '', /outside workspace/)
   assert.equal(writeAllowed.error, undefined)
-  assert.equal(await readFile(outsideFile, 'utf-8'), 'approved\n')
+  assert.match(writeAllowed.output, /not undoable \(outside workspace\)/)
+  assert.equal(writeAllowed.change, undefined)
+  assert.equal(editAllowed.error, undefined)
+  assert.match(editAllowed.output, /not undoable \(outside workspace\)/)
+  assert.equal(editAllowed.change, undefined)
+  assert.equal(await readFile(outsideFile, 'utf-8'), 'edited\n')
 })
 
 test('write and edit tools deny workspace symlink escapes', async () =>

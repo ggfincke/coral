@@ -40,8 +40,8 @@ export interface ContextWindowResolverDependencies
   model: string
   cwd: string
   totalMemBytes: number
-  showModel: (model: string) => Promise<ModelInfo>
-  listModels: () => Promise<Model[]>
+  showModel: (model: string, signal?: AbortSignal) => Promise<ModelInfo>
+  listModels: (signal?: AbortSignal) => Promise<Model[]>
 }
 
 export interface ResolvedContextWindow
@@ -128,16 +128,18 @@ export function computeMemoryCappedContext(inputs: BudgetInputs): number
 
 // resolve the pinned num_ctx from live model metadata & local config
 export async function resolvePinnedContextWindow(
-  deps: ContextWindowResolverDependencies
+  deps: ContextWindowResolverDependencies,
+  signal?: AbortSignal
 ): Promise<ResolvedContextWindow | undefined>
 {
   let info: ModelInfo
   try
   {
-    info = await deps.showModel(deps.model)
+    info = await deps.showModel(deps.model, signal)
   }
-  catch
+  catch (err)
   {
+    if (signal?.aborted) throw err
     return undefined
   }
 
@@ -145,7 +147,11 @@ export async function resolvePinnedContextWindow(
 
   const nativeContext = info.contextLength
   const maxNumCtx = resolveContextConfig(deps.cwd).maxNumCtx
-  const weightBytes = await resolveModelWeightBytes(deps.model, deps.listModels)
+  const weightBytes = await resolveModelWeightBytes(
+    deps.model,
+    deps.listModels,
+    signal
+  )
   const memoryCap = computeMemoryCappedContext({
     totalMemBytes: deps.totalMemBytes,
     weightBytes,
@@ -177,16 +183,18 @@ function roundDownToGranularity(value: number): number
 // look up active model weight size; unknown means "ignore weights"
 async function resolveModelWeightBytes(
   model: string,
-  listModels: () => Promise<Model[]>
+  listModels: (signal?: AbortSignal) => Promise<Model[]>,
+  signal?: AbortSignal
 ): Promise<number>
 {
   try
   {
-    const models = await listModels()
+    const models = await listModels(signal)
     return models.find((candidate) => candidate.name === model)?.size ?? 0
   }
-  catch
+  catch (err)
   {
+    if (signal?.aborted) throw err
     return 0
   }
 }

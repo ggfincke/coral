@@ -3,7 +3,9 @@
 
 import type { Tool, ToolResult } from './tool.js'
 import { pluralize } from '../utils/pluralize.js'
+import { cloneTodoItems } from '../types/undo.js'
 import {
+  getTodos,
   setTodos,
   STATUS_MARK,
   validateTodoList,
@@ -53,7 +55,14 @@ export const todoWriteTool: Tool = {
       return { output: '', error: result.error }
     }
 
+    const before = cloneTodoItems(getTodos())
     setTodos(result.todos)
-    return { output: renderTodos(result.todos) }
+    return {
+      output: renderTodos(result.todos),
+      todoChange: {
+        before,
+        after: cloneTodoItems(result.todos),
+      },
+    }
   },
 }

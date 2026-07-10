@@ -41,6 +41,7 @@ export interface OllamaMessage
 {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
+  displayContent?: string
   thinking?: string
   tool_name?: string
   tool_calls?: OllamaToolCall[]
@@ -118,8 +119,8 @@ export interface ModelInfo
   valueLength?: number
 }
 
-// reliability-layer counters — how often the agent had to compensate for the
-// model botching a tool call (per-model telemetry for /status)
+// reliability-layer counters — how often the agent had to compensate for model
+// tool-call issues; surfaced in /status, /telemetry, & eval reports
 export interface ReliabilityStats
 {
   repairedToolCalls: number

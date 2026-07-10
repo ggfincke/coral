@@ -26,13 +26,17 @@ import {
   type ToolCallBlock,
 } from './transcript/transcript.js'
 import PromptInput from './components/prompt-input.js'
+import CommandPalette from './components/command-palette.js'
 import { getThemeGeneration, inkColor, style } from './theme.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { previewToolDiff } from '../utils/diff.js'
 import {
   commandCompletions,
+  commandInfos,
   dispatchCommand,
+  keybindingInfos,
   type CommandContext,
+  type KeybindingAction,
 } from './shell/commands.js'
 import { buildMentionContext, formatMentionNotice } from './prompt/mentions.js'
 import { listProjectFiles } from './prompt/file-suggestions.js'
@@ -80,6 +84,7 @@ import {
   type TodoItem,
 } from '../tools/todo-store.js'
 import { restoredSessionForPickerSelection } from './model/model-activation.js'
+import { buildPaletteEntries, type PaletteEntry } from './palette.js'
 
 interface Props
 {
@@ -162,6 +167,7 @@ export default function App({
     if (resumeSession)
     {
       nextAgent.restoreMessages(resumeSession.messages)
+      nextAgent.restoreUndoStack(resumeSession.undo, resumeSession.redo)
     }
 
     return nextAgent
@@ -169,6 +175,7 @@ export default function App({
   const [pickerState, setPickerState] = useState<
     'hidden' | 'loading' | 'ready' | 'error'
   >(model ? 'hidden' : 'loading')
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [pickerError, setPickerError] = useState('')
   const [models, setModels] = useState<Model[]>([])
   const [selectedModelIndex, setSelectedModelIndex] = useState(0)
@@ -240,6 +247,8 @@ export default function App({
   const isRunning = runStage !== 'idle'
   const currentCwd = agent?.getCwd() ?? getCwd()
   const transcriptWidth = Math.max(terminalSize.columns - 2, 20)
+  const pickerVisible = pickerState !== 'hidden'
+  const paletteVisible = paletteOpen && !pickerVisible && Boolean(agent)
 
   const approvalBoxLines = useMemo(
     () =>
@@ -268,7 +277,7 @@ export default function App({
   const headerHeight = 2
   // either prompt takes over the input row
   const promptActive = Boolean(approval) || Boolean(confirm)
-  const inputHeight = promptActive ? 0 : 3
+  const inputHeight = promptActive || paletteVisible ? 0 : 3
   const statusHeight = 1
   const promptBoxLines = approval ? approvalBoxLines : confirmBoxLines
   const approvalHeight = promptActive ? promptBoxLines.length + 1 : 0
@@ -286,6 +295,7 @@ export default function App({
     terminalSize.rows - headerHeight - statusHeight,
     6
   )
+  const paletteViewportHeight = pickerViewportHeight
 
   const transcriptLines = useMemo(
     () =>
@@ -359,8 +369,8 @@ export default function App({
 
     disposedAgentsRef.current.add(agentInstance)
     // fold this agent's reliability counters into the persistent per-model
-    // telemetry, but only once the model has actually produced a turn — skips
-    // agents abandoned in the picker. attributed to the model active at dispose
+    // telemetry, but only once a model has produced a turn — skips agents
+    // abandoned in the picker. entries are already grouped per produced model
     try
     {
       if (agentInstance.hasProducedTurn())
@@ -400,6 +410,22 @@ export default function App({
     sessionIdRef.current = null
   }, [sessionIdRef])
 
+  const rebuildTranscript = useCallback(() =>
+  {
+    const currentAgent = agentRef.current
+    setOutput(
+      currentAgent ? buildRestoredBlocks(currentAgent.getMessages()) : []
+    )
+    setScrollOffset(0)
+  }, [])
+
+  // zero header gauges & agent cumulative counters (match resume after undo/redo)
+  const resetTokenUsage = useCallback(() =>
+  {
+    setTokenUsage(EMPTY_TOKEN_USAGE)
+    agentRef.current?.resetTokenUsage()
+  }, [])
+
   // fetch context window size from Ollama & update state
   const fetchContextWindowForAgent = useCallback((agentInstance: Agent) =>
   {
@@ -413,14 +439,17 @@ export default function App({
   const saveCurrentSession = useCallback((): string | null =>
   {
     const currentAgent = agentRef.current
-    if (!currentAgent || currentAgent.getMessageCount() === 0) return null
+    if (!currentAgent) return null
+    // skip new empty sessions; persist existing sessions emptied by undo
+    if (currentAgent.getMessageCount() === 0 && !sessionIdRef.current)
+      return null
     const meta = persistSession(currentAgent)
     if (meta)
     {
       setSessionLabelId(meta.id)
     }
     return meta?.id ?? null
-  }, [persistSession])
+  }, [persistSession, sessionIdRef])
 
   // rename the current session's title & update cached meta
   const renameCurrentSession = useCallback(
@@ -468,6 +497,7 @@ export default function App({
         think,
       })
       nextAgent.restoreMessages(target.messages)
+      nextAgent.restoreUndoStack(target.undo, target.redo)
 
       // update session tracking
       sessionIdRef.current = target.meta.id
@@ -605,6 +635,7 @@ export default function App({
       if (restoredSession)
       {
         nextAgent.restoreMessages(restoredSession.messages)
+        nextAgent.restoreUndoStack(restoredSession.undo, restoredSession.redo)
         setOutput(buildRestoredBlocks(restoredSession.messages))
       }
 
@@ -818,8 +849,6 @@ export default function App({
     }
   }, [runStage])
 
-  const pickerVisible = pickerState !== 'hidden'
-
   useInput(
     (ch, key) =>
     {
@@ -924,9 +953,85 @@ export default function App({
 
   // slash-command list & project-file lookup for prompt autocomplete
   const completionCommands = useMemo(() => commandCompletions(), [])
+  const paletteEntries = useMemo(
+    () => buildPaletteEntries(commandInfos(), keybindingInfos()),
+    []
+  )
   const listFiles = useCallback(
     () => listProjectFiles(currentCwd),
     [currentCwd]
+  )
+
+  const runSlashCommand = useCallback(
+    async (value: string): Promise<boolean> =>
+    {
+      if (!agent) return false
+
+      setInput('')
+      setScrollOffset(0)
+      const commandController = new AbortController()
+      runAbortRef.current = commandController
+      // lock submits for the command's lifetime so a long command (/index,
+      // /compact, …) can't overlap w/ a chat turn or another command
+      setCommandRunning(true)
+
+      const cmdCtx: CommandContext = {
+        agent,
+        activeModel,
+        host,
+        yolo,
+        sessionLabelId,
+        signal: commandController.signal,
+        getCwd: () => agent.getCwd(),
+        pushOutput: (...blocks) =>
+        {
+          setOutput((prev) => [...prev, ...blocks])
+        },
+        clearSession,
+        rebuildTranscript,
+        resetTokenUsage,
+        reopenModelPicker,
+        switchModel,
+        setYolo,
+        exitApp: () =>
+        {
+          void shutdown()
+        },
+        resumeSession: resumeSessionById,
+        saveCurrentSession,
+        renameCurrentSession,
+        notifyThemeChanged: () => setThemeGeneration(getThemeGeneration()),
+      }
+
+      try
+      {
+        return await dispatchCommand(value.trim(), cmdCtx)
+      }
+      finally
+      {
+        if (runAbortRef.current === commandController)
+        {
+          runAbortRef.current = null
+        }
+        setCommandRunning(false)
+      }
+    },
+    [
+      activeModel,
+      agent,
+      clearSession,
+      host,
+      rebuildTranscript,
+      renameCurrentSession,
+      reopenModelPicker,
+      resetTokenUsage,
+      resumeSessionById,
+      saveCurrentSession,
+      sessionLabelId,
+      shutdown,
+      switchModel,
+      yolo,
+    ]
   )
 
   const handleSubmit = useCallback(
@@ -950,52 +1055,7 @@ export default function App({
       // intercept slash commands before sending to the agent
       if (value.trim().startsWith('/'))
       {
-        setInput('')
-        setScrollOffset(0)
-        const commandController = new AbortController()
-        runAbortRef.current = commandController
-        // lock submits for the command's lifetime so a long command (/index,
-        // /compact, …) can't overlap w/ a chat turn or another command
-        setCommandRunning(true)
-
-        const cmdCtx: CommandContext = {
-          agent,
-          activeModel,
-          host,
-          yolo,
-          sessionLabelId,
-          signal: commandController.signal,
-          getCwd: () => agent.getCwd(),
-          pushOutput: (...blocks) =>
-          {
-            setOutput((prev) => [...prev, ...blocks])
-          },
-          clearSession,
-          reopenModelPicker,
-          switchModel,
-          setYolo,
-          exitApp: () =>
-          {
-            void shutdown()
-          },
-          resumeSession: resumeSessionById,
-          saveCurrentSession,
-          renameCurrentSession,
-          notifyThemeChanged: () => setThemeGeneration(getThemeGeneration()),
-        }
-
-        try
-        {
-          if (await dispatchCommand(value.trim(), cmdCtx)) return
-        }
-        finally
-        {
-          if (runAbortRef.current === commandController)
-          {
-            runAbortRef.current = null
-          }
-          setCommandRunning(false)
-        }
+        if (await runSlashCommand(value.trim())) return
       }
 
       const controller = new AbortController()
@@ -1218,6 +1278,8 @@ export default function App({
           },
           onCompaction(result)
           {
+            // rebuild from agent messages so the UI matches cleared undo stacks
+            rebuildTranscript()
             setOutput((prev) => [
               ...prev,
               { type: 'system', content: formatAutoCompactionResult(result) },
@@ -1258,36 +1320,28 @@ export default function App({
             persistAndLabel(agent)
           },
         },
-        controller.signal
+        controller.signal,
+        { displayContent: value }
       )
     },
     [
-      activeModel,
       addHistoryEntry,
       agent,
       promptActive,
       appendText,
       appendThinking,
-      clearSession,
       commandRunning,
       consumeBufferedBlocks,
-      host,
       persistSession,
-      renameCurrentSession,
-      reopenModelPicker,
+      rebuildTranscript,
       resetAnimation,
       resetStreamBuffer,
-      resumeSessionById,
       runStage,
-      saveCurrentSession,
+      runSlashCommand,
       sessionIdRef,
-      sessionLabelId,
-      shutdown,
       startWaiting,
       stopWaiting,
       switchingModel,
-      switchModel,
-      yolo,
     ]
   )
 
@@ -1312,7 +1366,15 @@ export default function App({
   const pickerEscHint = agent ? 'esc returns to chat' : 'esc quits'
   let statusLine: string
 
-  if (pickerVisible)
+  if (paletteVisible)
+  {
+    statusLine = buildStatusLine(
+      'command palette',
+      'enter runs · esc closes',
+      transcriptWidth
+    )
+  }
+  else if (pickerVisible)
   {
     statusLine =
       pickerState === 'loading'
@@ -1373,7 +1435,9 @@ export default function App({
       .filter(Boolean)
       .join(' · ')
     const yoloHint = yolo ? style('warning')('⚠ yolo') : ''
-    const hints = [yoloHint, '/help', 'esc quits'].filter(Boolean).join(' · ')
+    const hints = [yoloHint, 'ctrl+p commands', '/help', 'esc quits']
+      .filter(Boolean)
+      .join(' · ')
     statusLine = buildStatusLine(stateLeft, hints, transcriptWidth)
   }
 
@@ -1435,6 +1499,62 @@ export default function App({
       return next
     })
   }, [])
+
+  const openPalette = useCallback(() =>
+  {
+    if (
+      !agent ||
+      isRunning ||
+      commandRunning ||
+      switchingModel ||
+      promptActive
+    )
+    {
+      return
+    }
+    setPaletteOpen(true)
+  }, [agent, commandRunning, isRunning, promptActive, switchingModel])
+
+  const runKeybindingAction = useCallback(
+    (action: KeybindingAction) =>
+    {
+      if (action === 'toggle-thinking')
+      {
+        onToggleThinking()
+      }
+      else if (action === 'toggle-permissions')
+      {
+        onTogglePermissions()
+      }
+      else if (action === 'page-up')
+      {
+        onPageUp()
+      }
+      else if (action === 'page-down')
+      {
+        onPageDown()
+      }
+    },
+    [onPageDown, onPageUp, onTogglePermissions, onToggleThinking]
+  )
+
+  const onPaletteSelect = useCallback(
+    (entry: PaletteEntry) =>
+    {
+      setPaletteOpen(false)
+      if (entry.command)
+      {
+        addHistoryEntry(entry.command, sessionIdRef.current)
+        void runSlashCommand(entry.command)
+        return
+      }
+      if (entry.action)
+      {
+        runKeybindingAction(entry.action)
+      }
+    },
+    [addHistoryEntry, runKeybindingAction, runSlashCommand, sessionIdRef]
+  )
 
   const onHistoryUp = useCallback(() =>
   {
@@ -1513,15 +1633,24 @@ export default function App({
 
       {pickerVisible ? (
         <LineList lines={visiblePicker} />
+      ) : paletteVisible ? (
+        <CommandPalette
+          entries={paletteEntries}
+          width={transcriptWidth}
+          height={paletteViewportHeight}
+          onSelect={onPaletteSelect}
+          onClose={() => setPaletteOpen(false)}
+        />
       ) : agent ? (
         <LineList
           lines={output.length === 0 ? paddedWelcome : paddedTranscript}
         />
       ) : null}
 
-      {!pickerVisible && agent && todoPanelLines.length > 0 && (
-        <LineList lines={todoPanelLines} dim />
-      )}
+      {!pickerVisible &&
+        !paletteVisible &&
+        agent &&
+        todoPanelLines.length > 0 && <LineList lines={todoPanelLines} dim />}
 
       {!pickerVisible && agent && approval && (
         <LineList lines={approvalBoxLines} />
@@ -1531,7 +1660,7 @@ export default function App({
         <LineList lines={confirmBoxLines} />
       )}
 
-      {!pickerVisible && agent && !promptActive && (
+      {!pickerVisible && !paletteVisible && agent && !promptActive && (
         <Box flexDirection="column">
           <Text dimColor color={yolo ? inkColor('warning') : undefined}>
             {headerSep}
@@ -1555,6 +1684,7 @@ export default function App({
               onScrollDown={onScrollDown}
               onToggleThinking={onToggleThinking}
               onTogglePermissions={onTogglePermissions}
+              onOpenPalette={openPalette}
               onHistoryUp={onHistoryUp}
               onHistoryDown={onHistoryDown}
               placeholder={isRunning ? '' : 'ask coral anything'}

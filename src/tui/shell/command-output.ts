@@ -167,6 +167,7 @@ export function formatManualCompactionResult(result: CompactionResult): string
     'Context compacted',
     `  ${result.beforeMessages} messages -> ${result.afterMessages} messages (${savedMessages} summarized)`,
     `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (${formatTokenCount(savedTokens)} freed)`,
+    '  Undo history cleared',
   ].join('\n')
 }
 
@@ -188,6 +189,7 @@ export function formatAutoCompactionResult(result: CompactionResult): string
     header,
     `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
     `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (~${formatTokenCount(savedTokens)} freed)`,
+    '  Undo history cleared',
   ].join('\n')
 }
 

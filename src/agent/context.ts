@@ -9,12 +9,18 @@ import {
   formatProjectTreeEntryName,
   shouldIncludeProjectTreeEntry,
 } from '../shared/project-tree.js'
+import { CHARS_PER_TOKEN } from '../utils/limits.js'
 
 // max bytes to read from any single context file
 const MAX_CONTEXT_FILE_BYTES = 8_192
 
-// max total chars across all injected context (rough token budget: chars/4 ≈ tokens)
-const MAX_TOTAL_CHARS = 16_384
+// fallback total chars across injected context before num_ctx is known
+const DEFAULT_TOTAL_CHARS = 16_384
+
+// project context gets about 1/8 of the pinned context window
+const PROJECT_CONTEXT_FRACTION = 0.125
+const MIN_TOTAL_CHARS = 4_096
+const MAX_TOTAL_CHARS = 32_768
 
 // project files to look for, in priority order
 // higher priority files are loaded first & guaranteed space
@@ -47,6 +53,24 @@ interface ContextFile
   label: string
   name: string
   content: string
+}
+
+export interface ProjectContextOptions
+{
+  maxTotalChars?: number
+}
+
+export function projectContextBudgetForWindow(contextWindow: number): number
+{
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0)
+  {
+    return DEFAULT_TOTAL_CHARS
+  }
+
+  const chars = Math.floor(
+    contextWindow * CHARS_PER_TOKEN * PROJECT_CONTEXT_FRACTION
+  )
+  return Math.min(Math.max(chars, MIN_TOTAL_CHARS), MAX_TOTAL_CHARS)
 }
 
 // read a file up to MAX_CONTEXT_FILE_BYTES, returning null if missing/unreadable
@@ -138,10 +162,17 @@ function detectProjectType(files: ContextFile[]): string | null
 }
 
 // gather all available project context & format as a single block
-export function gatherProjectContext(cwd: string): string
+export function gatherProjectContext(
+  cwd: string,
+  options: ProjectContextOptions = {}
+): string
 {
   const loaded: ContextFile[] = []
   let totalChars = 0
+  const maxTotalChars = Math.max(
+    0,
+    Math.floor(options.maxTotalChars ?? DEFAULT_TOTAL_CHARS)
+  )
 
   // load context files in priority order
   for (const { name, label } of CONTEXT_FILES)
@@ -150,10 +181,10 @@ export function gatherProjectContext(cwd: string): string
     if (!content) continue
 
     // check budget before adding
-    if (totalChars + content.length > MAX_TOTAL_CHARS)
+    if (totalChars + content.length > maxTotalChars)
     {
       // still try to fit w/ truncation if file is large
-      const remaining = MAX_TOTAL_CHARS - totalChars
+      const remaining = maxTotalChars - totalChars
       if (remaining > 256)
       {
         loaded.push({
@@ -162,7 +193,7 @@ export function gatherProjectContext(cwd: string): string
           content:
             content.slice(0, remaining) + '\n… (truncated to fit budget)',
         })
-        totalChars = MAX_TOTAL_CHARS
+        totalChars = maxTotalChars
       }
       break
     }

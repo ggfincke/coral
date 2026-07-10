@@ -6,9 +6,7 @@ import { loadProjectConfig, loadUserConfig } from './project-config.js'
 
 // permission level for a given tool
 export type PermissionPolicy =
-  | 'always_allow'
-  | 'require_approval'
-  | 'always_deny'
+  'always_allow' | 'require_approval' | 'always_deny'
 
 // per-tool permission overrides — keys are tool names
 export type ToolPermissions = Record<string, PermissionPolicy>

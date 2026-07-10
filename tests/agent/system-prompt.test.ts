@@ -33,3 +33,20 @@ test('buildSystemPrompt includes lightweight project context', async () =>
   assert.match(prompt, /Project name: coral-prompt-/)
   assert.match(prompt, /Top-level entries: package\.json, README\.md, src\//)
 })
+
+test('buildSystemPrompt applies the project context budget', async () =>
+{
+  const dir = await tempDir('coral-prompt-budget-')
+  await writeFile(join(dir, '.coral.md'), 'x'.repeat(600), 'utf-8')
+
+  const prompt = buildSystemPrompt({
+    model: 'qwen3-coder:latest',
+    cwd: dir,
+    tools: [],
+    projectContextBudget: 300,
+  })
+
+  assert.match(prompt, /Loaded Project Context/)
+  assert.match(prompt, /truncated to fit budget/)
+  assert.ok(!prompt.includes('x'.repeat(600)))
+})
