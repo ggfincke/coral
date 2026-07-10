@@ -31,6 +31,7 @@ export const writeTool: Tool = {
     const cwd = context?.cwd ?? getCwd()
     const rawPath = args.path as string
     const content = args.content as string
+    const contentBytes = Buffer.byteLength(content, 'utf-8')
     const allowOutside = context?.allowOutsideWorkspace === true
     let path = rawPath
     try
@@ -47,19 +48,19 @@ export const writeTool: Tool = {
         await writeFile(path, content, 'utf-8')
         return {
           output:
-            `Wrote ${formatBytes(content.length)} to ${path} ` +
+            `Wrote ${formatBytes(contentBytes)} to ${path} ` +
             `(not undoable (outside workspace))`,
         }
       }
 
       // fail closed: refuse when undo cannot snapshot before/after
-      if (content.length > TEXT_FILE_READ_LIMIT_BYTES)
+      if (contentBytes > TEXT_FILE_READ_LIMIT_BYTES)
       {
         return {
           output: '',
           error:
             `Refusing to write ${path}: content is ` +
-            `${formatBytes(content.length)}, exceeds ` +
+            `${formatBytes(contentBytes)}, exceeds ` +
             `${formatBytes(TEXT_FILE_READ_LIMIT_BYTES)} undo capture limit`,
         }
       }
@@ -78,7 +79,7 @@ export const writeTool: Tool = {
       await mkdir(dirname(path), { recursive: true })
       await writeFile(path, content, 'utf-8')
       return {
-        output: `Wrote ${formatBytes(content.length)} to ${path}`,
+        output: `Wrote ${formatBytes(contentBytes)} to ${path}`,
         diff: computeDiff(before.content, content) ?? undefined,
         change: {
           path,

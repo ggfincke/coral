@@ -125,10 +125,7 @@ export function serializeUndoState(
 
   const state: PersistedUndoState = {
     undo: cappedUndo.map((turn) =>
-      serializeTurn(
-        turn,
-        !isUndoTurnAligned(messages, turn)
-      )
+      serializeTurn(turn, !isUndoTurnAligned(messages, turn))
     ),
     redo: cappedRedo.map((turn) => serializeTurn(turn, true)),
   }

@@ -36,6 +36,15 @@ const { tempDir, cleanup } = makeTempDirPool({ autoCleanup: false })
 const originalCwd = process.cwd()
 const hasRipgrep = spawnSync('rg', ['--version']).status === 0
 
+function oversizedUtf8Text(): string
+{
+  const character = '€'
+  const count = Math.floor(
+    TEXT_FILE_READ_LIMIT_BYTES / Buffer.byteLength(character, 'utf-8')
+  )
+  return character.repeat(count + 1)
+}
+
 after(async () =>
 {
   setCwd(originalCwd)
@@ -141,11 +150,15 @@ test('write_file refuses oversized content without mutating disk', async () =>
 {
   const dir = await tempDir('coral-write-big-content-')
   const target = join(dir, 'out.txt')
+  const content = oversizedUtf8Text()
+
+  assert.ok(content.length < TEXT_FILE_READ_LIMIT_BYTES)
+  assert.ok(Buffer.byteLength(content, 'utf-8') > TEXT_FILE_READ_LIMIT_BYTES)
 
   setCwd(dir)
   const result = await writeTool.execute({
     path: 'out.txt',
-    content: 'y'.repeat(TEXT_FILE_READ_LIMIT_BYTES + 1),
+    content,
   })
 
   assert.match(result.error ?? '', /undo capture limit/)
@@ -177,13 +190,19 @@ test('edit_file refuses oversized results without mutating disk', async () =>
 {
   const dir = await tempDir('coral-edit-big-')
   const target = join(dir, 'grow.txt')
+  const replacement = oversizedUtf8Text()
   await writeFile(target, 'seed\n', 'utf-8')
+
+  assert.ok(replacement.length < TEXT_FILE_READ_LIMIT_BYTES)
+  assert.ok(
+    Buffer.byteLength(replacement, 'utf-8') > TEXT_FILE_READ_LIMIT_BYTES
+  )
 
   setCwd(dir)
   const result = await editTool.execute({
     path: 'grow.txt',
     old_string: 'seed\n',
-    new_string: 'z'.repeat(TEXT_FILE_READ_LIMIT_BYTES + 1),
+    new_string: replacement,
   })
 
   assert.match(result.error ?? '', /undo capture limit/)

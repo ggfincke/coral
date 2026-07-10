@@ -265,10 +265,7 @@ test('serializeUndoState applies MAX_UNDO_TURNS before the byte cap', () =>
 
   assert.equal(persisted.undo.length, MAX_UNDO_TURNS)
   assert.equal(persisted.undo[0]?.userMessage, `Turn ${3}`)
-  assert.equal(
-    persisted.undo.at(-1)?.userMessage,
-    `Turn ${MAX_UNDO_TURNS + 2}`
-  )
+  assert.equal(persisted.undo.at(-1)?.userMessage, `Turn ${MAX_UNDO_TURNS + 2}`)
 })
 
 test(

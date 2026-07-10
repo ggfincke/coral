@@ -410,22 +410,25 @@ test('Agent records undo when a later stream errors after a write', async () =>
   })
 
   let seenError: Error | undefined
-  let doneCalled = false
+  let doneCalls = 0
+  let errorCalls = 0
   await agent.run(
     'create a file',
     makeAgentEvents({
       onDone()
       {
-        doneCalled = true
+        doneCalls++
       },
       onError(error)
       {
+        errorCalls++
         seenError = error
       },
     })
   )
 
-  assert.equal(doneCalled, true)
+  assert.equal(doneCalls, 0)
+  assert.equal(errorCalls, 1)
   assert.match(seenError?.message ?? '', /ollama disconnected/)
   assert.equal(await readFile(target, 'utf-8'), 'hello\n')
   assert.ok(agent.getUndoStack().length >= 1)

@@ -82,14 +82,15 @@ export const editTool: Tool = {
       }
     }
     const updated = result.after
+    const updatedBytes = Buffer.byteLength(updated, 'utf-8')
     // fail closed for in-workspace edits; outside-workspace skips undo capture
-    if (!allowOutside && updated.length > TEXT_FILE_READ_LIMIT_BYTES)
+    if (!allowOutside && updatedBytes > TEXT_FILE_READ_LIMIT_BYTES)
     {
       return {
         output: '',
         error:
           `Refusing to edit ${path}: result would be ` +
-          `${formatBytes(updated.length)}, exceeds ` +
+          `${formatBytes(updatedBytes)}, exceeds ` +
           `${formatBytes(TEXT_FILE_READ_LIMIT_BYTES)} undo capture limit`,
       }
     }

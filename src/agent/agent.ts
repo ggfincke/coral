@@ -1541,7 +1541,7 @@ export class Agent
     const fileChanges: UndoFileChange[] = []
     const todoChange: TodoChangeTracker = { before: null, after: null }
     let undoRecorded = false
-    const finish = () =>
+    const finalize = () =>
     {
       if (!undoRecorded)
       {
@@ -1554,7 +1554,7 @@ export class Agent
           this.pushMessage({
             role: 'system',
             content:
-              'Warning: undo could not record this turn\'s file changes after history trim',
+              "Warning: undo could not record this turn's file changes after history trim",
           })
         }
         this.recordUndoTurn(
@@ -1566,7 +1566,17 @@ export class Agent
         undoRecorded = true
       }
       this.activeRunStartMessage = undefined
+    }
+    const finish = () =>
+    {
+      finalize()
       this.finishRun(events)
+    }
+    const fail = (error: Error) =>
+    {
+      finalize()
+      this.clearCompactionCallbacks()
+      events.onError(error)
     }
     while (true)
     {
@@ -1687,10 +1697,8 @@ export class Agent
           return
         }
 
-        // record undo for any disk mutations already done this run, then
-        // surface the error (finish clears compaction callbacks via finishRun)
-        finish()
-        events.onError(toError(err))
+        // record undo for prior mutations w/o signaling clean completion
+        fail(toError(err))
         return
       }
 
