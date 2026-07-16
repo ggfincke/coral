@@ -29,7 +29,7 @@ const program = new Command()
   .option('--no-think', 'disable streamed reasoning requests')
   .option(
     '--yolo',
-    'auto-approve approval-gated calls (always_deny remains blocked)'
+    'auto-approve gated calls; always_deny stays blocked; MCP is disabled'
   )
   .option('--resume', 'resume the most recent session')
   .option('--session <id>', 'resume a specific session by ID')

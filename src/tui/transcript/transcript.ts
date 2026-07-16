@@ -9,7 +9,7 @@ import { formatElapsed } from '../shell/metrics.js'
 import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from '../theme.js'
 import { SOFT_WRAP_OPTIONS, wrapLines } from '../wrap.js'
-import { allTools } from '../../tools/index.js'
+import { allTools, type ToolCallPresentation } from '../../tools/index.js'
 import { ellipsize } from '../../utils/ellipsize.js'
 import { sanitizeUntrustedText, sanitizeStyledText } from './sanitize.js'
 
@@ -45,6 +45,8 @@ export interface ToolCallBlock
   // set when the tool finishes
   status?: 'success' | 'error'
   duration?: number
+  // emission-time snapshot for dynamic (MCP) tools — survives tool refreshes
+  display?: ToolCallPresentation
 }
 
 // emitted when tool execution completes
@@ -143,10 +145,16 @@ function getCachedBlockLines(
   return lines
 }
 
-// tool-specific label used in the tool call header; unknown tools show the name
-function toolDisplayLabel(toolName: string): string
+// tool-specific label used in the tool call header; a snapshot from the call
+// event wins, then the static registry, then the raw name
+function toolDisplayLabel(
+  toolName: string,
+  display?: ToolCallPresentation
+): string
 {
-  return TOOLS_BY_NAME.get(toolName)?.display?.label ?? toolName
+  return sanitizeUntrustedText(
+    display?.label ?? TOOLS_BY_NAME.get(toolName)?.display?.label ?? toolName
+  )
 }
 
 // format an in-progress tool call that depends on the current spinner frame
@@ -157,7 +165,7 @@ function formatPendingToolCall(
 ): string[]
 {
   const spinner = style('primary')(getSpinnerFrame(spinnerTick))
-  const label = toolDisplayLabel(block.toolName)
+  const label = toolDisplayLabel(block.toolName, block.display)
   const argDisplay = formatToolArgDisplay(block.toolName, block.args)
 
   const header = `   ${style('code')('│')} ${spinner} ${style('code')(label)} ${argDisplay}`
@@ -243,7 +251,7 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
 
     case 'tool_call':
     {
-      const label = toolDisplayLabel(block.toolName)
+      const label = toolDisplayLabel(block.toolName, block.display)
       const isError = block.status === 'error'
       const statusMark = isError ? style('error')('✗') : style('success')('✓')
       const duration =

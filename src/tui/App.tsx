@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import { existsSync } from 'node:fs'
 import { Agent } from '../agent/agent.js'
+import { resolveMcpConfig, type McpConfigResolution } from '../config/mcp.js'
+import type { McpLaunchApprovalRequest } from '../mcp/types.js'
 import { OllamaClient } from '../ollama/client.js'
 import { clamp } from '../utils/clamp.js'
 import { pluralize } from '../utils/pluralize.js'
@@ -43,6 +45,8 @@ import { listProjectFiles } from './prompt/file-suggestions.js'
 import {
   formatAutoCompactionResult,
   formatPermissionModeChange,
+  formatPermissionModeLocked,
+  formatPermissionModeUnchanged,
 } from './shell/command-output.js'
 import { useAnimationTimer } from './hooks/use-animation-timer.js'
 import { useStreamBuffer } from './hooks/use-stream-buffer.js'
@@ -63,7 +67,12 @@ import {
   formatTokenCount,
   formatTokensPerSecond,
 } from './shell/metrics.js'
-import { buildApprovalBox, buildConfirmBox } from './run/approval-box.js'
+import {
+  buildApprovalContent,
+  buildConfirmContent,
+  buildMcpApprovalContent,
+  renderPromptBox,
+} from './run/approval-box.js'
 import {
   buildRestoredBlocks,
   truncateToolResult,
@@ -85,6 +94,7 @@ import {
 } from '../tools/todo-store.js'
 import { restoredSessionForPickerSelection } from './model/model-activation.js'
 import { buildPaletteEntries, type PaletteEntry } from './palette.js'
+import type { ToolCallPresentation } from '../tools/index.js'
 
 interface Props
 {
@@ -102,6 +112,14 @@ interface ApprovalPrompt
   // pre-computed change preview — rendered inside the approval box
   diff?: string
   previewMessage?: string
+  // emission-time snapshot for dynamic (MCP) tools
+  presentation?: ToolCallPresentation
+  resolve: (approved: boolean) => void
+}
+
+interface McpApprovalPrompt
+{
+  request: McpLaunchApprovalRequest
   resolve: (approved: boolean) => void
 }
 
@@ -115,6 +133,30 @@ interface ConfirmPrompt
 const FLUSH_INTERVAL = 32
 const SPINNER_INTERVAL = 80
 const SCROLL_LINES = 3
+
+// single construction path for the session's primary Agent
+function buildPrimaryAgent(options: {
+  model: string
+  host: string
+  cwd?: string
+  think: boolean
+  mcp: boolean
+  mcpConfig: McpConfigResolution
+  restored?: SessionData | null
+}): Agent
+{
+  const nextAgent = new Agent(options.model, options.host, options.cwd, {
+    think: options.think,
+    mcp: options.mcp,
+    mcpConfig: options.mcpConfig,
+  })
+  if (options.restored)
+  {
+    nextAgent.restoreMessages(options.restored.messages)
+    nextAgent.restoreUndoStack(options.restored.undo, options.restored.redo)
+  }
+  return nextAgent
+}
 
 function canResumeInCwd(cwd: string): boolean
 {
@@ -155,6 +197,7 @@ export default function App({
   const resumeSessionUnavailable = Boolean(
     loadedResumeSession && !resumeSession
   )
+  const [mcpConfig] = useState(resolveMcpConfig)
 
   const [activeModel, setActiveModel] = useState(
     model ?? resumeSession?.meta.model ?? ''
@@ -163,14 +206,15 @@ export default function App({
   {
     if (!model) return null
 
-    const nextAgent = new Agent(model, host, resumeSession?.meta.cwd, { think })
-    if (resumeSession)
-    {
-      nextAgent.restoreMessages(resumeSession.messages)
-      nextAgent.restoreUndoStack(resumeSession.undo, resumeSession.redo)
-    }
-
-    return nextAgent
+    return buildPrimaryAgent({
+      model,
+      host,
+      cwd: resumeSession?.meta.cwd,
+      think,
+      mcp: !initialYolo,
+      mcpConfig,
+      restored: resumeSession,
+    })
   })
   const [pickerState, setPickerState] = useState<
     'hidden' | 'loading' | 'ready' | 'error'
@@ -194,7 +238,10 @@ export default function App({
   const [commandRunning, setCommandRunning] = useState(false)
   const [switchingModel, setSwitchingModel] = useState(false)
   const [approval, setApproval] = useState<ApprovalPrompt | null>(null)
+  const [mcpApproval, setMcpApproval] = useState<McpApprovalPrompt | null>(null)
   const [confirm, setConfirm] = useState<ConfirmPrompt | null>(null)
+  // body scroll position inside the active approval/confirm prompt
+  const [promptScrollOffset, setPromptScrollOffset] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [runElapsed, setRunElapsed] = useState<string | null>(null)
   const [sessionLabelId, setSessionLabelId] = useState<string | null>(
@@ -233,16 +280,22 @@ export default function App({
 
   const agentRef = useRef<Agent | null>(agent)
   const previousLineCountRef = useRef(0)
-  const disposedAgentsRef = useRef(new WeakSet<Agent>())
+  // per-agent cleanup promises so repeated disposal joins the same completion
+  const agentCleanupsRef = useRef(new WeakMap<Agent, Promise<void>>())
+  // still-running cleanup for retired agents — shutdown awaits all of these
+  const pendingCleanupsRef = useRef(new Set<Promise<void>>())
   const runStartTimeRef = useRef<number | null>(null)
   // per-call start times keyed by callId — parallel batches run several at once
   const toolStartTimesRef = useRef<Map<number, number>>(new Map())
   const runAbortRef = useRef<AbortController | null>(null)
   const shutdownCoordinatorRef = useRef<(() => Promise<void>) | null>(null)
-  // live permission mode — read at approval time so a mid-run toggle takes effect
+  // live permission mode — read at approval time; toggles are locked while a
+  // turn runs, so this serves runs started in yolo mode
   const yoloRef = useRef(yolo)
   const maxOffsetRef = useRef(0)
   const chatViewportHeightRef = useRef(6)
+  // prompt viewport geometry for the modal scroll keys
+  const promptViewportRef = useRef({ maxOffset: 0, pageSize: 1 })
 
   const isRunning = runStage !== 'idle'
   const currentCwd = agent?.getCwd() ?? getCwd()
@@ -250,36 +303,58 @@ export default function App({
   const pickerVisible = pickerState !== 'hidden'
   const paletteVisible = paletteOpen && !pickerVisible && Boolean(agent)
 
-  const approvalBoxLines = useMemo(
-    () =>
-      approval
-        ? buildApprovalBox(
-            approval.toolName,
-            approval.args,
-            transcriptWidth,
-            approval.diff,
-            approval.previewMessage
-          )
-        : [],
-    [approval, transcriptWidth]
-  )
-  const confirmBoxLines = useMemo(
-    () =>
-      confirm
-        ? buildConfirmBox(confirm.message, transcriptWidth, 'doom loop')
-        : [],
-    [confirm, transcriptWidth]
-  )
+  // one active prompt descriptor: MCP launch trust wins, then tool approval,
+  // then the doom-loop confirm
+  const activePromptContent = useMemo(() =>
+  {
+    if (mcpApproval)
+    {
+      return buildMcpApprovalContent(mcpApproval.request, transcriptWidth)
+    }
+    if (approval)
+    {
+      return buildApprovalContent(
+        approval.toolName,
+        approval.args,
+        transcriptWidth,
+        approval.diff,
+        approval.previewMessage,
+        approval.presentation
+      )
+    }
+    if (confirm)
+    {
+      return buildConfirmContent(confirm.message, transcriptWidth, 'doom loop')
+    }
+    return null
+  }, [approval, confirm, mcpApproval, transcriptWidth])
   const todoPanelLines = useMemo(
     () => buildTodoPanel(todos, transcriptWidth),
     [todos, transcriptWidth]
   )
   const headerHeight = 2
-  // either prompt takes over the input row
-  const promptActive = Boolean(approval) || Boolean(confirm)
+  // any modal prompt takes over the input row
+  const promptActive = Boolean(activePromptContent)
   const inputHeight = promptActive || paletteVisible ? 0 : 3
   const statusHeight = 1
-  const promptBoxLines = approval ? approvalBoxLines : confirmBoxLines
+  // bound the prompt so the chat viewport keeps its six-row minimum
+  const maxPromptRows = Math.max(
+    terminalSize.rows - headerHeight - statusHeight - 7,
+    10
+  )
+  const promptRender = useMemo(
+    () =>
+      activePromptContent
+        ? renderPromptBox(
+            activePromptContent,
+            transcriptWidth,
+            maxPromptRows,
+            promptScrollOffset
+          )
+        : null,
+    [activePromptContent, maxPromptRows, promptScrollOffset, transcriptWidth]
+  )
+  const promptBoxLines = promptRender?.lines ?? []
   const approvalHeight = promptActive ? promptBoxLines.length + 1 : 0
   const todoHeight = todoPanelLines.length
   const chatViewportHeight = Math.max(
@@ -363,35 +438,58 @@ export default function App({
   )
   const paddedWelcome = centerLinesVertical(welcomeLines, chatViewportHeight)
 
-  const disposeAgent = useCallback(async (agentInstance: Agent | null) =>
-  {
-    if (!agentInstance || disposedAgentsRef.current.has(agentInstance)) return
+  // dispose an agent exactly once; every caller joins the same tracked promise
+  const disposeAgent = useCallback(
+    (agentInstance: Agent | null): Promise<void> =>
+    {
+      if (!agentInstance) return Promise.resolve()
+      const existing = agentCleanupsRef.current.get(agentInstance)
+      if (existing) return existing
 
-    disposedAgentsRef.current.add(agentInstance)
-    // fold this agent's reliability counters into the persistent per-model
-    // telemetry, but only once a model has produced a turn — skips agents
-    // abandoned in the picker. entries are already grouped per produced model
-    try
-    {
-      if (agentInstance.hasProducedTurn())
+      const cleanup = (async () =>
       {
-        for (const entry of agentInstance.getReliabilityTelemetry())
+        // fold this agent's reliability counters into the persistent per-model
+        // telemetry, but only once a model has produced a turn — skips agents
+        // abandoned in the picker. entries are already grouped per produced model
+        try
         {
-          recordReliability(entry.model, entry.stats)
+          if (agentInstance.hasProducedTurn())
+          {
+            for (const entry of agentInstance.getReliabilityTelemetry())
+            {
+              recordReliability(entry.model, entry.stats)
+            }
+          }
         }
+        catch
+        {
+          // telemetry persistence is non-fatal
+        }
+        // disposal is best-effort teardown — never propagate to joiners
+        await agentInstance.dispose().catch(() => undefined)
+      })()
+
+      agentCleanupsRef.current.set(agentInstance, cleanup)
+      pendingCleanupsRef.current.add(cleanup)
+      const untrack = () =>
+      {
+        pendingCleanupsRef.current.delete(cleanup)
       }
-    }
-    catch
-    {
-      // telemetry persistence is non-fatal
-    }
-    await agentInstance.dispose()
-  }, [])
+      cleanup.then(untrack, untrack)
+      return cleanup
+    },
+    []
+  )
 
   const shutdown = useCallback(() =>
   {
     shutdownCoordinatorRef.current ??= createShutdownCoordinator(
-      () => disposeAgent(agentRef.current),
+      async () =>
+      {
+        // join the current agent & every retired agent's in-flight cleanup
+        await disposeAgent(agentRef.current)
+        await Promise.all([...pendingCleanupsRef.current])
+      },
       () => exit()
     )
 
@@ -481,7 +579,9 @@ export default function App({
       const currentAgent = agentRef.current
       if (currentAgent)
       {
-        void disposeAgent(currentAgent)
+        // serialize the old model unload before the next submit can run
+        setSwitchingModel(true)
+        void disposeAgent(currentAgent).finally(() => setSwitchingModel(false))
       }
 
       // rebuild transcript from saved messages
@@ -493,11 +593,15 @@ export default function App({
       restoreStoreTodos(sanitizeTodos(target.todos))
 
       // create fresh agent w/ restored messages
-      const nextAgent = new Agent(target.meta.model, host, target.meta.cwd, {
+      const nextAgent = buildPrimaryAgent({
+        model: target.meta.model,
+        host,
+        cwd: target.meta.cwd,
         think,
+        mcp: !yoloRef.current,
+        mcpConfig,
+        restored: target,
       })
-      nextAgent.restoreMessages(target.messages)
-      nextAgent.restoreUndoStack(target.undo, target.redo)
 
       // update session tracking
       sessionIdRef.current = target.meta.id
@@ -517,6 +621,7 @@ export default function App({
       disposeAgent,
       fetchContextWindowForAgent,
       host,
+      mcpConfig,
       sessionIdRef,
       sessionMetaRef,
       think,
@@ -575,6 +680,15 @@ export default function App({
     [confirm]
   )
 
+  const resolveMcpApproval = useCallback(
+    (approved: boolean) =>
+    {
+      mcpApproval?.resolve(approved)
+      setMcpApproval(null)
+    },
+    [mcpApproval]
+  )
+
   const abortRun = useCallback(() =>
   {
     const controller = runAbortRef.current
@@ -582,10 +696,11 @@ export default function App({
     {
       controller.abort()
       // dismiss any pending prompts
+      resolveMcpApproval(false)
       resolveApproval(false)
       resolveConfirm(false)
     }
-  }, [resolveApproval, resolveConfirm])
+  }, [resolveApproval, resolveConfirm, resolveMcpApproval])
 
   const activateModel = useCallback(
     (nextModel: string, restoredSession: SessionData | null) =>
@@ -623,19 +738,25 @@ export default function App({
       // no existing agent (or restoring a session) — create a fresh one
       if (existingAgent)
       {
-        void disposeAgent(existingAgent)
+        // serialize the old model unload before the next submit can run
+        setSwitchingModel(true)
+        void disposeAgent(existingAgent).finally(() => setSwitchingModel(false))
       }
 
       setActiveModel(nextModel)
       setContextWindow(0)
 
-      const nextAgent = new Agent(nextModel, host, restoredSession?.meta.cwd, {
+      const nextAgent = buildPrimaryAgent({
+        model: nextModel,
+        host,
+        cwd: restoredSession?.meta.cwd,
         think,
+        mcp: !yoloRef.current,
+        mcpConfig,
+        restored: restoredSession,
       })
       if (restoredSession)
       {
-        nextAgent.restoreMessages(restoredSession.messages)
-        nextAgent.restoreUndoStack(restoredSession.undo, restoredSession.redo)
         setOutput(buildRestoredBlocks(restoredSession.messages))
       }
 
@@ -643,7 +764,14 @@ export default function App({
       setPickerState('hidden')
       fetchContextWindowForAgent(nextAgent)
     },
-    [completeModelSwitch, disposeAgent, fetchContextWindowForAgent, host, think]
+    [
+      completeModelSwitch,
+      disposeAgent,
+      fetchContextWindowForAgent,
+      host,
+      mcpConfig,
+      think,
+    ]
   )
 
   const loadModels = useCallback(async () =>
@@ -712,6 +840,22 @@ export default function App({
   {
     maxOffsetRef.current = maxOffset
   }, [maxOffset])
+
+  useEffect(() =>
+  {
+    promptViewportRef.current = promptRender
+      ? { maxOffset: promptRender.maxOffset, pageSize: promptRender.pageSize }
+      : { maxOffset: 0, pageSize: 1 }
+  }, [promptRender])
+
+  // restart at the top whenever the prompt identity or width changes
+  useEffect(() =>
+  {
+    queueMicrotask(() =>
+    {
+      setPromptScrollOffset(0)
+    })
+  }, [approval, confirm, mcpApproval, transcriptWidth])
 
   useEffect(() =>
   {
@@ -852,6 +996,45 @@ export default function App({
   useInput(
     (ch, key) =>
     {
+      // scroll keys work inside every modal prompt viewport
+      if (mcpApproval || approval || confirm)
+      {
+        const { maxOffset: promptMax, pageSize } = promptViewportRef.current
+        const step = key.pageUp || key.pageDown ? pageSize : 1
+        if (key.upArrow || key.pageUp)
+        {
+          setPromptScrollOffset((current) => Math.max(current - step, 0))
+          return
+        }
+        if (key.downArrow || key.pageDown)
+        {
+          setPromptScrollOffset((current) =>
+            Math.min(current + step, promptMax)
+          )
+          return
+        }
+      }
+
+      if (mcpApproval)
+      {
+        if ((key.ctrl && ch.toLowerCase() === 'c') || key.escape)
+        {
+          abortRun()
+          // the run may already be aborted (orphaned modal) — dismiss anyway
+          resolveMcpApproval(false)
+        }
+        else if (ch === 'y' || ch === 'Y')
+        {
+          resolveMcpApproval(true)
+        }
+        else if (ch === 'n' || ch === 'N')
+        {
+          resolveMcpApproval(false)
+        }
+
+        return
+      }
+
       if (approval)
       {
         if (ch === 'y' || ch === 'Y')
@@ -948,7 +1131,13 @@ export default function App({
         }
       }
     },
-    { isActive: pickerVisible || Boolean(approval) || Boolean(confirm) }
+    {
+      isActive:
+        pickerVisible ||
+        Boolean(mcpApproval) ||
+        Boolean(approval) ||
+        Boolean(confirm),
+    }
   )
 
   // slash-command list & project-file lookup for prompt autocomplete
@@ -961,6 +1150,48 @@ export default function App({
     () => listProjectFiles(currentCwd),
     [currentCwd]
   )
+
+  // single owner of the ask/yolo transition — no-op check, success/failure
+  // output, & error containment for both ctrl+y & /permissions
+  const setPermissionMode = useCallback(async (nextYolo: boolean) =>
+  {
+    if (yoloRef.current === nextYolo)
+    {
+      setOutput((prev) => [
+        ...prev,
+        {
+          type: 'system' as const,
+          content: formatPermissionModeUnchanged(nextYolo),
+        },
+      ])
+      return
+    }
+
+    try
+    {
+      const transition = agentRef.current?.setMcpEnabled(!nextYolo)
+      yoloRef.current = nextYolo
+      setYolo(nextYolo)
+      await transition
+      setOutput((prev) => [
+        ...prev,
+        {
+          type: 'system' as const,
+          content: formatPermissionModeChange(nextYolo),
+        },
+      ])
+    }
+    catch (error)
+    {
+      setOutput((prev) => [
+        ...prev,
+        {
+          type: 'error' as const,
+          content: `Failed to change permission mode: ${toErrorMessage(error)}`,
+        },
+      ])
+    }
+  }, [])
 
   const runSlashCommand = useCallback(
     async (value: string): Promise<boolean> =>
@@ -992,7 +1223,7 @@ export default function App({
         resetTokenUsage,
         reopenModelPicker,
         switchModel,
-        setYolo,
+        setYolo: setPermissionMode,
         exitApp: () =>
         {
           void shutdown()
@@ -1028,6 +1259,7 @@ export default function App({
       resumeSessionById,
       saveCurrentSession,
       sessionLabelId,
+      setPermissionMode,
       shutdown,
       switchModel,
       yolo,
@@ -1125,12 +1357,12 @@ export default function App({
             setRunStage('responding')
             appendText(token)
           },
-          onToolCall(name, args, callId)
+          onToolCall(name, args, callId, presentation)
           {
             stopWaiting()
 
             const pendingBlocks = consumeBufferedBlocks()
-            setRunStage(`tool:${name}`)
+            setRunStage(`tool:${presentation?.label ?? name}`)
             toolStartTimesRef.current.set(callId, Date.now())
 
             setOutput((prev) => [
@@ -1141,10 +1373,11 @@ export default function App({
                 toolName: name,
                 args,
                 callId,
+                display: presentation,
               } satisfies ToolCallBlock,
             ])
           },
-          async onToolApproval(name, args)
+          async onToolApproval(name, args, presentation)
           {
             if (yoloRef.current) return true
 
@@ -1161,8 +1394,17 @@ export default function App({
                 diff: preview?.kind === 'diff' ? preview.diff : undefined,
                 previewMessage:
                   preview?.kind === 'message' ? preview.message : undefined,
+                presentation,
                 resolve,
               })
+            })
+          },
+          onMcpLaunchApproval(request)
+          {
+            stopWaiting()
+            return new Promise<boolean>((resolve) =>
+            {
+              setMcpApproval({ request, resolve })
             })
           },
           onDoomLoop(message)
@@ -1486,19 +1728,33 @@ export default function App({
 
   const onTogglePermissions = useCallback(() =>
   {
-    setYolo((current) =>
+    if (!agent) return
+    if (isRunning || commandRunning || switchingModel || promptActive)
     {
-      const next = !current
+      // deliberate: mid-run MCP enable/disable is unsafe, so say so instead
+      // of silently swallowing the keypress
       setOutput((prev) => [
         ...prev,
         {
           type: 'system' as const,
-          content: formatPermissionModeChange(next),
+          content: formatPermissionModeLocked(),
         },
       ])
-      return next
-    })
-  }, [])
+      return
+    }
+
+    setCommandRunning(true)
+    void setPermissionMode(!yoloRef.current).finally(() =>
+      setCommandRunning(false)
+    )
+  }, [
+    agent,
+    commandRunning,
+    isRunning,
+    promptActive,
+    setPermissionMode,
+    switchingModel,
+  ])
 
   const openPalette = useCallback(() =>
   {
@@ -1652,12 +1908,8 @@ export default function App({
         agent &&
         todoPanelLines.length > 0 && <LineList lines={todoPanelLines} dim />}
 
-      {!pickerVisible && agent && approval && (
-        <LineList lines={approvalBoxLines} />
-      )}
-
-      {!pickerVisible && agent && !approval && confirm && (
-        <LineList lines={confirmBoxLines} />
+      {!pickerVisible && agent && promptActive && (
+        <LineList lines={promptBoxLines} />
       )}
 
       {!pickerVisible && !paletteVisible && agent && !promptActive && (

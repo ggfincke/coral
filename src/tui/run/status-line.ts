@@ -3,6 +3,7 @@
 
 import wrapAnsi from 'wrap-ansi'
 import type { RunStage } from './run-stage.js'
+import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { padEnd, visibleWidth } from '../wrap.js'
 
 // truncate an ANSI-styled string to a visible column budget, preserving codes
@@ -29,7 +30,10 @@ function describeRunStage(stage: RunStage): string
 {
   const label = STAGE_LABELS[stage]
   if (label) return label
-  if (stage.startsWith('tool:')) return `running ${stage.slice(5)}`
+  if (stage.startsWith('tool:'))
+  {
+    return `running ${sanitizeUntrustedText(stage.slice(5))}`
+  }
   return 'ready'
 }
 

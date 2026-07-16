@@ -25,12 +25,13 @@ import { pluralize } from '../../utils/pluralize.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import {
   coralHeader,
+  describePermissionMode,
   formatIndexError,
   formatIndexProgress,
   formatIndexResult,
   formatIndexStart,
   formatManualCompactionResult,
-  formatPermissionModeChange,
+  formatMcpStatus,
   formatPermissionsHelp,
   formatThemeList,
   formatTodoList,
@@ -90,7 +91,8 @@ export interface CommandContext
     signal?: AbortSignal
   ) => BuiltIndexer
   // set the permission mode at runtime
-  setYolo: (yolo: boolean) => void
+  // owns the full transition: no-op check, success/failure output, containment
+  setYolo: (yolo: boolean) => Promise<void>
   // exit the application
   exitApp: () => void
   // resume a session by ID — loads agent & transcript from disk
@@ -262,9 +264,7 @@ const statusCommand: Command = {
     const tokens = ctx.agent.getEstimatedTokens()
     const messages = ctx.agent.getMessageCount()
     const session = ctx.sessionLabelId ?? '(unsaved)'
-    const permissions = ctx.yolo
-      ? 'yolo (auto-approve gated; denies stay blocked)'
-      : 'ask (prompt before writes)'
+    const permissions = describePermissionMode(ctx.yolo)
     const gitBranch = await getGitBranch(cwd)
     const usage = ctx.agent.getTokenUsage()
 
@@ -390,6 +390,19 @@ const statusCommand: Command = {
     }
 
     ctx.pushOutput(systemBlock(lines.join('\n')))
+  },
+}
+
+// ── /mcp ──────────────────────────────────────────────────────────────
+
+const mcpCommand: Command = {
+  name: 'mcp',
+  description: 'Show configured MCP server & tool status',
+  execute(_args, ctx)
+  {
+    ctx.pushOutput(
+      systemBlock(formatMcpStatus(ctx.agent.getMcpStatus(), ctx.yolo))
+    )
   },
 }
 
@@ -532,7 +545,7 @@ const permissionsCommand: Command = {
   name: 'permissions',
   aliases: ['perm', 'perms'],
   description: 'Show or set permission mode (ask / yolo)',
-  execute(args, ctx)
+  async execute(args, ctx)
   {
     if (!args)
     {
@@ -542,20 +555,14 @@ const permissionsCommand: Command = {
 
     const mode = args.trim().toLowerCase()
 
-    if (mode === 'yolo')
-    {
-      ctx.setYolo(true)
-      ctx.pushOutput(systemBlock(formatPermissionModeChange(true)))
-    }
-    else if (mode === 'ask')
-    {
-      ctx.setYolo(false)
-      ctx.pushOutput(systemBlock(formatPermissionModeChange(false)))
-    }
-    else
+    if (mode !== 'yolo' && mode !== 'ask')
     {
       ctx.pushOutput(systemBlock(formatUnknownPermissionMode(mode)))
+      return
     }
+
+    // the App-level transition owner emits the no-op/success/failure output
+    await ctx.setYolo(mode === 'yolo')
   },
 }
 
@@ -1036,6 +1043,7 @@ const commands: Command[] = [
   clearCommand,
   compactCommand,
   statusCommand,
+  mcpCommand,
   modelCommand,
   permissionsCommand,
   verifyCommand,
