@@ -4,7 +4,7 @@
 import { readdirSync } from 'node:fs'
 import { basename } from 'node:path'
 import type { Tool } from '../tools/tool.js'
-import { paramEntries } from '../types/inference.js'
+import { jsonSchemaTypeLabel, paramEntries } from '../types/inference.js'
 import { gatherProjectContext } from './context.js'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
 import {
@@ -25,11 +25,19 @@ function formatTool(tool: Tool): string
     ({ name, schema, required }) =>
     {
       const req = required ? ' (required)' : ' (optional)'
-      const desc = schema.description ? ` — ${schema.description}` : ''
-      return `    - ${name}: ${schema.type}${req}${desc}`
+      const desc =
+        typeof schema === 'object' && schema.description
+          ? ` — ${schema.description}`
+          : ''
+      return `    - ${name}: ${jsonSchemaTypeLabel(schema)}${req}${desc}`
     }
   )
 
+  // zero-parameter tools (common for MCP) get no dangling header
+  if (paramLines.length === 0)
+  {
+    return `- **${tool.name}**: ${tool.description}\n  Parameters: (none)`
+  }
   return `- **${tool.name}**: ${tool.description}\n  Parameters:\n${paramLines.join('\n')}`
 }
 

@@ -4,6 +4,7 @@
 import type { OllamaToolCall } from '../types/inference.js'
 import { tryParseJson } from '../utils/json.js'
 import { isPlainObject } from '../utils/guards.js'
+import { normalizeToolName } from '../utils/tool-name.js'
 
 // injected when a turn ends w/ no tool call, no content, & no thinking
 export const STALL_NUDGE_MESSAGE =
@@ -47,12 +48,6 @@ export function looksLikeAttemptedToolCall(
     if (known.has(normalizeToolName(match[1]!))) return true
   }
   return false
-}
-
-// lowercase & strip separators so Read_File / READFILE match read_file
-export function normalizeToolName(name: string): string
-{
-  return name.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
 // leaked template tokens some models emit around text tool calls

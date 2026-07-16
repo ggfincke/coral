@@ -31,6 +31,18 @@ export interface ToolDisplay
   summarize?(args: Record<string, unknown>): string
 }
 
+// immutable presentation snapshot taken at call emission — carries dynamic
+// (MCP) labels & formatting hints past later tool refreshes w/o a live manager
+export interface ToolCallPresentation
+{
+  label: string
+  // MCP calls render raw pretty-JSON args & MCP approval copy
+  mcp: boolean
+}
+
+export type ToolArgumentValidation =
+  { ok: true; args: Record<string, unknown> } | { ok: false; error: string }
+
 // request-scoped values passed by the agent when a tool runs
 export interface ToolExecutionContext
 {
@@ -54,6 +66,8 @@ export interface Tool
   parallelSafe?: boolean
   // omitted label falls back to the tool name; omitted summarize to compact JSON
   display?: ToolDisplay
+  // override built-in coercion for tools w/ richer input schemas
+  validateArgs?(args: Record<string, unknown>): ToolArgumentValidation
   execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext

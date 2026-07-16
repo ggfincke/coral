@@ -14,6 +14,7 @@ import {
   subagentTools,
   toolToOllamaFormat,
   type Tool,
+  type ToolCallPresentation,
   type ToolExecutionContext,
   type ToolResult,
 } from '../tools/index.js'
@@ -50,12 +51,13 @@ import { totalmem } from 'node:os'
 
 export type { CompactionResult } from './compaction.js'
 import { toError, toErrorMessage } from '../utils/errors.js'
-import { capToolOutput, capErrorMessage } from './tool-output.js'
+import { raceAbort } from '../utils/abort.js'
+import { normalizeToolName } from '../utils/tool-name.js'
+import { capToolOutput, capErrorMessage } from '../tools/tool-output.js'
 import {
   parseToolCallsFromContent,
   STALL_NUDGE_MESSAGE,
   MAX_STALL_NUDGES,
-  normalizeToolName,
   looksLikeAttemptedToolCall,
   REPROMPT_MESSAGE,
   MAX_REPROMPTS,
@@ -90,6 +92,14 @@ import { buildGitContextMessage } from './git-context.js'
 import { requiresWorkspacePathApproval } from '../tools/path-policy.js'
 import { setTodos, type TodoItem } from '../tools/todo-store.js'
 import { TypeScriptCodeIntel, type CodeIntelService } from '../lsp/client.js'
+// type-only: the SDK-backed manager module loads lazily at MCP bootstrap
+import type { McpManager } from '../mcp/manager.js'
+import {
+  configuredMcpStatus,
+  type McpLaunchApprovalRequest,
+  type McpStatus,
+} from '../mcp/types.js'
+import { resolveMcpConfig, type McpConfigResolution } from '../config/mcp.js'
 
 // max messages to keep in history (system prompt + recent context)
 const MAX_HISTORY = 100
@@ -207,37 +217,6 @@ function mergeToolCalls(
   })
 }
 
-// race a promise against an AbortSignal — rejects w/ AbortError if aborted first
-function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T>
-{
-  if (!signal) return promise
-  if (signal.aborted)
-    return Promise.reject(new DOMException('Aborted', 'AbortError'))
-
-  return new Promise<T>((resolve, reject) =>
-  {
-    const onAbort = () =>
-    {
-      reject(new DOMException('Aborted', 'AbortError'))
-    }
-
-    signal.addEventListener('abort', onAbort, { once: true })
-
-    promise.then(
-      (value) =>
-      {
-        signal.removeEventListener('abort', onAbort)
-        resolve(value)
-      },
-      (err) =>
-      {
-        signal.removeEventListener('abort', onAbort)
-        reject(err)
-      }
-    )
-  })
-}
-
 function cloneUndoStack(stack: UndoTurn[]): UndoTurn[]
 {
   return stack.map(cloneUndoTurn)
@@ -290,7 +269,8 @@ export interface AgentEvents
   onToolCall: (
     name: string,
     args: Record<string, unknown>,
-    callId: number
+    callId: number,
+    presentation?: ToolCallPresentation
   ) => void
   onToolResult: (
     name: string,
@@ -302,8 +282,11 @@ export interface AgentEvents
   // return true to approve, false to reject — only called for write/edit/bash
   onToolApproval: (
     name: string,
-    args: Record<string, unknown>
+    args: Record<string, unknown>,
+    presentation?: ToolCallPresentation
   ) => Promise<boolean>
+  // launch trust is separate from per-tool approval & never auto-approved
+  onMcpLaunchApproval?: (request: McpLaunchApprovalRequest) => Promise<boolean>
   // a stuck loop was detected — return true to continue, false to stop the run
   onDoomLoop?: (message: string) => Promise<boolean>
   // result of the post-edit self-check (warn-only — does not alter history)
@@ -334,6 +317,10 @@ interface AgentOptions
   permissions?: ToolPermissions
   // share the interactive Agent's lazy LSP client w/ read-only subagents
   codeIntel?: CodeIntelService
+  // only the primary interactive Agent opts into user-configured MCP servers
+  mcp?: boolean
+  // pin one MCP config snapshot across primary Agent replacements & mode changes
+  mcpConfig?: McpConfigResolution
 }
 
 interface AgentRunOptions
@@ -353,11 +340,13 @@ export class Agent
   private compactionConfig: CompactionConfig
   private thinkMode: boolean | 'low' | 'medium' | 'high'
   // per-instance toolset & its Ollama format — subagents run a restricted subset
-  private tools: Tool[]
-  private ollamaTools: OllamaTool[]
-  // name -> tool for O(1) lookup; the toolset is fixed for the agent's lifetime
-  private toolsByName: Map<string, Tool>
-  private toolNames: string[]
+  private baseTools: Tool[]
+  private mcpTools: Tool[] = []
+  // derived in wireTools(): base tools plus session-dynamic MCP tools
+  private tools!: Tool[]
+  private ollamaTools!: OllamaTool[]
+  private toolsByName!: Map<string, Tool>
+  private toolNames!: string[]
   private maxIterations?: number
   private estimatedTokenCount = 0
   // number of leading messages that stay byte-stable across compaction — the
@@ -393,6 +382,11 @@ export class Agent
   private subagentRunner: SubagentRunner
   private codeIntel: CodeIntelService
   private ownsCodeIntel: boolean
+  private mcpConfig?: McpConfigResolution
+  private mcpEnabled = false
+  private mcpManager?: McpManager
+  private installedMcpManager?: McpManager
+  private disposePromise?: Promise<void>
 
   constructor(
     model: string,
@@ -406,10 +400,8 @@ export class Agent
     this.cwd = resolve(cwd ?? getCwd())
     this.client = new OllamaClient(baseUrl)
     this.thinkMode = options.think ?? true
-    this.tools = options.tools ?? allTools
-    this.ollamaTools = this.tools.map(toolToOllamaFormat)
-    this.toolsByName = new Map(this.tools.map((t) => [t.name, t]))
-    this.toolNames = this.tools.map((t) => t.name)
+    this.baseTools = options.tools ?? allTools
+    this.wireTools()
     this.maxIterations = options.maxIterations
     this.verifyEdits =
       options.verifyEdits ??
@@ -423,6 +415,10 @@ export class Agent
 
     // load per-tool permission policies from config unless a caller injects one
     this.permissions = options.permissions ?? resolvePermissions(this.cwd)
+    this.mcpConfig = options.mcpConfig
+    // manager construction is deferred to run bootstrap so no-MCP sessions &
+    // informational CLI exits never load the SDK dependency graph
+    this.mcpEnabled = Boolean(options.mcp)
 
     // compaction defaults — can be overridden via setCompactionConfig()
     this.compactionConfig = { ...DEFAULT_COMPACTION_CONFIG }
@@ -463,6 +459,7 @@ export class Agent
       numCtx: this.numCtx,
       verifyEdits: false,
       codeIntel: this.codeIntel,
+      mcp: false,
     })
 
     let text = ''
@@ -516,17 +513,63 @@ export class Agent
     return parseVerifyVerdict(result.text, diffs.length)
   }
 
-  // stop client background work & unload the active model
-  async dispose(): Promise<void>
+  // stop client background work & unload the active model — idempotent:
+  // every caller joins the same in-flight cleanup promise
+  dispose(): Promise<void>
+  {
+    this.disposePromise ??= this.disposeInternal()
+    return this.disposePromise
+  }
+
+  private async disposeInternal(): Promise<void>
   {
     try
     {
-      if (this.ownsCodeIntel) await this.codeIntel.dispose()
+      await this.mcpManager?.dispose()
     }
     finally
     {
-      await this.client.unloadModel(this.model)
+      try
+      {
+        if (this.ownsCodeIntel) await this.codeIntel.dispose()
+      }
+      finally
+      {
+        await this.client.unloadModel(this.model)
+      }
     }
+  }
+
+  getMcpStatus(): McpStatus
+  {
+    if (this.mcpManager) return this.mcpManager.getStatus()
+    this.mcpConfig ??= resolveMcpConfig()
+    return configuredMcpStatus(this.mcpConfig)
+  }
+
+  private async createMcpManager(): Promise<McpManager>
+  {
+    this.mcpConfig ??= resolveMcpConfig()
+    const { McpManager } = await import('../mcp/manager.js')
+    return new McpManager({
+      config: this.mcpConfig,
+      permissions: this.permissions,
+      baseTools: this.baseTools,
+    })
+  }
+
+  async setMcpEnabled(enabled: boolean): Promise<void>
+  {
+    this.mcpEnabled = enabled
+    // a fresh manager is created lazily at the next run bootstrap
+    if (enabled) return
+
+    const manager = this.mcpManager
+    this.mcpManager = undefined
+    this.installedMcpManager = undefined
+    this.mcpTools = []
+    this.refreshTools()
+    await manager?.dispose()
   }
 
   // restore conversation from a previous session's messages
@@ -1011,6 +1054,59 @@ export class Agent
   {
     this.undoStack = []
     this.redoStack = []
+  }
+
+  // one derivation of the four tool structures — construct & refresh must agree
+  private wireTools(): void
+  {
+    this.tools = [...this.baseTools, ...this.mcpTools]
+    this.ollamaTools = this.tools.map(toolToOllamaFormat)
+    this.toolsByName = new Map(this.tools.map((tool) => [tool.name, tool]))
+    this.toolNames = this.tools.map((tool) => tool.name)
+  }
+
+  private refreshTools(): void
+  {
+    this.wireTools()
+    this.replaceSystemPrompt(this.buildSystemContent(this.model))
+  }
+
+  // presentation snapshot for dynamic MCP tools — static tools resolve their
+  // display via the TUI registry; snapshots keep historical blocks immutable
+  // across later tool refreshes
+  private mcpPresentation(name: string): ToolCallPresentation | undefined
+  {
+    const tool = this.mcpTools.find((candidate) => candidate.name === name)
+    if (!tool) return undefined
+    return { label: tool.display?.label ?? name, mcp: true }
+  }
+
+  private async initializeMcp(
+    events: AgentEvents,
+    signal?: AbortSignal
+  ): Promise<void>
+  {
+    if (!this.mcpEnabled) return
+    this.mcpManager ??= await this.createMcpManager()
+    // MCP may have been disabled while the module graph loaded
+    if (!this.mcpEnabled)
+    {
+      this.mcpManager = undefined
+      return
+    }
+
+    const manager = this.mcpManager
+    if (this.installedMcpManager === manager) return
+
+    const tools = await manager.initialize({
+      signal,
+      onLaunchApproval: events.onMcpLaunchApproval,
+    })
+    if (this.mcpManager !== manager || signal?.aborted) return
+
+    this.mcpTools = tools
+    this.installedMcpManager = manager
+    this.refreshTools()
   }
 
   // build the system prompt for a model — same wiring at construct & switch
@@ -1506,6 +1602,47 @@ export class Agent
     options: AgentRunOptions = {}
   ): Promise<void>
   {
+    if (signal?.aborted)
+    {
+      this.finishRun(events)
+      return
+    }
+
+    // record the accepted turn before cancelable bootstrap (MCP launch trust,
+    // context resolution) so visible & persisted history cannot diverge when
+    // the user cancels mid-bootstrap — interruption stays explicit via onDone
+    const runStartMessage: OllamaMessage = {
+      role: 'user',
+      content: userMessage,
+    }
+    if (options.displayContent !== undefined)
+    {
+      runStartMessage.displayContent = options.displayContent
+    }
+    this.pushMessage(runStartMessage)
+    this.activeRunStartMessage = runStartMessage
+
+    try
+    {
+      await this.initializeMcp(events, signal)
+    }
+    catch (err)
+    {
+      if (signal?.aborted)
+      {
+        this.finishRun(events)
+        return
+      }
+      events.onError(toError(err))
+      return
+    }
+
+    if (signal?.aborted)
+    {
+      this.finishRun(events)
+      return
+    }
+
     // resolve the num_ctx pin before the first request so every turn (incl. the
     // first) hits the runner w/ the same num_ctx — otherwise turn 1 loads at
     // the Modelfile default & turn 2 reloads, wiping the KV cache. no-op once
@@ -1530,17 +1667,6 @@ export class Agent
       this.finishRun(events)
       return
     }
-
-    const runStartMessage: OllamaMessage = {
-      role: 'user',
-      content: userMessage,
-    }
-    if (options.displayContent !== undefined)
-    {
-      runStartMessage.displayContent = options.displayContent
-    }
-    this.pushMessage(runStartMessage)
-    this.activeRunStartMessage = runStartMessage
 
     // store compaction callbacks so compactIfNeeded() can invoke them
     this.onCompactionCallback = events.onCompaction
@@ -1878,7 +2004,12 @@ export class Agent
 
           for (const item of batch)
           {
-            events.onToolCall(item.name, item.args, item.id)
+            events.onToolCall(
+              item.name,
+              item.args,
+              item.id,
+              this.mcpPresentation(item.name)
+            )
           }
 
           // let parallel-safe tools finish the batch
@@ -1944,7 +2075,12 @@ export class Agent
           name: toolName,
           args: toolArgs,
         }
-        events.onToolCall(toolName, toolArgs, callId)
+        events.onToolCall(
+          toolName,
+          toolArgs,
+          callId,
+          this.mcpPresentation(toolName)
+        )
 
         const tool = this.getOwnTool(toolName)
         if (!tool)
@@ -1997,7 +2133,11 @@ export class Agent
           try
           {
             approved = await raceAbort(
-              events.onToolApproval(toolName, toolArgs),
+              events.onToolApproval(
+                toolName,
+                toolArgs,
+                this.mcpPresentation(toolName)
+              ),
               signal
             )
           }

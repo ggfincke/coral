@@ -6,10 +6,18 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readJsonObjectFile } from '../utils/json.js'
 
-// top-level config schema for .coral.json
-export interface CoralConfig
+interface SharedCoralConfig
 {
   permissions?: Record<string, unknown>
+}
+
+export interface UserCoralConfig extends SharedCoralConfig
+{
+  mcp?: unknown
+}
+
+export interface ProjectCoralConfig extends SharedCoralConfig
+{
   retrieval?: {
     embeddingModel?: string
   }
@@ -23,10 +31,16 @@ export interface CoralConfig
   }
 }
 
-const configCache = new Map<string, { mtimeMs: number; config: CoralConfig }>()
+interface CachedConfig
+{
+  mtimeMs: number
+  config: Record<string, unknown>
+}
+
+const configCache = new Map<string, CachedConfig>()
 
 // load & parse a single config file
-function loadCoralConfigFile(path: string): CoralConfig
+function loadCoralConfigFile(path: string): Record<string, unknown>
 {
   let mtimeMs: number
   try
@@ -41,19 +55,44 @@ function loadCoralConfigFile(path: string): CoralConfig
   const cached = configCache.get(path)
   if (cached && cached.mtimeMs === mtimeMs) return cached.config
 
-  const config = (readJsonObjectFile(path) ?? {}) as CoralConfig
+  const config = readJsonObjectFile(path) ?? {}
   configCache.set(path, { mtimeMs, config })
   return config
 }
 
 // load the user-level ~/.coral.json config
-export function loadUserConfig(): CoralConfig
+export function loadUserConfig(): UserCoralConfig
 {
-  return loadCoralConfigFile(join(homedir(), '.coral.json'))
+  const config = loadCoralConfigFile(join(homedir(), '.coral.json'))
+  const result: UserCoralConfig = {}
+  if (config.permissions !== undefined)
+  {
+    result.permissions = config.permissions as Record<string, unknown>
+  }
+  if (config.mcp !== undefined) result.mcp = config.mcp
+  return result
 }
 
 // load the project-level .coral.json config
-export function loadProjectConfig(cwd: string): CoralConfig
+export function loadProjectConfig(cwd: string): ProjectCoralConfig
 {
-  return loadCoralConfigFile(resolve(cwd, '.coral.json'))
+  const config = loadCoralConfigFile(resolve(cwd, '.coral.json'))
+  const result: ProjectCoralConfig = {}
+  if (config.permissions !== undefined)
+  {
+    result.permissions = config.permissions as Record<string, unknown>
+  }
+  if (config.retrieval !== undefined)
+  {
+    result.retrieval = config.retrieval as ProjectCoralConfig['retrieval']
+  }
+  if (config.context !== undefined)
+  {
+    result.context = config.context as ProjectCoralConfig['context']
+  }
+  if (config.verify !== undefined)
+  {
+    result.verify = config.verify as ProjectCoralConfig['verify']
+  }
+  return result
 }

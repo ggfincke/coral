@@ -51,5 +51,11 @@ export const subagentTools: Tool[] = allTools.filter(
   (t) => t.subagentSafe === true
 )
 
-export type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
+export type {
+  Tool,
+  ToolArgumentValidation,
+  ToolCallPresentation,
+  ToolExecutionContext,
+  ToolResult,
+} from './tool.js'
 export { toolToOllamaFormat } from './tool.js'
