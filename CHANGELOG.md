@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Safe local MCP tools:** add a user-configured stdio MCP client for explicitly
+  allowlisted tools from up to four local server processes and twelve tools
+  total. Tools are namespaced as `mcp__<server>__<tool>`, validated against
+  server JSON Schemas, executed serially, bounded for output and diagnostics,
+  excluded from read-only subagents, and observable through `/mcp`. MCP is
+  available in ask mode only for this initial release.
+
+### Changed
+
+- **Bounded approval prompts:** tool approval, MCP launch-trust, and confirm
+  prompts render inside a terminal-height viewport with pinned title and action
+  rows, `↑`/`↓` and `PgUp`/`PgDn` scrolling, and a position indicator, so long
+  prompts can no longer push their action keys off-screen. Box rows measure
+  fullwidth characters correctly and truncation never splits surrogate pairs.
+- **Permission-toggle feedback:** the ask/yolo transition has one owner shared
+  by `ctrl+y` and `/permissions`; toggling while a turn or command runs now
+  prints a lock notice instead of silently ignoring the keypress, and `/status`
+  states MCP availability per mode.
+
+### Security
+
+- **Fingerprint-gated MCP launch trust:** accept MCP process definitions only
+  from `~/.coral.json`, resolve and disclose the executable before spawn, launch
+  without a shell from a neutral home-directory working directory, forward only
+  the SDK's minimal default environment plus explicitly named variables, and
+  persist approval for the exact alias/executable/args/env-name/tool allowlist
+  fingerprint. Project config may tighten namespaced MCP tool permissions but
+  cannot add servers or loosen user policy.
+
 ## [0.12.0] - 2026-07-10
 
 ### Added

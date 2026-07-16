@@ -105,7 +105,9 @@ view is printed below the per-run report (suppressed under `--json`).
 
 - The harness uses Coral's built-in default tool permissions and **auto-approves
   every gated tool call** so runs are fully headless. User/project permission
-  overrides are ignored to keep reports comparable.
+  overrides are ignored to keep reports comparable. Eval agents do not opt into
+  user-configured MCP servers, so local MCP availability cannot change a
+  benchmark's toolset or results.
 - Each rep executes in a fresh **throwaway temp dir** under the OS temp root
   (`coral-eval-*`, removed after the rep). It is not a sandbox — the agent can
   still run `bash`/`node` on the host, so only point it at models you trust.

@@ -782,7 +782,7 @@ test('Agent stores displayContent without sending it to the model', async () =>
   assert.equal(agent.getMessages()[1]?.displayContent, displayPrompt)
 })
 
-test('Agent.run aborts context resolution before recording a user turn', async () =>
+test('Agent.run keeps the accepted turn when context resolution aborts', async () =>
 {
   const dir = await tempDir('coral-agent-context-abort-')
   const controller = new AbortController()
@@ -817,6 +817,8 @@ test('Agent.run aborts context resolution before recording a user turn', async (
     {
       return []
     },
+    async unloadModel()
+    {},
     chatStream,
   } as TestAgent['client']
 
@@ -826,8 +828,18 @@ test('Agent.run aborts context resolution before recording a user turn', async (
   await run
 
   assert.equal(seenSignal, controller.signal)
-  assert.equal(agent.getMessageCount(), 0)
+  // the accepted turn is recorded before cancelable bootstrap so the visible
+  // & persisted transcripts agree after a cancel; no model request ran
+  assert.equal(agent.getMessageCount(), 1)
+  const lastMessage = agent.getMessages().at(-1)
+  assert.equal(lastMessage?.role, 'user')
+  assert.equal(lastMessage?.content, 'hello')
   assert.equal(streams(), 0)
+
+  // repeated disposal joins one cleanup promise
+  const firstDispose = agent.dispose()
+  assert.equal(agent.dispose(), firstDispose)
+  await firstDispose
 })
 
 test(

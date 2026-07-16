@@ -12,8 +12,10 @@ import {
 } from '../../src/tui/transcript/transcript.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
 import {
-  buildApprovalBox,
-  buildConfirmBox,
+  buildApprovalContent,
+  buildConfirmContent,
+  buildMcpApprovalContent,
+  renderPromptBox,
 } from '../../src/tui/run/approval-box.js'
 import {
   formatAutoCompactionResult,
@@ -336,7 +338,7 @@ test('permission and compaction formatters preserve command copy', () =>
   )
   assert.ok(
     plain(formatPermissionModeChange(true)).includes(
-      'Permission mode → yolo (all tool calls auto-approved)'
+      'Permission mode → yolo (all approval-gated built-in tool calls auto-approved'
     )
   )
   assert.ok(
@@ -366,8 +368,12 @@ test('permission and compaction formatters preserve command copy', () =>
 
 test('approval and confirm boxes share framed prompt rendering', () =>
 {
-  const approval = plain(buildApprovalBox('bash', { command: 'npm test' }, 50))
-  const confirm = plain(buildConfirmBox('Continue anyway?', 50, 'confirm'))
+  const render = (content: ReturnType<typeof buildConfirmContent>) =>
+    plain(renderPromptBox(content, 50, 200, 0).lines)
+  const approval = render(
+    buildApprovalContent('bash', { command: 'npm test' }, 50)
+  )
+  const confirm = render(buildConfirmContent('Continue anyway?', 50, 'confirm'))
 
   assert.ok(approval.includes('tool approval'))
   assert.ok(approval.includes('Allow bash?'))
@@ -377,6 +383,50 @@ test('approval and confirm boxes share framed prompt rendering', () =>
   assert.ok(confirm.includes('confirm'))
   assert.ok(confirm.includes('Continue anyway?'))
   assert.ok(confirm.includes('(y) continue  (n) stop'))
+
+  // full MCP launch identity must stay inspectable before trust persists
+  const mcpContent = buildMcpApprovalContent(
+    {
+      alias: 'fixture',
+      command: 'node',
+      executable: '/usr/local/bin/node',
+      args: ['server.js', '--flag'],
+      launchCwd: '/home/user',
+      passEnv: ['API_TOKEN_NAME'],
+      enabledTools: ['echo'],
+      fingerprint: 'f'.repeat(64),
+    },
+    80
+  )
+  const mcp = plain(renderPromptBox(mcpContent, 80, 200, 0).lines)
+  assert.ok(mcp.includes('Trust & launch MCP server "fixture"?'))
+  assert.ok(mcp.includes('Resolved executable: /usr/local/bin/node'))
+  assert.ok(mcp.includes('Arguments: ["server.js","--flag"]'))
+  assert.ok(mcp.includes('Forwarded environment names: API_TOKEN_NAME'))
+  // the fingerprint hard-wraps across rows; compare w/o frame & whitespace
+  assert.ok(mcp.replace(/[\s│]/g, '').includes(`Fingerprint:${'f'.repeat(64)}`))
+  assert.ok(mcp.includes('(y) trust & launch  (n) reject  (esc) cancel'))
+
+  // a bounded viewport pins title & actions while the body scrolls; the MCP
+  // raw-JSON format follows the presentation snapshot, not name sniffing
+  const long = buildApprovalContent(
+    'mcp__fixture__echo',
+    { text: 'x'.repeat(4_000) },
+    50,
+    undefined,
+    undefined,
+    { label: 'MCP · fixture · echo', mcp: true }
+  )
+  const bounded = renderPromptBox(long, 50, 16, 0)
+  assert.ok(bounded.lines.length <= 16)
+  assert.ok(bounded.maxOffset > 0)
+  const boundedText = plain(bounded.lines)
+  assert.ok(boundedText.includes('Allow mcp__fixture__echo?'))
+  assert.ok(boundedText.includes('(y) approve  (n) reject  (esc) cancel'))
+  assert.match(boundedText, /lines 1-\d+ of \d+/)
+  const scrolled = plain(renderPromptBox(long, 50, 16, bounded.maxOffset).lines)
+  assert.match(scrolled, new RegExp(`of \\d+`))
+  assert.notEqual(boundedText, scrolled)
 })
 
 test('dispatchCommand persists after successful manual compaction', async () =>
