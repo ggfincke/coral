@@ -1,4 +1,4 @@
-// src/agent/tool-output.ts
+// src/tools/tool-output.ts
 // bound tool output before it enters the model context
 
 import {
