@@ -7,14 +7,24 @@ import type {
   EmbedResponse,
   Model,
   ModelInfo,
+  ModelRequestMessage,
+  OllamaTool,
+  OllamaToolCall,
 } from '../types/inference.js'
-import { DEFAULT_OLLAMA_HOST } from './host.js'
+import { DEFAULT_OLLAMA_HOST, normalizeOllamaHost } from './host.js'
+import { OllamaApiError, OllamaModelIdentityError } from './errors.js'
 import { toErrorMessage } from '../utils/errors.js'
 
 const DEFAULT_KEEP_ALIVE = '10m'
 const JSON_HEADERS = { 'Content-Type': 'application/json' } as const
 const THINK_FALLBACK_STATUS = new Set([400, 404, 422])
 type ThinkSupport = 'unknown' | 'supported' | 'unsupported'
+
+export interface OllamaModelArtifact
+{
+  model: string
+  digest: string
+}
 
 type ChatMessage = ChatRequest['messages'][number]
 
@@ -27,9 +37,7 @@ interface JsonRequestOptions
 
 function throwApiError(status: number, body: string): never
 {
-  throw new Error(
-    body ? `Ollama API error: ${status} ${body}` : `Ollama API error: ${status}`
-  )
+  throw new OllamaApiError(status, body)
 }
 
 function formatConnectionError(baseUrl: string, detail: string): string
@@ -37,11 +45,73 @@ function formatConnectionError(baseUrl: string, detail: string): string
   return `Cannot reach Ollama at ${baseUrl}: ${detail}`
 }
 
-function wireMessage(message: ChatMessage): ChatMessage
+function wireToolCall(call: OllamaToolCall): OllamaToolCall
 {
-  const body = { ...message }
-  delete body.displayContent
-  return body
+  const projected: OllamaToolCall = {
+    function: {
+      name: call.function.name,
+      arguments: { ...call.function.arguments },
+    },
+  }
+
+  if (call.type !== undefined) projected.type = call.type
+  if (call.function.index !== undefined)
+  {
+    projected.function.index = call.function.index
+  }
+  return projected
+}
+
+// independently reconstruct the transport shape so persisted/ui-only message
+// fields cannot cross the final fetch boundary through a structural type cast
+function wireMessage(message: ChatMessage): ModelRequestMessage
+{
+  const projected: ModelRequestMessage = {
+    role: message.role,
+    content: message.content,
+  }
+
+  if (message.thinking !== undefined) projected.thinking = message.thinking
+  if (message.tool_name !== undefined) projected.tool_name = message.tool_name
+  if (message.tool_calls !== undefined)
+  {
+    projected.tool_calls = message.tool_calls.map(wireToolCall)
+  }
+  return projected
+}
+
+function wireTool(tool: OllamaTool): OllamaTool
+{
+  return {
+    type: 'function',
+    function: {
+      name: tool.function.name,
+      description: tool.function.description,
+      parameters: tool.function.parameters,
+    },
+  }
+}
+
+// match the shortest names returned by /api/tags while preserving custom hosts
+function modelLookupKey(model: string): string
+{
+  let key = model.trim().replace(/^https?:\/\//i, '')
+  key = key.replace(/^registry\.ollama\.ai\/library\//i, '')
+  key = key.replace(/^library\//i, '')
+
+  if (key.lastIndexOf(':') <= key.lastIndexOf('/'))
+  {
+    key += ':latest'
+  }
+
+  return key.toLowerCase()
+}
+
+function normalizedArtifactDigest(digest: unknown): string | null
+{
+  if (typeof digest !== 'string') return null
+  const match = digest.trim().match(/^(?:sha256:)?([a-f\d]{64})$/i)
+  return match?.[1]?.toLowerCase() ?? null
 }
 
 // read an exact numeric key from an Ollama model_info map
@@ -71,11 +141,14 @@ function scanContextLength(info: Record<string, unknown>): number
 // * Ollama REST API client
 export class OllamaClient
 {
+  private baseUrl: string
   private lastModel: string | null = null
   private thinkSupportByModel = new Map<string, ThinkSupport>()
 
-  constructor(private baseUrl = DEFAULT_OLLAMA_HOST)
-  {}
+  constructor(baseUrl = DEFAULT_OLLAMA_HOST)
+  {
+    this.baseUrl = normalizeOllamaHost(baseUrl)
+  }
 
   // decide whether the server rejected the think field specifically
   private shouldRetryWithoutThink(status: number, errorText: string): boolean
@@ -96,24 +169,30 @@ export class OllamaClient
     // ! never add a `format` field to tool-bearing requests — it silently
     // ! empties tool_calls (ollama#8095)
     // num_ctx is a top-level convenience field — Ollama expects it under options
-    const { num_ctx, num_predict, messages, ...rest } = request
     const body: Record<string, unknown> = {
-      ...rest,
-      messages: messages.map(wireMessage),
+      model: request.model,
+      messages: request.messages.map(wireMessage),
       keep_alive: request.keep_alive ?? DEFAULT_KEEP_ALIVE,
       stream: true,
     }
 
-    if (!includeThink)
+    if (request.tools !== undefined)
     {
-      delete body.think
+      body.tools = request.tools.map(wireTool)
+    }
+    if (includeThink && request.think !== undefined)
+    {
+      body.think = request.think
     }
 
     const options: Record<string, number> = {}
-    if (typeof num_ctx === 'number' && num_ctx > 0) options.num_ctx = num_ctx
-    if (typeof num_predict === 'number' && num_predict > 0)
+    if (typeof request.num_ctx === 'number' && request.num_ctx > 0)
     {
-      options.num_predict = num_predict
+      options.num_ctx = request.num_ctx
+    }
+    if (typeof request.num_predict === 'number' && request.num_predict > 0)
+    {
+      options.num_predict = request.num_predict
     }
     if (Object.keys(options).length > 0) body.options = options
 
@@ -243,14 +322,14 @@ export class OllamaClient
     return retry
   }
 
-  // track the active model so Coral can unload it on shutdown
+  // remember the active model for callers that later choose explicit eviction
   startKeepAlive(model: string): void
   {
     this.lastModel = model
   }
 
-  // unload a tracked model immediately
-  async unloadModel(model = this.lastModel): Promise<void>
+  // explicitly evict a model from the shared Ollama host
+  async evictModel(model = this.lastModel): Promise<void>
   {
     if (!model) return
 
@@ -270,7 +349,7 @@ export class OllamaClient
     }
     catch
     {
-      // swallow — shutdown unload is best-effort
+      // swallow — explicit host eviction is best-effort
     }
     finally
     {
@@ -333,7 +412,73 @@ export class OllamaClient
     const data = await this.jsonRequest<{ models: Model[] }>('/api/tags', {
       signal,
     })
+    if (!data || !Array.isArray(data.models))
+    {
+      throw new OllamaModelIdentityError(
+        'invalid_response',
+        'Ollama /api/tags response did not include a models array'
+      )
+    }
     return data.models
+  }
+
+  // resolve a display label to Ollama's immutable local manifest digest
+  async resolveModelArtifact(
+    model: string,
+    signal?: AbortSignal
+  ): Promise<OllamaModelArtifact>
+  {
+    const requestedKey = modelLookupKey(model)
+    const matches = (await this.listModels(signal)).filter((candidate) =>
+    {
+      if (!candidate || typeof candidate !== 'object') return false
+      const names = [candidate.name, candidate.model].filter(
+        (name): name is string => typeof name === 'string' && name.length > 0
+      )
+      return names.some((name) => modelLookupKey(name) === requestedKey)
+    })
+
+    if (matches.length === 0)
+    {
+      throw new OllamaModelIdentityError(
+        'missing',
+        `Embedding model "${model}" is not listed by Ollama at ${this.baseUrl}; pull it or configure an installed embedding model`
+      )
+    }
+
+    if (matches.length > 1)
+    {
+      throw new OllamaModelIdentityError(
+        'ambiguous',
+        `Embedding model "${model}" matches multiple Ollama /api/tags entries; configure one exact listed model name`
+      )
+    }
+
+    const match = matches[0]!
+    const digest = normalizedArtifactDigest(match.digest)
+    if (!digest)
+    {
+      throw new OllamaModelIdentityError(
+        'invalid_digest',
+        `Embedding model "${model}" has no valid immutable SHA-256 digest in Ollama /api/tags; upgrade Ollama before using persistent semantic retrieval`
+      )
+    }
+
+    const canonicalModel =
+      (typeof match.model === 'string' && match.model.trim()) ||
+      (typeof match.name === 'string' && match.name.trim())
+    if (!canonicalModel)
+    {
+      throw new OllamaModelIdentityError(
+        'invalid_response',
+        `Embedding model "${model}" has no valid name in Ollama /api/tags`
+      )
+    }
+
+    return {
+      model: canonicalModel,
+      digest,
+    }
   }
 
   // generate embeddings through Ollama's /api/embed endpoint
@@ -371,7 +516,9 @@ export class OllamaClient
       if (
         !Array.isArray(embedding) ||
         embedding.length === 0 ||
-        embedding.some((value) => typeof value !== 'number')
+        embedding.some(
+          (value) => typeof value !== 'number' || !Number.isFinite(value)
+        )
       )
       {
         throw new Error('Ollama embed response included an invalid embedding')

@@ -2,16 +2,32 @@
 // tests for semantic retrieval indexing
 
 import { strict as assert } from 'node:assert'
-import { mkdir, symlink, unlink, utimes, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  readFile,
+  stat,
+  symlink,
+  unlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import Database from 'better-sqlite3'
 import { chunkText } from '../../src/retrieval/chunker.js'
+import { createEmbeddingSpace } from '../../src/retrieval/embedding-space.js'
 import { collectIndexableFiles } from '../../src/retrieval/files.js'
 import { ProjectIndexer } from '../../src/retrieval/indexer.js'
-import { SqliteIndexStore } from '../../src/retrieval/sqlite-store.js'
+import {
+  embeddingSpaceDbPath,
+  RETRIEVAL_APPLICATION_ID,
+  RETRIEVAL_SCHEMA_VERSION,
+  SqliteIndexStore,
+} from '../../src/retrieval/sqlite-store.js'
 import {
   CHUNKER_VERSION,
   type Embedder,
+  type EmbeddingSpace,
   type IndexedFile,
 } from '../../src/retrieval/types.js'
 import { makeTempDirPool } from '../helpers/temp.js'
@@ -20,10 +36,24 @@ import { HAS_GIT, initTestRepo } from '../helpers/git.js'
 
 const { tempDir } = makeTempDirPool()
 
+function makeSpace(
+  digestChar = 'a',
+  host = 'http://ollama.test',
+  model = 'test-embed:latest'
+): EmbeddingSpace
+{
+  return createEmbeddingSpace(host, {
+    model,
+    digest: digestChar.repeat(64),
+  })
+}
+
 class KeywordEmbedder implements Embedder
 {
-  model = 'test-embed'
   embeddedTexts: string[] = []
+
+  constructor(public space = makeSpace())
+  {}
 
   async embed(texts: string[]): Promise<number[][]>
   {
@@ -105,7 +135,8 @@ test('ProjectIndexer ranks indexed chunks and reuses current embeddings', async 
     'utf-8'
   )
 
-  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
   const embedder = new KeywordEmbedder()
   const indexer = new ProjectIndexer(dir, embedder, store)
 
@@ -147,7 +178,8 @@ test('ProjectIndexer.ensureIndexed reports progress, stats, and idempotency', as
     'utf-8'
   )
 
-  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
   const embedder = new KeywordEmbedder()
   const indexer = new ProjectIndexer(dir, embedder, store)
 
@@ -292,8 +324,9 @@ test('ProjectIndexer shares concurrent refreshes for a project and model', async
   )
 
   const dbPath = join(dir, 'index.sqlite')
-  const storeA = new SqliteIndexStore(dbPath)
-  const storeB = new SqliteIndexStore(dbPath)
+  const space = makeSpace()
+  const storeA = new SqliteIndexStore(space, dbPath)
+  const storeB = new SqliteIndexStore(space, dbPath)
   const embedderA = new PausedEmbedder()
   const embedderB = new KeywordEmbedder()
   const indexerA = new ProjectIndexer(dir, embedderA, storeA)
@@ -324,13 +357,277 @@ test('ProjectIndexer shares concurrent refreshes for a project and model', async
   }
 })
 
+test('embedding spaces isolate hosts and artifacts while preserving A-B-A reuse', async () =>
+{
+  const dir = await tempDir('coral-retrieval-spaces-')
+  const file = join(dir, 'feature.ts')
+  await writeFile(file, 'export const feature = "first"\n')
+
+  const spaces = [
+    makeSpace('a', 'http://ollama-a.test', 'same-tag:latest'),
+    makeSpace('a', 'http://ollama-b.test', 'same-tag:latest'),
+    makeSpace('b', 'http://ollama-a.test', 'same-tag:latest'),
+  ]
+  assert.equal(new Set(spaces.map((space) => space.id)).size, 3)
+
+  const stores = spaces.map(
+    (space) =>
+      new SqliteIndexStore(space, join(dir, 'cache', `${space.id}.sqlite`))
+  )
+  const embedders = spaces.map((space) => new KeywordEmbedder(space))
+  const indexers = spaces.map(
+    (space, index) => new ProjectIndexer(dir, embedders[index]!, stores[index]!)
+  )
+
+  try
+  {
+    assert.equal((await indexers[0]!.ensureIndexed()).embeddedFiles, 1)
+    assert.equal((await indexers[1]!.ensureIndexed()).embeddedFiles, 1)
+    assert.equal((await indexers[0]!.ensureIndexed()).embeddedFiles, 0)
+    assert.equal((await indexers[2]!.ensureIndexed()).embeddedFiles, 1)
+    assert.equal((await indexers[0]!.ensureIndexed()).embeddedFiles, 0)
+
+    await writeFile(file, 'export const feature = "changed content"\n')
+
+    for (const indexer of indexers)
+    {
+      assert.equal((await indexer.ensureIndexed()).embeddedFiles, 1)
+    }
+    assert.equal((await indexers[0]!.ensureIndexed()).embeddedFiles, 0)
+  }
+  finally
+  {
+    for (const store of stores) store.close()
+  }
+})
+
+test('different embedding spaces never share an in-process refresh', async () =>
+{
+  const dir = await tempDir('coral-retrieval-space-coalescing-')
+  await writeFile(dir + '/feature.ts', 'export const feature = true\n')
+
+  const spaceA = makeSpace('a', 'http://ollama-a.test', 'same-tag:latest')
+  const spaceB = makeSpace('a', 'http://ollama-b.test', 'same-tag:latest')
+  const storeA = new SqliteIndexStore(spaceA, join(dir, 'a.sqlite'))
+  const storeB = new SqliteIndexStore(spaceB, join(dir, 'b.sqlite'))
+  const embedderA = new PausedEmbedder(spaceA)
+  const embedderB = new PausedEmbedder(spaceB)
+  const indexerA = new ProjectIndexer(dir, embedderA, storeA)
+  const indexerB = new ProjectIndexer(dir, embedderB, storeB)
+
+  try
+  {
+    const first = indexerA.ensureIndexed()
+    await embedderA.entered
+    const second = indexerB.ensureIndexed()
+    let timer: NodeJS.Timeout | undefined
+    try
+    {
+      await Promise.race([
+        embedderB.entered,
+        new Promise<never>((_resolve, reject) =>
+        {
+          timer = setTimeout(
+            () => reject(new Error('different embedding space was coalesced')),
+            1_000
+          )
+        }),
+      ])
+    }
+    finally
+    {
+      if (timer) clearTimeout(timer)
+    }
+
+    embedderA.release()
+    embedderB.release()
+    const stats = await Promise.all([first, second])
+    assert.deepEqual(
+      stats.map((value) => value.embeddedFiles),
+      [1, 1]
+    )
+  }
+  finally
+  {
+    embedderA.release()
+    embedderB.release()
+    storeA.close()
+    storeB.close()
+  }
+})
+
+test('ProjectIndexer discards embeddings when source bytes change in flight', async () =>
+{
+  const dir = await tempDir('coral-retrieval-source-race-')
+  const path = join(dir, 'feature.ts')
+  await writeFile(path, 'export const feature = "old auth"\n')
+
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
+  const embedder = new PausedEmbedder(space)
+  const indexer = new ProjectIndexer(dir, embedder, store)
+
+  try
+  {
+    const indexing = indexer.ensureIndexed()
+    await embedder.entered
+    await writeFile(path, 'export const feature = "new session content"\n')
+    embedder.release()
+
+    const stats = await indexing
+    assert.equal(stats.embeddedFiles, 1)
+
+    const hits = await indexer.search('new session', 1)
+    assert.equal(hits[0]?.path, 'feature.ts')
+    assert.match(hits[0]?.text ?? '', /new session content/)
+    assert.doesNotMatch(hits[0]?.text ?? '', /old auth/)
+  }
+  finally
+  {
+    embedder.release()
+    store.close()
+  }
+})
+
+test('SqliteIndexStore rejects stale writes and deletes after a newer commit', async () =>
+{
+  const dir = await tempDir('coral-retrieval-stale-write-')
+  const space = makeSpace()
+  const dbPath = join(dir, 'index.sqlite')
+  const storeA = new SqliteIndexStore(space, dbPath)
+  const storeB = new SqliteIndexStore(space, dbPath)
+  const projectA = storeA.ensureProject(dir)
+  const projectB = storeB.ensureProject(dir)
+  const oldFile: IndexedFile = {
+    path: 'feature.ts',
+    size: 3,
+    mtimeMs: 1,
+    ctimeMs: 1,
+    sha256: 'old-content',
+    chunks: [
+      {
+        chunkIndex: 0,
+        startLine: 1,
+        endLine: 1,
+        text: 'old auth',
+        chunkerVersion: CHUNKER_VERSION,
+        embedding: keywordVector('old auth'),
+      },
+    ],
+  }
+  const newFile: IndexedFile = {
+    ...oldFile,
+    size: 11,
+    mtimeMs: 2,
+    ctimeMs: 2,
+    sha256: 'new-content',
+    chunks: [
+      {
+        ...oldFile.chunks[0]!,
+        text: 'new session',
+        embedding: keywordVector('new session'),
+      },
+    ],
+  }
+
+  try
+  {
+    assert.equal(storeA.upsertFile(projectA, oldFile, undefined), true)
+    const staleSnapshot = storeA.listFiles(projectA, CHUNKER_VERSION)
+    const currentSnapshot = storeB.listFiles(projectB, CHUNKER_VERSION)
+
+    assert.equal(
+      storeB.upsertFile(projectB, newFile, currentSnapshot.get(newFile.path)),
+      true
+    )
+    assert.equal(
+      storeA.upsertFile(projectA, oldFile, staleSnapshot.get(oldFile.path)),
+      false
+    )
+    assert.equal(
+      storeA.deleteMissingFiles(projectA, new Set(), staleSnapshot),
+      false
+    )
+
+    const [hit] = storeA.search(projectA, keywordVector('new session'), 1)
+    assert.equal(hit?.text, 'new session')
+  }
+  finally
+  {
+    storeA.close()
+    storeB.close()
+  }
+})
+
+test('embedding-space paths reject inconsistent or prefixed identities', () =>
+{
+  const space = makeSpace()
+  assert.throws(
+    () => embeddingSpaceDbPath({ ...space, id: 'f'.repeat(64) }),
+    /does not match its host and artifact digest/
+  )
+  assert.throws(
+    () =>
+      embeddingSpaceDbPath({
+        ...space,
+        artifactDigest: `sha256:${space.artifactDigest}`,
+      }),
+    /artifact digest must be a lowercase 64-character SHA-256 hash/
+  )
+})
+
+test('SqliteIndexStore maps exhausted write contention to an actionable error', async () =>
+{
+  const dir = await tempDir('coral-retrieval-busy-')
+  const space = makeSpace()
+  const dbPath = join(dir, 'index.sqlite')
+  const store = new SqliteIndexStore(space, dbPath, { busyTimeoutMs: 25 })
+  const blocker = new Database(dbPath, { timeout: 25 })
+  const projectId = store.ensureProject(dir)
+  const file: IndexedFile = {
+    path: 'feature.ts',
+    size: 7,
+    mtimeMs: 1,
+    ctimeMs: 1,
+    sha256: 'feature',
+    chunks: [
+      {
+        chunkIndex: 0,
+        startLine: 1,
+        endLine: 1,
+        text: 'feature',
+        chunkerVersion: CHUNKER_VERSION,
+        embedding: [1, 0],
+      },
+    ],
+  }
+
+  try
+  {
+    blocker.exec('BEGIN IMMEDIATE')
+    assert.throws(
+      () => store.upsertFile(projectId, file, undefined),
+      /stayed busy or locked for 25ms.*retry the search or index command/
+    )
+    blocker.exec('ROLLBACK')
+    assert.equal(store.upsertFile(projectId, file, undefined), true)
+  }
+  finally
+  {
+    if (blocker.inTransaction) blocker.exec('ROLLBACK')
+    blocker.close()
+    store.close()
+  }
+})
+
 test('ProjectIndexer refreshes changed files', async () =>
 {
   const dir = await tempDir('coral-retrieval-refresh-')
   const file = join(dir, 'feature.ts')
   await writeFile(file, 'export const label = "button";\n', 'utf-8')
 
-  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
   const embedder = new KeywordEmbedder()
   const indexer = new ProjectIndexer(dir, embedder, store)
 
@@ -350,13 +647,67 @@ test('ProjectIndexer refreshes changed files', async () =>
   }
 })
 
+test('ProjectIndexer invalidates equal-size content when mtime is restored', async () =>
+{
+  const dir = await tempDir('coral-retrieval-ctime-')
+  const path = join(dir, 'feature.ts')
+  const alpha = 'export const label = "alpha";\n'
+  const bravo = 'export const label = "bravo";\n'
+  const fixedTime = new Date('2026-01-02T03:04:05.000Z')
+  assert.equal(Buffer.byteLength(alpha), Buffer.byteLength(bravo))
+
+  await writeFile(path, alpha)
+  await utimes(path, fixedTime, fixedTime)
+
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
+  const embedder = new KeywordEmbedder(space)
+  const indexer = new ProjectIndexer(dir, embedder, store)
+
+  try
+  {
+    assert.equal((await indexer.ensureIndexed()).embeddedFiles, 1)
+    const before = await stat(path)
+
+    let after = before
+    for (
+      let attempt = 0;
+      attempt < 20 && after.ctimeMs === before.ctimeMs;
+      attempt++
+    )
+    {
+      await writeFile(path, bravo)
+      await utimes(path, fixedTime, fixedTime)
+      after = await stat(path)
+      if (after.ctimeMs === before.ctimeMs)
+      {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    }
+
+    assert.equal(after.size, before.size)
+    assert.equal(after.mtimeMs, before.mtimeMs)
+    assert.notEqual(after.ctimeMs, before.ctimeMs)
+    assert.equal((await indexer.ensureIndexed()).embeddedFiles, 1)
+
+    const [hit] = await indexer.search('bravo', 1)
+    assert.match(hit?.text ?? '', /bravo/)
+    assert.doesNotMatch(hit?.text ?? '', /alpha/)
+  }
+  finally
+  {
+    store.close()
+  }
+})
+
 test('ProjectIndexer removes files that become empty', async () =>
 {
   const dir = await tempDir('coral-retrieval-empty-')
   const file = join(dir, 'feature.ts')
   await writeFile(file, 'export const login = "auth session";\n', 'utf-8')
 
-  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
   const embedder = new KeywordEmbedder()
   const indexer = new ProjectIndexer(dir, embedder, store)
 
@@ -383,7 +734,8 @@ test('ProjectIndexer removes deleted files from the index', async () =>
   const file = join(dir, 'feature.ts')
   await writeFile(file, 'export const login = "auth session";\n', 'utf-8')
 
-  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
   const embedder = new KeywordEmbedder()
   const indexer = new ProjectIndexer(dir, embedder, store)
 
@@ -407,12 +759,14 @@ test('ProjectIndexer removes deleted files from the index', async () =>
 test('SqliteIndexStore rejects zero-chunk upserts', async () =>
 {
   const dir = await tempDir('coral-retrieval-zero-chunk-')
-  const store = new SqliteIndexStore(join(dir, 'index.sqlite'))
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
   const projectId = store.ensureProject(dir)
   const file: IndexedFile = {
     path: 'empty.ts',
     size: 0,
     mtimeMs: 0,
+    ctimeMs: 0,
     sha256: 'empty',
     chunks: [],
   }
@@ -420,12 +774,139 @@ test('SqliteIndexStore rejects zero-chunk upserts', async () =>
   try
   {
     assert.throws(
-      () => store.upsertFile(projectId, file, 'test-embed'),
+      () => store.upsertFile(projectId, file, undefined),
       /Cannot upsert empty\.ts without chunks/
     )
   }
   finally
   {
     store.close()
+  }
+})
+
+test('versioned space cache preserves legacy data and validates schema metadata', async () =>
+{
+  const home = await tempDir('coral-retrieval-layout-')
+  const previousHome = process.env.CORAL_HOME
+  process.env.CORAL_HOME = home
+  const legacyPath = join(home, 'retrieval', 'index.sqlite')
+  await mkdir(join(home, 'retrieval'), { recursive: true })
+  await writeFile(legacyPath, 'legacy cache sentinel\n')
+
+  const space = makeSpace('c', 'HTTP://OLLAMA.TEST:80/', 'same-tag:latest')
+  const path = embeddingSpaceDbPath(space)
+  let store: SqliteIndexStore | undefined
+
+  try
+  {
+    store = new SqliteIndexStore(space)
+    const projectId = store.ensureProject(home)
+    const file: IndexedFile = {
+      path: 'feature.ts',
+      size: 12,
+      mtimeMs: 1,
+      ctimeMs: 1,
+      sha256: 'content',
+      chunks: [
+        {
+          chunkIndex: 0,
+          startLine: 1,
+          endLine: 1,
+          text: 'feature',
+          chunkerVersion: CHUNKER_VERSION,
+          embedding: [1, 0],
+        },
+      ],
+    }
+    store.upsertFile(projectId, file, undefined)
+    assert.throws(
+      () => store!.search(projectId, [1, 0, 0], 1),
+      /Embedding dimension mismatch/
+    )
+    assert.throws(
+      () => store!.search(projectId, [Number.NaN, 0], 1),
+      /contains invalid numeric values/
+    )
+
+    const connection = (store as unknown as { db: Database.Database }).db
+    assert.equal(connection.pragma('busy_timeout', { simple: true }), 5_000)
+    assert.equal(connection.pragma('foreign_keys', { simple: true }), 1)
+    assert.equal(connection.pragma('journal_mode', { simple: true }), 'wal')
+    assert.equal(connection.pragma('synchronous', { simple: true }), 1)
+    assert.equal(connection.pragma('trusted_schema', { simple: true }), 0)
+    store.close()
+    store = undefined
+
+    assert.throws(
+      () => new SqliteIndexStore(makeSpace('d'), path),
+      /embedding-space metadata does not match/
+    )
+
+    assert.equal(await readFile(legacyPath, 'utf8'), 'legacy cache sentinel\n')
+    assert.match(path, /\/retrieval\/v2\/spaces\/[a-f\d]{64}\.sqlite$/)
+    if (process.platform !== 'win32')
+    {
+      assert.equal((await stat(path)).mode & 0o777, 0o600)
+    }
+
+    const db = new Database(path, { readonly: true })
+    try
+    {
+      assert.equal(
+        db.pragma('application_id', { simple: true }),
+        RETRIEVAL_APPLICATION_ID
+      )
+      assert.equal(
+        db.pragma('user_version', { simple: true }),
+        RETRIEVAL_SCHEMA_VERSION
+      )
+      assert.equal(db.pragma('journal_mode', { simple: true }), 'wal')
+
+      const metadata = db
+        .prepare(
+          'SELECT space_id, normalized_host, artifact_digest, embedding_dimensions FROM cache_metadata'
+        )
+        .get() as {
+        space_id: string
+        normalized_host: string
+        artifact_digest: string
+        embedding_dimensions: number
+      }
+      assert.deepEqual(metadata, {
+        space_id: space.id,
+        normalized_host: 'http://ollama.test',
+        artifact_digest: 'c'.repeat(64),
+        embedding_dimensions: 2,
+      })
+
+      const embeddingColumns = db
+        .pragma('table_info(embeddings)')
+        .map((column: { name: string }) => column.name)
+      assert.deepEqual(embeddingColumns, ['chunk_id', 'dims', 'vector'])
+
+      const fileColumns = db
+        .pragma('table_info(files)')
+        .map((column: { name: string }) => column.name)
+      assert.deepEqual(fileColumns, [
+        'id',
+        'project_id',
+        'path',
+        'size',
+        'mtime_ms',
+        'ctime_ms',
+        'sha256',
+        'indexed_at',
+      ])
+    }
+    finally
+    {
+      db.close()
+    }
+  }
+  finally
+  {
+    store?.close()
+    if (previousHome === undefined) delete process.env.CORAL_HOME
+    else process.env.CORAL_HOME = previousHome
   }
 })

@@ -3,6 +3,7 @@
 
 import { loadProjectConfig } from './project-config.js'
 import { DEFAULT_EMBEDDING_MODEL } from '../retrieval/types.js'
+import { isPlainObject } from '../utils/guards.js'
 
 export interface RetrievalConfig
 {
@@ -11,10 +12,10 @@ export interface RetrievalConfig
 
 export function resolveRetrievalConfig(cwd: string): RetrievalConfig
 {
-  const config = loadProjectConfig(cwd).retrieval
+  const raw = loadProjectConfig(cwd).retrieval
   const configured =
-    typeof config?.embeddingModel === 'string'
-      ? config.embeddingModel.trim()
+    isPlainObject(raw) && typeof raw.embeddingModel === 'string'
+      ? raw.embeddingModel.trim()
       : ''
   const env = process.env.CORAL_EMBEDDING_MODEL?.trim()
 

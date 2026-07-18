@@ -2,7 +2,8 @@
 // project file discovery for semantic indexing
 
 import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { open, readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import {
   iterateProjectFiles,
   type ProjectFile,
@@ -15,12 +16,22 @@ const MAX_PROJECT_FILES = 2_000
 const TEXT_SAMPLE_BYTES = 4_096
 const RETRIEVAL_IGNORED_ENTRIES = ['.coral', '.coral-retrieval']
 
-export type ProjectFileStat = Pick<ProjectFile, 'path' | 'size' | 'mtimeMs'>
+export type ProjectFileStat = Pick<
+  ProjectFile,
+  'path' | 'size' | 'mtimeMs' | 'ctimeMs'
+>
 
 export interface CollectedFiles
 {
   changed: SourceFile[]
   unchangedPaths: string[]
+}
+
+export interface RevalidatedSourceStat
+{
+  size: number
+  mtimeMs: number
+  ctimeMs: number
 }
 
 function isProbablyText(buffer: Buffer): boolean
@@ -44,6 +55,7 @@ async function readSourceFile(
     path: fileStat.path,
     size: fileStat.size,
     mtimeMs: fileStat.mtimeMs,
+    ctimeMs: fileStat.ctimeMs,
     sha256: createHash('sha256').update(buffer).digest('hex'),
     content: buffer.toString('utf8'),
   }
@@ -79,4 +91,49 @@ export async function collectIndexableFiles(
   }
 
   return { changed, unchangedPaths }
+}
+
+// verify bytes through one file descriptor immediately before persistence
+export async function revalidateSourceFile(
+  cwd: string,
+  source: SourceFile
+): Promise<RevalidatedSourceStat | null>
+{
+  let handle
+  try
+  {
+    handle = await open(resolve(cwd, source.path), 'r')
+    const before = await handle.stat()
+    if (!before.isFile()) return null
+
+    const buffer = await handle.readFile()
+    const after = await handle.stat()
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs ||
+      buffer.length !== after.size
+    )
+    {
+      return null
+    }
+
+    const digest = createHash('sha256').update(buffer).digest('hex')
+    if (digest !== source.sha256) return null
+    return {
+      size: after.size,
+      mtimeMs: after.mtimeMs,
+      ctimeMs: after.ctimeMs,
+    }
+  }
+  catch
+  {
+    return null
+  }
+  finally
+  {
+    await handle?.close()
+  }
 }

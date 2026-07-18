@@ -4,9 +4,17 @@
 export const DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text'
 export const CHUNKER_VERSION = 1
 
+export interface EmbeddingSpace
+{
+  id: string
+  normalizedHost: string
+  artifactDigest: string
+  displayModel: string
+}
+
 export interface Embedder
 {
-  model: string
+  space: EmbeddingSpace
   embed(texts: string[]): Promise<number[][]>
 }
 
@@ -15,6 +23,7 @@ export interface SourceFile
   path: string
   size: number
   mtimeMs: number
+  ctimeMs: number
   sha256: string
   content: string
 }
@@ -38,6 +47,7 @@ export interface IndexedFile
   path: string
   size: number
   mtimeMs: number
+  ctimeMs: number
   sha256: string
   chunks: EmbeddedChunk[]
 }
@@ -72,32 +82,42 @@ export interface IndexedFileStatus
 {
   size: number
   mtimeMs: number
+  ctimeMs: number
   sha256: string
   embeddingsCurrent: boolean
 }
 
 export interface IndexStore
 {
+  space: EmbeddingSpace
   ensureProject(cwd: string): number
   listFiles(
     projectId: number,
-    model: string,
     chunkerVersion: number
   ): Map<string, IndexedFileStatus>
   touchFile(
     projectId: number,
     path: string,
     size: number,
-    mtimeMs: number
-  ): void
-  upsertFile(projectId: number, file: IndexedFile, model: string): void
-  deleteFile(projectId: number, path: string): void
-  deleteMissingFiles(projectId: number, currentPaths: Set<string>): void
-  search(
+    mtimeMs: number,
+    ctimeMs: number,
+    expected: IndexedFileStatus
+  ): boolean
+  upsertFile(
     projectId: number,
-    model: string,
-    queryVector: number[],
-    limit: number
-  ): SearchHit[]
+    file: IndexedFile,
+    expected: IndexedFileStatus | undefined
+  ): boolean
+  deleteFile(
+    projectId: number,
+    path: string,
+    expected: IndexedFileStatus | undefined
+  ): boolean
+  deleteMissingFiles(
+    projectId: number,
+    currentPaths: Set<string>,
+    expectedFiles: Map<string, IndexedFileStatus>
+  ): boolean
+  search(projectId: number, queryVector: number[], limit: number): SearchHit[]
   close?(): void
 }

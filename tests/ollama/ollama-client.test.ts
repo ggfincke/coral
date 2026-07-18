@@ -4,6 +4,8 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { OllamaClient } from '../../src/ollama/client.js'
+import { normalizeOllamaHost } from '../../src/ollama/host.js'
+import type { ChatRequest } from '../../src/types/inference.js'
 import { parseFetchJsonBody, withFetch } from '../helpers/fetch.js'
 
 function buildNdjsonResponse(lines: unknown[]): Response
@@ -16,6 +18,30 @@ function buildNdjsonResponse(lines: unknown[]): Response
     }
   )
 }
+
+test('normalizeOllamaHost canonicalizes identity and rejects unsafe URL parts', () =>
+{
+  assert.equal(
+    normalizeOllamaHost('HTTP://OLLAMA.TEST:80/proxy///'),
+    'http://ollama.test/proxy'
+  )
+  assert.equal(
+    normalizeOllamaHost('https://ollama.test:443/'),
+    'https://ollama.test'
+  )
+  assert.throws(
+    () => normalizeOllamaHost('ftp://ollama.test'),
+    /use http or https/
+  )
+  assert.throws(
+    () => normalizeOllamaHost('http://user:secret@ollama.test'),
+    /cannot include credentials/
+  )
+  assert.throws(
+    () => normalizeOllamaHost('http://ollama.test?tenant=a'),
+    /query string or fragment/
+  )
+})
 
 test('chatStream defaults keep_alive to 10m', async () =>
 {
@@ -60,6 +86,130 @@ test('chatStream defaults keep_alive to 10m', async () =>
       ])
     }
   )
+})
+
+test('chatStream allowlists request, message, tool, & tool-call wire fields', async () =>
+{
+  let requestBody: Record<string, unknown> | undefined
+
+  await withFetch(
+    async (_input, init) =>
+    {
+      requestBody = parseFetchJsonBody(init)
+      return buildNdjsonResponse([
+        { message: { role: 'assistant', content: 'done' }, done: true },
+      ])
+    },
+    async () =>
+    {
+      const client = new OllamaClient('http://localhost:11434')
+      const internalRequest = {
+        model: 'fake-model',
+        messages: [
+          {
+            role: 'user',
+            content: 'captured model content',
+            displayContent: 'clean transcript content',
+            requestedAttachments: ['secret.txt'],
+          },
+          {
+            role: 'assistant',
+            content: '',
+            thinking: 'inspect first',
+            rogueMessageField: 'must not cross',
+            tool_calls: [
+              {
+                type: 'function',
+                rogueCallField: 'must not cross',
+                function: {
+                  index: 0,
+                  name: 'inspect_fixture',
+                  arguments: { path: 'fixture.txt' },
+                  rogueFunctionField: 'must not cross',
+                },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            content: 'fixture result',
+            tool_name: 'inspect_fixture',
+            rogueToolMessageField: 'must not cross',
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            rogueToolField: 'must not cross',
+            function: {
+              name: 'inspect_fixture',
+              description: 'inspect one fixture',
+              parameters: {
+                type: 'object',
+                properties: { path: { type: 'string' } },
+                required: ['path'],
+              },
+              rogueToolFunctionField: 'must not cross',
+            },
+          },
+        ],
+        think: 'low',
+        num_ctx: 8_192,
+        num_predict: 1_024,
+        rogueRequestField: 'must not cross',
+      } as unknown as ChatRequest
+
+      for await (const _chunk of client.chatStream(internalRequest))
+      {
+        void _chunk
+      }
+    }
+  )
+
+  assert.deepEqual(requestBody, {
+    model: 'fake-model',
+    messages: [
+      { role: 'user', content: 'captured model content' },
+      {
+        role: 'assistant',
+        content: '',
+        thinking: 'inspect first',
+        tool_calls: [
+          {
+            type: 'function',
+            function: {
+              index: 0,
+              name: 'inspect_fixture',
+              arguments: { path: 'fixture.txt' },
+            },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: 'fixture result',
+        tool_name: 'inspect_fixture',
+      },
+    ],
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'inspect_fixture',
+          description: 'inspect one fixture',
+          parameters: {
+            type: 'object',
+            properties: { path: { type: 'string' } },
+            required: ['path'],
+          },
+        },
+      },
+    ],
+    think: 'low',
+    keep_alive: '10m',
+    stream: true,
+    options: { num_ctx: 8_192, num_predict: 1_024 },
+  })
 })
 
 test('chatStream nests num_ctx and num_predict under options', async () =>
@@ -237,7 +387,7 @@ test('think fallback is tracked per model', async () =>
   )
 })
 
-test('unloadModel sends keep_alive 0 for immediate shutdown', async () =>
+test('evictModel explicitly sends host-global keep_alive 0', async () =>
 {
   const requests: unknown[] = []
 
@@ -252,7 +402,7 @@ test('unloadModel sends keep_alive 0 for immediate shutdown', async () =>
       const client = new OllamaClient('http://localhost:11434')
       client.startKeepAlive('fake-model')
 
-      await client.unloadModel()
+      await client.evictModel()
 
       assert.deepEqual(requests, [
         {
@@ -369,6 +519,89 @@ test('metadata requests pass the abort signal to fetch', async () =>
       await client.listModels(controller.signal)
 
       assert.deepEqual(seenSignals, [controller.signal, controller.signal])
+    }
+  )
+})
+
+test('resolveModelArtifact uses the exact /api/tags manifest digest', async () =>
+{
+  await withFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          models: [
+            {
+              name: 'nomic-embed-text:latest',
+              model: 'nomic-embed-text:latest',
+              size: 1,
+              modified_at: '',
+              digest: 'A'.repeat(64),
+            },
+          ],
+        }),
+        { headers: { 'Content-Type': 'application/json' } }
+      ),
+    async () =>
+    {
+      const client = new OllamaClient('HTTP://OLLAMA.TEST:80/')
+      assert.deepEqual(await client.resolveModelArtifact('nomic-embed-text'), {
+        model: 'nomic-embed-text:latest',
+        digest: 'a'.repeat(64),
+      })
+    }
+  )
+})
+
+test('resolveModelArtifact rejects missing, malformed, and ambiguous identities', async () =>
+{
+  const responses = [
+    { models: [] },
+    {
+      models: [
+        {
+          name: 'embed:latest',
+          model: 'embed:latest',
+          digest: 'mutable-tag',
+        },
+      ],
+    },
+    {
+      models: [
+        {
+          name: 'embed:latest',
+          model: 'embed:latest',
+          digest: 'a'.repeat(64),
+        },
+        {
+          name: 'EMBED:latest',
+          model: 'EMBED:latest',
+          digest: 'b'.repeat(64),
+        },
+      ],
+    },
+  ]
+  let responseIndex = 0
+
+  await withFetch(
+    async () =>
+      new Response(JSON.stringify(responses[responseIndex++]!), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    async () =>
+    {
+      const client = new OllamaClient('http://ollama.test')
+      await assert.rejects(
+        () => client.resolveModelArtifact('embed'),
+        /is not listed/
+      )
+      await assert.rejects(
+        () => client.resolveModelArtifact('embed'),
+        /no valid immutable SHA-256 digest/
+      )
+      await assert.rejects(
+        () => client.resolveModelArtifact('embed'),
+        /matches multiple/
+      )
     }
   )
 })
