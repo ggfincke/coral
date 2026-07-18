@@ -70,7 +70,11 @@ async function fixturePid(path: string): Promise<number>
   const deadline = Date.now() + 2_000
   while (Date.now() < deadline)
   {
-    if (existsSync(path)) return Number(await readFile(path, 'utf8'))
+    if (existsSync(path))
+    {
+      const pid = Number((await readFile(path, 'utf8')).trim())
+      if (Number.isInteger(pid) && pid > 0) return pid
+    }
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   assert.fail('MCP fixture did not record its pid')
@@ -276,8 +280,6 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
     },
     { mcp: true, mcpConfig, numCtx: 8_192 }
   )
-  agent.client.unloadModel = async () => undefined
-
   let launchApprovals = 0
   let approvalCheckedBeforeSpawn = false
   const approvalLabels: string[] = []
@@ -508,7 +510,6 @@ test('MCP abort retires the server and disposal leaves no child process', async 
     [[{ message: { role: 'assistant', content: 'done' }, done: true }]],
     { mcp: true, mcpConfig: lazyConfig, numCtx: 8_192 }
   )
-  lazyAgent.client.unloadModel = async () => undefined
   const lazyRun = lazyAgent.run(
     'start MCP',
     makeAgentEvents({

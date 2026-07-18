@@ -2,11 +2,11 @@
 // tests for session persistence
 
 import { strict as assert } from 'node:assert'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, beforeEach, test } from 'node:test'
 import type { OllamaMessage } from '../../src/types/inference.js'
-import type { TodoItem } from '../../src/tools/todo-store.js'
+import type { TodoItem } from '../../src/types/todo.js'
 import type { UndoTurn } from '../../src/types/undo.js'
 import {
   MAX_UNDO_TURNS,
@@ -22,6 +22,14 @@ import {
   type SessionMeta,
 } from '../../src/session/store.js'
 import { resolveResumeSessionFromCandidates } from '../../src/session/resume.js'
+import { toModelRequestMessage } from '../../src/agent/request-budget.js'
+import { attachmentReportFromMaterialization } from '../../src/agent/attachments.js'
+import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
+import {
+  MAX_ATTACHMENT_OMITTED_OVER_BUDGET,
+  MAX_ATTACHMENT_REPORT_PATH_CHARS,
+} from '../../src/types/attachments.js'
+import { makeFakeAgent } from '../helpers/agent-harness.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import { makeSessionData, makeSessionMeta } from '../helpers/session.js'
@@ -66,6 +74,122 @@ test('createSession and loadSession round-trip conversation state', () =>
   assert.equal(loaded.messages[3]!.tool_name, 'list_files')
 })
 
+test('attachment reports survive session resume and redo but stay off the wire', async () =>
+{
+  const cwd = await tempDir('coral-session-attachments-')
+  const expandedContent =
+    'inspect the files\n\nReferenced files (from @-mentions):\n\n===== large.txt (truncated) =====\npartial bytes'
+  const userMessage: OllamaMessage = {
+    role: 'user',
+    content: expandedContent,
+    displayContent: 'inspect @large.txt @binary.dat',
+    attachmentReport: {
+      attached: [{ path: 'large.txt', truncated: true }],
+      skipped: [{ path: 'binary.dat', reason: 'binary' }],
+      omittedOverBudget: 2,
+    },
+  }
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System' },
+    userMessage,
+    { role: 'assistant', content: 'Reviewed.' },
+  ]
+  const undo: UndoTurn = {
+    startIndex: 1,
+    endIndex: 3,
+    userMessage: expandedContent,
+    messages: messages.slice(1),
+    changes: [],
+  }
+  const meta = createSession('test-model', cwd, messages, [], [undo])
+  const loaded = loadSession(meta.id)
+
+  assert.ok(loaded)
+  assert.deepEqual(
+    loaded.messages[1]?.attachmentReport,
+    userMessage.attachmentReport
+  )
+  const resumed = makeFakeAgent(cwd, [[]]).agent
+  resumed.restoreMessages(loaded.messages)
+  resumed.restoreUndoStack(loaded.undo, loaded.redo)
+  assert.equal((await resumed.undoLastTurn()).ok, true)
+  assert.equal((await resumed.redoLastTurn()).ok, true)
+
+  const restoredMessages = resumed.getMessages()
+  assert.deepEqual(buildRestoredBlocks(restoredMessages), [
+    { type: 'user', content: 'inspect @large.txt @binary.dat' },
+    {
+      type: 'system',
+      content:
+        'Truncated to fit context: large.txt; skipped @-mention: binary.dat (binary); 2 additional @-mentions skipped (over budget)',
+    },
+    { type: 'assistant', content: 'Reviewed.' },
+  ])
+
+  const restoredUser = restoredMessages[1]!
+  const projected = toModelRequestMessage(restoredUser)
+  assert.equal(projected.content, expandedContent)
+  assert.equal('displayContent' in projected, false)
+  assert.equal('attachmentReport' in projected, false)
+
+  const oversizedPath = `${'x'.repeat(
+    MAX_ATTACHMENT_REPORT_PATH_CHARS - 2
+  )}🙂tail`
+  const boundedReport = attachmentReportFromMaterialization({
+    context: null,
+    attached: [{ path: oversizedPath, truncated: true }],
+    skipped: [],
+    usedChars: 0,
+    omittedOverBudget: MAX_ATTACHMENT_OMITTED_OVER_BUDGET + 1,
+  })
+  assert.equal(
+    boundedReport.attached[0]?.path.length,
+    MAX_ATTACHMENT_REPORT_PATH_CHARS - 1
+  )
+  assert.equal(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(
+      boundedReport.attached[0]?.path ?? ''
+    ),
+    false
+  )
+  assert.equal(
+    boundedReport.omittedOverBudget,
+    MAX_ATTACHMENT_OMITTED_OVER_BUDGET
+  )
+  const boundedMeta = createSession('test-model', cwd, [
+    { role: 'system', content: 'System' },
+    {
+      role: 'user',
+      content: 'bounded report',
+      attachmentReport: boundedReport,
+    },
+  ])
+  assert.deepEqual(
+    loadSession(boundedMeta.id)?.messages[1]?.attachmentReport,
+    boundedReport
+  )
+
+  const malformedId = 'bad0cafe'
+  await writeFile(
+    join(process.env.CORAL_HOME!, 'sessions', `${malformedId}.json`),
+    JSON.stringify({
+      meta: makeMeta(malformedId),
+      messages: [
+        {
+          role: 'user',
+          content: 'bad attachment report',
+          attachmentReport: {
+            attached: [],
+            skipped: [{ path: 'bad.txt', reason: 'invented reason' }],
+          },
+        },
+      ],
+    }),
+    'utf-8'
+  )
+  assert.equal(loadSession(malformedId), undefined)
+})
+
 test('saveSession preserves identity and updates stored messages', () =>
 {
   const messages: OllamaMessage[] = [
@@ -86,6 +210,41 @@ test('saveSession preserves identity and updates stored messages', () =>
   assert.equal(updated.title, 'First message')
   assert.ok(loaded)
   assert.equal(loaded.messages.length, 5)
+})
+
+test('same-ID saves replace one complete session snapshot', () =>
+{
+  const initial = createSession('initial-model', '/tmp/initial', [
+    { role: 'system', content: 'Initial system' },
+    { role: 'user', content: 'Initial turn' },
+  ])
+  const first: OllamaMessage[] = [
+    { role: 'system', content: 'First system' },
+    { role: 'user', content: 'First contender' },
+    { role: 'assistant', content: 'A'.repeat(4_096) },
+  ]
+  const second: OllamaMessage[] = [
+    { role: 'system', content: 'Second system' },
+    { role: 'user', content: 'Second contender' },
+    { role: 'assistant', content: 'B'.repeat(8_192) },
+  ]
+
+  saveSession(initial.id, 'first-model', '/tmp/first', first, {
+    createdAt: initial.createdAt,
+    title: 'First title',
+  })
+  saveSession(initial.id, 'second-model', '/tmp/second', second, {
+    createdAt: initial.createdAt,
+    title: 'Second title',
+  })
+
+  const loaded = loadSession(initial.id)
+
+  assert.ok(loaded)
+  assert.equal(loaded.meta.model, 'second-model')
+  assert.equal(loaded.meta.cwd, '/tmp/second')
+  assert.equal(loaded.meta.title, 'Second title')
+  assert.deepEqual(loaded.messages, second)
 })
 
 test('createSession and saveSession round-trip the todo list', () =>
@@ -283,14 +442,10 @@ test(
     const sessionMode =
       (await stat(join(process.env.CORAL_HOME!, 'sessions', `${meta.id}.json`)))
         .mode & 0o777
-    const indexMode =
-      (await stat(join(process.env.CORAL_HOME!, 'sessions', 'index.json')))
-        .mode & 0o777
 
     assert.equal(homeMode, 0o700)
     assert.equal(sessionsMode, 0o700)
     assert.equal(sessionMode, 0o600)
-    assert.equal(indexMode, 0o600)
   }
 )
 
@@ -356,30 +511,33 @@ test('loadSession rejects a session whose messages field is not an array', async
   assert.equal(loadSession('1a2b3c4d'), undefined)
 })
 
-test('loadSessionIndex filters invalid index rows and rebuilds from disk', async () =>
+test('listSessions discovers files missing from a valid legacy index', async () =>
 {
   const dir = join(process.env.CORAL_HOME!, 'sessions')
   await mkdir(dir, { recursive: true })
 
-  const valid = makeMeta('11112222')
-  // valid meta plus a bogus row missing required fields
+  const first = makeMeta('11112222')
+  const second = makeMeta('33334444')
   const index = {
     version: 1,
-    sessions: [valid, { id: '33334444' }],
+    sessions: [first],
   }
-  await writeFile(join(dir, 'index.json'), JSON.stringify(index))
-  // write the matching session file so a rebuild keeps the valid one
-  await writeFile(
-    join(dir, '11112222.json'),
-    JSON.stringify(makeSession(valid))
+  const indexPath = join(dir, 'index.json')
+  const legacyIndex = JSON.stringify(index)
+  await writeFile(indexPath, legacyIndex)
+  await Promise.all(
+    [first, second].map((meta) =>
+      writeFile(join(dir, `${meta.id}.json`), JSON.stringify(makeSession(meta)))
+    )
   )
 
-  const ids = listSessions().map((session) => session.id)
+  const ids = new Set(listSessions().map((session) => session.id))
 
-  assert.deepEqual(ids, ['11112222'])
+  assert.deepEqual(ids, new Set(['11112222', '33334444']))
+  assert.equal(await readFile(indexPath, 'utf-8'), legacyIndex)
 })
 
-test('loadSession and rebuild ignore filename/meta id mismatch', async () =>
+test('loadSession and discovery ignore filename/meta id mismatch', async () =>
 {
   const dir = join(process.env.CORAL_HOME!, 'sessions')
   await mkdir(dir, { recursive: true })
@@ -391,9 +549,6 @@ test('loadSession and rebuild ignore filename/meta id mismatch', async () =>
 
   assert.equal(loadSession('feedface'), undefined)
   assert.equal(loadSession('deadbeef'), undefined)
-
-  // force a rebuild from disk — the mismatched session must not appear
-  await rm(join(dir, 'index.json'), { force: true })
 
   assert.equal(
     listSessions().some((session) => session.id === 'feedface'),
@@ -420,7 +575,7 @@ test('listSessions orders resume targets by newest update', async () =>
   assert.ok(ids.indexOf(second.id) < ids.indexOf(first.id))
 })
 
-test('renameSession updates the index without losing conversation data', () =>
+test('renameSession updates authoritative metadata without losing conversation data', () =>
 {
   const meta = createSession('test-model', '/tmp/preserve', [
     { role: 'system', content: 'System' },
@@ -429,11 +584,11 @@ test('renameSession updates the index without losing conversation data', () =>
   ])
 
   const renamed = renameSession(meta.id, 'New name')
-  const indexed = listSessions().find((session) => session.id === meta.id)
+  const discovered = listSessions().find((session) => session.id === meta.id)
   const loaded = loadSession(meta.id)
 
   assert.ok(renamed)
-  assert.equal(indexed?.title, 'New name')
+  assert.equal(discovered?.title, 'New name')
   assert.equal(renamed.createdAt, meta.createdAt)
   assert.ok(loaded)
   assert.equal(loaded.messages.length, 3)

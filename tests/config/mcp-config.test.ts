@@ -2,7 +2,7 @@
 // MCP launch config & trust boundary integration test
 
 import { strict as assert } from 'node:assert'
-import { stat, writeFile } from 'node:fs/promises'
+import { stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -11,6 +11,7 @@ import { defaultToolPermissions } from '../../src/config/permissions.js'
 import { loadProjectConfig } from '../../src/config/project-config.js'
 import { McpManager } from '../../src/mcp/manager.js'
 import {
+  fingerprintMcpLaunch,
   isMcpLaunchTrusted,
   trustMcpLaunch,
   type McpLaunchDescriptor,
@@ -49,7 +50,9 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
 
   const projectConfig = loadProjectConfig(workspace)
   assert.equal('mcp' in projectConfig, false)
-  assert.equal(projectConfig.permissions?.mcp__github__get_me, 'always_deny')
+  assert.deepEqual(projectConfig.permissions, {
+    mcp__github__get_me: 'always_deny',
+  })
 
   const resolved = parseMcpConfig({
     servers: {
@@ -111,7 +114,9 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
 
   if (process.platform !== 'win32')
   {
-    const info = await stat(join(coralHome, 'mcp-trust.json'))
+    const info = await stat(
+      join(coralHome, 'mcp-trust.d', `${descriptor.alias}.json`)
+    )
     assert.equal(info.mode & 0o777, 0o600)
   }
 
@@ -147,4 +152,76 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
   assert.match(deniedStatus?.message ?? '', /denied by permission policy/)
   assert.equal(deniedStatus?.executable, undefined)
   await deniedManager.dispose()
+})
+
+test('MCP config reports malformed raw section shapes', () =>
+{
+  const resolved = parseMcpConfig([])
+
+  assert.deepEqual(resolved.servers, [])
+  assert.deepEqual(resolved.issues, [
+    { message: 'mcp.servers must be an object' },
+  ])
+})
+
+test('MCP trust sidecars preserve legacy aliases and fail closed when invalid', async () =>
+{
+  const coralHome = await tempDir('coral-mcp-home-')
+  process.env.CORAL_HOME = coralHome
+
+  const legacy: McpLaunchDescriptor = {
+    alias: 'legacy',
+    command: 'node',
+    executable: '/usr/local/bin/node',
+    args: ['legacy.js'],
+    launchCwd: homedir(),
+    passEnv: [],
+    enabledTools: ['echo'],
+  }
+  const current: McpLaunchDescriptor = {
+    ...legacy,
+    alias: 'current',
+    args: ['current.js'],
+  }
+  const dangling: McpLaunchDescriptor = {
+    ...legacy,
+    alias: 'dangling',
+    args: ['dangling.js'],
+  }
+  await writeFile(
+    join(coralHome, 'mcp-trust.json'),
+    JSON.stringify({
+      version: 1,
+      servers: {
+        legacy: {
+          fingerprint: fingerprintMcpLaunch(legacy),
+          approvedAt: '2026-07-17T00:00:00.000Z',
+        },
+        dangling: {
+          fingerprint: fingerprintMcpLaunch(dangling),
+          approvedAt: '2026-07-17T00:00:00.000Z',
+        },
+      },
+    }),
+    'utf-8'
+  )
+
+  trustMcpLaunch(current)
+
+  assert.equal(isMcpLaunchTrusted(legacy), true)
+  assert.equal(isMcpLaunchTrusted(current), true)
+  assert.equal(isMcpLaunchTrusted(dangling), true)
+
+  const legacySidecar = join(coralHome, 'mcp-trust.d', 'legacy.json')
+  await writeFile(legacySidecar, '{', 'utf-8')
+
+  assert.equal(isMcpLaunchTrusted(legacy), false)
+  assert.equal(isMcpLaunchTrusted(current), true)
+
+  if (process.platform !== 'win32')
+  {
+    const danglingSidecar = join(coralHome, 'mcp-trust.d', 'dangling.json')
+    await symlink('missing-trust-record.json', danglingSidecar)
+    assert.equal(isMcpLaunchTrusted(dangling), false)
+  }
 })

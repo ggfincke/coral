@@ -1,7 +1,13 @@
 // src/telemetry/store.ts
-// persist per-model reliability telemetry across sessions (~/.coral/telemetry.json)
+// persist per-model reliability telemetry as a legacy baseline + immutable events
 
-import type { ReliabilityStats } from '../types/inference.js'
+import { randomUUID } from 'node:crypto'
+import { readdirSync } from 'node:fs'
+import { basename, dirname, extname, join } from 'node:path'
+import {
+  makeReliabilityStats,
+  type ReliabilityStats,
+} from '../types/inference.js'
 import { coralHomePath } from '../utils/coral-home.js'
 import { isPlainObject } from '../utils/guards.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
@@ -17,6 +23,15 @@ interface ModelTelemetry
   firstSeen: string
   // ISO timestamp of the most recent fold
   updatedAt: string
+}
+
+interface TelemetryEvent
+{
+  version: number
+  id: string
+  model: string
+  reliability: ReliabilityStats
+  recordedAt: string
 }
 
 export interface TelemetryStore
@@ -37,6 +52,13 @@ const RELIABILITY_LABELS: Record<keyof ReliabilityStats, string> = {
   verifyReprompts: 'verify fixes',
 }
 
+const TELEMETRY_EVENT_VERSION = 1
+const TELEMETRY_EVENT_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const RELIABILITY_KEYS = Object.keys(
+  makeReliabilityStats()
+) as (keyof ReliabilityStats)[]
+
 function telemetryPath(): string
 {
   return coralHomePath('telemetry.json')
@@ -51,7 +73,155 @@ export function evalTelemetryPath(): string
 
 function emptyStore(): TelemetryStore
 {
-  return { models: {} }
+  return {
+    models: Object.create(null) as Record<string, ModelTelemetry>,
+  }
+}
+
+function telemetryEventsDir(path: string): string
+{
+  const extension = extname(path)
+  const stem =
+    extension === '.json' ? basename(path, extension) : basename(path)
+  return join(dirname(path), `${stem}.d`)
+}
+
+function readReliability(
+  value: unknown,
+  strict: boolean
+): ReliabilityStats | undefined
+{
+  if (!isPlainObject(value)) return undefined
+
+  const stats = makeReliabilityStats()
+  for (const key of RELIABILITY_KEYS)
+  {
+    const present = Object.hasOwn(value, key)
+    const raw = present ? value[key] : undefined
+    if (
+      strict &&
+      present &&
+      (typeof raw !== 'number' || !Number.isInteger(raw) || Number(raw) < 0)
+    )
+    {
+      return undefined
+    }
+    const count = Number(raw)
+    stats[key] = Number.isFinite(count) && count >= 0 ? count : 0
+  }
+  return stats
+}
+
+function isIsoTimestamp(value: unknown): value is string
+{
+  if (typeof value !== 'string') return false
+  const timestamp = Date.parse(value)
+  return (
+    Number.isFinite(timestamp) && new Date(timestamp).toISOString() === value
+  )
+}
+
+function readModelTelemetry(value: unknown): ModelTelemetry | undefined
+{
+  if (!isPlainObject(value)) return undefined
+  const reliability = readReliability(value.reliability, false)
+  if (!reliability) return undefined
+  if (!Number.isInteger(value.sessions) || Number(value.sessions) < 0)
+  {
+    return undefined
+  }
+  if (typeof value.firstSeen !== 'string') return undefined
+  if (typeof value.updatedAt !== 'string') return undefined
+  return {
+    reliability,
+    sessions: Number(value.sessions),
+    firstSeen: value.firstSeen,
+    updatedAt: value.updatedAt,
+  }
+}
+
+function loadLegacyTelemetry(path: string): TelemetryStore
+{
+  const raw = readJsonObjectFile(path)
+  if (!raw || !isPlainObject(raw.models)) return emptyStore()
+
+  const models: Record<string, ModelTelemetry> = Object.create(null)
+  for (const [model, value] of Object.entries(raw.models))
+  {
+    const record = readModelTelemetry(value)
+    if (record) models[model] = record
+  }
+  return { models }
+}
+
+function isTelemetryEvent(value: unknown): value is TelemetryEvent
+{
+  return (
+    isPlainObject(value) &&
+    value.version === TELEMETRY_EVENT_VERSION &&
+    typeof value.id === 'string' &&
+    TELEMETRY_EVENT_ID_PATTERN.test(value.id) &&
+    typeof value.model === 'string' &&
+    value.model.length > 0 &&
+    isIsoTimestamp(value.recordedAt) &&
+    readReliability(value.reliability, true) !== undefined
+  )
+}
+
+function loadTelemetryEvents(path: string): TelemetryEvent[]
+{
+  const dir = telemetryEventsDir(path)
+  let files: string[]
+  try
+  {
+    files = readdirSync(dir).sort()
+  }
+  catch
+  {
+    return []
+  }
+
+  const seen = new Set<string>()
+  const events: TelemetryEvent[] = []
+  for (const file of files)
+  {
+    if (!file.endsWith('.json')) continue
+    const id = file.slice(0, -'.json'.length)
+    if (!TELEMETRY_EVENT_ID_PATTERN.test(id)) continue
+
+    const value = readJsonObjectFile(join(dir, file))
+    if (!isTelemetryEvent(value) || value.id !== id || seen.has(value.id))
+    {
+      continue
+    }
+    const reliability = readReliability(value.reliability, true)
+    if (!reliability) continue
+    seen.add(value.id)
+    events.push({ ...value, reliability })
+  }
+  return events
+}
+
+function mergeTelemetryEvent(
+  store: TelemetryStore,
+  event: TelemetryEvent
+): void
+{
+  const existing = Object.hasOwn(store.models, event.model)
+    ? store.models[event.model]
+    : undefined
+  store.models[event.model] = {
+    reliability: addReliability(existing?.reliability, event.reliability),
+    sessions: (existing?.sessions ?? 0) + 1,
+    firstSeen:
+      existing && existing.firstSeen.localeCompare(event.recordedAt) <= 0
+        ? existing.firstSeen
+        : event.recordedAt,
+    updatedAt:
+      existing && existing.updatedAt.localeCompare(event.recordedAt) >= 0
+        ? existing.updatedAt
+        : event.recordedAt,
+  }
 }
 
 // element-wise sum of two counter sets. keys come from the live `add` stats so
@@ -79,30 +249,37 @@ export function foldReliability(
   now: string
 ): TelemetryStore
 {
-  const existing = store.models[model]
+  const existing = Object.hasOwn(store.models, model)
+    ? store.models[model]
+    : undefined
   const record: ModelTelemetry = {
     reliability: addReliability(existing?.reliability, stats),
     sessions: (existing?.sessions ?? 0) + 1,
     firstSeen: existing?.firstSeen ?? now,
     updatedAt: now,
   }
-  return {
-    models: { ...store.models, [model]: record },
+  const models: Record<string, ModelTelemetry> = Object.create(null)
+  for (const [name, value] of Object.entries(store.models))
+  {
+    models[name] = value
   }
+  models[model] = record
+  return { models }
 }
 
 // load the store, returning an empty store when absent or malformed
 export function loadTelemetry(path = telemetryPath()): TelemetryStore
 {
-  const raw = readJsonObjectFile(path)
-  if (!raw || !isPlainObject(raw.models)) return emptyStore()
-  return {
-    models: raw.models as Record<string, ModelTelemetry>,
+  const store = loadLegacyTelemetry(path)
+  for (const event of loadTelemetryEvents(path))
+  {
+    mergeTelemetryEvent(store, event)
   }
+  return store
 }
 
-// fold a session's final stats into the on-disk store. `now` & `path` are
-// injectable for tests; defaults hit the wall clock & ~/.coral
+// persist one agent lifetime as a uniquely named immutable event. the legacy
+// snapshot remains a read-only baseline so cutover retries cannot copy it twice
 export function recordReliability(
   model: string,
   stats: ReliabilityStats,
@@ -110,9 +287,25 @@ export function recordReliability(
   path: string = telemetryPath()
 ): TelemetryStore
 {
-  const next = foldReliability(loadTelemetry(path), model, stats, now)
-  writeJsonFile(path, next)
-  return next
+  if (!model || !isIsoTimestamp(now))
+  {
+    throw new Error('Telemetry events require a model and ISO timestamp')
+  }
+  const id = randomUUID()
+  const reliability = readReliability(stats, true)
+  if (!reliability)
+  {
+    throw new Error('Reliability stats must be non-negative integer counters')
+  }
+  const event: TelemetryEvent = {
+    version: TELEMETRY_EVENT_VERSION,
+    id,
+    model,
+    reliability,
+    recordedAt: now,
+  }
+  writeJsonFile(join(telemetryEventsDir(path), `${id}.json`), event)
+  return loadTelemetry(path)
 }
 
 // render the store for /telemetry — one block per model, newest activity first

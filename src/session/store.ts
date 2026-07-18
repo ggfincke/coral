@@ -5,8 +5,14 @@ import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { OllamaMessage } from '../types/inference.js'
-import { isTodoStatus, type TodoItem } from '../tools/todo-store.js'
+import { isTodoStatus, type TodoItem } from '../types/todo.js'
 import type { UndoTurn } from '../types/undo.js'
+import {
+  isAttachmentSkipReason,
+  MAX_ATTACHMENT_OMITTED_OVER_BUDGET,
+  MAX_ATTACHMENT_REPORT_ITEMS,
+  MAX_ATTACHMENT_REPORT_PATH_CHARS,
+} from '../types/attachments.js'
 import {
   hydrateUndoState,
   serializeUndoState,
@@ -18,9 +24,8 @@ import { ensurePrivateDir } from '../utils/fs.js'
 import { isPlainObject } from '../utils/guards.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
 
-// ! keep in sync w/ scripts/lib/coral_dev_tools/session_analysis.py SESSION_INDEX_VERSION
-const SESSION_INDEX_VERSION = 1
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}$/
+const SESSION_FILE_PATTERN = /^([0-9a-f]{8})\.json$/
 const MESSAGE_ROLES = new Set(['system', 'user', 'assistant', 'tool'])
 
 // session metadata stored alongside the conversation
@@ -77,12 +82,6 @@ interface SessionFileData
   redo?: PersistedUndoTurn[]
 }
 
-interface SessionIndexFile
-{
-  version: number
-  sessions: SessionMeta[]
-}
-
 // generate an 8-char hex session ID
 function generateId(): string
 {
@@ -111,6 +110,52 @@ function isToolCall(value: unknown): boolean
   return isPlainObject(fn.arguments)
 }
 
+function isAttachmentReport(value: unknown): boolean
+{
+  if (!isPlainObject(value)) return false
+  if (
+    !Array.isArray(value.attached) ||
+    !value.attached.every(
+      (entry) =>
+        isPlainObject(entry) &&
+        typeof entry.path === 'string' &&
+        entry.path.length > 0 &&
+        entry.path.length <= MAX_ATTACHMENT_REPORT_PATH_CHARS &&
+        typeof entry.truncated === 'boolean'
+    )
+  )
+  {
+    return false
+  }
+  if (
+    !Array.isArray(value.skipped) ||
+    !value.skipped.every(
+      (entry) =>
+        isPlainObject(entry) &&
+        typeof entry.path === 'string' &&
+        entry.path.length > 0 &&
+        entry.path.length <= MAX_ATTACHMENT_REPORT_PATH_CHARS &&
+        isAttachmentSkipReason(entry.reason)
+    )
+  )
+  {
+    return false
+  }
+  if (
+    value.attached.length + value.skipped.length >
+    MAX_ATTACHMENT_REPORT_ITEMS
+  )
+  {
+    return false
+  }
+  return (
+    value.omittedOverBudget === undefined ||
+    (Number.isSafeInteger(value.omittedOverBudget) &&
+      Number(value.omittedOverBudget) >= 0 &&
+      Number(value.omittedOverBudget) <= MAX_ATTACHMENT_OMITTED_OVER_BUDGET)
+  )
+}
+
 function isOllamaMessage(value: unknown): value is OllamaMessage
 {
   if (!isPlainObject(value)) return false
@@ -122,6 +167,13 @@ function isOllamaMessage(value: unknown): value is OllamaMessage
   if (
     value.displayContent !== undefined &&
     typeof value.displayContent !== 'string'
+  )
+  {
+    return false
+  }
+  if (
+    value.attachmentReport !== undefined &&
+    !isAttachmentReport(value.attachmentReport)
   )
   {
     return false
@@ -301,12 +353,6 @@ function sessionsDir(): string
   return coralHomePath('sessions')
 }
 
-// get the compact metadata index path
-function sessionIndexPath(): string
-{
-  return join(sessionsDir(), 'index.json')
-}
-
 // get the file path for a session ID
 function sessionPath(id: string): string
 {
@@ -323,32 +369,21 @@ function sortSessions(sessions: SessionMeta[]): SessionMeta[]
   return [...sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 }
 
-// write the compact metadata index
-function writeSessionIndex(sessions: SessionMeta[]): void
-{
-  const file: SessionIndexFile = {
-    version: SESSION_INDEX_VERSION,
-    sessions: sortSessions(sessions),
-  }
-
-  writeJsonFile(sessionIndexPath(), file)
-}
-
-// scan full session files only as a fallback for missing/corrupt indexes
-function rebuildSessionIndex(): SessionMeta[]
+// discover sessions from their authoritative files. legacy index.json remains
+// untouched but cannot hide a valid session or supply stale metadata
+function discoverSessions(): SessionMeta[]
 {
   ensureDir()
 
   const sessions: SessionMeta[] = []
   const dir = sessionsDir()
-  const files = readdirSync(dir).filter(
-    (file) => file.endsWith('.json') && file !== 'index.json'
-  )
+  const files = readdirSync(dir)
 
   for (const file of files)
   {
-    const id = file.slice(0, -'.json'.length)
-    if (!isValidSessionId(id)) continue
+    const match = SESSION_FILE_PATTERN.exec(file)
+    if (!match) continue
+    const id = match[1]!
 
     const session = readSessionData(join(dir, file))
     if (session && session.meta.id === id)
@@ -357,40 +392,7 @@ function rebuildSessionIndex(): SessionMeta[]
     }
   }
 
-  writeSessionIndex(sessions)
   return sortSessions(sessions)
-}
-
-// load the metadata index, rebuilding it if needed
-function loadSessionIndex(): SessionMeta[]
-{
-  ensureDir()
-
-  const index = readJsonObjectFile<SessionIndexFile>(sessionIndexPath())
-  if (
-    index?.version === SESSION_INDEX_VERSION &&
-    Array.isArray(index.sessions)
-  )
-  {
-    if (index.sessions.every(isSessionMeta))
-    {
-      return sortSessions(index.sessions)
-    }
-
-    return rebuildSessionIndex()
-  }
-
-  return rebuildSessionIndex()
-}
-
-// insert or replace a session entry in the metadata index
-function upsertSessionIndex(meta: SessionMeta): void
-{
-  const sessions = loadSessionIndex().filter(
-    (session) => session.id !== meta.id
-  )
-  sessions.push(meta)
-  writeSessionIndex(sessions)
 }
 
 // count messages that are part of the conversation history
@@ -399,7 +401,8 @@ function countConversationMessages(messages: OllamaMessage[]): number
   return messages.filter((m) => m.role !== 'system').length
 }
 
-// write a session file & update the compact metadata index
+// replace one complete session snapshot. concurrent saves of the same ID use
+// whole-file last-completed-replacement wins semantics
 function writeSessionData(session: SessionData): void
 {
   ensureDir()
@@ -417,7 +420,6 @@ function writeSessionData(session: SessionData): void
   }
 
   writeJsonFile(sessionPath(session.meta.id), file)
-  upsertSessionIndex(session.meta)
 }
 
 // create a new session & persist it
@@ -468,20 +470,20 @@ export function saveSession(
   ensureDir()
 
   const now = new Date().toISOString()
-  const indexedMeta =
+  const storedMeta =
     metaHint?.createdAt && metaHint?.title
       ? undefined
-      : loadSessionIndex().find((session) => session.id === id)
+      : readSessionData(sessionPath(id))?.meta
   const meta: SessionMeta = {
     id,
     model,
     cwd,
-    createdAt: metaHint?.createdAt ?? indexedMeta?.createdAt ?? now,
+    createdAt: metaHint?.createdAt ?? storedMeta?.createdAt ?? now,
     updatedAt: now,
-    title: metaHint?.title ?? indexedMeta?.title ?? extractTitle(messages),
+    title: metaHint?.title ?? storedMeta?.title ?? extractTitle(messages),
     messageCount: countConversationMessages(messages),
-    compactionCount: metaHint?.compactionCount ?? indexedMeta?.compactionCount,
-    lastCompactedAt: metaHint?.lastCompactedAt ?? indexedMeta?.lastCompactedAt,
+    compactionCount: metaHint?.compactionCount ?? storedMeta?.compactionCount,
+    lastCompactedAt: metaHint?.lastCompactedAt ?? storedMeta?.lastCompactedAt,
   }
 
   writeSessionData({ meta, messages, todos, undo, redo })
@@ -503,7 +505,7 @@ export function loadSession(id: string): SessionData | undefined
 // list all sessions, sorted by updatedAt (newest first)
 export function listSessions(): SessionMeta[]
 {
-  return loadSessionIndex()
+  return discoverSessions()
 }
 
 // rename a session's title

@@ -2,6 +2,8 @@
 // persist approved MCP launch fingerprints
 
 import { createHash } from 'node:crypto'
+import { lstatSync } from 'node:fs'
+import { join } from 'node:path'
 import { coralHomePath } from '../utils/coral-home.js'
 import { isPlainObject } from '../utils/guards.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
@@ -33,9 +35,20 @@ interface McpTrustFile
   servers: Record<string, McpTrustEntry>
 }
 
-function trustPath(): string
+interface McpTrustSidecar extends McpTrustEntry
+{
+  version: number
+  alias: string
+}
+
+function legacyTrustPath(): string
 {
   return coralHomePath('mcp-trust.json')
+}
+
+function trustSidecarPath(alias: string): string
+{
+  return join(coralHomePath('mcp-trust.d'), `${alias}.json`)
 }
 
 function isTrustEntry(value: unknown): value is McpTrustEntry
@@ -48,9 +61,9 @@ function isTrustEntry(value: unknown): value is McpTrustEntry
   )
 }
 
-function loadTrustFile(): McpTrustFile
+function loadLegacyTrustFile(): McpTrustFile
 {
-  const value = readJsonObjectFile(trustPath())
+  const value = readJsonObjectFile(legacyTrustPath())
   if (
     !isPlainObject(value) ||
     value.version !== TRUST_FILE_VERSION ||
@@ -74,6 +87,47 @@ function loadTrustFile(): McpTrustFile
   return { version: TRUST_FILE_VERSION, servers }
 }
 
+function hasTrustSidecar(path: string): boolean
+{
+  try
+  {
+    // inspect the directory entry itself so dangling symlinks still shadow
+    // legacy trust instead of silently reviving an older approval
+    return lstatSync(path, { throwIfNoEntry: false }) !== undefined
+  }
+  catch
+  {
+    // an inaccessible sidecar still shadows legacy trust & fails closed
+    return true
+  }
+}
+
+function isTrustSidecar(
+  value: unknown,
+  alias: string
+): value is McpTrustSidecar
+{
+  return (
+    isPlainObject(value) &&
+    value.version === TRUST_FILE_VERSION &&
+    value.alias === alias &&
+    isTrustEntry(value)
+  )
+}
+
+function loadTrustEntry(alias: string): McpTrustEntry | undefined
+{
+  if (!SERVER_ALIAS_PATTERN.test(alias)) return undefined
+
+  const sidecarPath = trustSidecarPath(alias)
+  if (hasTrustSidecar(sidecarPath))
+  {
+    const value = readJsonObjectFile(sidecarPath)
+    return isTrustSidecar(value, alias) ? value : undefined
+  }
+  return loadLegacyTrustFile().servers[alias]
+}
+
 export function fingerprintMcpLaunch(descriptor: McpLaunchDescriptor): string
 {
   const payload = {
@@ -91,7 +145,7 @@ export function fingerprintMcpLaunch(descriptor: McpLaunchDescriptor): string
 
 export function isMcpLaunchTrusted(descriptor: McpLaunchDescriptor): boolean
 {
-  const entry = loadTrustFile().servers[descriptor.alias]
+  const entry = loadTrustEntry(descriptor.alias)
   return entry?.fingerprint === fingerprintMcpLaunch(descriptor)
 }
 
@@ -101,10 +155,11 @@ export function trustMcpLaunch(descriptor: McpLaunchDescriptor): void
   {
     throw new Error('Invalid MCP server alias')
   }
-  const file = loadTrustFile()
-  file.servers[descriptor.alias] = {
+  const sidecar: McpTrustSidecar = {
+    version: TRUST_FILE_VERSION,
+    alias: descriptor.alias,
     fingerprint: fingerprintMcpLaunch(descriptor),
     approvedAt: new Date().toISOString(),
   }
-  writeJsonFile(trustPath(), file)
+  writeJsonFile(trustSidecarPath(descriptor.alias), sidecar)
 }
