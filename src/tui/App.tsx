@@ -337,10 +337,14 @@ export default function App({
   const promptActive = Boolean(activePromptContent)
   const inputHeight = promptActive || paletteVisible ? 0 : 3
   const statusHeight = 1
-  // bound the prompt so the chat viewport keeps its six-row minimum
-  const maxPromptRows = Math.max(
-    terminalSize.rows - headerHeight - statusHeight - 7,
-    10
+  // bound the prompt so chat keeps six rows whenever terminal geometry permits
+  const promptCapacity = Math.max(
+    terminalSize.rows - headerHeight - statusHeight,
+    1
+  )
+  const maxPromptRows = Math.min(
+    Math.max(promptCapacity - 7, 10),
+    promptCapacity
   )
   const promptRender = useMemo(
     () =>
@@ -356,7 +360,7 @@ export default function App({
   )
   const promptBoxLines = promptRender?.lines ?? []
   const approvalHeight = promptActive ? promptBoxLines.length + 1 : 0
-  const todoHeight = todoPanelLines.length
+  const todoHeight = promptActive ? 0 : todoPanelLines.length
   const chatViewportHeight = Math.max(
     terminalSize.rows -
       headerHeight -
@@ -364,7 +368,7 @@ export default function App({
       statusHeight -
       approvalHeight -
       todoHeight,
-    6
+    promptActive ? 0 : 6
   )
   const pickerViewportHeight = Math.max(
     terminalSize.rows - headerHeight - statusHeight,
@@ -1906,6 +1910,7 @@ export default function App({
       {!pickerVisible &&
         !paletteVisible &&
         agent &&
+        !promptActive &&
         todoPanelLines.length > 0 && <LineList lines={todoPanelLines} dim />}
 
       {!pickerVisible && agent && promptActive && (

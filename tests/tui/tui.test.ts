@@ -35,6 +35,7 @@ import type { IndexStore } from '../../src/retrieval/types.js'
 import type { ResumeSessionResolution } from '../../src/session/resume.js'
 import type { SessionMeta } from '../../src/session/store.js'
 import { restoredSessionForPickerSelection } from '../../src/tui/model/model-activation.js'
+import { visibleWidth } from '../../src/tui/wrap.js'
 import { makeFakeAgent } from '../helpers/agent-harness.js'
 import { makeSessionMeta } from '../helpers/session.js'
 import { makeTempDirPool } from '../helpers/temp.js'
@@ -427,6 +428,31 @@ test('approval and confirm boxes share framed prompt rendering', () =>
   const scrolled = plain(renderPromptBox(long, 50, 16, bounded.maxOffset).lines)
   assert.match(scrolled, new RegExp(`of \\d+`))
   assert.notEqual(boundedText, scrolled)
+
+  // legal narrow geometry stays inside both hard viewport dimensions
+  const narrow = buildMcpApprovalContent(
+    {
+      alias: 'a'.repeat(32),
+      command: 'node',
+      executable: '/usr/local/bin/node',
+      args: ['x'.repeat(4_096)],
+      launchCwd: '/home/user',
+      passEnv: [],
+      enabledTools: ['t'.repeat(128)],
+      fingerprint: 'f'.repeat(64),
+    },
+    20
+  )
+  const narrowTop = renderPromptBox(narrow, 20, 10, 0)
+  assert.ok(narrowTop.lines.length <= 10)
+  assert.ok(narrowTop.lines.every((line) => visibleWidth(line) <= 20))
+  assert.ok(narrowTop.maxOffset > 0)
+  assert.match(plain(narrowTop.lines), /trust|reject|cancel/)
+  const fingerprintReachable = Array.from(
+    { length: narrowTop.maxOffset + 1 },
+    (_, offset) => plain(renderPromptBox(narrow, 20, 10, offset).lines)
+  ).some((rendered) => rendered.includes('f'.repeat(8)))
+  assert.equal(fingerprintReachable, true)
 })
 
 test('dispatchCommand persists after successful manual compaction', async () =>

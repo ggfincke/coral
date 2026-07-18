@@ -72,12 +72,12 @@ export function boxFrame(
 ): BoxFrame
 {
   const tintFn = tint ?? ((text: string) => text)
-  const innerWidth = Math.max(width - 4, 12)
+  const innerWidth = Math.max(width - 4, 1)
   const top = tintFn(`╭─${buildLabeledSeparator(innerWidth, label)}─╮`)
   const bottom = tintFn(`╰${buildRule(innerWidth + 2)}╯`)
   const row = (content: string): string =>
   {
-    const fill = padEnd(content, innerWidth)
+    const fill = padEnd(truncateToWidth(content, innerWidth), innerWidth)
     return `${tintFn('│')} ${fill} ${tintFn('│')}`
   }
 
@@ -111,8 +111,10 @@ export function buildRule(width: number): string
 
 function buildLabeledSeparator(width: number, label: string): string
 {
-  const labelStr = ` ${label} `
-  const remaining = Math.max(width - labelStr.length, 2)
+  const labelBudget = Math.max(width - 2, 0)
+  const fittedLabel = truncateToWidth(label, labelBudget)
+  const labelStr = fittedLabel ? ` ${fittedLabel} ` : ''
+  const remaining = Math.max(width - visibleWidth(labelStr), 0)
   const left = Math.floor(remaining / 2)
   const right = remaining - left
   return `${'─'.repeat(left)}${labelStr}${'─'.repeat(right)}`

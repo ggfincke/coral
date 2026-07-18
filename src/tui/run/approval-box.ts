@@ -11,14 +11,13 @@ import { summarizeToolArgs } from '../transcript/transcript.js'
 import { boxFrame } from './status-line.js'
 import { style } from '../theme.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
+import { visibleWidth } from '../wrap.js'
 
 // cap change previews so large edits don't swallow the screen
 const MAX_PREVIEW_LINES = 20
 const MAX_MCP_APPROVAL_ARG_CHARS = 8_000
-// minimum body rows shown even on tiny terminals
-const MIN_BODY_ROWS = 3
 
-// pre-wrapped prompt content: title & actions stay pinned, body scrolls
+// logical prompt content: title & actions stay pinned, body scrolls
 export interface PromptBoxContent
 {
   label: string
@@ -45,18 +44,13 @@ function contentBuilder(width: number, label: string): ContentBuilder
   const titleLines: string[] = []
   const bodyLines: string[] = []
 
-  const wrapInto = (
+  const appendInto = (
     target: string[],
     content: string,
     decorate: (line: string) => string = (line) => line
   ) =>
   {
-    const wrapped = wrapAnsi(content, innerWidth, {
-      hard: true,
-      trim: false,
-      wordWrap: true,
-    })
-    for (const line of wrapped.split('\n'))
+    for (const line of content.split('\n'))
     {
       target.push(decorate(line))
     }
@@ -65,8 +59,8 @@ function contentBuilder(width: number, label: string): ContentBuilder
   return {
     innerWidth,
     warn,
-    title: (content) => wrapInto(titleLines, content, warn),
-    push: (content, decorate) => wrapInto(bodyLines, content, decorate),
+    title: (content) => appendInto(titleLines, content, warn),
+    push: (content, decorate) => appendInto(bodyLines, content, decorate),
     raw: (line) => bodyLines.push(line),
     blank: () => bodyLines.push(''),
     finish: (actionLine) => ({ label, titleLines, bodyLines, actionLine }),
@@ -188,6 +182,48 @@ export interface PromptBoxRender
   pageSize: number
 }
 
+interface WrappedPromptBoxContent
+{
+  titleLines: string[]
+  bodyLines: string[]
+  actionLines: string[]
+}
+
+const wrappedContentCache = new WeakMap<
+  PromptBoxContent,
+  Map<number, WrappedPromptBoxContent>
+>()
+
+// scroll changes only the viewport slice, so retain wrapping for this content
+function wrappedPromptContent(
+  content: PromptBoxContent,
+  width: number
+): WrappedPromptBoxContent
+{
+  let byWidth = wrappedContentCache.get(content)
+  if (!byWidth)
+  {
+    byWidth = new Map()
+    wrappedContentCache.set(content, byWidth)
+  }
+  const cached = byWidth.get(width)
+  if (cached) return cached
+
+  const wrap = (line: string): string[] =>
+    wrapAnsi(line, width, {
+      hard: true,
+      trim: false,
+      wordWrap: true,
+    }).split('\n')
+  const wrapped = {
+    titleLines: content.titleLines.flatMap(wrap),
+    bodyLines: content.bodyLines.flatMap(wrap),
+    actionLines: wrap(content.actionLine),
+  }
+  byWidth.set(width, wrapped)
+  return wrapped
+}
+
 // frame content into at most maxRows terminal rows; title & actions stay
 // pinned while the body scrolls behind a position indicator
 export function renderPromptBox(
@@ -199,42 +235,76 @@ export function renderPromptBox(
 {
   const warn = style('warning')
   const frame = boxFrame(width, content.label, warn)
+  const rowLimit = Math.max(Math.floor(maxRows), 0)
+  if (rowLimit === 0) return { lines: [], maxOffset: 0, pageSize: 1 }
 
-  // fixed rows: top, blank, title, blank+action+blank, bottom
-  const fixedRows = 2 + content.titleLines.length + 3 + 1
-  const fitsWithoutIndicator = fixedRows + content.bodyLines.length <= maxRows
+  const { titleLines, bodyLines, actionLines } = wrappedPromptContent(
+    content,
+    frame.innerWidth
+  )
 
-  let visibleBody = content.bodyLines
-  let indicator: string | null = null
-  let maxOffset = 0
-  let pageSize = Math.max(content.bodyLines.length, 1)
-
-  if (!fitsWithoutIndicator)
+  // retain the roomy presentation when every row fits
+  const roomyRows =
+    2 + 3 + titleLines.length + bodyLines.length + actionLines.length
+  if (roomyRows <= rowLimit)
   {
-    const bodyRows = Math.max(maxRows - fixedRows - 1, MIN_BODY_ROWS)
-    maxOffset = Math.max(content.bodyLines.length - bodyRows, 0)
-    const offset = Math.min(Math.max(scrollOffset, 0), maxOffset)
-    visibleBody = content.bodyLines.slice(offset, offset + bodyRows)
-    pageSize = bodyRows
+    const lines = [
+      frame.top,
+      frame.row(''),
+      ...titleLines.map(frame.row),
+      ...bodyLines.map(frame.row),
+      frame.row(''),
+      ...actionLines.map(frame.row),
+      frame.row(''),
+      frame.bottom,
+    ]
+    return {
+      lines: lines.slice(0, rowLimit),
+      maxOffset: 0,
+      pageSize: Math.max(bodyLines.length, 1),
+    }
+  }
+
+  // constrained mode drops decorative blanks & moves title overflow into the
+  // scrollable body so complete identities remain reachable
+  const insideRows = Math.max(rowLimit - 2, 0)
+  const visibleActions = actionLines.slice(0, insideRows)
+  const contentRows = Math.max(insideRows - visibleActions.length, 0)
+  const indicatorRows = contentRows >= 2 ? 1 : 0
+  const viewportRows = Math.max(contentRows - indicatorRows, 0)
+  const reserveBody = bodyLines.length > 0 && viewportRows > 1 ? 1 : 0
+  const pinnedTitleCount = Math.min(
+    titleLines.length,
+    Math.max(viewportRows - reserveBody, 0)
+  )
+  const pinnedTitle = titleLines.slice(0, pinnedTitleCount)
+  const scrollable = [...titleLines.slice(pinnedTitleCount), ...bodyLines]
+  const bodyRows = Math.max(viewportRows - pinnedTitle.length, 0)
+  const maxOffset = Math.max(scrollable.length - bodyRows, 0)
+  const offset = Math.min(Math.max(scrollOffset, 0), maxOffset)
+  const visibleBody = scrollable.slice(offset, offset + bodyRows)
+  const pageSize = Math.max(bodyRows, 1)
+
+  let indicator: string | null = null
+  if (indicatorRows > 0 && maxOffset > 0)
+  {
+    const start = offset + 1
+    const end = offset + visibleBody.length
+    const detailed = `lines ${start}-${end} of ${scrollable.length} · ↑/↓ · PgUp/PgDn`
+    const compact = `${start}-${end}/${scrollable.length}`
     indicator = chalk.dim(
-      `… lines ${offset + 1}-${offset + visibleBody.length} of ${content.bodyLines.length} — ↑/↓ scroll · PgUp/PgDn page`
+      visibleWidth(detailed) <= frame.innerWidth ? detailed : compact
     )
   }
 
-  const lines: string[] = [frame.top, frame.row('')]
-  for (const title of content.titleLines)
-  {
-    lines.push(frame.row(title))
-  }
-  for (const body of visibleBody)
-  {
-    lines.push(frame.row(body))
-  }
-  if (indicator) lines.push(frame.row(indicator))
-  lines.push(frame.row(''))
-  lines.push(frame.row(content.actionLine))
-  lines.push(frame.row(''))
-  lines.push(frame.bottom)
+  const lines = [
+    frame.top,
+    ...pinnedTitle.map(frame.row),
+    ...visibleBody.map(frame.row),
+    ...(indicator ? [frame.row(indicator)] : []),
+    ...visibleActions.map(frame.row),
+    ...(rowLimit >= 2 ? [frame.bottom] : []),
+  ]
 
-  return { lines, maxOffset, pageSize }
+  return { lines: lines.slice(0, rowLimit), maxOffset, pageSize }
 }
