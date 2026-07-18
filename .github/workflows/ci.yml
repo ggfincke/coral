@@ -55,6 +55,9 @@ jobs:
       - name: Check dev tools
         run: npm run check:dev-tools
 
+      - name: Check architecture boundaries
+        run: npm run check:architecture
+
   build:
     runs-on: ubuntu-latest
     needs: test

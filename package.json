@@ -3,6 +3,7 @@
   "version": "0.12.0",
   "description": "A local-first CLI/TUI coding agent for Ollama",
   "type": "module",
+  "exports": {},
   "files": [
     "dist",
     "README.md",
@@ -35,6 +36,7 @@
     "bench:compaction": "tsx tests/scripts/bench-compaction.ts",
     "eval": "tsx tests/scripts/eval/run.ts",
     "check:dev-tools": "node scripts/check-dev-tools.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "test:watch": "node --import tsx --test --watch 'tests/**/*.test.ts'",
     "lint": "eslint .",
     "lint:fix": "eslint --fix .",
