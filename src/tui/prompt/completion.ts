@@ -1,5 +1,5 @@
 // src/tui/prompt/completion.ts
-// pure completion logic for slash commands & @-file mentions in the prompt
+// pure completion logic for slash commands and @-file mentions in the prompt
 
 import {
   decodeMentionPath,
@@ -15,7 +15,7 @@ export type CompletionKind = 'command' | 'file'
 export interface CompletionQuery
 {
   kind: CompletionKind
-  // query text w/o the leading sigil (e.g. 'sta' for '/sta', 'src/fo' for '@src/fo')
+  // query text without the leading sigil (e.g. 'sta' for '/sta', 'src/fo' for '@src/fo')
   token: string
   // index of the sigil; start of the replaceable span
   start: number
@@ -172,7 +172,7 @@ export function rankFiles(token: string, files: string[]): CompletionItem[]
     .map(({ path }) => ({ value: path, label: path }))
 }
 
-// splice a chosen item into the prompt, keeping the sigil & adding a trailing space
+// splice a chosen item into the prompt, keeping the sigil and adding a trailing space
 export function applyCompletion(
   value: string,
   query: CompletionQuery,

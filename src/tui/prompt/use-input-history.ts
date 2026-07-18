@@ -1,5 +1,5 @@
-// src/tui/hooks/use-input-history.ts
-// React hook for navigating & persisting input history
+// src/tui/prompt/use-input-history.ts
+// navigate and persist input history in a React hook
 
 import { useCallback, useRef } from 'react'
 import {
@@ -9,7 +9,7 @@ import {
   computeNavigateUp,
   computeNavigateDown,
   type HistoryEntry,
-} from '../prompt/input-history.js'
+} from './input-history.js'
 
 export interface InputHistoryControls
 {

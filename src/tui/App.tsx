@@ -1,59 +1,47 @@
 // src/tui/App.tsx
-// render the interactive terminal view & route user input
+// render the interactive terminal view and route user input
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
-import { OllamaClient } from '../ollama/client.js'
 import type { Agent } from '../agent/agent.js'
 import { clamp } from '../utils/clamp.js'
 import { pluralize } from '../utils/pluralize.js'
-import type { Model } from '../types/inference.js'
-import { buildModelPickerLines, sortModels } from './model/model-picker.js'
+import { buildModelPickerLines } from './model/model-picker.js'
 import { buildWelcomeLines } from './shell/welcome.js'
 import {
   buildTranscriptLines,
   centerLinesVertical,
-  failPendingToolCalls,
   maxScrollOffset,
   padLinesTop,
   sliceViewport,
-  type DiffBlock,
-  type OutputBlock,
-  type ToolCallBlock,
 } from './transcript/transcript.js'
-import PromptInput from './components/prompt-input.js'
-import CommandPalette from './components/command-palette.js'
+import PromptInput from './prompt/prompt-input.js'
+import CommandPalette from './palette/command-palette.js'
 import { getThemeGeneration, inkColor, style } from './theme.js'
 import { toErrorMessage } from '../utils/errors.js'
-import { previewToolDiff } from '../tools/preview.js'
 import {
   commandCompletions,
   commandInfos,
   dispatchCommand,
   keybindingInfos,
-  type CommandContext,
-  type KeybindingAction,
-} from './shell/commands.js'
-import { formatMentionNotice, parseMentions } from './prompt/mentions.js'
+} from './commands/registry.js'
+import type { CommandContext } from './commands/contracts.js'
+import type { KeybindingAction } from './input/keybindings.js'
+import { parseMentions } from './prompt/mentions.js'
 import {
-  formatAutoCompactionResult,
   formatPermissionModeChange,
   formatPermissionModeLocked,
   formatPermissionModeUnchanged,
-} from './shell/command-output.js'
-import { useAnimationTimer } from './hooks/use-animation-timer.js'
-import { useStreamBuffer } from './hooks/use-stream-buffer.js'
-import { useInputHistory } from './hooks/use-input-history.js'
+} from './commands/runtime-output.js'
+import { useInputHistory } from './prompt/use-input-history.js'
 import {
-  resolveStartupSession,
+  type InteractiveSessionView,
   useInteractiveSession,
-} from './hooks/use-interactive-session.js'
+} from './session/use-interactive-session.js'
+import { resolveStartupSession } from './session/agent-session.js'
 import { getCwd } from '../cwd.js'
-import { type RunStage } from './run/run-stage.js'
 import {
   buildTokenGauge,
-  computeTokensPerSecond,
-  formatElapsed,
   formatTokenCount,
   formatTokensPerSecond,
 } from './shell/metrics.js'
@@ -64,19 +52,16 @@ import {
   renderPromptBox,
 } from './run/approval-box.js'
 import {
-  buildRestoredBlocks,
-  truncateToolResult,
-} from './transcript/restored-blocks.js'
-import {
   buildRule,
   buildStatusLine,
   describeRunStageWithElapsed,
 } from './run/status-line.js'
 import { LineList } from './components/line-list.js'
 import { buildTodoPanel } from './transcript/todo-panel.js'
-import { restoredSessionForPickerSelection } from './model/model-activation.js'
-import { buildPaletteEntries, type PaletteEntry } from './palette.js'
+import { useModelPicker } from './model/use-model-picker.js'
+import { buildPaletteEntries, type PaletteEntry } from './palette/palette.js'
 import type { OperationHandle } from './session/interactive-runtime.js'
+import { useAgentTurn } from './run/use-agent-turn.js'
 
 export interface AppProps
 {
@@ -87,26 +72,12 @@ export interface AppProps
   resumeSessionId?: string
 }
 
-const FLUSH_INTERVAL = 32
-const SPINNER_INTERVAL = 80
 const SCROLL_LINES = 3
 
 interface SlashDispatchResult
 {
   admitted: boolean
   handled: boolean
-}
-
-// zeroed token-usage state — initial value & reset target
-const EMPTY_TOKEN_USAGE = {
-  // cumulative session totals (every turn re-prefills the context)
-  prompt: 0,
-  completion: 0,
-  // current context occupancy — drives the ctx gauge
-  context: 0,
-  // last-turn throughput (tokens / second) — 0 when the server omitted durations
-  lastPrefillTps: 0,
-  lastDecodeTps: 0,
 }
 
 export default function App({
@@ -124,95 +95,46 @@ export default function App({
   const [resumeSession] = useState(
     () => resolveStartupSession(resumeSessionId).session
   )
-  const [pickerState, setPickerState] = useState<
-    'hidden' | 'loading' | 'ready' | 'error'
-  >(model ? 'hidden' : 'loading')
   const [paletteOpen, setPaletteOpen] = useState(false)
-  const [pickerErrorTitle, setPickerErrorTitle] = useState(
-    'Failed to load Ollama models'
-  )
-  const [pickerError, setPickerError] = useState('')
-  const [models, setModels] = useState<Model[]>([])
-  const [selectedModelIndex, setSelectedModelIndex] = useState(0)
   const [input, setInput] = useState('')
-  const [output, setOutput] = useState<OutputBlock[]>(() =>
-    resumeSession ? buildRestoredBlocks(resumeSession.messages) : []
-  )
   const [showThinking, setShowThinking] = useState(true)
-  // mirrors the module-level theme generation so theme switches re-render
+  // re-render when the module-level theme generation changes
   const [themeGeneration, setThemeGeneration] = useState(getThemeGeneration)
-  const [runStage, setRunStage] = useState<RunStage>('idle')
-  // block new submits while a long slash command or an in-place model switch is
-  // still in flight — keeps command/chat turns from overlapping & stops a fast
-  // submit from running against the pre-switch model
+  // block new submits while a slash command or in-place model switch is running
+  // so command and chat turns cannot overlap
   const [commandRunning, setCommandRunning] = useState(false)
   // body scroll position inside the active approval/confirm prompt
   const [promptScrollOffset, setPromptScrollOffset] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
-  const [runElapsed, setRunElapsed] = useState<string | null>(null)
-  const [tokenUsage, setTokenUsage] = useState(EMPTY_TOKEN_USAGE)
   const [terminalSize, setTerminalSize] = useState({
     columns: terminal.columns ?? 80,
     rows: terminal.rows ?? 24,
   })
-
-  const {
-    streamBuf,
-    appendText,
-    appendThinking,
-    consumeBufferedBlocks,
-    resetStreamBuffer,
-  } = useStreamBuffer(FLUSH_INTERVAL)
-  const {
-    spinnerTick,
-    waitingElapsed,
-    showWaitingIndicator,
-    startWaiting,
-    stopWaiting,
-    resetAnimation,
-  } = useAnimationTimer(runStage, SPINNER_INTERVAL)
   const previousLineCountRef = useRef(0)
-  const runStartTimeRef = useRef<number | null>(null)
-  // per-call start times keyed by callId — parallel batches run several at once
-  const toolStartTimesRef = useRef<Map<number, number>>(new Map())
-  const modelLoadAbortRef = useRef<AbortController | null>(null)
-
-  const restoreSessionView = useCallback(
-    (session: NonNullable<typeof resumeSession>) =>
-    {
-      setOutput(buildRestoredBlocks(session.messages))
-      setScrollOffset(0)
-      setTokenUsage(EMPTY_TOKEN_USAGE)
-      setRunStage('idle')
-      runStartTimeRef.current = null
-      toolStartTimesRef.current.clear()
-      resetStreamBuffer()
-      resetAnimation()
-    },
-    [resetAnimation, resetStreamBuffer]
-  )
-  const clearSessionView = useCallback(() =>
-  {
-    setOutput([])
-    setScrollOffset(0)
-    setTokenUsage(EMPTY_TOKEN_USAGE)
-    setRunStage('idle')
-    runStartTimeRef.current = null
-    toolStartTimesRef.current.clear()
-    resetStreamBuffer()
-    resetAnimation()
-  }, [resetAnimation, resetStreamBuffer])
-  const resetTokenUsageView = useCallback(() =>
-  {
-    setTokenUsage(EMPTY_TOKEN_USAGE)
-  }, [])
-  const interactiveView = useMemo(
+  const {
+    navigateUp,
+    navigateDown,
+    addEntry: addHistoryEntry,
+    resetNavigation,
+  } = useInputHistory()
+  const clearInput = useCallback(() => setInput(''), [])
+  const scrollToLatest = useCallback(() => setScrollOffset(0), [])
+  const interactiveViewRef = useRef<InteractiveSessionView>({
+    restoreSession()
+    {},
+    clearSession()
+    {},
+    resetTokenUsage()
+    {},
+  })
+  const interactiveView = useMemo<InteractiveSessionView>(
     () => ({
-      restoreSession: restoreSessionView,
-      clearSession: clearSessionView,
-      resetTokenUsage: resetTokenUsageView,
+      restoreSession: (session) =>
+        interactiveViewRef.current.restoreSession(session),
+      clearSession: () => interactiveViewRef.current.clearSession(),
+      resetTokenUsage: () => interactiveViewRef.current.resetTokenUsage(),
     }),
-    [clearSessionView, resetTokenUsageView, restoreSessionView]
+    []
   )
 
   const interactive = useInteractiveSession({
@@ -243,12 +165,9 @@ export default function App({
     resetTokenUsage,
     setPermissionMode: transitionPermissionMode,
     beginOperation,
-    acceptsEvent,
     acceptsCommandEvent,
     acceptsCommandTerminal,
-    requestPrompt,
     settlePrompt,
-    completeTurn,
     finishCommand,
     runOperation,
     abortActive: abortRun,
@@ -258,28 +177,73 @@ export default function App({
     isAcceptingTransitions,
     shutdown: shutdownInteractive,
   } = interactive
-  const transitioningSession = sessionTransition !== null
-  const shutdown = useCallback(() =>
-  {
-    modelLoadAbortRef.current?.abort()
-    return shutdownInteractive()
-  }, [shutdownInteractive])
   const {
-    navigateUp,
-    navigateDown,
-    addEntry: addHistoryEntry,
-    resetNavigation,
-  } = useInputHistory()
+    output,
+    setOutput,
+    runStage,
+    runElapsed,
+    tokenUsage,
+    streamBuffer: streamBuf,
+    spinnerTick,
+    waitingElapsed,
+    showWaitingIndicator,
+    view: agentTurnView,
+    rebuildTranscript,
+    run: runAgentTurn,
+    isRunning,
+  } = useAgentTurn({
+    initialSession: resumeSession,
+    session: interactive,
+    addHistoryEntry,
+    clearInput,
+    scrollToLatest,
+  })
+  useEffect(() =>
+  {
+    interactiveViewRef.current = agentTurnView
+  }, [agentTurnView])
+
+  const reportModelPersistenceError = useCallback(() =>
+  {
+    setOutput((previous) => [
+      ...previous,
+      {
+        type: 'error',
+        content: 'Model changed, but the current session could not be saved.',
+      },
+    ])
+  }, [setOutput])
+  const {
+    state: pickerState,
+    visible: pickerVisible,
+    errorTitle: pickerErrorTitle,
+    error: pickerError,
+    models,
+    selectedIndex: selectedModelIndex,
+    reopen: reopenModelPicker,
+    retry: retryModelPicker,
+    moveSelection: moveModelSelection,
+    selectCurrent: selectCurrentModel,
+    escape: escapeModelPicker,
+    shutdown,
+  } = useModelPicker({
+    requestedModel: model,
+    host,
+    initialSession: resumeSession,
+    agent,
+    activateModel,
+    isAcceptingTransitions,
+    shutdown: shutdownInteractive,
+    onPersistenceError: reportModelPersistenceError,
+  })
+  const transitioningSession = sessionTransition !== null
 
   const maxOffsetRef = useRef(0)
   const chatViewportHeightRef = useRef(6)
   // prompt viewport geometry for the modal scroll keys
   const promptViewportRef = useRef({ maxOffset: 0, pageSize: 1 })
-
-  const isRunning = runStage !== 'idle'
   const currentCwd = agent?.getCwd() ?? getCwd()
   const transcriptWidth = Math.max(terminalSize.columns - 2, 20)
-  const pickerVisible = pickerState !== 'hidden'
   const paletteVisible = paletteOpen && !pickerVisible && Boolean(agent)
 
   // render the controller's one active blocking prompt
@@ -424,162 +388,6 @@ export default function App({
   )
   const paddedWelcome = centerLinesVertical(welcomeLines, chatViewportHeight)
 
-  const rebuildTranscript = useCallback(
-    (target = agent) =>
-    {
-      setOutput(target ? buildRestoredBlocks(target.getMessages()) : [])
-      setScrollOffset(0)
-    },
-    [agent]
-  )
-
-  // show the model picker — preserves current agent for in-place switching
-  // uses loadModelsRef to avoid circular dependency w/ loadModels/activateModel
-  const loadModelsRef = useRef<(() => Promise<void>) | undefined>(undefined)
-  const modelLoadGenerationRef = useRef(0)
-  const initialModelLoadStartedRef = useRef(false)
-  const pickerSelectionPendingRef = useRef(false)
-  const reopenModelPicker = useCallback(() =>
-  {
-    void loadModelsRef.current?.()
-  }, [])
-
-  const chooseModel = useCallback(
-    (nextModel: string, restoredSession: typeof resumeSession) =>
-    {
-      if (pickerSelectionPendingRef.current) return
-      pickerSelectionPendingRef.current = true
-      setPickerState('hidden')
-      void activateModel(nextModel, restoredSession)
-        .then((result) =>
-        {
-          if (result.status === 'changed')
-          {
-            if (result.persistence.status === 'error')
-            {
-              setOutput((previous) => [
-                ...previous,
-                {
-                  type: 'error' as const,
-                  content:
-                    'Model changed, but the current session could not be saved.',
-                },
-              ])
-            }
-            return
-          }
-          if (result.status === 'unchanged') return
-          if (result.status === 'stale' || result.status === 'aborted') return
-
-          pickerSelectionPendingRef.current = false
-          setPickerErrorTitle('Failed to activate model')
-          setPickerError('Another session update is still running.')
-          setPickerState('error')
-        })
-        .catch((error: unknown) =>
-        {
-          if (!isAcceptingTransitions()) return
-          pickerSelectionPendingRef.current = false
-          setPickerErrorTitle('Failed to activate model')
-          setPickerError(toErrorMessage(error))
-          setPickerState('error')
-        })
-    },
-    [activateModel, isAcceptingTransitions]
-  )
-
-  const loadModels = useCallback(async () =>
-  {
-    modelLoadAbortRef.current?.abort()
-    const controller = new AbortController()
-    modelLoadAbortRef.current = controller
-    const loadGeneration = ++modelLoadGenerationRef.current
-    pickerSelectionPendingRef.current = false
-    setPickerState('loading')
-    setPickerErrorTitle('Failed to load Ollama models')
-    setPickerError('')
-
-    try
-    {
-      const client = new OllamaClient(host)
-      const loadedModels = sortModels(
-        await client.listModels(controller.signal)
-      )
-      if (
-        controller.signal.aborted ||
-        loadGeneration !== modelLoadGenerationRef.current ||
-        !isAcceptingTransitions()
-      )
-      {
-        return
-      }
-      const isReopening = Boolean(agent)
-
-      // when reopening mid-session, always show the picker — don't auto-select
-      if (!isReopening)
-      {
-        if (loadedModels.length === 1)
-        {
-          chooseModel(loadedModels[0]!.name, resumeSession)
-          return
-        }
-
-        if (resumeSession)
-        {
-          const sessionModel = loadedModels.find(
-            (loadedModel) => loadedModel.name === resumeSession.meta.model
-          )
-          if (sessionModel)
-          {
-            chooseModel(sessionModel.name, resumeSession)
-            return
-          }
-        }
-      }
-
-      // pre-select the current model in the picker list
-      const currentModelIndex = isReopening
-        ? loadedModels.findIndex((m) => m.name === agent?.getModel())
-        : 0
-
-      setModels(loadedModels)
-      setSelectedModelIndex(currentModelIndex >= 0 ? currentModelIndex : 0)
-      setPickerState('ready')
-    }
-    catch (err)
-    {
-      if (
-        controller.signal.aborted ||
-        loadGeneration !== modelLoadGenerationRef.current ||
-        !isAcceptingTransitions()
-      )
-      {
-        return
-      }
-      setPickerError(toErrorMessage(err))
-      setPickerState('error')
-    }
-    finally
-    {
-      if (modelLoadAbortRef.current === controller)
-      {
-        modelLoadAbortRef.current = null
-      }
-    }
-  }, [agent, chooseModel, host, isAcceptingTransitions, resumeSession])
-
-  useEffect(() =>
-  {
-    loadModelsRef.current = loadModels
-  }, [loadModels])
-
-  useEffect(() => () => modelLoadAbortRef.current?.abort(), [])
-
-  useEffect(() =>
-  {
-    modelLoadGenerationRef.current++
-  }, [agent])
-
   useEffect(() =>
   {
     maxOffsetRef.current = maxOffset
@@ -627,16 +435,6 @@ export default function App({
 
   useEffect(() =>
   {
-    if (model || initialModelLoadStartedRef.current) return
-    initialModelLoadStartedRef.current = true
-    queueMicrotask(() =>
-    {
-      void loadModels()
-    })
-  }, [loadModels, model])
-
-  useEffect(() =>
-  {
     const nextLineCount = transcriptLines.length
     const previousLineCount = previousLineCountRef.current
 
@@ -659,34 +457,6 @@ export default function App({
       setScrollOffset((current) => Math.min(current, maxOffset))
     })
   }, [maxOffset, scrollOffset])
-
-  useEffect(() =>
-  {
-    if (runStage === 'idle' || runStartTimeRef.current == null)
-    {
-      queueMicrotask(() =>
-      {
-        setRunElapsed(null)
-      })
-      return
-    }
-
-    const updateRunElapsed = () =>
-    {
-      if (runStartTimeRef.current != null)
-      {
-        setRunElapsed(formatElapsed(Date.now() - runStartTimeRef.current))
-      }
-    }
-
-    updateRunElapsed()
-
-    const timer = setInterval(updateRunElapsed, 250)
-    return () =>
-    {
-      clearInterval(timer)
-    }
-  }, [runStage])
 
   useInput(
     (ch, key) =>
@@ -766,27 +536,9 @@ export default function App({
 
       if (pickerVisible)
       {
-        // if there's an agent behind the picker, go back to chat; else exit
-        const escapePicker = () =>
-        {
-          if (agent)
-          {
-            modelLoadAbortRef.current?.abort()
-            modelLoadGenerationRef.current++
-            setPickerState('hidden')
-          }
-          else
-          {
-            void shutdown()
-          }
-        }
-
         if (pickerState === 'loading')
         {
-          if (key.escape)
-          {
-            escapePicker()
-          }
+          if (key.escape) escapeModelPicker()
           return
         }
 
@@ -794,11 +546,11 @@ export default function App({
         {
           if (ch === 'r' || ch === 'R')
           {
-            void loadModels()
+            retryModelPicker()
           }
           else if (key.escape)
           {
-            escapePicker()
+            escapeModelPicker()
           }
 
           return
@@ -806,31 +558,19 @@ export default function App({
 
         if (key.upArrow || ch === 'k')
         {
-          setSelectedModelIndex((current) =>
-            clamp(current - 1, 0, models.length - 1)
-          )
+          moveModelSelection(-1)
         }
         else if (key.downArrow || ch === 'j')
         {
-          setSelectedModelIndex((current) =>
-            clamp(current + 1, 0, models.length - 1)
-          )
+          moveModelSelection(1)
         }
         else if (key.return)
         {
-          const selected = models[selectedModelIndex]
-          if (selected)
-          {
-            // when reopening mid-session, switch in-place (no restore session)
-            chooseModel(
-              selected.name,
-              restoredSessionForPickerSelection(Boolean(agent), resumeSession)
-            )
-          }
+          selectCurrentModel()
         }
         else if (key.escape)
         {
-          escapePicker()
+          escapeModelPicker()
         }
       }
     },
@@ -839,7 +579,7 @@ export default function App({
     }
   )
 
-  // slash-command list & project-file lookup for prompt autocomplete
+  // slash-command list and project-file lookup for prompt autocomplete
   const completionCommands = useMemo(() => commandCompletions(), [])
   const paletteEntries = useMemo(
     () => buildPaletteEntries(commandInfos(), keybindingInfos()),
@@ -850,8 +590,8 @@ export default function App({
     [currentCwd, refreshProjectFiles]
   )
 
-  // single owner of the ask/yolo transition — no-op check, success/failure
-  // output, & error containment for both ctrl+y & /permissions
+  // own the ask/yolo transition, including no-op handling, output, and errors
+  // for ctrl+y and /permissions
   const setPermissionMode = useCallback(
     async (nextYolo: boolean, operation: OperationHandle<Agent>) =>
     {
@@ -897,7 +637,12 @@ export default function App({
         ])
       }
     },
-    [acceptsCommandEvent, acceptsCommandTerminal, transitionPermissionMode]
+    [
+      acceptsCommandEvent,
+      acceptsCommandTerminal,
+      setOutput,
+      transitionPermissionMode,
+    ]
   )
 
   const runSlashCommand = useCallback(
@@ -913,8 +658,8 @@ export default function App({
 
       setInput('')
       setScrollOffset(0)
-      // lock submits for the command's lifetime so a long command (/index,
-      // /compact, …) can't overlap w/ a chat turn or another command
+      // lock submits for the command's lifetime so /index and /compact cannot
+      // overlap with a chat turn or another command
       setCommandRunning(true)
 
       const cmdCtx: CommandContext = {
@@ -998,6 +743,7 @@ export default function App({
       runOperation,
       saveOperationSession,
       setPermissionMode,
+      setOutput,
       shutdown,
       switchModel,
     ]
@@ -1025,336 +771,17 @@ export default function App({
         if (!result.admitted || result.handled) return
         historyRecorded = true
       }
-
-      const operation = beginOperation('turn')
-      if (!operation) return
-      const runAgent = operation.agent
-      // accept the clean turn before runOperation's registered microtask so an
-      // immediate cancel/shutdown cannot leave the visible & saved histories split
-      const acceptedTurn = runAgent.acceptTurn({
-        content: value,
+      await runAgentTurn(value, {
+        historyRecorded,
         attachmentPaths: parseMentions(value),
-      })
-      const resetRunState = () =>
-      {
-        resetStreamBuffer()
-        resetAnimation()
-        setRunStage('idle')
-        runStartTimeRef.current = null
-        toolStartTimesRef.current.clear()
-      }
-      const completeFailedTurn = (message: string) =>
-      {
-        const completion = completeTurn(operation)
-        if (!completion.accepted) return
-        const pendingBlocks = consumeBufferedBlocks()
-        const toolStarts = new Map(toolStartTimesRef.current)
-        const finishedAt = Date.now()
-        setOutput((prev) => [
-          ...failPendingToolCalls(prev, toolStarts, finishedAt),
-          ...pendingBlocks,
-          { type: 'error', content: message },
-          ...(completion.persistence === 'error'
-            ? [
-                {
-                  type: 'error' as const,
-                  content:
-                    'Session save failed; this turn may not be available after exit.',
-                },
-              ]
-            : []),
-        ])
-        resetRunState()
-      }
-
-      const task = runOperation(operation, async () =>
-      {
-        if (!historyRecorded) addHistoryEntry(value.trim(), getSessionId())
-
-        setInput('')
-        setScrollOffset(0)
-        setOutput((prev) => [...prev, { type: 'user', content: value }])
-        setRunStage('waiting')
-        runStartTimeRef.current = Date.now()
-        startWaiting()
-        resetStreamBuffer()
-
-        await runAgent.runAcceptedTurn(
-          acceptedTurn,
-          {
-            onAttachments(expansion)
-            {
-              if (!acceptsEvent(operation)) return
-              const notice = formatMentionNotice(expansion)
-              if (notice)
-              {
-                setOutput((prev) => [
-                  ...prev,
-                  { type: 'system', content: notice },
-                ])
-              }
-            },
-            onThinking(thinking)
-            {
-              if (!acceptsEvent(operation)) return
-              stopWaiting()
-              setRunStage('thinking')
-              appendThinking(thinking)
-            },
-            onToken(token)
-            {
-              if (!acceptsEvent(operation)) return
-              stopWaiting()
-              setRunStage('responding')
-              appendText(token)
-            },
-            onToolCall(name, args, callId, presentation)
-            {
-              if (!acceptsEvent(operation)) return
-              stopWaiting()
-
-              const pendingBlocks = consumeBufferedBlocks()
-              setRunStage(`tool:${presentation?.label ?? name}`)
-              toolStartTimesRef.current.set(callId, Date.now())
-
-              setOutput((prev) => [
-                ...prev,
-                ...pendingBlocks,
-                {
-                  type: 'tool_call',
-                  toolName: name,
-                  args,
-                  callId,
-                  display: presentation,
-                } satisfies ToolCallBlock,
-              ])
-            },
-            async onToolApproval(name, args, presentation)
-            {
-              if (!acceptsEvent(operation)) return false
-              if (isYolo()) return true
-
-              // compute the change preview before showing the box (best-effort)
-              const preview = await previewToolDiff(name, args, {
-                cwd: runAgent.getCwd(),
-              })
-              if (!acceptsEvent(operation)) return false
-
-              return requestPrompt(operation, {
-                kind: 'tool',
-                toolName: name,
-                args,
-                diff: preview?.kind === 'diff' ? preview.diff : undefined,
-                previewMessage:
-                  preview?.kind === 'message' ? preview.message : undefined,
-                presentation,
-              })
-            },
-            onMcpLaunchApproval(request)
-            {
-              if (!acceptsEvent(operation)) return Promise.resolve(false)
-              stopWaiting()
-              return requestPrompt(operation, { kind: 'mcp', request })
-            },
-            onDoomLoop(message)
-            {
-              if (!acceptsEvent(operation)) return Promise.resolve(false)
-              stopWaiting()
-              return requestPrompt(operation, { kind: 'doom', message })
-            },
-            onVerification(result)
-            {
-              if (!acceptsEvent(operation)) return
-              const label = pluralize(result.editCount, 'edit')
-              let content: string
-              if (result.status === 'pass')
-              {
-                content = `${style('success')('✓ self-check passed')} — ${label} reviewed`
-              }
-              else if (result.status === 'fail')
-              {
-                const reason =
-                  result.reason ?? 'change may not match the request'
-                content = `${style('warning')(`⚠ self-check flagged ${label}`)}: ${reason}${
-                  result.retrying ? ' — asking the model to fix it' : ''
-                }`
-              }
-              else
-              {
-                content = `self-check inconclusive — ${label} reviewed`
-              }
-              setOutput((prev) => [...prev, { type: 'system', content }])
-            },
-            onToolResult(name, result, error, callId, diff)
-            {
-              if (!acceptsEvent(operation)) return
-              const startedAt = toolStartTimesRef.current.get(callId)
-              const duration =
-                startedAt != null ? Date.now() - startedAt : undefined
-              toolStartTimesRef.current.delete(callId)
-
-              setRunStage('waiting')
-              startWaiting()
-
-              setOutput((prev) =>
-              {
-                const next = [...prev]
-
-                for (let i = next.length - 1; i >= 0; i--)
-                {
-                  const block = next[i]!
-                  if (
-                    block.type === 'tool_call' &&
-                    block.callId === callId &&
-                    !block.status
-                  )
-                  {
-                    next[i] = {
-                      ...block,
-                      status: error ? 'error' : 'success',
-                      duration,
-                    }
-                    break
-                  }
-                }
-
-                if (error)
-                {
-                  next.push({
-                    type: 'tool_result',
-                    toolName: name,
-                    content: error,
-                    isError: true,
-                  })
-                }
-                else if (diff)
-                {
-                  // the diff says it all — skip the redundant summary line
-                  next.push({ type: 'diff', unified: diff } satisfies DiffBlock)
-                }
-                else if (result)
-                {
-                  next.push({
-                    type: 'tool_result',
-                    toolName: name,
-                    content: truncateToolResult(result),
-                  })
-                }
-
-                return next
-              })
-            },
-            onUsage(usage)
-            {
-              if (!acceptsEvent(operation)) return
-              const prefillTps = computeTokensPerSecond(
-                usage.promptTokens,
-                usage.promptEvalDurationNs
-              )
-              const decodeTps = computeTokensPerSecond(
-                usage.completionTokens,
-                usage.evalDurationNs
-              )
-              setTokenUsage((prev) => ({
-                prompt: usage.totalPromptTokens,
-                completion: usage.totalCompletionTokens,
-                context: usage.contextTokens,
-                // keep the previous throughput if the current turn reported nothing
-                // (e.g., a cache-only hit w/ zero decode tokens)
-                lastPrefillTps:
-                  prefillTps > 0 ? prefillTps : prev.lastPrefillTps,
-                lastDecodeTps: decodeTps > 0 ? decodeTps : prev.lastDecodeTps,
-              }))
-            },
-            onCompactionStart()
-            {
-              if (!acceptsEvent(operation)) return
-              setRunStage('compacting')
-            },
-            onCompaction(result)
-            {
-              if (!acceptsEvent(operation)) return
-              // rebuild from agent messages so the UI matches cleared undo stacks
-              rebuildTranscript(runAgent)
-              setOutput((prev) => [
-                ...prev,
-                { type: 'system', content: formatAutoCompactionResult(result) },
-              ])
-              setRunStage('waiting')
-              startWaiting()
-            },
-            onDone()
-            {
-              const completion = completeTurn(operation)
-              if (!completion.accepted) return
-              const pendingBlocks = consumeBufferedBlocks()
-              const persistenceBlocks: OutputBlock[] =
-                completion.persistence === 'error'
-                  ? [
-                      {
-                        type: 'error',
-                        content:
-                          'Session save failed; this turn may not be available after exit.',
-                      },
-                    ]
-                  : []
-
-              if (completion.aborted)
-              {
-                const toolStarts = new Map(toolStartTimesRef.current)
-                const finishedAt = Date.now()
-                setOutput((prev) => [
-                  ...failPendingToolCalls(prev, toolStarts, finishedAt),
-                  ...pendingBlocks,
-                  { type: 'system', content: 'Generation interrupted' },
-                  ...persistenceBlocks,
-                ])
-              }
-              else
-              {
-                setOutput((prev) => [
-                  ...prev,
-                  ...pendingBlocks,
-                  ...persistenceBlocks,
-                ])
-              }
-
-              resetRunState()
-            },
-            onError(error)
-            {
-              completeFailedTurn(error.message)
-            },
-          },
-          operation.signal
-        )
-      })
-      return task.catch((error: unknown) =>
-      {
-        completeFailedTurn(toErrorMessage(error))
       })
     },
     [
-      addHistoryEntry,
-      acceptsEvent,
-      beginOperation,
-      completeTurn,
-      getSessionId,
-      isYolo,
-      promptActive,
-      appendText,
-      appendThinking,
       commandRunning,
-      consumeBufferedBlocks,
-      rebuildTranscript,
-      resetAnimation,
-      resetStreamBuffer,
+      promptActive,
+      runAgentTurn,
       runStage,
       runSlashCommand,
-      requestPrompt,
-      runOperation,
-      startWaiting,
-      stopWaiting,
       transitioningSession,
     ]
   )
@@ -1362,7 +789,7 @@ export default function App({
   const sessionLabel = sessionLabelId ? `session ${sessionLabelId}` : ''
   // ctx gauge reflects current context occupancy, not lifetime throughput
   const tokenGauge = buildTokenGauge(tokenUsage.context, contextWindow)
-  // cumulative tokens processed this session — distinct from occupancy above
+  // cumulative tokens processed this session — distinct from current occupancy
   const sessionTokens = tokenUsage.prompt + tokenUsage.completion
   const sessionGauge =
     sessionTokens > 0 ? `${formatTokenCount(sessionTokens)} tok session` : ''
@@ -1459,7 +886,7 @@ export default function App({
   }
   else
   {
-    // idle state — show ctx gauge, last-turn throughput, & session total on left
+    // show the context gauge, last-turn throughput, and session total while idle
     const stateLeft = [tokenGauge || 'ready', perfGauge, sessionGauge]
       .filter(Boolean)
       .join(' · ')
@@ -1518,8 +945,8 @@ export default function App({
     if (!agent) return
     if (isRunning || commandRunning || transitioningSession || promptActive)
     {
-      // deliberate: mid-run MCP enable/disable is unsafe, so say so instead
-      // of silently swallowing the keypress
+      // reject mid-run MCP enable/disable because the active Agent owns the
+      // current tool set
       setOutput((prev) => [
         ...prev,
         {
@@ -1555,6 +982,7 @@ export default function App({
     promptActive,
     runOperation,
     setPermissionMode,
+    setOutput,
     transitioningSession,
   ])
 

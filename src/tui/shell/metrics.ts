@@ -1,5 +1,5 @@
 // src/tui/shell/metrics.ts
-// shared token, throughput, & duration formatting for TUI surfaces
+// shared token, throughput, and duration formatting for TUI surfaces
 
 import { pluralize } from '../../utils/pluralize.js'
 
@@ -71,7 +71,7 @@ export function buildTokenGauge(
 }
 
 // frozen-prefix coverage for /status — tokens Coral keeps byte-stable across
-// compaction, w/ % of the pinned window when known. neutral wording: this is
+// compaction, with a percentage of the pinned window when known. this is
 // what Coral froze to enable prefix reuse, not a measured server-side cache hit
 export function formatFrozenPrefixCoverage(
   tokens: number,

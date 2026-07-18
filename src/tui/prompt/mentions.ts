@@ -1,5 +1,5 @@
 // src/tui/prompt/mentions.ts
-// parse @-file mention syntax & format transcript notices
+// parse @-file mention syntax and format transcript notices
 
 import type {
   AttachmentReport,
@@ -46,8 +46,7 @@ export function parseMentions(value: string): string[]
   return paths
 }
 
-// one-line transcript notice for truncated/skipped mentions, or null when every
-// mention attached cleanly (success is implicit — no need to narrate it)
+// format a notice for truncated or skipped mentions; return null on success
 export function formatMentionNotice(
   expansion: MentionExpansion
 ): string | null

@@ -1,20 +1,12 @@
-// src/tui/hooks/use-interactive-session.ts
-// own interactive Agent, session, prompt, model, permission, & shutdown lifetime
+// src/tui/session/use-interactive-session.ts
+// own the interactive Agent, session, prompt, model, permission, and shutdown lifetime
 
 import { existsSync } from 'node:fs'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Agent } from '../../agent/agent.js'
-import { AgentTodoState } from '../../agent/todo-state.js'
-import { resolveMcpConfig, type McpConfigResolution } from '../../config/mcp.js'
-import {
-  createSession,
-  isValidSessionId,
-  loadSession,
-  renameSession,
-  saveSession,
-  type SessionData,
-  type SessionMeta,
-} from '../../session/store.js'
+import type { Agent } from '../../agent/agent.js'
+import { resolveMcpConfig } from '../../config/mcp.js'
+import { loadSession, renameSession } from '../../session/store.js'
+import type { SessionData, SessionMeta } from '../../session/types.js'
 import { recordReliability } from '../../telemetry/store.js'
 import type { TodoItem } from '../../types/todo.js'
 import {
@@ -30,13 +22,9 @@ import {
   type OperationHandle,
   type PromptRequest,
   type SessionSaveResult,
-} from '../session/interactive-runtime.js'
-import { ProjectFileCatalog } from '../session/project-file-catalog.js'
-
-interface StartupSession
-{
-  session: SessionData | null
-}
+} from './interactive-runtime.js'
+import { ProjectFileCatalog } from './project-file-catalog.js'
+import { buildPrimaryAgent, persistAgentSession } from './agent-session.js'
 
 export interface InteractiveSessionView
 {
@@ -120,87 +108,6 @@ export interface InteractiveSession
   isYolo: () => boolean
   isAcceptingTransitions: () => boolean
   shutdown: () => Promise<void>
-}
-
-export function resolveStartupSession(
-  resumeSessionId?: string
-): StartupSession
-{
-  if (!resumeSessionId || !isValidSessionId(resumeSessionId))
-  {
-    return { session: null }
-  }
-
-  const session = loadSession(resumeSessionId)
-  if (!session || !existsSync(session.meta.cwd)) return { session: null }
-  return { session }
-}
-
-function buildPrimaryAgent(options: {
-  model: string
-  host: string
-  cwd?: string
-  think: boolean
-  mcp: boolean
-  mcpConfig: McpConfigResolution
-  restored?: SessionData | null
-}): Agent
-{
-  const agent = new Agent(options.model, options.host, options.cwd, {
-    think: options.think,
-    mcp: options.mcp,
-    mcpConfig: options.mcpConfig,
-    todoState: new AgentTodoState(options.restored?.todos),
-  })
-  if (options.restored)
-  {
-    agent.restoreMessages(options.restored.messages)
-    agent.restoreUndoStack(options.restored.undo, options.restored.redo)
-  }
-  return agent
-}
-
-function persistAgentSession(
-  agent: Agent,
-  target: SessionMeta | null
-): SessionMeta | null
-{
-  try
-  {
-    const messages = agent.getMessages()
-    const model = agent.getModel()
-    const cwd = agent.getCwd()
-    const todos = agent.getTodos()
-    const { undo, redo } = agent.exportUndoStateForPersistence()
-    const metaHint = {
-      compactionCount: agent.getCompactionCount(),
-      lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
-      ...(target
-        ? {
-            createdAt: target.createdAt,
-            title: target.title,
-          }
-        : {}),
-    }
-
-    return target
-      ? saveSession(
-          target.id,
-          model,
-          cwd,
-          messages,
-          metaHint,
-          todos,
-          undo,
-          redo
-        )
-      : createSession(model, cwd, messages, todos, undo, redo)
-  }
-  catch
-  {
-    // session save failure is non-fatal
-    return null
-  }
 }
 
 export function useInteractiveSession(
@@ -531,9 +438,9 @@ export function useInteractiveSession(
         let committed = false
         try
         {
-          // Agent commits the mode synchronously before returning its joined
+          // publish the mode commit synchronously before returning its joined
           // cleanup promise; publish that commit immediately so cancellation
-          // during retirement cannot split the runtime & visible mode
+          // during retirement cannot split the runtime and visible mode
           const cleanup = target.setMcpEnabled(!nextYolo, transition.signal)
           committed = target.isMcpEnabled() === !nextYolo
           if (committed)

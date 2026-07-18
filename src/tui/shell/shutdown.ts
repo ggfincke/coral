@@ -7,7 +7,7 @@ export interface SignalProcessLike
   off?(event: 'SIGINT' | 'SIGTERM', listener: () => void): unknown
 }
 
-// register process signal handlers & return an unregister callback
+// register process signal handlers and return an unregister callback
 export function registerSignalHandlers(
   proc: SignalProcessLike,
   handler: () => void

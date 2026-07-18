@@ -1,5 +1,5 @@
 // src/tui/prompt/mention-path.ts
-// encode & decode @-mention path tokens
+// encode and decode @-mention path tokens
 
 export const MENTION_BOUNDARY = String.raw`(?:^|\s)@`
 export const QUOTED_BODY = String.raw`(?:\\.|[^"\\])*`

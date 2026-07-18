@@ -1,5 +1,5 @@
 // src/tui/transcript/transcript.ts
-// format conversation blocks into viewport-ready lines w/ visual hierarchy
+// format conversation blocks into viewport-ready lines with visual hierarchy
 
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
@@ -9,84 +9,11 @@ import { formatElapsed } from '../shell/metrics.js'
 import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from '../theme.js'
 import { SOFT_WRAP_OPTIONS, wrapLines } from '../wrap.js'
-import { allTools, type ToolCallPresentation } from '../../tools/index.js'
+import type { ToolCallPresentation } from '../../tools/tool.js'
 import { ellipsize } from '../../utils/ellipsize.js'
+import { stringifyForDisplay } from '../../utils/untrusted-text.js'
 import { sanitizeUntrustedText, sanitizeStyledText } from './sanitize.js'
-
-// block types w/ richer data for tool calls & results
-
-export interface UserBlock
-{
-  type: 'user'
-  content: string
-}
-
-export interface AssistantBlock
-{
-  type: 'assistant'
-  content: string
-}
-
-export interface ThinkingBlock
-{
-  type: 'thinking'
-  content: string
-}
-
-// emitted when a tool call starts (before execution)
-export interface ToolCallBlock
-{
-  type: 'tool_call'
-  toolName: string
-  args: Record<string, unknown>
-  // correlates the result back to this call (parallel batches announce many
-  // calls — often same-named — before any resolves)
-  callId?: number
-  // set when the tool finishes
-  status?: 'success' | 'error'
-  duration?: number
-  // emission-time snapshot for dynamic (MCP) tools — survives tool refreshes
-  display?: ToolCallPresentation
-}
-
-// emitted when tool execution completes
-export interface ToolResultBlock
-{
-  type: 'tool_result'
-  toolName: string
-  content: string
-  isError?: boolean
-}
-
-// colored unified diff — from edit/write tools or /diff
-export interface DiffBlock
-{
-  type: 'diff'
-  unified: string
-}
-
-export interface ErrorBlock
-{
-  type: 'error'
-  content: string
-}
-
-// output from slash commands & system messages
-export interface SystemBlock
-{
-  type: 'system'
-  content: string
-}
-
-export type OutputBlock =
-  | UserBlock
-  | AssistantBlock
-  | ThinkingBlock
-  | ToolCallBlock
-  | ToolResultBlock
-  | DiffBlock
-  | ErrorBlock
-  | SystemBlock
+import type { OutputBlock, ToolCallBlock } from './types.js'
 
 // settle every call still owned by a terminal turn so none keeps animating
 export function failPendingToolCalls(
@@ -127,20 +54,17 @@ function getSpinnerFrame(tick: number): string
   return SPINNER_FRAMES[tick % SPINNER_FRAMES.length]!
 }
 
-// tool registry keyed by name for O(1) presentation lookups
-const TOOLS_BY_NAME = new Map(allTools.map((tool) => [tool.name, tool]))
-
-// format tool call args into a short summary, sourced from the tool's own
-// display metadata; unknown tools fall back to compact JSON
+// prefer the event-time summary; otherwise use compact JSON
 export function summarizeToolArgs(
-  toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  display?: ToolCallPresentation
 ): string
 {
-  const summarize = TOOLS_BY_NAME.get(toolName)?.display?.summarize
-  if (summarize) return sanitizeUntrustedText(summarize(args))
-  const json = JSON.stringify(args)
-  return ellipsize(sanitizeUntrustedText(json), 60)
+  const summary = display?.summary ?? stringifyForDisplay(args)
+  return ellipsize(
+    sanitizeUntrustedText(summary).replace(/\s+/g, ' ').trim(),
+    60
+  )
 }
 
 function getCachedBlockLines(
@@ -165,16 +89,13 @@ function getCachedBlockLines(
   return lines
 }
 
-// tool-specific label used in the tool call header; a snapshot from the call
-// event wins, then the static registry, then the raw name
+// use the event-time label when available; otherwise retain the raw name
 function toolDisplayLabel(
   toolName: string,
   display?: ToolCallPresentation
 ): string
 {
-  return sanitizeUntrustedText(
-    display?.label ?? TOOLS_BY_NAME.get(toolName)?.display?.label ?? toolName
-  )
+  return sanitizeUntrustedText(display?.label ?? toolName)
 }
 
 // format an in-progress tool call that depends on the current spinner frame
@@ -186,7 +107,11 @@ function formatPendingToolCall(
 {
   const spinner = style('primary')(getSpinnerFrame(spinnerTick))
   const label = toolDisplayLabel(block.toolName, block.display)
-  const argDisplay = formatToolArgDisplay(block.toolName, block.args)
+  const argDisplay = formatToolArgDisplay(
+    block.toolName,
+    block.args,
+    block.display
+  )
 
   const header = `   ${style('code')('│')} ${spinner} ${style('code')(label)} ${argDisplay}`
 
@@ -219,10 +144,11 @@ function formatStreamingAssistantText(
 // styled tool-arg summary — bash gets a '$ ' prefix, others dimmed
 function formatToolArgDisplay(
   toolName: string,
-  args: Record<string, unknown>
+  args: Record<string, unknown>,
+  display?: ToolCallPresentation
 ): string
 {
-  const argSummary = summarizeToolArgs(toolName, args)
+  const argSummary = summarizeToolArgs(args, display)
   return toolName === 'bash'
     ? chalk.dim('$ ') + chalk.white(argSummary)
     : chalk.dim(argSummary)
@@ -279,7 +205,11 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
           ? chalk.dim(` ${formatElapsed(block.duration)}`)
           : ''
       const border = isError ? style('error')('│') : style('code')('│')
-      const argDisplay = formatToolArgDisplay(block.toolName, block.args)
+      const argDisplay = formatToolArgDisplay(
+        block.toolName,
+        block.args,
+        block.display
+      )
 
       const header = `   ${border} ${statusMark} ${style('code')(label)} ${argDisplay}${duration}`
       return wrapLines(header, width)
@@ -328,7 +258,7 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
   }
 }
 
-// format a block while caching finalized content by identity, width, & theme
+// format a block while caching finalized content by identity, width, and theme
 function formatBlock(
   block: OutputBlock,
   width: number,
@@ -346,7 +276,7 @@ function formatBlock(
   )
 }
 
-// format tool result output w/ left-border continuation style
+// format tool result output with left-border continuation style
 function formatToolResultLines(
   content: string,
   isError: boolean,

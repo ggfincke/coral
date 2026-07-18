@@ -1,17 +1,17 @@
-// src/tui/components/prompt-input.tsx
-// inline prompt input w/ unified keyboard, wheel, & safe text insertion
+// src/tui/prompt/prompt-input.tsx
+// inline prompt input with unified keyboard, wheel, and safe text insertion
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text } from 'ink'
 import chalk from 'chalk'
+import { useCoralInput } from '../input/use-coral-input.js'
 import {
-  useCoralInput,
   isParsedControlSequence,
   isParsedControlFragment,
   type CoralKey,
-} from '../hooks/use-coral-input.js'
-import { matchPromptKeybinding } from '../keybindings.js'
-import { applyPromptEdit } from '../prompt/prompt-edit.js'
+} from '../input/terminal-input.js'
+import { matchPromptKeybinding } from '../input/keybindings.js'
+import { applyPromptEdit } from './prompt-edit.js'
 import {
   applyCompletion,
   detectCompletion,
@@ -19,10 +19,10 @@ import {
   rankFiles,
   type CommandSummary,
   type CompletionItem,
-} from '../prompt/completion.js'
+} from './completion.js'
 import CompletionMenu from './completion-menu.js'
-import { resetPromptFileSuggestions } from '../prompt/prompt-file-suggestions.js'
-import { renderPromptValueWithCursor } from '../prompt/prompt-render.js'
+import { resetPromptFileSuggestions } from './prompt-file-suggestions.js'
+import { renderPromptValueWithCursor } from './prompt-render.js'
 
 export interface PromptInputProps
 {
@@ -90,8 +90,8 @@ export default function PromptInput({
   const fileRequestIdRef = useRef(0)
   const mountedRef = useRef(true)
   const pendingTerminalSequenceRef = useRef('')
-  // cursor is out of sync w/ the controlled value -> the value changed
-  // externally (history recall, submit clear), so render the cursor at the end
+  // move the cursor to the end when external value changes invalidate its
+  // controlled position
   const hasExternalValue = value !== cursor.value
   const resolvedCursor = useMemo(
     () =>
@@ -111,7 +111,7 @@ export default function PromptInput({
     [cursor, focus, hasExternalValue, showCursor, value]
   )
 
-  // active completion span under the cursor, & its ranked suggestions
+  // active completion span and ranked suggestions under the cursor
   const query = useMemo(
     () => detectCompletion(value, resolvedCursor.cursorOffset),
     [value, resolvedCursor.cursorOffset]
@@ -186,7 +186,7 @@ export default function PromptInput({
     }
   }, [filesCacheKey, needFiles, refreshFiles])
 
-  // splice the highlighted suggestion into the prompt & close the menu
+  // splice the highlighted suggestion into the prompt and close the menu
   const acceptCompletion = useCallback(() =>
   {
     if (!query || items.length === 0) return
@@ -330,9 +330,8 @@ export default function PromptInput({
       if (key.return)
       {
         onSubmit(value)
-        // a real submit clears the field; reset the cursor so a later history
-        // recall of the same text isn't mistaken for the current (now stale)
-        // cursor value & left mid-text; skip empty/whitespace (never submitted)
+        // reset the cursor after a real submit so later history recall does not
+        // reuse a stale mid-text position
         if (value.trim())
         {
           setCursor({ value: '', cursorOffset: 0, cursorWidth: 0 })
@@ -365,7 +364,7 @@ export default function PromptInput({
       if (nextState.value !== value)
       {
         onChange(nextState.value)
-        // typing/deleting re-opens a dismissed menu & resets the highlight;
+        // typing or deleting reopens a dismissed menu and resets the highlight;
         // a cursor-only move leaves an Esc-dismissed menu closed
         setDismissed(false)
         setSelectedIndex(0)

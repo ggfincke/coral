@@ -1,13 +1,8 @@
-// src/tui/hooks/use-coral-input.ts
-// parse keyboard & wheel input from Ink's shared event stream
+// src/tui/input/terminal-input.ts
+// tokenize terminal packets and normalize keyboard and wheel input
 
-import type { EventEmitter } from 'node:events'
-import { useEffect, useRef } from 'react'
-import { useStdin } from 'ink'
 import { parseKeypress, nonAlphanumericKeys } from './keypress.js'
 
-const ENABLE_MOUSE_TRACKING = '\x1b[?1000h\x1b[?1006h'
-const DISABLE_MOUSE_TRACKING = '\x1b[?1006l\x1b[?1000l'
 const ESC = '\u001b'
 const SGR_MOUSE_PACKET_RE = new RegExp(`^${ESC}\\[<(\\d+);\\d+;\\d+[Mm]$`)
 const SGR_MOUSE_PREFIX_RE = new RegExp(`^${ESC}\\[<\\d+;\\d+;\\d+[Mm]`)
@@ -18,8 +13,8 @@ const BRACKETED_PASTE_FRAGMENT_RE = new RegExp(`^${ESC}\\[(?:2|20|200|201)?$`)
 const FOCUS_PACKET_RE = new RegExp(`^${ESC}\\[[IO]$`)
 const FOCUS_PREFIX_RE = new RegExp(`^${ESC}\\[[IO]`)
 const FOCUS_FRAGMENT_RE = new RegExp(`^${ESC}\\[$`)
-// fixed control-sequence anchors — mirrored by the *_PREFIX_RE / *_PACKET_RE /
-// *_FRAGMENT_RE regexes above; add new control types in both places
+// fixed control-sequence anchors must stay in sync w/ the prefix, packet, and
+// fragment regexes; add each new control type to every corresponding list
 const CONTROL_PREFIXES = [
   '\x1b[<',
   '\x1b[200~',
@@ -53,29 +48,16 @@ export interface CoralKey
   wheelDown: boolean
 }
 
-interface ParsedInputEvent
+export interface ParsedInputEvent
 {
   input: string
   key: CoralKey
 }
 
-interface UseCoralInputOptions
-{
-  isActive?: boolean
-  enableMouseTracking?: boolean
-}
-
-interface TokenizedChunk
+export interface TokenizedChunk
 {
   tokens: string[]
   pending: string
-}
-
-interface CoralStdinContext
-{
-  setRawMode: (value: boolean) => void
-  internal_exitOnCtrlC: boolean
-  internal_eventEmitter: EventEmitter
 }
 
 export function buildKey(overrides: Partial<CoralKey> = {}): CoralKey
@@ -119,7 +101,7 @@ export function isParsedControlSequence(input: string): boolean
   )
 }
 
-// a partial/incomplete SGR-mouse sequence — callers test this BEFORE
+// a partial/incomplete SGR-mouse sequence — callers test this before
 // isParsedControlSequence (which subsumes this regex) to buffer vs discard
 export function isParsedControlFragment(input: string): boolean
 {
@@ -160,7 +142,10 @@ function findNextControlIndex(input: string): number
   return indexes.length > 0 ? Math.min(...indexes) : -1
 }
 
-function tokenizeTerminalChunk(input: string, pending = ''): TokenizedChunk
+export function tokenizeTerminalChunk(
+  input: string,
+  pending = ''
+): TokenizedChunk
 {
   const tokens: string[] = []
   let remaining = pending + input
@@ -217,7 +202,7 @@ function tokenizeTerminalChunk(input: string, pending = ''): TokenizedChunk
   return { tokens, pending: '' }
 }
 
-function toInputEvent(packet: string): ParsedInputEvent | null
+export function toInputEvent(packet: string): ParsedInputEvent | null
 {
   const wheel = parseMouseWheelPacket(packet)
   if (wheel === 'up' || wheel === 'down')
@@ -273,77 +258,4 @@ function toInputEvent(packet: string): ParsedInputEvent | null
   }
 
   return { input, key }
-}
-
-export function useCoralInput(
-  handler: (input: string, key: CoralKey) => void,
-  options: UseCoralInputOptions = {}
-): void
-{
-  const { setRawMode, internal_exitOnCtrlC, internal_eventEmitter } =
-    useStdin() as unknown as CoralStdinContext
-  const { isActive = true, enableMouseTracking = false } = options
-  const pendingRef = useRef('')
-  const handlerRef = useRef(handler)
-
-  useEffect(() =>
-  {
-    handlerRef.current = handler
-  }, [handler])
-
-  useEffect(() =>
-  {
-    if (!isActive) return
-
-    setRawMode(true)
-
-    return () =>
-    {
-      setRawMode(false)
-    }
-  }, [isActive, setRawMode])
-
-  useEffect(() =>
-  {
-    if (!isActive || !enableMouseTracking) return
-
-    process.stdout.write(ENABLE_MOUSE_TRACKING)
-
-    return () =>
-    {
-      process.stdout.write(DISABLE_MOUSE_TRACKING)
-    }
-  }, [enableMouseTracking, isActive])
-
-  useEffect(() =>
-  {
-    if (!isActive) return
-
-    const handleData = (data: string | Buffer) =>
-    {
-      const raw = typeof data === 'string' ? data : data.toString()
-      const { tokens, pending } = tokenizeTerminalChunk(raw, pendingRef.current)
-      pendingRef.current = pending
-
-      for (const token of tokens)
-      {
-        const event = toInputEvent(token)
-        if (!event) continue
-        if (event.input === 'c' && event.key.ctrl && internal_exitOnCtrlC)
-        {
-          continue
-        }
-
-        handlerRef.current(event.input, event.key)
-      }
-    }
-
-    internal_eventEmitter.on('input', handleData)
-
-    return () =>
-    {
-      pendingRef.current = ''
-      internal_eventEmitter.removeListener('input', handleData)
-    }
-  }, [internal_eventEmitter, internal_exitOnCtrlC, isActive])
 }

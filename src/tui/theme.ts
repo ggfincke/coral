@@ -1,5 +1,5 @@
 // src/tui/theme.ts
-// role-based theme system: mutable active theme + call-time style accessors
+// role-based theme system: mutable active theme and call-time style accessors
 
 import chalk, { type ChalkInstance } from 'chalk'
 import { DEFAULT_THEME } from './themes.js'
@@ -43,7 +43,7 @@ export type RoleColor = RGB | { ansi: AnsiColor }
 
 export interface Theme
 {
-  // kebab-case id used by /theme & prefs
+  // kebab-case id used by /theme and preferences
   name: string
   label: string
   description: string

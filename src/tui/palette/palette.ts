@@ -1,11 +1,14 @@
-// src/tui/palette.ts
-// command palette entries, ranking, & terminal-line rendering
+// src/tui/palette/palette.ts
+// command palette entries, ranking, and terminal-line rendering
 
 import chalk from 'chalk'
-import { style } from './theme.js'
-import { wrapLines } from './wrap.js'
-import type { CommandInfo } from './shell/commands.js'
-import type { KeybindingAction, KeybindingSummary } from './keybindings.js'
+import { style } from '../theme.js'
+import { wrapLines } from '../wrap.js'
+import type { CommandInfo } from '../commands/contracts.js'
+import type {
+  KeybindingAction,
+  KeybindingSummary,
+} from '../input/keybindings.js'
 
 export type PaletteEntryKind = 'command' | 'keybinding'
 

@@ -4,7 +4,7 @@
 import stringWidth from 'string-width'
 import wrapAnsi from 'wrap-ansi'
 
-// visible terminal columns (ANSI-aware & fullwidth-aware, matching wrap-ansi)
+// visible terminal columns (ANSI-aware and fullwidth-aware, matching wrap-ansi)
 export function visibleWidth(text: string): number
 {
   return stringWidth(text)
@@ -26,7 +26,7 @@ export function center(line: string, width: number): string
 }
 
 // soft-wrap opts (break on spaces, keep leading/trailing space) — shared so the
-// transcript tool-result wrapper can't drift from wrapLines
+// keep transcript tool-result wrapping consistent with wrapLines
 export const SOFT_WRAP_OPTIONS = {
   hard: false,
   trim: false,

@@ -1,23 +1,25 @@
 // src/tui/run/approval-box.ts
-// bordered tool & MCP launch approval prompt content & bounded viewport render
+// bordered tool and MCP launch approval content with bounded viewport rendering
 
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import type { McpLaunchApprovalRequest } from '../../mcp/types.js'
 import type { ToolCallPresentation } from '../../tools/tool.js'
-import { trimTrailingHighSurrogate } from '../../utils/ellipsize.js'
+import { ellipsize, trimTrailingHighSurrogate } from '../../utils/ellipsize.js'
 import { renderUnifiedDiff } from '../transcript/diff.js'
 import { summarizeToolArgs } from '../transcript/transcript.js'
 import { boxFrame } from './status-line.js'
 import { style } from '../theme.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
+import { stringifyForDisplay } from '../../utils/untrusted-text.js'
 import { visibleWidth } from '../wrap.js'
 
 // cap change previews so large edits don't swallow the screen
 const MAX_PREVIEW_LINES = 20
 const MAX_MCP_APPROVAL_ARG_CHARS = 8_000
+const MAX_APPROVAL_TOOL_NAME_CHARS = 256
 
-// logical prompt content: title & actions stay pinned, body scrolls
+// logical prompt content: title and actions stay pinned while the body scrolls
 export interface PromptBoxContent
 {
   label: string
@@ -73,19 +75,22 @@ function formatApprovalArgs(
   presentation?: ToolCallPresentation
 ): string
 {
-  // MCP calls carry a presentation snapshot — no name-prefix sniffing here;
-  // the naming convention stays owned by the manager
+  // preserve the manager's dynamic-tool decision; do not infer it from a name
+  // prefix
   if (presentation?.mcp)
   {
-    const json = sanitizeUntrustedText(JSON.stringify(args, null, 2))
+    const json = sanitizeUntrustedText(stringifyForDisplay(args, 2))
     if (json.length <= MAX_MCP_APPROVAL_ARG_CHARS) return json
     return `${trimTrailingHighSurrogate(json.slice(0, MAX_MCP_APPROVAL_ARG_CHARS))}\n… [MCP arguments truncated]`
   }
-  const summary = summarizeToolArgs(toolName, args)
+  const summary =
+    presentation?.summary !== undefined
+      ? sanitizeUntrustedText(presentation.summary)
+      : summarizeToolArgs(args, presentation)
   return toolName === 'bash' ? `$ ${summary}` : summary
 }
 
-// lines come back fully styled; render w/o an outer Ink color prop so the
+// lines come back fully styled; render without an outer Ink color prop so the
 // embedded diff colors survive
 export function buildApprovalContent(
   toolName: string,
@@ -98,7 +103,11 @@ export function buildApprovalContent(
 {
   const box = contentBuilder(width, 'tool approval')
 
-  box.title(`Allow ${toolName}?`)
+  const cleanToolName = ellipsize(
+    sanitizeUntrustedText(toolName).replace(/\s+/g, ' ').trim(),
+    MAX_APPROVAL_TOOL_NAME_CHARS
+  )
+  box.title(`Allow ${cleanToolName}?`)
   box.push(formatApprovalArgs(toolName, args, presentation), box.warn)
 
   if (diff)
@@ -224,7 +233,7 @@ function wrappedPromptContent(
   return wrapped
 }
 
-// frame content into at most maxRows terminal rows; title & actions stay
+// frame content into at most maxRows terminal rows; title and actions stay
 // pinned while the body scrolls behind a position indicator
 export function renderPromptBox(
   content: PromptBoxContent,
@@ -265,7 +274,7 @@ export function renderPromptBox(
     }
   }
 
-  // constrained mode drops decorative blanks & moves title overflow into the
+  // constrained mode drops decorative blanks and moves title overflow into the
   // scrollable body so complete identities remain reachable
   const insideRows = Math.max(rowLimit - 2, 0)
   const visibleActions = actionLines.slice(0, insideRows)

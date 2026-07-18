@@ -1,5 +1,5 @@
 // src/tui/run/status-line.ts
-// status label & separator formatting
+// status label and separator formatting
 
 import wrapAnsi from 'wrap-ansi'
 import type { RunStage } from './run-stage.js'
@@ -18,7 +18,7 @@ function truncateToWidth(text: string, width: number): string
   )
 }
 
-// fixed-label stages; 'idle' & unmapped values fall through to 'ready'
+// fixed-label stages; 'idle' and unmapped values fall through to 'ready'
 const STAGE_LABELS: Partial<Record<RunStage, string>> = {
   waiting: 'waiting for model',
   thinking: 'thinking',

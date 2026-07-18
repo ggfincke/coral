@@ -8,7 +8,7 @@ import { clamp } from '../../utils/clamp.js'
 import { style } from '../theme.js'
 import { wrapLines } from '../wrap.js'
 
-// preferred default model, pinned to top & selected at startup
+// preferred default model, pinned to the top and selected at startup
 const DEFAULT_MODEL = 'gemma4:31b-mlx'
 
 function parseModifiedAt(value: string): number

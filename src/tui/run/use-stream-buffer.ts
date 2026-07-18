@@ -1,9 +1,9 @@
-// src/tui/hooks/use-stream-buffer.ts
-// buffered streaming state for assistant text & reasoning
+// src/tui/run/use-stream-buffer.ts
+// buffered streaming state for assistant text and reasoning
 
 import { useCallback, useRef, useState } from 'react'
 import { clearTimerRef } from './clear-timer-ref.js'
-import type { OutputBlock } from '../transcript/transcript.js'
+import type { OutputBlock } from '../transcript/types.js'
 
 export interface StreamBuffer
 {

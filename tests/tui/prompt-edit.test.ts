@@ -8,7 +8,7 @@ import {
   type PromptCursorState,
 } from '../../src/tui/prompt/prompt-edit.js'
 import { buildPromptCursorSegments } from '../../src/tui/prompt/prompt-render.js'
-import { buildKey } from '../../src/tui/hooks/use-coral-input.js'
+import { buildKey } from '../../src/tui/input/terminal-input.js'
 
 function buildCursor(cursorOffset: number, cursorWidth = 0): PromptCursorState
 {
@@ -104,7 +104,7 @@ test('applyPromptEdit keeps grapheme clusters intact', () =>
   )
 })
 
-test('applyPromptEdit moves the cursor across emoji graphemes whole', () =>
+test('applyPromptEdit moves the cursor across grapheme clusters whole', () =>
 {
   // leftArrow from the right side jumps the whole emoji cluster (3 -> 1)
   assert.deepEqual(
@@ -127,10 +127,7 @@ test('applyPromptEdit moves the cursor across emoji graphemes whole', () =>
     }),
     { value: 'a\ud83d\ude42b', cursorOffset: 3, cursorWidth: 0 }
   )
-})
 
-test('applyPromptEdit moves the cursor across combining-mark graphemes whole', () =>
-{
   // leftArrow jumps the whole 'e + combining acute' cluster (4 -> 3)
   assert.deepEqual(
     applyPromptEdit({
@@ -142,7 +139,7 @@ test('applyPromptEdit moves the cursor across combining-mark graphemes whole', (
     { value: 'cafe\u0301', cursorOffset: 3, cursorWidth: 0 }
   )
 
-  // rightArrow over the '\u00e9' cluster lands past the combining mark (3 -> 5)
+  // rightArrow over the combining-mark cluster lands past the mark (3 -> 5)
   assert.deepEqual(
     applyPromptEdit({
       value: 'cafe\u0301',

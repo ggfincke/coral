@@ -1,5 +1,5 @@
-// src/tui/components/command-palette.tsx
-// interactive command palette for slash commands & keybindings
+// src/tui/palette/command-palette.tsx
+// interactive command palette for slash commands and keybindings
 
 import { useMemo, useState } from 'react'
 import {
@@ -7,9 +7,10 @@ import {
   filterPaletteEntries,
   reducePaletteInput,
   type PaletteEntry,
-} from '../palette.js'
-import { useCoralInput, type CoralKey } from '../hooks/use-coral-input.js'
-import { LineList } from './line-list.js'
+} from './palette.js'
+import { useCoralInput } from '../input/use-coral-input.js'
+import type { CoralKey } from '../input/terminal-input.js'
+import { LineList } from '../components/line-list.js'
 
 export interface CommandPaletteProps
 {

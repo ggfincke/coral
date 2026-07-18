@@ -1,5 +1,5 @@
 // src/tui/themes.ts
-// built-in theme definitions & lookup
+// built-in theme definitions and lookup
 
 import type { Theme } from './theme.js'
 

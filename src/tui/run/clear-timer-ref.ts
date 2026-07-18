@@ -1,5 +1,5 @@
-// src/tui/hooks/clear-timer-ref.ts
-// clear a React timer ref & null it out
+// src/tui/run/clear-timer-ref.ts
+// clear a React timer ref and null it out
 
 import type { MutableRefObject } from 'react'
 

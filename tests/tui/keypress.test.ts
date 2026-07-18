@@ -3,7 +3,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { parseKeypress } from '../../src/tui/hooks/keypress.js'
+import { parseKeypress } from '../../src/tui/input/keypress.js'
 
 test('parseKeypress handles Mac delete variants correctly', () =>
 {

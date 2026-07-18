@@ -1,5 +1,5 @@
-// src/tui/keybindings.ts
-// shared keybinding registry for help, palette, & prompt handlers
+// src/tui/input/keybindings.ts
+// shared keybinding registry for help, palette, and prompt handlers
 
 export type KeybindingAction =
   'toggle-thinking' | 'toggle-permissions' | 'page-up' | 'page-down'
@@ -22,7 +22,7 @@ export interface KeybindingKey
   pageDown: boolean
 }
 
-// single source for advertised bindings & PromptInput matchers
+// single source for advertised bindings and PromptInput matchers
 export const KEYBINDINGS: readonly KeybindingSummary[] = [
   {
     keys: 'ctrl+p',

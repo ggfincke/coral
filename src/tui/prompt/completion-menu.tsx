@@ -1,9 +1,9 @@
-// src/tui/components/completion-menu.tsx
-// dropdown of slash-command / @-file suggestions rendered under the prompt
+// src/tui/prompt/completion-menu.tsx
+// render slash-command and @-file suggestions under the prompt
 
 import { Box, Text } from 'ink'
 import { inkColor } from '../theme.js'
-import type { CompletionItem, CompletionKind } from '../prompt/completion.js'
+import type { CompletionItem, CompletionKind } from './completion.js'
 
 export interface CompletionMenuProps
 {

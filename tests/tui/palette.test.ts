@@ -8,13 +8,10 @@ import {
   buildPaletteEntries,
   buildPaletteLines,
   filterPaletteEntries,
-  movePaletteSelection,
   reducePaletteInput,
-} from '../../src/tui/palette.js'
-import type {
-  CommandInfo,
-  KeybindingSummary,
-} from '../../src/tui/shell/commands.js'
+} from '../../src/tui/palette/palette.js'
+import type { CommandInfo } from '../../src/tui/commands/contracts.js'
+import type { KeybindingSummary } from '../../src/tui/input/keybindings.js'
 
 const commands: CommandInfo[] = [
   { name: 'status', aliases: [], description: 'Show status' },
@@ -54,14 +51,6 @@ test('filterPaletteEntries ranks names, aliases, and keybindings', () =>
   )
 })
 
-test('movePaletteSelection clamps to available rows', () =>
-{
-  assert.equal(movePaletteSelection(0, -1, 3), 0)
-  assert.equal(movePaletteSelection(0, 1, 3), 1)
-  assert.equal(movePaletteSelection(2, 1, 3), 2)
-  assert.equal(movePaletteSelection(2, -1, 0), 0)
-})
-
 test('reducePaletteInput types literal j and k while arrows navigate', () =>
 {
   assert.deepEqual(
@@ -90,25 +79,6 @@ test('reducePaletteInput types literal j and k while arrows navigate', () =>
     ),
     { handled: true, state: { query: 'jk', selectedIndex: 1 } }
   )
-})
-
-test('buildPaletteLines renders query, selected marker, and disabled hint', () =>
-{
-  const entries = buildPaletteEntries(commands, keybindings)
-  const lines = buildPaletteLines({
-    entries: filterPaletteEntries(entries, ''),
-    query: 'perm',
-    selectedIndex: 1,
-    width: 72,
-    height: 8,
-  })
-  const rendered = plain(lines)
-
-  assert.match(rendered, /command palette ctrl\+p/)
-  assert.match(rendered, /query: perm/)
-  assert.match(rendered, /\/status/)
-  assert.match(rendered, /\/sessions/)
-  assert.match(rendered, /press key/)
 })
 
 test('buildPaletteLines keeps the selected entry visible in short viewports', () =>

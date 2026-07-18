@@ -1,4 +1,4 @@
-// src/tui/hooks/keypress.ts
+// src/tui/input/keypress.ts
 // parse terminal keypresses for Coral's shared input layer
 
 const ESC = '\u001b'
@@ -147,8 +147,8 @@ export function parseKeypress(input: string = ''): ParsedKey
     key.raw = undefined
     key.name = 'return'
   }
-  // keep a bare '\n' (pasted newline) as literal input — else it falls through
-  // to the ctrl-letter branch below as Ctrl+J. Enter arrives as '\r' (above).
+  // keep a bare '\n' (pasted newline) as literal input; otherwise it falls
+  // through to the ctrl-letter path as Ctrl+J. Enter arrives as '\r'.
   else if (value === '\n')
   {
     key.name = ''

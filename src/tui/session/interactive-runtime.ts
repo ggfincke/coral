@@ -1,10 +1,10 @@
 // src/tui/session/interactive-runtime.ts
-// coordinate agent generations, operations, prompts, sessions, & cleanup
+// coordinate Agent generations, operations, prompts, sessions, and cleanup
 
 import type { ReliabilityStats } from '../../types/inference.js'
-import type { SessionMeta } from '../../session/store.js'
+import type { SessionMeta } from '../../session/types.js'
 import type { McpLaunchApprovalRequest } from '../../mcp/types.js'
-import type { ToolCallPresentation } from '../../tools/index.js'
+import type { ToolCallPresentation } from '../../tools/tool.js'
 
 export interface InteractiveLifetimeAgent
 {
@@ -242,7 +242,7 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
     }
 
     // install the join before invoking user code so /exit cannot start
-    // shutdown in the gap between dispatch & task registration. an operation
+    // shutdown in the gap between dispatch and task registration. an operation
     // that requests shutdown must not await its own joined shutdown promise
     const task = Promise.resolve().then(work)
     const joined = task.then(

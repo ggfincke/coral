@@ -1,9 +1,9 @@
-// src/tui/hooks/use-animation-timer.ts
+// src/tui/run/use-animation-timer.ts
 // spinner/shimmer timer management for visible run-stage animations
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { clearTimerRef } from './clear-timer-ref.js'
-import { isAnimatedRunStage, type RunStage } from '../run/run-stage.js'
+import { isAnimatedRunStage, type RunStage } from './run-stage.js'
 
 export interface AnimationTimerState
 {
