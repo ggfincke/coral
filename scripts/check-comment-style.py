@@ -50,7 +50,7 @@ def resolve_root(explicit: Path | None) -> Path:
 			text=True,
 			check=True,
 		)
-	except OSError, subprocess.CalledProcessError:
+	except (OSError, subprocess.CalledProcessError):
 		return Path.cwd()
 	return Path(result.stdout.strip() or ".").resolve()
 
