@@ -1,5 +1,5 @@
 // src/config/project-config.ts
-// raw user & project Coral config loading
+// user and project Coral config loading
 
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -31,7 +31,7 @@ interface CachedConfig
 
 const configCache = new Map<string, CachedConfig>()
 
-// load one JSON object w/o interpreting its section values
+// load one JSON object without interpreting its section values
 function loadCoralConfigFile(path: string): Record<string, unknown>
 {
   let mtimeMs: number
@@ -52,7 +52,7 @@ function loadCoralConfigFile(path: string): Record<string, unknown>
   return config
 }
 
-// load the user-level ~/.coral.json config
+// load the user-level ~/.coral.json file
 export function loadUserConfig(): UserCoralConfig
 {
   const config = loadCoralConfigFile(join(homedir(), '.coral.json'))
@@ -62,7 +62,7 @@ export function loadUserConfig(): UserCoralConfig
   return result
 }
 
-// load the project-level .coral.json config
+// load the project-level .coral.json file
 export function loadProjectConfig(cwd: string): ProjectCoralConfig
 {
   const config = loadCoralConfigFile(resolve(cwd, '.coral.json'))

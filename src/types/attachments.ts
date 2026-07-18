@@ -1,5 +1,5 @@
 // src/types/attachments.ts
-// ui-only attachment outcome contracts shared across persistence & transcript layers
+// define UI-only attachment outcome contracts shared across persistence and transcript layers
 
 export const ATTACHMENT_SKIP_REASONS = [
   'not found',

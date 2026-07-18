@@ -18,6 +18,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Reviewable MCP security boundaries:** keep `McpManager` as the sole lazy
+  trust/process/session owner while extracting stateless launch preparation,
+  dialect-aware schema and Coral-tool adaptation, and bounded/redacted protocol
+  result conversion into explicit MCP modules. The architecture gate now keeps
+  SDK/AJV imports and MCP runtime internals behind that dynamic manager entry;
+  launch trust, allowlist/budget admission, serialized calls, timeout/abort
+  retirement, status, rollback, and subprocess cleanup remain manager-owned.
+- **Feature-owned TUI and session persistence:** split the 21 slash commands
+  into four feature bundles behind one canonical ordered registry, colocate
+  input, prompt, palette, run, model, and session adapters, and move neutral
+  transcript values out of the renderer. `useAgentTurn` now owns streaming and
+  Agent-event projection while `useModelPicker` owns discovery and activation;
+  `App` remains the Ink composition root and `InteractiveSessionRuntime`
+  remains the sole lifecycle authority. Session hydrated values and pure
+  current/legacy decoding now live in `session/types` and `session/codec`, while
+  `session/store` retains paths, discovery, atomic whole-file writes, and
+  multiwriter semantics.
+- **Explicit Agent coordination boundaries:** preserve `Agent` as the public
+  façade while moving public values, request projection/budget policy,
+  conversation/todo/compaction state, revision-checked compaction inference,
+  transactional file/todo replay, exact request planning, Agent-local MCP
+  capability lifetime, and complete tool-round settlement into dedicated
+  `agent/contracts`, `agent/request`, `agent/state`, `agent/loop`, and
+  `agent/effects` owners. Prepared tool rounds bind immutable catalog and
+  budget snapshots, stage every sibling outcome and effect before callbacks,
+  and leave protected history commit on the façade. MCP bootstrap and
+  retirement are epoch-checked and joined so stale initialization cannot
+  resurrect tools across disable or model switches. Compaction callbacks are
+  operation-local snapshots rather than mutable per-run Agent fields, while
+  abort, stale-plan, rollback, persistence, and model-request behavior remain
+  unchanged.
+- **CLI-only package and enforced module boundaries:** declare the `coral`
+  executable as the supported npm surface, close undocumented JavaScript and
+  deep-import paths, and add an architecture gate for local import resolution,
+  runtime cycles, application entry direction, subsystem ownership, lazy MCP
+  loading, and ambient-cwd consumers. Neutral retrieval config, LSP contracts,
+  workspace containment, and tool validation now live with their actual
+  owners; the active tool catalog also snapshots bounded, sanitized display
+  data for built-in, custom, and MCP calls so the TUI does not load the
+  executable registry.
 - **Dedicated conversation-state boundary:** move stored messages, exact cached
   estimates, frozen compaction state, active-turn anchors, undo/redo records,
   and compaction metrics behind one revision-checked `ConversationState` while
@@ -233,7 +273,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   overflow the window; files past the budget are head-truncated or skipped, and
   any truncated/skipped/missing/binary mention is reported in a one-line
   transcript note instead of vanishing silently. Pure completion logic lives in
-  `src/tui/completion.ts` and mention parsing/expansion in `src/tui/mentions.ts`,
+  `src/tui/prompt/completion.ts` and mention parsing/expansion in
+  `src/tui/prompt/mentions.ts`,
   both unit-tested.
 - **Todo session persistence + `/todo`:** the task list now persists with the
   session, so `/resume` restores it (and re-renders the panel) instead of
@@ -251,7 +292,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`/copy` command:** `/copy` copies the last assistant response to the system
   clipboard & `/copy code` copies its last fenced code block. Uses the platform's
   native clipboard CLI (`pbcopy` / `clip` / `wl-copy` / `xclip` / `xsel`) with no
-  new dependency; extraction helpers live in `src/tui/copy.ts`.
+  new dependency; extraction helpers live in `src/tui/shell/copy.ts`.
 - **Eval harness:** add a live-model benchmark (`npm run eval -- <model...>`)
   that drives a real Ollama model through 6 deterministic coding tasks
   (read-report, single-edit, create-file, search-multi-edit, build-run,

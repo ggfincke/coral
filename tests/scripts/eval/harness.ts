@@ -30,7 +30,7 @@ import type {
   TaskResult,
 } from './types.js'
 
-// defaults applied when EvalOptions leaves a field unset
+// use bounded defaults when EvalOptions leaves a field unset
 const DEFAULT_REPS = 1
 const DEFAULT_MAX_ITERATIONS = 15
 const DEFAULT_TIMEOUT_MS = 120000
@@ -45,9 +45,7 @@ interface RunRepDependencies
   createAgent?: () => EvalAgent
 }
 
-// compensations = repair/name/stall/validation/editRepair/reprompt counters.
-// doomLoopTrips, verifyFlags, & verifyReprompts are reported but EXCLUDED — not
-// tool-format issues
+// count only tool-format compensations; other reliability flags stay separate
 function countCompensations(stats: ReliabilityStats): number
 {
   return (
@@ -60,8 +58,7 @@ function countCompensations(stats: ReliabilityStats): number
   )
 }
 
-// cleanlinessRate = 1 when no calls & no compensations, else the share of
-// tool activity that wasn't a compensation
+// measure tool activity that completed without a compensation
 function computeCleanliness(
   toolCallsExecuted: number,
   compensations: number
@@ -72,14 +69,14 @@ function computeCleanliness(
   return 1 - compensations / denom
 }
 
-// tokens/sec from the last onUsage — completion tokens over eval seconds
+// derive throughput from the last usage sample
 function computeTokensPerSecond(usage: TokenUsage | undefined): number
 {
   if (!usage || usage.totalEvalDurationNs <= 0) return 0
   return usage.totalCompletionTokens / (usage.totalEvalDurationNs / 1e9)
 }
 
-// last assistant message content from the transcript = the agent's final answer
+// read the agent's final answer from the last assistant message
 function extractFinalText(
   messages: { role: string; content: string }[]
 ): string
@@ -95,7 +92,7 @@ function extractFinalText(
   return ''
 }
 
-// drive one agent run in an isolated scratch dir & capture its metrics + verdict
+// run one agent in an isolated scratch dir & capture its metrics
 export async function runRep(
   model: string,
   task: EvalTask,
@@ -107,10 +104,9 @@ export async function runRep(
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
-  // fresh per-rep scratch dir under the OS temp root
   const dir = await mkdtemp(join(tmpdir(), 'coral-eval-'))
 
-  // event-loop tallies populated by the stubbed AgentEvents
+  // collect the event counters used by RunMetrics
   let toolCallsExecuted = 0
   let toolErrors = 0
   let lastUsage: TokenUsage | undefined
@@ -120,11 +116,9 @@ export async function runRep(
 
   try
   {
-    // seed the scratch dir before the agent sees it
+    // apply task setup before constructing the agent
     await task.setup(dir)
 
-    // reps run sequentially — one local runner serves every rep, while each
-    // rep owns a fresh Agent scope around its throwaway workspace
     agent =
       dependencies.createAgent?.() ??
       new Agent(model, host, dir, {
@@ -133,7 +127,7 @@ export async function runRep(
         permissions: defaultToolPermissions(),
       })
 
-    // abort the run on timeout & mark it as aborted
+    // turn a timeout into the cancellation signal received by Agent.run
     const controller = new AbortController()
     const timer = setTimeout(() =>
     {
@@ -141,7 +135,7 @@ export async function runRep(
       controller.abort()
     }, timeoutMs)
 
-    // stub every AgentEvents callback; tallies feed the metrics below
+    // collect only the callbacks needed for the eval metrics
     const events: AgentEvents = {
       onToken: () =>
       {},
@@ -154,9 +148,9 @@ export async function runRep(
         toolCallsExecuted++
         if (error !== undefined) toolErrors++
       },
-      // auto-approve every gated tool so the run is fully headless
+      // keep eval runs headless by approving gated tools
       onToolApproval: async () => true,
-      // never proceed past a detected doom loop — let the run stop
+      // stop a run when the agent reports a doom loop
       onDoomLoop: async () => false,
       onVerification: () =>
       {},
@@ -178,8 +172,7 @@ export async function runRep(
 
     const startMs = Date.now()
 
-    // a throw escapes run() rarely — onError sets errored; either way one bad
-    // task yields a failed RunOutcome instead of aborting the whole suite
+    // contain a failed task as a failed RunOutcome
     try
     {
       await agent.run(task.prompt, events, controller.signal)
@@ -195,7 +188,6 @@ export async function runRep(
 
     const wallMs = Date.now() - startMs
 
-    // build the final answer from the transcript, then grade
     const messages = agent.getMessages()
     const finalText = extractFinalText(messages)
 
@@ -221,7 +213,7 @@ export async function runRep(
       detail = detail ? `${reason}: ${detail}` : reason
     }
 
-    // capture reliability counters AFTER run() resolves
+    // read reliability after run completion so late updates are included
     const reliability = agent.getReliabilityStats()
     const compensations = countCompensations(reliability)
 
@@ -242,7 +234,7 @@ export async function runRep(
   }
   catch (err)
   {
-    // a setup or constructor failure becomes a failed outcome so the suite keeps going
+    // keep setup & constructor failures inside one failed outcome
     return {
       toolCallsExecuted,
       toolErrors,
@@ -262,32 +254,31 @@ export async function runRep(
   {
     try
     {
-      // release every Agent-local resource before its workspace disappears
+      // dispose Agent-owned resources before deleting its workspace
       await agent?.dispose()
     }
     finally
     {
-      // always clean up the scratch dir, even on setup/grade/disposal failure
+      // remove the scratch dir even when setup, grading, or disposal fails
       await rm(dir, { recursive: true, force: true })
     }
   }
 }
 
-// arithmetic mean; 0 for an empty set
+// return the arithmetic mean, or zero for an empty set
 function mean(values: number[]): number
 {
   if (values.length === 0) return 0
   return values.reduce((acc, value) => acc + value, 0) / values.length
 }
 
-// arithmetic sum; 0 for an empty set
+// return the arithmetic sum, or zero for an empty set
 function sum(values: number[]): number
 {
   return values.reduce((acc, value) => acc + value, 0)
 }
 
-// element-wise sum of the reliability counters across runs (raw totals, not
-// means) — what gets folded into the longitudinal eval telemetry store
+// sum raw reliability counters before persisting one model-level telemetry entry
 export function sumReliability(runs: RunOutcome[]): ReliabilityStats
 {
   return runs.reduce(
@@ -296,7 +287,7 @@ export function sumReliability(runs: RunOutcome[]): ReliabilityStats
   )
 }
 
-// element-wise mean of the reliability counters across runs
+// average each reliability counter across runs
 function meanReliability(runs: RunOutcome[]): ReliabilityStats
 {
   if (runs.length === 0) return makeReliabilityStats()
@@ -309,14 +300,14 @@ function meanReliability(runs: RunOutcome[]): ReliabilityStats
   return mean
 }
 
-// collapse a task's reps into one result — majority-pass verdict + mean metrics
+// aggregate a task's reps using a strict majority & mean metrics
 export function aggregateTask(taskId: string, runs: RunOutcome[]): TaskResult
 {
   const reps = runs.length
   const passes = runs.filter((r) => r.passed && !r.aborted && !r.errored).length
-  // require a real majority; ties fail
+  // ties fail because a passing result needs a strict majority
   const passed = reps > 0 && passes > reps / 2
-  // surface the first failing detail, else the first run's detail
+  // prefer the first failure detail, else the first run's detail
   const firstFail = runs.find((r) => !r.passed || r.aborted || r.errored)
   const detail = firstFail?.detail ?? runs[0]?.detail ?? ''
 
@@ -329,7 +320,7 @@ export function aggregateTask(taskId: string, runs: RunOutcome[]): TaskResult
     completionTokens: mean(runs.map((r) => r.completionTokens)),
     tokensPerSecond: mean(runs.map((r) => r.tokensPerSecond)),
     wallMs: mean(runs.map((r) => r.wallMs)),
-    // aggregate flags are true if any rep tripped them
+    // preserve any abort or error across the task's reps
     aborted: runs.some((r) => r.aborted),
     errored: runs.some((r) => r.errored),
   }
@@ -337,13 +328,13 @@ export function aggregateTask(taskId: string, runs: RunOutcome[]): TaskResult
   return { taskId, reps, passes, passed, detail, metrics }
 }
 
-// roll a model's per-task results into a single report w/ headline rates
+// aggregate per-task results into one model report
 export function aggregateModel(
   model: string,
   results: TaskResult[]
 ): ModelReport
 {
-  // passRate weights by reps so a 3-rep task counts more than a 1-rep task
+  // weight passRate by reps so each run contributes equally
   const totalPasses = results.reduce((sum, r) => sum + r.passes, 0)
   const totalReps = results.reduce((sum, r) => sum + r.reps, 0)
   const passRate = totalReps === 0 ? 0 : totalPasses / totalReps
@@ -357,9 +348,7 @@ export function aggregateModel(
   }
 }
 
-// run every model over every task. tasks run SEQUENTIALLY because a single local
-// Ollama runner serves every rep — parallel reps would contend for the shared
-// host. each request's keep_alive keeps the model warm while Agents close locally
+// run tasks sequentially so one local Ollama runner can keep the model warm
 export async function runEval(
   models: string[],
   tasks: EvalTask[],
@@ -369,7 +358,6 @@ export async function runEval(
   const host = opts.host ?? DEFAULT_OLLAMA_HOST
   const reps = opts.reps ?? DEFAULT_REPS
 
-  // honor the id allowlist when present
   const filter = opts.taskFilter
   const selectedTasks =
     filter && filter.length > 0
@@ -378,11 +366,9 @@ export async function runEval(
 
   const modelReports: ModelReport[] = []
 
-  // loop models -> tasks -> reps so the active model stays loaded across tasks
   for (const model of models)
   {
     const taskResults: TaskResult[] = []
-    // every rep across every task for this model — summed for telemetry below
     const modelRuns: RunOutcome[] = []
 
     for (const task of selectedTasks)
@@ -390,7 +376,6 @@ export async function runEval(
       const runs: RunOutcome[] = []
       for (let rep = 0; rep < reps; rep++)
       {
-        // runRep constructs its own Agent (warm model, fresh scratch dir)
         runs.push(await runRep(model, task, { ...opts, host, reps }))
       }
       modelRuns.push(...runs)
@@ -399,8 +384,7 @@ export async function runEval(
 
     modelReports.push(aggregateModel(model, taskResults))
 
-    // fold this model's summed run reliability into the longitudinal eval store
-    // as one entry, keeping eval data out of the interactive telemetry file
+    // persist one model-level entry outside interactive telemetry
     if (opts.saveTelemetry)
     {
       recordReliability(
@@ -411,8 +395,7 @@ export async function runEval(
       )
     }
 
-    // there is no exclusive-host authorization here, so do not issue a
-    // host-global eviction; Ollama releases the model after keep_alive expires
+    // leave model eviction to Ollama's keep_alive policy
   }
 
   return { models: modelReports, host, reps }

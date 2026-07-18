@@ -1,5 +1,5 @@
 # scripts/lib/coral_dev_tools/analyze_sessions.py
-# CLI for session/history analysis reports
+# run session and history analysis reports
 
 from __future__ import annotations
 

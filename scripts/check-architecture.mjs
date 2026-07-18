@@ -1,7 +1,7 @@
 // scripts/check-architecture.mjs
 // validate local source resolution, runtime cycles, & dependency direction
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, extname, relative, resolve, sep } from 'node:path'
 import ts from 'typescript'
 
@@ -22,6 +22,26 @@ const AMBIENT_CWD_ALLOWLIST = new Set([
   'src/tools/write.ts',
   'src/tui/App.tsx',
   'src/utils/file-read.ts',
+])
+const INTERACTIVE_SESSION_CONSUMERS = new Set([
+  'src/tui/App.tsx',
+  'src/tui/model/use-model-picker.ts',
+  'src/tui/run/use-agent-turn.ts',
+])
+const AGENT_STATE_RUNTIME_UTILS = new Set(['src/utils/ellipsize.ts'])
+const SESSION_CODEC_RUNTIME_DEPS = new Set([
+  'src/session/types.ts',
+  'src/session/undo-state.ts',
+  'src/types/attachments.ts',
+  'src/types/todo.ts',
+  'src/utils/guards.ts',
+])
+const SESSION_LAYER_RANKS = new Map([
+  ['src/session/types.ts', 0],
+  ['src/session/undo-state.ts', 1],
+  ['src/session/codec.ts', 2],
+  ['src/session/store.ts', 3],
+  ['src/session/resume.ts', 4],
 ])
 
 function toRepoPath(path)
@@ -57,9 +77,11 @@ function sourceCandidates(path)
   if (extension === '.js')
   {
     const stem = path.slice(0, -extension.length)
-    return SOURCE_EXTENSIONS.map((sourceExtension) => stem + sourceExtension)
+    return [stem + '.ts', stem + '.tsx']
   }
   if (extension === '.jsx') return [path.slice(0, -4) + '.tsx']
+  if (extension === '.mjs') return [path.slice(0, -4) + '.mts']
+  if (extension === '.cjs') return [path.slice(0, -4) + '.cts']
   if (SOURCE_EXTENSIONS.includes(extension)) return [path]
   return [
     ...SOURCE_EXTENSIONS.map((sourceExtension) => path + sourceExtension),
@@ -69,10 +91,10 @@ function sourceCandidates(path)
   ]
 }
 
-function resolveLocalSpecifier(source, specifier)
+function resolveLocalSpecifier(source, specifier, sourcePaths)
 {
   const base = resolve(dirname(source), specifier)
-  return sourceCandidates(base).find((candidate) => existsSync(candidate))
+  return sourceCandidates(base).find((candidate) => sourcePaths.has(candidate))
 }
 
 function importIsTypeOnly(node)
@@ -82,25 +104,42 @@ function importIsTypeOnly(node)
   if (clause.isTypeOnly) return true
   if (clause.name || !clause.namedBindings) return false
   if (!ts.isNamedImports(clause.namedBindings)) return false
-  return clause.namedBindings.elements.every((element) => element.isTypeOnly)
+  return (
+    clause.namedBindings.elements.length > 0 &&
+    clause.namedBindings.elements.every((element) => element.isTypeOnly)
+  )
 }
 
 function exportIsTypeOnly(node)
 {
   if (node.isTypeOnly) return true
   if (!node.exportClause || !ts.isNamedExports(node.exportClause)) return false
-  return node.exportClause.elements.every((element) => element.isTypeOnly)
+  return (
+    node.exportClause.elements.length > 0 &&
+    node.exportClause.elements.every((element) => element.isTypeOnly)
+  )
 }
 
 function collectEdges(files)
 {
   const edges = []
+  const external = []
   const unresolved = []
+  const sourcePaths = new Set(files)
 
   function addEdge(source, specifier, runtime, kind)
   {
-    if (!isLocalSpecifier(specifier)) return
-    const target = resolveLocalSpecifier(source, specifier)
+    if (!isLocalSpecifier(specifier))
+    {
+      external.push({
+        source: toRepoPath(source),
+        specifier,
+        runtime,
+        kind,
+      })
+      return
+    }
+    const target = resolveLocalSpecifier(source, specifier, sourcePaths)
     if (!target)
     {
       unresolved.push({ source: toRepoPath(source), specifier })
@@ -109,6 +148,7 @@ function collectEdges(files)
     edges.push({
       source: toRepoPath(source),
       target: toRepoPath(target),
+      specifier,
       runtime,
       kind,
     })
@@ -177,7 +217,7 @@ function collectEdges(files)
     ts.forEachChild(sourceFile, visit)
   }
 
-  return { edges, unresolved }
+  return { edges, external, unresolved }
 }
 
 function runtimeCycles(files, edges)
@@ -264,19 +304,73 @@ function dependencyErrors(edges)
 
     if (target === 'cli' && source !== 'cli')
     {
-      errors.push(`only CLI files may depend on CLI composition: ${edge.source} -> ${edge.target}`)
+      errors.push(
+        `only CLI files may depend on CLI composition: ${edge.source} -> ${edge.target}`
+      )
     }
     if (target === 'tui' && source !== 'tui' && source !== 'cli')
     {
-      errors.push(`only CLI composition may enter TUI: ${edge.source} -> ${edge.target}`)
+      errors.push(
+        `only CLI composition may enter TUI: ${edge.source} -> ${edge.target}`
+      )
     }
     if (source === 'agent')
     {
       forbid(edge, ['tui', 'session', 'telemetry'], 'Agent boundary')
+      if (
+        edge.source.startsWith('src/agent/state/') &&
+        (edge.target.startsWith('src/agent/effects/') ||
+          edge.target.startsWith('src/agent/loop/'))
+      )
+      {
+        errors.push(
+          `Agent state cannot depend on effects or loop coordination: ${edge.source} -> ${edge.target}`
+        )
+      }
+      if (edge.source.startsWith('src/agent/state/') && edge.runtime)
+      {
+        if (!['agent', 'types', 'utils'].includes(target))
+        {
+          errors.push(
+            `Agent state must remain I/O-free and policy-local: ${edge.source} -> ${edge.target}`
+          )
+        }
+        if (target === 'utils' && !AGENT_STATE_RUNTIME_UTILS.has(edge.target))
+        {
+          errors.push(
+            `Agent state runtime utility is not allowlisted: ${edge.source} -> ${edge.target}`
+          )
+        }
+      }
+    }
+    if (
+      ['tui', 'cli', 'session'].includes(source) &&
+      (edge.target.startsWith('src/agent/effects/') ||
+        edge.target.startsWith('src/agent/loop/'))
+    )
+    {
+      errors.push(
+        `application boundaries must use the Agent façade: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (
+      edge.target === 'src/agent/mcp-scope.ts' &&
+      edge.source !== 'src/agent/agent.ts'
+    )
+    {
+      errors.push(
+        `only the Agent façade may own the MCP scope: ${edge.source} -> ${edge.target}`
+      )
     }
     if (source === 'tools')
     {
       forbid(edge, ['agent', 'tui', 'session', 'mcp'], 'tool boundary')
+      if (target === 'lsp' && edge.target !== 'src/lsp/contracts.ts')
+      {
+        errors.push(
+          `tools may depend only on the neutral LSP contract: ${edge.source} -> ${edge.target}`
+        )
+      }
     }
     if (source === 'session')
     {
@@ -287,10 +381,34 @@ function dependencyErrors(edges)
           `session may depend only on the neutral tool contract: ${edge.source} -> ${edge.target}`
         )
       }
+      const sourceRank = SESSION_LAYER_RANKS.get(edge.source)
+      const targetRank = SESSION_LAYER_RANKS.get(edge.target)
+      if (
+        sourceRank !== undefined &&
+        targetRank !== undefined &&
+        sourceRank < targetRank
+      )
+      {
+        errors.push(
+          `session layers may depend only inward: ${edge.source} -> ${edge.target}`
+        )
+      }
+      if (
+        edge.source === 'src/session/codec.ts' &&
+        edge.runtime &&
+        !SESSION_CODEC_RUNTIME_DEPS.has(edge.target)
+      )
+      {
+        errors.push(
+          `session codec runtime dependency is not pure-data allowlisted: ${edge.source} -> ${edge.target}`
+        )
+      }
     }
     if (source === 'types' && target !== 'types')
     {
-      errors.push(`types must remain a neutral source leaf: ${edge.source} -> ${edge.target}`)
+      errors.push(
+        `types must remain a neutral source leaf: ${edge.source} -> ${edge.target}`
+      )
     }
     if (source === 'utils')
     {
@@ -312,15 +430,100 @@ function dependencyErrors(edges)
     }
     if (source === 'config' && target === 'retrieval')
     {
-      errors.push(`config must not depend on retrieval: ${edge.source} -> ${edge.target}`)
+      errors.push(
+        `config must not depend on retrieval: ${edge.source} -> ${edge.target}`
+      )
     }
     if (
       source === 'mcp' &&
-      (edge.target === 'src/tools/index.ts' ||
-        edge.target === 'src/tools/registry.ts')
+      target === 'tools' &&
+      edge.target !== 'src/tools/tool.ts'
     )
     {
-      errors.push(`MCP must not load the built-in registry: ${edge.source} -> ${edge.target}`)
+      errors.push(
+        `MCP may depend only on the neutral tool contract: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (
+      edge.target.startsWith('src/mcp/') &&
+      source !== 'mcp' &&
+      edge.target !== 'src/mcp/types.ts' &&
+      edge.target !== 'src/mcp/manager.ts'
+    )
+    {
+      errors.push(
+        `external MCP consumers may use only contracts or the lazy manager entry: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (
+      edge.source === 'src/mcp/types.ts' &&
+      edge.target.startsWith('src/mcp/') &&
+      edge.runtime
+    )
+    {
+      errors.push(
+        `MCP status contracts cannot load MCP runtime modules: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (target === 'tools' && edge.target === 'src/tools/index.ts')
+    {
+      errors.push(
+        `source modules cannot restore the retired tool façade: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (
+      source === 'tui' &&
+      (edge.target === 'src/tools/registry.ts' ||
+        edge.target === 'src/tools/index.ts')
+    )
+    {
+      errors.push(
+        `TUI must consume event presentation, not the executable registry: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'tui' && edge.target === 'src/tui/App.tsx')
+    {
+      errors.push(
+        `TUI features cannot depend on the App composition root: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (
+      (edge.target === 'src/tui/model/use-model-picker.ts' ||
+        edge.target === 'src/tui/run/use-agent-turn.ts') &&
+      edge.source !== 'src/tui/App.tsx'
+    )
+    {
+      errors.push(
+        `only App may compose TUI presentation adapters: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (
+      edge.target === 'src/tui/session/use-interactive-session.ts' &&
+      !INTERACTIVE_SESSION_CONSUMERS.has(edge.source)
+    )
+    {
+      errors.push(
+        `interactive session consumers are not allowlisted: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (
+      edge.target === 'src/tui/session/use-interactive-session.ts' &&
+      edge.runtime &&
+      edge.source !== 'src/tui/App.tsx'
+    )
+    {
+      errors.push(
+        `only App may runtime-compose the interactive session hook: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (
+      edge.source === 'src/tui/transcript/types.ts' &&
+      edge.target.startsWith('src/tui/')
+    )
+    {
+      errors.push(
+        `transcript value types cannot depend on TUI implementations: ${edge.source} -> ${edge.target}`
+      )
     }
     if (
       edge.target === 'src/cwd.ts' &&
@@ -337,27 +540,73 @@ function dependencyErrors(edges)
   if (
     managerEdges.length !== 1 ||
     managerEdges[0].kind !== 'dynamic' ||
-    topLevel(managerEdges[0].source) !== 'agent'
+    managerEdges[0].source !== 'src/agent/mcp-scope.ts' ||
+    managerEdges[0].specifier !== '../mcp/manager.js'
   )
   {
     const rendered =
       managerEdges.length === 0
         ? 'none'
         : managerEdges
-            .map((edge) => `${edge.kind} ${edge.source}`)
+            .map((edge) => `${edge.kind} ${edge.source} via ${edge.specifier}`)
             .join(', ')
     errors.push(
-      `mcp/manager.ts must have one Agent-owned literal dynamic import; found ${rendered}`
+      `mcp/manager.ts must have one MCP-scope-owned literal dynamic import; found ${rendered}`
     )
   }
 
   return errors
 }
 
+function externalDependencyErrors(external)
+{
+  const errors = []
+  for (const edge of external)
+  {
+    if (edge.source.startsWith('src/agent/state/') && edge.runtime)
+    {
+      errors.push(
+        `Agent state cannot load external runtime dependencies: ${edge.source} -> ${edge.specifier}`
+      )
+    }
+    if (edge.source === 'src/session/codec.ts' && edge.runtime)
+    {
+      errors.push(
+        `session codec cannot load external runtime dependencies: ${edge.source} -> ${edge.specifier}`
+      )
+    }
+    const isMcpSdk =
+      edge.specifier === '@modelcontextprotocol/sdk' ||
+      edge.specifier.startsWith('@modelcontextprotocol/sdk/')
+    const isAjv =
+      edge.specifier === 'ajv' ||
+      edge.specifier.startsWith('ajv/') ||
+      edge.specifier === 'ajv-formats' ||
+      edge.specifier.startsWith('ajv-formats/')
+    if (!isMcpSdk && !isAjv) continue
+    if (!edge.source.startsWith('src/mcp/'))
+    {
+      errors.push(
+        `MCP SDK and schema runtimes must stay inside the lazy MCP boundary: ${edge.source} -> ${edge.specifier}`
+      )
+    }
+    if (edge.source === 'src/mcp/types.ts')
+    {
+      errors.push(
+        `MCP status contracts must remain SDK-free: ${edge.source} -> ${edge.specifier}`
+      )
+    }
+  }
+  return errors
+}
+
 const files = collectSourceFiles(SOURCE_ROOT)
-const { edges, unresolved } = collectEdges(files)
+const { edges, external, unresolved } = collectEdges(files)
 const cycles = runtimeCycles(files, edges)
-const errors = dependencyErrors(edges)
+const errors = [
+  ...dependencyErrors(edges),
+  ...externalDependencyErrors(external),
+]
 
 for (const item of unresolved)
 {

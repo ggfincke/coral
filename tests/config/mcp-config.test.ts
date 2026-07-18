@@ -1,5 +1,5 @@
 // tests/config/mcp-config.test.ts
-// MCP launch config & trust boundary integration test
+// test MCP launch config & trust boundaries
 
 import { strict as assert } from 'node:assert'
 import { stat, symlink, writeFile } from 'node:fs/promises'
@@ -16,7 +16,7 @@ import {
   trustMcpLaunch,
   type McpLaunchDescriptor,
 } from '../../src/mcp/trust.js'
-import { allTools } from '../../src/tools/index.js'
+import { allTools } from '../../src/tools/registry.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 

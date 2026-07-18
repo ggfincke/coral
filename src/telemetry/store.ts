@@ -1,5 +1,5 @@
 // src/telemetry/store.ts
-// persist per-model reliability telemetry as a legacy baseline + immutable events
+// per-model reliability telemetry persistence
 
 import { randomUUID } from 'node:crypto'
 import { readdirSync } from 'node:fs'
@@ -13,15 +13,12 @@ import { isPlainObject } from '../utils/guards.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
 import { pluralize } from '../utils/pluralize.js'
 
-// lifetime reliability for one model, accumulated across agent lifetimes
+// reliability accumulated across agent lifetimes for one model
 interface ModelTelemetry
 {
   reliability: ReliabilityStats
-  // count of agent lifetimes folded into this record
   sessions: number
-  // ISO timestamp the model was first recorded
   firstSeen: string
-  // ISO timestamp of the most recent fold
   updatedAt: string
 }
 
@@ -39,7 +36,7 @@ export interface TelemetryStore
   models: Record<string, ModelTelemetry>
 }
 
-// readable label per reliability counter — drives /telemetry output
+// labels used by /telemetry output
 const RELIABILITY_LABELS: Record<keyof ReliabilityStats, string> = {
   repairedToolCalls: 'tool-call repairs',
   nameRepairs: 'name repairs',
@@ -64,8 +61,7 @@ function telemetryPath(): string
   return coralHomePath('telemetry.json')
 }
 
-// separate store for eval-harness runs — kept apart from interactive telemetry
-// so synthetic benchmark counters don't swamp the real-usage signal
+// keep eval-harness counters separate from interactive telemetry
 export function evalTelemetryPath(): string
 {
   return coralHomePath('eval-telemetry.json')
@@ -224,9 +220,7 @@ function mergeTelemetryEvent(
   }
 }
 
-// element-wise sum of two counter sets. keys come from the live `add` stats so
-// a stale on-disk record can't silently drop a counter; existing values are
-// coerced so a corrupt entry degrades to 0 rather than poisoning the total
+// add counters from the live stats so stale or corrupt records cannot drop keys
 export function addReliability(
   base: ReliabilityStats | undefined,
   add: ReliabilityStats
@@ -241,7 +235,7 @@ export function addReliability(
   return sum
 }
 
-// fold one agent lifetime's final stats into the per-model record (pure)
+// fold one agent lifetime's final stats into a new per-model record
 export function foldReliability(
   store: TelemetryStore,
   model: string,
@@ -267,7 +261,7 @@ export function foldReliability(
   return { models }
 }
 
-// load the store, returning an empty store when absent or malformed
+// load the store, returning an empty value when absent or malformed
 export function loadTelemetry(path = telemetryPath()): TelemetryStore
 {
   const store = loadLegacyTelemetry(path)
@@ -278,8 +272,7 @@ export function loadTelemetry(path = telemetryPath()): TelemetryStore
   return store
 }
 
-// persist one agent lifetime as a uniquely named immutable event. the legacy
-// snapshot remains a read-only baseline so cutover retries cannot copy it twice
+// persist one immutable event so retries do not duplicate the legacy baseline
 export function recordReliability(
   model: string,
   stats: ReliabilityStats,
@@ -308,7 +301,7 @@ export function recordReliability(
   return loadTelemetry(path)
 }
 
-// render the store for /telemetry — one block per model, newest activity first
+// render one newest-first block per model for /telemetry
 export function formatTelemetry(store: TelemetryStore): string[]
 {
   const models = Object.entries(store.models)

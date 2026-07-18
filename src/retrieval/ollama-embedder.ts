@@ -1,5 +1,5 @@
 // src/retrieval/ollama-embedder.ts
-// Ollama-backed embedding provider
+// embedding provider backed by Ollama
 
 import { OllamaClient } from '../ollama/client.js'
 import { assertOllamaEmbeddingSpace } from './embedding-space.js'

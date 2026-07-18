@@ -18,12 +18,11 @@ import {
   loadSession,
   listSessions,
   renameSession,
-  type SessionData,
-  type SessionMeta,
 } from '../../src/session/store.js'
+import type { SessionData, SessionMeta } from '../../src/session/types.js'
 import { resolveResumeSessionFromCandidates } from '../../src/session/resume.js'
-import { toModelRequestMessage } from '../../src/agent/request-budget.js'
-import { attachmentReportFromMaterialization } from '../../src/agent/attachments.js'
+import { toModelRequestMessage } from '../../src/agent/request/projection.js'
+import { attachmentReportFromMaterialization } from '../../src/agent/request/attachments.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
 import {
   MAX_ATTACHMENT_OMITTED_OVER_BUDGET,

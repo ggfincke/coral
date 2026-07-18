@@ -1,5 +1,5 @@
 // src/types/todo.ts
-// neutral todo contracts, parsing, & cloning
+// neutral todo contracts, parsing, and cloning
 
 const TODO_STATUSES = ['pending', 'in_progress', 'completed'] as const
 export type TodoStatus = (typeof TODO_STATUSES)[number]
@@ -49,7 +49,7 @@ function parseTodoEntry(entry: unknown): TodoItem | undefined
   return { content: content.trim(), status }
 }
 
-// lenient for session restore; drops invalid entries & demotes extra active work
+// sanitize restored entries, dropping invalid items and demoting extra active work
 export function sanitizeTodos(raw: unknown): TodoItem[]
 {
   if (!Array.isArray(raw)) return []

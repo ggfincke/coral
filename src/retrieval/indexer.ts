@@ -1,5 +1,5 @@
 // src/retrieval/indexer.ts
-// project indexing & semantic search orchestration
+// project indexing and semantic search orchestration
 
 import { resolve } from 'node:path'
 import { chunkText } from './chunker.js'
@@ -85,10 +85,10 @@ export class ProjectIndexer
     const { force = false, onProgress } = options
 
     const snapshot = this.store.listFiles(projectId, CHUNKER_VERSION)
-    // force ignores cached state so every file re-chunks & re-embeds
+    // force bypasses cached state so every file is re-chunked and re-embedded
     const known = force ? new Map<string, IndexedFileStatus>() : snapshot
 
-    // trust size+mtime+ctime as the fast-path token; hash on stat mismatch
+    // use metadata as the fast path and hash only after a mismatch
     const { changed, unchangedPaths } = await collectIndexableFiles(
       this.cwd,
       (file) =>
@@ -111,7 +111,7 @@ export class ProjectIndexer
     let chunkCount = 0
     let staleSource = false
 
-    // fire progress once per processed file; ++ only when a listener is attached
+    // report progress once per processed file
     const report = (path: string) =>
       onProgress?.({ processed: (processed += 1), total, path })
 
@@ -119,7 +119,7 @@ export class ProjectIndexer
     {
       currentPaths.add(source.path)
 
-      // mtime churn w/ identical content -> refresh metadata, keep embeddings
+      // refresh metadata when content is unchanged despite timestamp churn
       const row = known.get(source.path)
       if (row?.embeddingsCurrent && row.sha256 === source.sha256)
       {
@@ -249,8 +249,7 @@ export class ProjectIndexer
     const force = options.force ?? false
     const key = this.refreshKey()
 
-    // coalesce onto an in-flight refresh for the same project+space; a coalesced
-    // caller shares the original's progress/store/embedder & gets its stats
+    // share an in-flight refresh for the same project and embedding space
     while (true)
     {
       const existing = inFlightRefreshes.get(key)
@@ -281,8 +280,7 @@ export class ProjectIndexer
     }
   }
 
-  // build or refresh the index, returning a summary. force re-embeds every
-  // file; concurrent refreshes for the same project/space share work
+  // build or refresh the index, sharing concurrent work for the same project
   async ensureIndexed(options?: RefreshOptions): Promise<IndexStats>
   {
     return this.refreshDeduped(options)

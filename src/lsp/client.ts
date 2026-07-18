@@ -1,5 +1,5 @@
 // src/lsp/client.ts
-// lazy Agent-owned TypeScript language-server client
+// lazy TypeScript language-server client owned by Agent
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createRequire } from 'node:module'
@@ -21,6 +21,11 @@ import {
   formatLocationResult,
   type LspDiagnostic,
 } from './format.js'
+import {
+  codeIntelLanguageId,
+  type CodeIntelQuery,
+  type CodeIntelService,
+} from './contracts.js'
 
 const require = createRequire(import.meta.url)
 const STARTUP_TIMEOUT_MS = 30_000
@@ -31,35 +36,6 @@ const SHUTDOWN_TIMEOUT_MS = 2_000
 const PROCESS_EXIT_TIMEOUT_MS = 500
 const MAX_STDERR_CHARS = 8_000
 const MAX_START_ATTEMPTS = 2
-
-const LANGUAGE_IDS = new Map([
-  ['.ts', 'typescript'],
-  ['.tsx', 'typescriptreact'],
-  ['.mts', 'typescript'],
-  ['.cts', 'typescript'],
-  ['.js', 'javascript'],
-  ['.jsx', 'javascriptreact'],
-  ['.mjs', 'javascript'],
-  ['.cjs', 'javascript'],
-])
-
-export type CodeIntelOperation =
-  'definition' | 'references' | 'hover' | 'diagnostics'
-
-export interface CodeIntelQuery
-{
-  operation: CodeIntelOperation
-  path: string
-  line?: number
-  character?: number
-  signal?: AbortSignal
-}
-
-export interface CodeIntelService
-{
-  query(request: CodeIntelQuery): Promise<string>
-  dispose(): Promise<void>
-}
 
 interface OpenDocument
 {
@@ -167,17 +143,7 @@ function asDiagnosticParams(value: unknown): DiagnosticParams | null
   }
 }
 
-function languageId(path: string): string | null
-{
-  return LANGUAGE_IDS.get(extname(path).toLowerCase()) ?? null
-}
-
-export function isCodeIntelPath(path: string): boolean
-{
-  return languageId(path) !== null
-}
-
-// * Own one TypeScript language server for an interactive Agent & its subagents
+// * Own one TypeScript language server for an interactive Agent and its subagents
 export class TypeScriptCodeIntel implements CodeIntelService
 {
   private child?: ChildProcessWithoutNullStreams
@@ -417,7 +383,7 @@ export class TypeScriptCodeIntel implements CodeIntelService
     signal?: AbortSignal
   ): Promise<SyncedDocument>
   {
-    const id = languageId(path)
+    const id = codeIntelLanguageId(path)
     if (!id)
     {
       throw new Error(

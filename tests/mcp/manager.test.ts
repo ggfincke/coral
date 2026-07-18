@@ -1,5 +1,5 @@
 // tests/mcp/manager.test.ts
-// major Agent-mediated stdio bridge & abort/lifecycle scenarios
+// test major Agent-mediated stdio bridge & lifecycle paths
 
 import { strict as assert } from 'node:assert'
 import { existsSync } from 'node:fs'
@@ -11,7 +11,7 @@ import { after, test } from 'node:test'
 import { parseMcpConfig } from '../../src/config/mcp.js'
 import { defaultToolPermissions } from '../../src/config/permissions.js'
 import { McpManager } from '../../src/mcp/manager.js'
-import { allTools } from '../../src/tools/index.js'
+import { allTools } from '../../src/tools/registry.js'
 import type { ChatRequest, OllamaMessage } from '../../src/types/inference.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import { makeAgentEvents, makeFakeAgent } from '../helpers/agent-harness.js'
@@ -130,8 +130,8 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
   })
   assert.deepEqual(mcpConfig.issues, [])
 
-  // request-inspecting fake model: each turn asserts what the model actually
-  // sees at the request boundary, then drives the next leg of the scenario
+  // inspect each request at the model boundary across discovery, validation,
+  // disable, & re-enable
   const mcpToolNames = (request?: ChatRequest) =>
     (request?.tools ?? [])
       .map((tool) => tool.function.name)
@@ -163,7 +163,7 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
       turn += 1
       if (turn === 1)
       {
-        // discovery reached the model: sanitized namespaced tool & system prompt
+        // discovery exposes the sanitized namespaced tool & system prompt
         assert.deepEqual(mcpToolNames(request), [
           'mcp__fixture__echo',
           'mcp__fixture__large',
@@ -270,7 +270,7 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
         yield doneChunk
         return
       }
-      // turn 5 (re-enabled): tools reinstall on the next chat turn
+      // re-enabled tools return on the next chat turn
       assert.deepEqual(mcpToolNames(request), [
         'mcp__fixture__echo',
         'mcp__fixture__large',
@@ -346,7 +346,7 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
   await waitForProcessExit(newPid)
 })
 
-test('MCP abort retires the server and disposal leaves no child process', async () =>
+test('MCP preflight and abort failures preserve status and retire processes', async () =>
 {
   const coralHome = await tempDir('coral-mcp-lifecycle-home-')
   const readyPidPath = join(coralHome, 'startup-ready.pid')
@@ -354,6 +354,51 @@ test('MCP abort retires the server and disposal leaves no child process', async 
   const pidPath = join(coralHome, 'lifecycle.pid')
   process.env.CORAL_HOME = coralHome
   process.env.CORAL_MCP_TEST_TOKEN = 'bridge-\x1b[31m-value'
+
+  const missingEnvironmentNames = Array.from({ length: 32 }, (_, index) =>
+  {
+    const prefix = `CORAL_MCP_MISSING_${String(index).padStart(2, '0')}_`
+    return prefix + 'X'.repeat(128 - prefix.length)
+  })
+  const previousMissingEnvironment = missingEnvironmentNames.map(
+    (name) => [name, process.env[name]] as const
+  )
+  for (const name of missingEnvironmentNames) delete process.env[name]
+  const missingEnvironmentConfig = parseMcpConfig({
+    servers: {
+      missing_environment: {
+        command: process.execPath,
+        enabledTools: ['echo'],
+        passEnv: missingEnvironmentNames,
+      },
+    },
+  })
+  assert.deepEqual(missingEnvironmentConfig.issues, [])
+  const missingEnvironmentManager = new McpManager({
+    config: missingEnvironmentConfig,
+    permissions: defaultToolPermissions(),
+    baseTools: allTools,
+    maxDynamicToolTokens: 8_192,
+  })
+  try
+  {
+    assert.deepEqual(await missingEnvironmentManager.initialize(), [])
+    const missingEnvironmentMessage = `missing required environment variable(s): ${missingEnvironmentNames.join(', ')}`
+    assert.ok(missingEnvironmentMessage.length > 4_000)
+    assert.equal(
+      missingEnvironmentManager.getStatus().servers[0]?.message,
+      missingEnvironmentMessage
+    )
+  }
+  finally
+  {
+    await missingEnvironmentManager.dispose()
+    for (const [name, value] of previousMissingEnvironment)
+    {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
 
   const startupConfig = parseMcpConfig({
     servers: {

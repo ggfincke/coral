@@ -1,7 +1,7 @@
 // src/utils/tool-name.ts
-// canonical tool-name normalization shared by agent repair & MCP collision checks
+// canonical tool-name normalization shared by agent repair and MCP collision checks
 
-// lowercase & strip separators so Read_File / READFILE match read_file
+// lowercase and strip separators so Read_File and READFILE match read_file
 export function normalizeToolName(name: string): string
 {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '')

@@ -23,11 +23,8 @@ import {
   SqliteIndexStore,
 } from '../../src/retrieval/sqlite-store.js'
 import type { Embedder, EmbeddingSpace } from '../../src/retrieval/types.js'
-import {
-  listSessions,
-  loadSession,
-  type SessionMeta,
-} from '../../src/session/store.js'
+import { listSessions, loadSession } from '../../src/session/store.js'
+import type { SessionMeta } from '../../src/session/types.js'
 import {
   loadTelemetry,
   type TelemetryStore,

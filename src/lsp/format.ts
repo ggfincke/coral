@@ -1,5 +1,5 @@
 // src/lsp/format.ts
-// compact TypeScript LSP responses for model & transcript use
+// compact TypeScript LSP response formatting
 
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'

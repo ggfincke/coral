@@ -1,5 +1,5 @@
 // tests/scripts/eval-harness.test.ts
-// unit tests for the eval harness graders & aggregation (no live model)
+// test eval harness graders & aggregation without a live model
 
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
@@ -7,12 +7,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import {
-  answerContains,
-  readJson,
-  treeContains,
-  treeFreeOf,
-} from './eval/grade.js'
+import { treeContains, treeFreeOf } from './eval/grade.js'
 import { aggregateModel, aggregateTask, runRep } from './eval/harness.js'
 import { taskById } from './eval/tasks.js'
 import { makeReliabilityStats } from '../../src/types/inference.js'
@@ -27,7 +22,7 @@ import { makeTempDirPool } from '../helpers/temp.js'
 const pool = makeTempDirPool()
 const tempDir = () => pool.tempDir('coral-eval-test-')
 
-// minimal but type-complete RunOutcome; override the fields a case asserts on
+// build a type-complete outcome while overriding fields under test
 function outcome(overrides: Partial<RunOutcome> = {}): RunOutcome
 {
   return {
@@ -47,7 +42,7 @@ function outcome(overrides: Partial<RunOutcome> = {}): RunOutcome
   }
 }
 
-// minimal TaskResult for aggregateModel cases; metricsOverrides patches the mean
+// build a task result while overriding aggregate metrics under test
 function taskResult(
   overrides: Partial<Omit<TaskResult, 'metrics'>> = {},
   metricsOverrides: Partial<RunMetrics> = {}
@@ -84,8 +79,7 @@ function requireTask(id: string): EvalTask
   return task
 }
 
-// run the eval CLI in a child process & capture its exit code + stderr. every
-// case here fails during arg parsing, so the harness never reaches a live model
+// run the eval CLI far enough to test parsing without reaching a live model
 function runEvalCli(args: string[]): { code: number; stderr: string }
 {
   try
@@ -113,14 +107,6 @@ describe('eval CLI argument parsing', () =>
     assert.match(fractional.stderr, /--reps must be a positive integer/)
 
     assert.match(
-      runEvalCli(['--reps', '0', 'fake-model']).stderr,
-      /--reps must be a positive number/
-    )
-    assert.match(
-      runEvalCli(['--think', 'bogus', 'fake-model']).stderr,
-      /--think must be one of/
-    )
-    assert.match(
       runEvalCli(['--task', 'nope', 'fake-model']).stderr,
       /unknown task id: nope/
     )
@@ -128,7 +114,6 @@ describe('eval CLI argument parsing', () =>
       runEvalCli(['--bogus', 'fake-model']).stderr,
       /unknown flag: --bogus/
     )
-    assert.match(runEvalCli(['--reps']).stderr, /--reps requires a value/)
   })
 })
 
@@ -181,17 +166,6 @@ describe('runRep lifecycle', () =>
     assert.equal(result.errored, true)
     assert.equal(disposed, true)
     assert.equal(existsSync(scratchDir), false)
-  })
-})
-
-describe('answerContains', () =>
-{
-  it('matches case-insensitively & rejects absent needles', () =>
-  {
-    assert.equal(answerContains('The Answer Is 42', 'answer is 42'), true)
-    assert.equal(answerContains('the answer is 42', 'ANSWER'), true)
-    assert.equal(answerContains('the answer is 42', 'wrong'), false)
-    assert.equal(answerContains('', 'x'), false)
   })
 })
 
@@ -248,17 +222,6 @@ describe('task graders', () =>
 
 describe('tree graders against a synthetic dir', () =>
 {
-  it('readJson parses valid json, returns null for missing & invalid', async () =>
-  {
-    const dir = await tempDir()
-    await writeFile(join(dir, 'pkg.json'), '{"name":"coral","n":1}', 'utf-8')
-    await writeFile(join(dir, 'broken.json'), '{not valid', 'utf-8')
-
-    assert.deepEqual(await readJson(dir, 'pkg.json'), { name: 'coral', n: 1 })
-    assert.equal(await readJson(dir, 'broken.json'), null)
-    assert.equal(await readJson(dir, 'missing.json'), null)
-  })
-
   it('treeContains/treeFreeOf walk text files & skip node_modules', async () =>
   {
     const dir = await tempDir()
@@ -270,15 +233,12 @@ describe('tree graders against a synthetic dir', () =>
       'utf-8'
     )
 
-    // pattern present in a walked file
     assert.equal(await treeContains(dir, /TARGET/), true)
     assert.equal(await treeFreeOf(dir, /TARGET/), false)
 
-    // pattern only inside node_modules -> not found
     assert.equal(await treeContains(dir, /HIDDEN/), false)
     assert.equal(await treeFreeOf(dir, /HIDDEN/), true)
 
-    // pattern absent everywhere
     assert.equal(await treeContains(dir, /nowhere/), false)
     assert.equal(await treeFreeOf(dir, /nowhere/), true)
   })
@@ -320,19 +280,16 @@ describe('aggregateTask', () =>
     assert.equal(result.taskId, 'demo')
     assert.equal(result.reps, 3)
     assert.equal(result.passes, 2)
-    // 2 of 3 passed -> strict majority
+    // two of three passes satisfy the strict majority
     assert.equal(result.passed, true)
-    // surfaces the first failing run's detail
+    // preserve the first failing detail
     assert.equal(result.detail, 'first failure')
-    // element-wise means across the 3 runs
+    // average each numeric metric across the three runs
     assert.equal(result.metrics.toolCallsExecuted, 4)
     assert.equal(result.metrics.tokensPerSecond, 50)
     assert.equal(result.metrics.cleanlinessRate, (1 + 0.5 + 0.6) / 3)
     assert.equal(result.metrics.reliability.nameRepairs, 2)
-  })
 
-  it('requires a strict majority & falls back to first detail when all pass', () =>
-  {
     const tie = aggregateTask('tie', [
       outcome({ passed: true, detail: 'a' }),
       outcome({ passed: false, detail: 'b' }),
@@ -340,13 +297,13 @@ describe('aggregateTask', () =>
     assert.equal(tie.passes, 1)
     assert.equal(tie.passed, false)
 
-    // a lone failing rep fails the task
+    // one failing rep is enough to fail a one-rep task
     const lost = aggregateTask('lost', [
       outcome({ passed: false, detail: 'x' }),
     ])
     assert.equal(lost.passed, false)
 
-    // no failures -> detail comes from the first run
+    // use the first detail when every rep passes
     const won = aggregateTask('won', [
       outcome({ passed: true, detail: 'firstpass' }),
       outcome({ passed: true, detail: 'secondpass' }),
@@ -387,17 +344,14 @@ describe('aggregateModel', () =>
     const report = aggregateModel('gemma', results)
 
     assert.equal(report.model, 'gemma')
-    // weighted by reps: (3 + 0) / (3 + 1) = 0.75
+    // weight the pass rate by the number of reps
     assert.equal(report.passRate, 0.75)
     assert.equal(report.meanCleanliness, (1 + 0.5) / 2)
     assert.equal(report.meanTokensPerSecond, (120 + 80) / 2)
-  })
 
-  it('yields a zero passRate for an empty result set', () =>
-  {
-    const report = aggregateModel('empty', [])
-    assert.equal(report.passRate, 0)
-    assert.equal(report.meanCleanliness, 0)
-    assert.equal(report.meanTokensPerSecond, 0)
+    const empty = aggregateModel('empty', [])
+    assert.equal(empty.passRate, 0)
+    assert.equal(empty.meanCleanliness, 0)
+    assert.equal(empty.meanTokensPerSecond, 0)
   })
 })

@@ -1,5 +1,5 @@
 // src/utils/json.ts
-// JSON parse & file helpers
+// parse JSON and read or write files
 
 import { randomUUID } from 'node:crypto'
 import {

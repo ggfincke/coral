@@ -31,10 +31,6 @@ test('lastAssistantText skips tool-call-only assistant turns', () =>
   ]
 
   assert.equal(lastAssistantText(messages), 'the real answer')
-})
-
-test('lastAssistantText returns null when there is no assistant text', () =>
-{
   assert.equal(lastAssistantText([{ role: 'user', content: 'hi' }]), null)
 })
 
@@ -45,12 +41,8 @@ test('lastCodeBlock extracts the final fenced block', () =>
   assert.equal(lastCodeBlock(md), 'x = 2')
 })
 
-test('lastCodeBlock ignores inline code spans', () =>
+test('lastCodeBlock returns null without a fenced block', () =>
 {
   assert.equal(lastCodeBlock('just prose with `inline` only'), null)
-})
-
-test('lastCodeBlock returns null when there are no code blocks', () =>
-{
   assert.equal(lastCodeBlock('plain paragraph text'), null)
 })

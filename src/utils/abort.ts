@@ -1,7 +1,7 @@
 // src/utils/abort.ts
 // shared abort-signal race helper
 
-// race a promise against an AbortSignal — rejects w/ AbortError if aborted
+// race a promise against an AbortSignal and reject with AbortError when aborted
 // first; pre-aborted signals reject immediately; listeners detach on settle
 export function raceAbort<T>(
   promise: Promise<T>,

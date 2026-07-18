@@ -1,8 +1,8 @@
-// src/config/retrieval.ts
-// semantic retrieval config
+// src/retrieval/config.ts
+// semantic retrieval configuration
 
-import { loadProjectConfig } from './project-config.js'
-import { DEFAULT_EMBEDDING_MODEL } from '../retrieval/types.js'
+import { loadProjectConfig } from '../config/project-config.js'
+import { DEFAULT_EMBEDDING_MODEL } from './types.js'
 import { isPlainObject } from '../utils/guards.js'
 
 export interface RetrievalConfig

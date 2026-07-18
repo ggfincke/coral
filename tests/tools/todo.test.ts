@@ -93,7 +93,10 @@ test('validateTodoList rejects invalid todo lists', () =>
   assert.equal(emptyContent.ok, false)
   if (!emptyContent.ok)
   {
-    assert.equal(emptyContent.error, 'each todo needs a non-empty content string')
+    assert.equal(
+      emptyContent.error,
+      'each todo needs a non-empty content string'
+    )
   }
 
   const badStatus = validateTodoList([{ content: 'x', status: 'done' }])

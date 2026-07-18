@@ -1,5 +1,5 @@
 // src/utils/ellipsize.ts
-// single-line string shorteners: cap w/ ellipsis & first-line excerpt
+// single-line string shorteners: cap with ellipsis and first-line excerpt
 
 // drop a trailing lone high surrogate left by code-unit slicing
 export function trimTrailingHighSurrogate(text: string): string
@@ -31,7 +31,7 @@ function firstLine(text: string): string
   return (lines.find((line) => line.trim().length > 0) ?? '').trim()
 }
 
-// first line of text, capped to max chars w/ an ellipsis
+// first line of text, capped to max chars with an ellipsis
 export function excerpt(text: string, max: number): string
 {
   return ellipsize(firstLine(text), max)

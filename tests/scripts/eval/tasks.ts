@@ -1,5 +1,5 @@
 // tests/scripts/eval/tasks.ts
-// the 6-task eval suite: fixtures, prompts, & deterministic graders
+// define the eval suite's fixtures, prompts, & deterministic graders
 
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -43,7 +43,7 @@ function stringField(value: unknown, key: string): string | null
   return typeof field === 'string' ? field : null
 }
 
-// 1) read a config value out of a json file & answer in chat
+// define a read-only config lookup task & grader
 const readReport: EvalTask = {
   id: 'read-report',
   description: 'read a config value & report it in the final answer',
@@ -55,7 +55,7 @@ const readReport: EvalTask = {
       JSON.stringify({ service: 'coral', port: 8137, debug: false }, null, 2) +
         '\n'
     )
-    // distractor — a different number that must not be confused for the port
+    // keep an unrelated number nearby so the grader catches the wrong lookup
     await writeFile(
       join(dir, 'notes.txt'),
       'remember to renew the cert before 2099 & ping ops on channel 4242\n'
@@ -71,7 +71,7 @@ const readReport: EvalTask = {
   },
 }
 
-// 2) bump a single field in package.json via an edit
+// define a focused package.json edit task & grader
 const singleEdit: EvalTask = {
   id: 'single-edit',
   description: 'bump the version field in package.json',
@@ -102,7 +102,7 @@ const singleEdit: EvalTask = {
   },
 }
 
-// 3) create a file w/ exact contents
+// define an exact file-creation task & grader
 const createFile: EvalTask = {
   id: 'create-file',
   description: 'create greeting.txt w/ exact contents',
@@ -110,7 +110,7 @@ const createFile: EvalTask = {
     'Create a file named greeting.txt whose entire contents are exactly: hello world',
   async setup()
   {
-    // no fixtures — the agent creates the file from scratch
+    // leave the workspace empty so the agent must create the target
   },
   async grade(ctx)
   {
@@ -129,7 +129,7 @@ const createFile: EvalTask = {
   },
 }
 
-// 4) rename a function across definition & call sites
+// define a cross-file rename task & grader
 const searchMultiEdit: EvalTask = {
   id: 'search-multi-edit',
   description: 'rename oldName -> newName across the project',
@@ -198,7 +198,7 @@ const searchMultiEdit: EvalTask = {
   },
 }
 
-// 5) write fizzbuzz then verify by re-running node ourselves
+// define a runtime-verified FizzBuzz task
 const buildRun: EvalTask = {
   id: 'build-run',
   description: 'create fizzbuzz.mjs & verify its output by execution',
@@ -206,11 +206,11 @@ const buildRun: EvalTask = {
     'Create fizzbuzz.mjs that prints the numbers 1 through 15 one per line, but prints Fizz for multiples of 3, Buzz for multiples of 5, and FizzBuzz for multiples of both. Then run it to confirm.',
   async setup()
   {
-    // no fixtures — the agent creates fizzbuzz.mjs
+    // leave the workspace empty so the agent must create the program
   },
   async grade(ctx)
   {
-    // never trust the model's claim — re-run node & check stdout
+    // grade the executable output instead of the model's final claim
     const { code, stdout } = await runNode(
       ctx.dir,
       ['fizzbuzz.mjs'],
@@ -236,7 +236,7 @@ const buildRun: EvalTask = {
   },
 }
 
-// exact seeded test fixture — locked so a model can't pass by weakening it
+// keep the seeded test fixture locked so weakening it cannot pass
 const SUM_TEST_FIXTURE = [
   "import assert from 'node:assert'",
   "import test from 'node:test'",
@@ -250,7 +250,7 @@ const SUM_TEST_FIXTURE = [
   '',
 ].join('\n')
 
-// 6) fix a bug so the test passes then verify by re-running the test
+// define a source-fix task w/ a locked test
 const bugFixVerify: EvalTask = {
   id: 'bug-fix-verify',
   description: 'fix the sum bug & verify via node --test',
@@ -258,7 +258,7 @@ const bugFixVerify: EvalTask = {
     'The test in sum.test.mjs is failing. Fix the bug in sum.mjs so the test passes, then run the test to confirm.',
   async setup(dir)
   {
-    // bug: subtracts instead of adds
+    // seed a subtraction bug so the locked test fails
     await writeFile(
       join(dir, 'sum.mjs'),
       'export function sum(a, b)\n{\n  return a - b\n}\n'
@@ -267,13 +267,13 @@ const bugFixVerify: EvalTask = {
   },
   async grade(ctx)
   {
-    // reject editing the test instead of the source — fixture must be untouched
+    // reject editing the test; the fixture must remain untouched
     const testFile = await readFileSafe(ctx.dir, 'sum.test.mjs')
     if (testFile !== SUM_TEST_FIXTURE)
     {
       return { passed: false, detail: 'sum.test.mjs was modified, not sum.mjs' }
     }
-    // the source must still define sum & now add rather than subtract
+    // require the source to keep sum & implement addition
     const source = await readFileSafe(ctx.dir, 'sum.mjs')
     if (source === null || !/function\s+sum\b/.test(source))
     {
@@ -282,7 +282,7 @@ const bugFixVerify: EvalTask = {
         detail: 'sum.mjs missing or no longer defines sum',
       }
     }
-    // re-run the locked test ourselves — exit 0 only when the fix is real
+    // run the locked test so only a real fix passes
     const { code } = await runNode(
       ctx.dir,
       ['--test', 'sum.test.mjs'],

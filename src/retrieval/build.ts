@@ -1,10 +1,10 @@
 // src/retrieval/build.ts
-// shared construction of the embedder-backed project indexer
+// retrieval index construction
 
 import { OllamaClient } from '../ollama/client.js'
 import { isOllamaMissingModelError } from '../ollama/errors.js'
 import { normalizeOllamaHost } from '../ollama/host.js'
-import { resolveRetrievalConfig } from '../config/retrieval.js'
+import { resolveRetrievalConfig } from './config.js'
 import { resolveOllamaEmbeddingSpace } from './embedding-space.js'
 import { ProjectIndexer } from './indexer.js'
 import { OllamaEmbedder } from './ollama-embedder.js'
@@ -16,7 +16,7 @@ import {
 } from './types.js'
 import { toError } from '../utils/errors.js'
 
-// swappable construction seams for tests
+// construction seams for the embedder, store, and indexer
 export interface RetrievalDeps
 {
   createStore?: (space: EmbeddingSpace) => IndexStore
@@ -84,8 +84,8 @@ export function describeRetrievalFailure(
   }
 }
 
-// wire up store + client + embedder + indexer for a project. caller owns the
-// returned store & must close it; on construction failure the store is closed
+// build the project indexer and return its caller-owned store
+// close the store when construction fails or the indexer is no longer needed
 export async function buildIndexer(
   cwd: string,
   ollamaHost: string,

@@ -1,5 +1,5 @@
 // tests/cli/app-launch.test.ts
-// CLI host validation before Ink application composition
+// validate CLI host before Ink application composition
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'

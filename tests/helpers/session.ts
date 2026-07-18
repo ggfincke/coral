@@ -1,7 +1,7 @@
 // tests/helpers/session.ts
-// SessionMeta / SessionData fixture factories for node:test files
+// create SessionMeta & SessionData fixtures for node:test files
 
-import type { SessionData, SessionMeta } from '../../src/session/store.js'
+import type { SessionData, SessionMeta } from '../../src/session/types.js'
 
 export function makeSessionMeta(
   overrides: Partial<SessionMeta> = {}

@@ -1,5 +1,5 @@
 // src/config/permissions.ts
-// per-tool permission policies loaded from .coral.json
+// per-tool permission policy resolution
 
 import { isPlainObject } from '../utils/guards.js'
 import {
@@ -9,10 +9,8 @@ import {
 } from '../tools/catalog.js'
 import { loadProjectConfig, loadUserConfig } from './project-config.js'
 
-// permission level for a given tool
 export type PermissionPolicy = DefaultToolPolicy
 
-// per-tool permission overrides — keys are tool names
 export type ToolPermissions = Record<string, PermissionPolicy>
 
 function permissionRecord(
@@ -24,7 +22,6 @@ function permissionRecord(
   return result
 }
 
-// default policies when no config is present
 const DEFAULT_TOOL_POLICIES: ToolPermissions = Object.freeze(
   permissionRecord(
     builtInToolRegistrations.map((registration) => [
@@ -49,13 +46,12 @@ function mergePermissions(
   return result
 }
 
-// return a fresh copy so callers can use defaults w/o local config overrides
+// return a fresh copy so callers can merge local overrides safely
 export function defaultToolPermissions(): ToolPermissions
 {
   return mergePermissions(DEFAULT_TOOL_POLICIES)
 }
 
-// validate that a permission value is one of the allowed policies
 function isValidPolicy(value: unknown): value is PermissionPolicy
 {
   return (
@@ -65,7 +61,7 @@ function isValidPolicy(value: unknown): value is PermissionPolicy
   )
 }
 
-// sanitize permissions object — strip invalid entries
+// keep only valid policy entries from untrusted config
 function sanitizePermissions(raw: unknown): ToolPermissions
 {
   if (!isPlainObject(raw))
@@ -118,10 +114,7 @@ function applyProjectPermissions(
   return result
 }
 
-// resolve the effective permission config by loading:
-// 1. built-in defaults
-// 2. user-level ~/.coral.json (may loosen or tighten defaults)
-// 3. project-level .coral.json in CWD (tightens only; never loosens)
+// combine built-in, user, and project policies while keeping project policy stricter
 export function resolvePermissions(cwd: string): ToolPermissions
 {
   const userConfig = loadUserConfig()
@@ -136,7 +129,7 @@ export function resolvePermissions(cwd: string): ToolPermissions
   )
 }
 
-// get the policy for a specific tool — falls back to require_approval for unknown tools
+// resolve one tool policy and fail closed for unknown tools
 export function getToolPolicy(
   permissions: ToolPermissions,
   toolName: string
