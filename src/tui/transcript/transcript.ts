@@ -88,6 +88,26 @@ export type OutputBlock =
   | ErrorBlock
   | SystemBlock
 
+// settle every call still owned by a terminal turn so none keeps animating
+export function failPendingToolCalls(
+  blocks: readonly OutputBlock[],
+  startedAt: ReadonlyMap<number, number>,
+  finishedAt: number
+): OutputBlock[]
+{
+  return blocks.map((block) =>
+  {
+    if (block.type !== 'tool_call' || block.status) return block
+    if (block.callId === undefined || !startedAt.has(block.callId)) return block
+    const started = startedAt.get(block.callId)!
+    return {
+      ...block,
+      status: 'error',
+      duration: Math.max(finishedAt - started, 0),
+    }
+  })
+}
+
 // braille spinner frames for in-progress tools
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 

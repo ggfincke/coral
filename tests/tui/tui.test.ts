@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import stripAnsi from 'strip-ansi'
 import {
   buildTranscriptLines,
+  failPendingToolCalls,
   maxScrollOffset,
   sliceViewport,
   type OutputBlock,
@@ -32,9 +33,14 @@ import {
 } from '../../src/tui/shell/commands.js'
 import type { Agent, CompactionResult } from '../../src/agent/agent.js'
 import type { IndexStore } from '../../src/retrieval/types.js'
+import { createEmbeddingSpace } from '../../src/retrieval/embedding-space.js'
+import { RetrievalBuildError } from '../../src/retrieval/build.js'
+import { OllamaModelIdentityError } from '../../src/ollama/errors.js'
 import type { ResumeSessionResolution } from '../../src/session/resume.js'
 import type { SessionMeta } from '../../src/session/store.js'
 import { restoredSessionForPickerSelection } from '../../src/tui/model/model-activation.js'
+import { buildTodoPanel } from '../../src/tui/transcript/todo-panel.js'
+import { AgentTodoState } from '../../src/agent/todo-state.js'
 import { visibleWidth } from '../../src/tui/wrap.js'
 import { makeFakeAgent } from '../helpers/agent-harness.js'
 import { makeSessionMeta } from '../helpers/session.js'
@@ -61,6 +67,7 @@ function makeCommandContext(
     yolo: false,
     sessionLabelId: 'abcd1234',
     pushOutput: (...blocks) => output.push(...blocks),
+    pushTerminalOutput: (...blocks) => output.push(...blocks),
     clearSession()
     {},
     rebuildTranscript()
@@ -69,15 +76,14 @@ function makeCommandContext(
     {},
     reopenModelPicker()
     {},
-    switchModel: async () =>
-    {},
+    switchModel: async () => ({ status: 'unchanged' }),
     getCwd: () => '/tmp/project',
     setYolo()
     {},
     exitApp()
     {},
     resumeSession: () => false,
-    saveCurrentSession: () => 'abcd1234',
+    saveCurrentSession: () => ({ status: 'saved', id: 'abcd1234' }),
     renameCurrentSession: () => false,
     notifyThemeChanged()
     {},
@@ -120,6 +126,45 @@ test('buildTranscriptLines renders conversation and tool results in scrollable o
   assert.ok(lines.some((line) => line.includes('file contents here')))
   assert.equal(topViewport[0], lines[0])
   assert.equal(liveViewport.at(-1), lines.at(-1))
+})
+
+test('terminal cleanup fails pending tool calls and preserves their elapsed duration', () =>
+{
+  const pending: OutputBlock = {
+    type: 'tool_call',
+    toolName: 'read_file',
+    args: { path: 'src/agent/agent.ts' },
+    callId: 7,
+  }
+  const completed: OutputBlock = {
+    type: 'tool_call',
+    toolName: 'glob',
+    args: { pattern: '**/*.ts' },
+    callId: 8,
+    status: 'success',
+    duration: 25,
+  }
+  const olderPending: OutputBlock = {
+    type: 'tool_call',
+    toolName: 'grep',
+    args: { pattern: 'stale' },
+    callId: 99,
+  }
+
+  const blocks = failPendingToolCalls(
+    [olderPending, pending, completed],
+    new Map([[7, 1_000]]),
+    1_450
+  )
+
+  assert.equal(blocks[0], olderPending)
+  assert.deepEqual(blocks[1], {
+    ...pending,
+    status: 'error',
+    duration: 450,
+  })
+  assert.equal(blocks[2], completed)
+  assert.equal((pending as { status?: string }).status, undefined)
 })
 
 test('buildRestoredBlocks uses displayContent for restored user messages', () =>
@@ -455,6 +500,90 @@ test('approval and confirm boxes share framed prompt rendering', () =>
   assert.equal(fingerprintReachable, true)
 })
 
+test('todo panel and commands follow the active Agent session lifecycle', async () =>
+{
+  const initialTodos = [
+    { content: 'inspect state', status: 'in_progress' as const },
+    { content: 'finish handoff', status: 'pending' as const },
+  ]
+  const state = new AgentTodoState(initialTodos)
+  const output: OutputBlock[] = []
+  let historyClears = 0
+  const agent: Partial<Agent> = {
+    getTodos: () => state.snapshot(),
+    clearTodos: () => state.clear(),
+    clearHistory: () =>
+    {
+      historyClears += 1
+      return 2
+    },
+  }
+  const context = makeCommandContext(agent, output)
+  const savedSnapshots: ReturnType<typeof state.snapshot>[] = []
+  context.saveCurrentSession = () =>
+  {
+    savedSnapshots.push(state.snapshot())
+    return { status: 'saved', id: 'abcd1234' }
+  }
+  context.clearSession = () => state.clear()
+
+  assert.match(plain(buildTodoPanel(state.snapshot(), 48)), /inspect state/)
+  assert.equal(await dispatchCommand('/todo', context), true)
+  const viewed = output.at(-1)
+  assert.equal(viewed?.type, 'system')
+  if (viewed?.type === 'system')
+  {
+    assert.match(plain(viewed.content), /inspect state/)
+    assert.match(plain(viewed.content), /finish handoff/)
+  }
+
+  assert.equal(await dispatchCommand('/todo clear', context), true)
+  assert.deepEqual(state.snapshot(), [])
+  assert.deepEqual(savedSnapshots, [[]])
+
+  state.replace(initialTodos)
+  assert.equal(await dispatchCommand('/clear', context), true)
+  assert.deepEqual(state.snapshot(), [])
+  assert.equal(historyClears, 1)
+  assert.equal(savedSnapshots.length, 1)
+
+  state.replace(initialTodos)
+  assert.equal(await dispatchCommand('/new', context), true)
+  assert.deepEqual(savedSnapshots.at(-1), initialTodos)
+  assert.deepEqual(state.snapshot(), [])
+  assert.equal(historyClears, 2)
+})
+
+test('/new preserves the current conversation when session saving fails', async () =>
+{
+  const output: OutputBlock[] = []
+  let historyClears = 0
+  let sessionClears = 0
+  const context = makeCommandContext(
+    {
+      clearHistory: () =>
+      {
+        historyClears += 1
+        return 3
+      },
+    },
+    output
+  )
+  context.saveCurrentSession = () => ({ status: 'error' })
+  context.clearSession = () =>
+  {
+    sessionClears += 1
+  }
+
+  assert.equal(await dispatchCommand('/new', context), true)
+  assert.equal(historyClears, 0)
+  assert.equal(sessionClears, 0)
+  assert.match(
+    plain(output.map((block) => block.content)),
+    /could not be saved.*not started/
+  )
+})
+
 test('dispatchCommand persists after successful manual compaction', async () =>
 {
   const compacted: CompactionResult = {
@@ -478,7 +607,7 @@ test('dispatchCommand persists after successful manual compaction', async () =>
   ctx.saveCurrentSession = () =>
   {
     saves += 1
-    return 'abcd1234'
+    return { status: 'saved', id: 'abcd1234' }
   }
   ctx.rebuildTranscript = () =>
   {
@@ -503,7 +632,20 @@ test('dispatchCommand persists after successful manual compaction', async () =>
 test('dispatchCommand does not save interrupted manual compaction', async () =>
 {
   const dir = await tempDir('coral-tui-compact-abort-')
-  const { agent } = makeFakeAgent(dir, [])
+  const controller = new AbortController()
+  const { agent } = makeFakeAgent(dir, [], {
+    inferenceClient: {
+      async *chatStream(_request, signal)
+      {
+        assert.equal(signal, controller.signal)
+        controller.abort()
+        yield {
+          message: { role: 'assistant', content: 'partial' },
+          done: false,
+        }
+      },
+    },
+  })
   agent.restoreMessages([
     { role: 'system', content: 'System' },
     { role: 'user', content: 'one' },
@@ -512,18 +654,6 @@ test('dispatchCommand does not save interrupted manual compaction', async () =>
     { role: 'assistant', content: 'four' },
   ])
   const beforeMessages = agent.getMessages().map((message) => message.content)
-  const controller = new AbortController()
-  agent.client = {
-    startKeepAlive()
-    {},
-    async *chatStream(_request, signal)
-    {
-      assert.equal(signal, controller.signal)
-      controller.abort()
-      yield { message: { role: 'assistant', content: 'partial' }, done: false }
-    },
-  } as typeof agent.client
-
   const output: OutputBlock[] = []
   let saves = 0
   const ctx = makeCommandContext(agent, output)
@@ -531,7 +661,7 @@ test('dispatchCommand does not save interrupted manual compaction', async () =>
   ctx.saveCurrentSession = () =>
   {
     saves += 1
-    return 'abcd1234'
+    return { status: 'saved', id: 'abcd1234' }
   }
 
   assert.equal(await dispatchCommand('/compact', ctx), true)
@@ -587,7 +717,7 @@ test('dispatchCommand handles undo and redo transcript rebuilds', async () =>
   ctx.saveCurrentSession = () =>
   {
     saves += 1
-    return 'abcd1234'
+    return { status: 'saved', id: 'abcd1234' }
   }
 
   assert.equal(await dispatchCommand('/undo', ctx), true)
@@ -612,6 +742,53 @@ test('dispatchCommand handles undo and redo transcript rebuilds', async () =>
   )
 })
 
+test('an undo committed during cancellation still reconciles and persists', async () =>
+{
+  let releaseUndo = () =>
+  {}
+  const undoGate = new Promise<void>((resolve) =>
+  {
+    releaseUndo = resolve
+  })
+  const controller = new AbortController()
+  const output: OutputBlock[] = []
+  let rebuilds = 0
+  let saves = 0
+  const context = makeCommandContext(
+    {
+      async undoLastTurn()
+      {
+        await undoGate
+        return { ok: true, message: 'Undid last turn', changedFiles: 1 }
+      },
+    },
+    output
+  )
+  context.signal = controller.signal
+  context.pushOutput = (...blocks) =>
+  {
+    if (!controller.signal.aborted) output.push(...blocks)
+  }
+  context.rebuildTranscript = () =>
+  {
+    rebuilds += 1
+  }
+  context.saveCurrentSession = () =>
+  {
+    saves += 1
+    return { status: 'saved', id: 'abcd1234' }
+  }
+
+  const undo = dispatchCommand('/undo', context)
+  await Promise.resolve()
+  controller.abort()
+  releaseUndo()
+  assert.equal(await undo, true)
+  assert.equal(rebuilds, 1)
+  assert.equal(saves, 1)
+  assert.match(plain(output.map((block) => block.content)), /Undid last turn/)
+})
+
 test('dispatchCommand reports empty undo stack without saving', async () =>
 {
   const output: OutputBlock[] = []
@@ -625,7 +802,7 @@ test('dispatchCommand reports empty undo stack without saving', async () =>
   ctx.saveCurrentSession = () =>
   {
     saves += 1
-    return 'abcd1234'
+    return { status: 'saved', id: 'abcd1234' }
   }
 
   assert.equal(await dispatchCommand('/undo', ctx), true)
@@ -641,7 +818,12 @@ test('dispatchCommand passes the command abort signal into /index', async () =>
   const controller = new AbortController()
   let seenSignal: AbortSignal | undefined
   let closed = false
+  const embeddingSpace = createEmbeddingSpace('http://ollama.test', {
+    model: 'test-embed:latest',
+    digest: 'a'.repeat(64),
+  })
   const store: IndexStore = {
+    space: embeddingSpace,
     ensureProject: () => 1,
     listFiles: () => new Map(),
     touchFile()
@@ -668,6 +850,7 @@ test('dispatchCommand passes the command abort signal into /index', async () =>
     return {
       store,
       embeddingModel: 'test-embed',
+      embeddingSpace,
       indexer: {
         ensureIndexed: async () => ({
           totalFiles: 1,
@@ -682,4 +865,126 @@ test('dispatchCommand passes the command abort signal into /index', async () =>
   assert.equal(seenSignal, controller.signal)
   assert.equal(closed, true)
   assert.ok(plain(output.map((block) => block.content)).includes('Indexed 1/1'))
+})
+
+test('/model honors command cancellation and reports only committed switches', async () =>
+{
+  const originalFetch = globalThis.fetch
+  const seenSignals: Array<AbortSignal | null | undefined> = []
+  globalThis.fetch = async (_input, init) =>
+  {
+    seenSignals.push(init?.signal)
+    return new Response(
+      JSON.stringify({
+        models: [
+          {
+            name: 'next-model',
+            model: 'next-model',
+            size: 0,
+            modified_at: '',
+          },
+        ],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    )
+  }
+
+  try
+  {
+    const dir = await tempDir('coral-tui-model-command-')
+    const { agent } = makeFakeAgent(dir, [])
+
+    const abortedOutput: OutputBlock[] = []
+    const aborted = new AbortController()
+    aborted.abort()
+    let abortedSwitches = 0
+    const abortedContext = makeCommandContext(agent, abortedOutput)
+    abortedContext.signal = aborted.signal
+    abortedContext.switchModel = async () =>
+    {
+      abortedSwitches++
+      return { status: 'changed' }
+    }
+
+    assert.equal(
+      await dispatchCommand('/model next-model', abortedContext),
+      true
+    )
+    assert.equal(seenSignals.at(-1), aborted.signal)
+    assert.equal(abortedSwitches, 0)
+    assert.ok(
+      !plain(abortedOutput.map((block) => block.content)).includes(
+        'Switched model'
+      )
+    )
+    assert.match(
+      plain(abortedOutput.map((block) => block.content)),
+      /Model switch interrupted/
+    )
+
+    const committedOutput: OutputBlock[] = []
+    let saves = 0
+    const committedContext = makeCommandContext(agent, committedOutput)
+    committedContext.activeModel = 'old-model'
+    committedContext.switchModel = async () => ({ status: 'changed' })
+    committedContext.saveCurrentSession = () =>
+    {
+      saves++
+      return { status: 'saved', id: 'abcd1234' }
+    }
+
+    assert.equal(
+      await dispatchCommand('/model next-model', committedContext),
+      true
+    )
+    assert.equal(saves, 0)
+    assert.ok(
+      plain(committedOutput.map((block) => block.content)).includes(
+        'Switched model: old-model'
+      )
+    )
+  }
+  finally
+  {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('/index preserves a configured model across async missing-model failure', async () =>
+{
+  const output: OutputBlock[] = []
+  const ctx = makeCommandContext({} as Agent, output)
+  ctx.buildIndexer = async () =>
+  {
+    throw new RetrievalBuildError(
+      'custom-embed',
+      new OllamaModelIdentityError(
+        'missing',
+        'Embedding model "custom-embed" is not listed by Ollama'
+      )
+    )
+  }
+
+  assert.equal(await dispatchCommand('/index', ctx), true)
+  const rendered = plain(output.map((block) => block.content))
+  assert.match(rendered, /embedding model custom-embed/)
+  assert.match(rendered, /ollama pull custom-embed/)
+  assert.doesNotMatch(rendered, /ollama pull nomic-embed-text/)
+})
+
+test('/index does not suggest pulling for artifact identity drift', async () =>
+{
+  const output: OutputBlock[] = []
+  const ctx = makeCommandContext({} as Agent, output)
+  ctx.buildIndexer = async () =>
+  {
+    throw new Error(
+      'Embedding model custom-embed changed artifact identity during retrieval'
+    )
+  }
+
+  assert.equal(await dispatchCommand('/index', ctx), true)
+  const rendered = plain(output.map((block) => block.content))
+  assert.match(rendered, /changed artifact identity/)
+  assert.doesNotMatch(rendered, /ollama pull/)
 })

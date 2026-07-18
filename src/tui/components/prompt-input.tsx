@@ -32,7 +32,7 @@ export interface PromptInputProps
   showCursor?: boolean
   filesCacheKey?: string
   completionCommands?: CommandSummary[]
-  listFiles?: () => Promise<string[]>
+  refreshFiles?: () => Promise<string[]>
   onChange: (value: string) => void
   onSubmit: (value: string) => void
   onEscape: () => void
@@ -62,7 +62,7 @@ export default function PromptInput({
   showCursor = true,
   filesCacheKey,
   completionCommands = [],
-  listFiles,
+  refreshFiles,
   onChange,
   onSubmit,
   onEscape,
@@ -86,8 +86,8 @@ export default function PromptInput({
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [dismissed, setDismissed] = useState(false)
   const [files, setFiles] = useState<string[]>([])
-  const filesRequestedRef = useRef(false)
   const filesCacheKeyRef = useRef(filesCacheKey)
+  const fileRequestIdRef = useRef(0)
   const mountedRef = useRef(true)
   const pendingTerminalSequenceRef = useRef('')
   // cursor is out of sync w/ the controlled value -> the value changed
@@ -132,8 +132,20 @@ export default function PromptInput({
     items.length > 0
   const safeIndex = Math.min(selectedIndex, items.length - 1)
 
-  // lazily load the project file list the first time an @-mention is typed
+  // reset cwd-bound completion state before starting a new-cwd refresh
   const needFiles = query?.kind === 'file'
+  useEffect(() =>
+  {
+    if (filesCacheKeyRef.current === filesCacheKey) return
+    filesCacheKeyRef.current = filesCacheKey
+    fileRequestIdRef.current += 1
+
+    const reset = resetPromptFileSuggestions()
+    setFiles(reset.files)
+    setSelectedIndex(reset.selectedIndex)
+    setDismissed(reset.dismissed)
+  }, [filesCacheKey])
+
   useEffect(() =>
   {
     mountedRef.current = true
@@ -142,34 +154,37 @@ export default function PromptInput({
       mountedRef.current = false
     }
   }, [])
+
+  // refresh whenever a fresh @-mention query opens
   useEffect(() =>
   {
-    if (!needFiles || !listFiles || filesRequestedRef.current) return
-    filesRequestedRef.current = true
-    void listFiles()
+    if (!needFiles || !refreshFiles)
+    {
+      fileRequestIdRef.current += 1
+      return
+    }
+
+    const requestId = ++fileRequestIdRef.current
+    const requestCacheKey = filesCacheKey
+    void refreshFiles()
       .then((loaded) =>
       {
-        if (mountedRef.current) setFiles(loaded)
+        if (
+          mountedRef.current &&
+          fileRequestIdRef.current === requestId &&
+          filesCacheKeyRef.current === requestCacheKey
+        )
+        {
+          setFiles(loaded)
+        }
       })
-      .catch(() =>
-      {
-        if (!mountedRef.current) return
-        filesRequestedRef.current = false
-        setFiles([])
-      })
-  }, [needFiles, listFiles])
+      .catch(() => undefined)
 
-  useEffect(() =>
-  {
-    if (filesCacheKeyRef.current === filesCacheKey) return
-    filesCacheKeyRef.current = filesCacheKey
-
-    const reset = resetPromptFileSuggestions()
-    filesRequestedRef.current = reset.filesRequested
-    setFiles(reset.files)
-    setSelectedIndex(reset.selectedIndex)
-    setDismissed(reset.dismissed)
-  }, [filesCacheKey])
+    return () =>
+    {
+      if (fileRequestIdRef.current === requestId) fileRequestIdRef.current += 1
+    }
+  }, [filesCacheKey, needFiles, refreshFiles])
 
   // splice the highlighted suggestion into the prompt & close the menu
   const acceptCompletion = useCallback(() =>

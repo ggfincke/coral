@@ -16,6 +16,7 @@ import {
   formatCliResumeError,
   formatCliSessionList,
 } from '../tui/shell/command-output.js'
+import { launchCliApp } from './app-launch.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../../package.json') as { version: string }
@@ -110,13 +111,19 @@ else if (opts.resume)
   resumeSessionId = resolution.session.id
 }
 
-render(
-  <App
-    model={opts.model}
-    host={opts.host}
-    think={opts.think ?? true}
-    yolo={opts.yolo ?? false}
-    resumeSessionId={resumeSessionId}
-  />,
-  { exitOnCtrlC: false }
+const exitCode = launchCliApp(
+  {
+    model: opts.model,
+    host: opts.host,
+    think: opts.think ?? true,
+    yolo: opts.yolo ?? false,
+    resumeSessionId,
+  },
+  (props) =>
+  {
+    render(<App {...props} />, { exitOnCtrlC: false })
+  },
+  (message) => console.error(message)
 )
+
+if (exitCode !== 0) process.exitCode = exitCode

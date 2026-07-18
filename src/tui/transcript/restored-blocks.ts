@@ -7,6 +7,7 @@ import {
   type TruncateOutputOptions,
 } from '../../utils/truncate-output.js'
 import type { OutputBlock } from './transcript.js'
+import { formatMentionNotice } from '../prompt/mentions.js'
 
 const TRUNCATED_TOOL_RESULT_OPTIONS: TruncateOutputOptions = {
   dropEmpty: false,
@@ -33,6 +34,14 @@ export function buildRestoredBlocks(messages: OllamaMessage[]): OutputBlock[]
         type: 'user',
         content: msg.displayContent ?? msg.content,
       })
+      if (msg.attachmentReport)
+      {
+        const notice = formatMentionNotice(msg.attachmentReport)
+        if (notice)
+        {
+          restoredBlocks.push({ type: 'system', content: notice })
+        }
+      }
       continue
     }
 

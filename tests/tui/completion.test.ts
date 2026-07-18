@@ -1,5 +1,5 @@
 // tests/tui/completion.test.ts
-// tests for prompt completion logic & @-mention expansion
+// tests for prompt completion logic & @-mention syntax
 
 import { strict as assert } from 'node:assert'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -13,7 +13,6 @@ import {
   type CommandSummary,
 } from '../../src/tui/prompt/completion.js'
 import {
-  buildMentionContext,
   formatMentionNotice,
   parseMentions,
 } from '../../src/tui/prompt/mentions.js'
@@ -22,7 +21,6 @@ import {
   listProjectFiles,
 } from '../../src/tui/prompt/file-suggestions.js'
 import { resetPromptFileSuggestions } from '../../src/tui/prompt/prompt-file-suggestions.js'
-import type { TextFileReadResult } from '../../src/utils/file-read.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 
 const { tempDir } = makeTempDirPool()
@@ -140,6 +138,17 @@ test('listProjectFiles uses suggestion policy instead of retrieval caps', async 
   assert.ok(!files.includes('assets/logo.png'))
 })
 
+test('listProjectFiles honors cancellation before project discovery', async () =>
+{
+  const dir = await tempDir('coral-completion-abort-')
+  const controller = new AbortController()
+  controller.abort(new DOMException('Aborted', 'AbortError'))
+
+  await assert.rejects(listProjectFiles(dir, controller.signal), {
+    name: 'AbortError',
+  })
+})
+
 test('resetPromptFileSuggestions clears cwd-bound prompt file cache state', () =>
 {
   assert.deepEqual(resetPromptFileSuggestions(), {
@@ -200,162 +209,6 @@ test('parseMentions returns unique paths in submission order', () =>
   assert.deepEqual(parseMentions('ping user@host'), [])
 })
 
-test('buildMentionContext attaches readable files & skips the rest', async () =>
-{
-  const reads: Record<string, TextFileReadResult> = {
-    'a.ts': {
-      ok: true,
-      path: 'a.ts',
-      content: 'export const a = 1',
-      existed: true,
-    },
-    'my docs/read me.md': {
-      ok: true,
-      path: 'my docs/read me.md',
-      content: 'spaced path',
-      existed: true,
-    },
-    'missing.ts': {
-      ok: false,
-      path: 'missing.ts',
-      reason: 'missing',
-      message: 'gone',
-    },
-    'bin.dat': {
-      ok: true,
-      path: 'bin.dat',
-      content: `binary${String.fromCharCode(0)}blob`,
-      existed: true,
-    },
-  }
-  const read = async (path: string) =>
-    reads[path] ?? {
-      ok: false as const,
-      path,
-      reason: 'missing' as const,
-      message: 'gone',
-    }
-
-  const result = await buildMentionContext(
-    'check @a.ts @missing.ts @bin.dat',
-    read
-  )
-  assert.ok(result.context)
-  assert.match(result.context, /===== a\.ts =====/)
-  assert.match(result.context, /export const a = 1/)
-  assert.deepEqual(
-    result.attached.map((a) => a.path),
-    ['a.ts']
-  )
-
-  const quoted = await buildMentionContext('check @"my docs/read me.md"', read)
-  assert.ok(quoted.context)
-  assert.match(quoted.context, /===== my docs\/read me\.md =====/)
-  assert.match(quoted.context, /spaced path/)
-  // missing & binary files are skipped, not injected
-  assert.doesNotMatch(result.context, /missing\.ts/)
-  assert.doesNotMatch(result.context, /bin\.dat/)
-
-  // no mentions -> nothing to attach
-  assert.equal(
-    (await buildMentionContext('no mentions here', read)).context,
-    null
-  )
-})
-
-test('buildMentionContext skips off-workspace paths when cwd is provided', async () =>
-{
-  const dir = await tempDir('coral-mention-cwd-')
-  const outside = await tempDir('coral-mention-outside-')
-  const outsideFile = join(outside, 'secret.txt')
-  await writeFile(outsideFile, 'secret\n', 'utf-8')
-
-  const expansion = await buildMentionContext(
-    `read @${outsideFile}`,
-    undefined,
-    undefined,
-    dir
-  )
-
-  assert.equal(expansion.context, null)
-  assert.deepEqual(expansion.skipped, [
-    { path: outsideFile, reason: 'outside workspace' },
-  ])
-})
-
-test('buildMentionContext reports a skip reason for each dropped mention', async () =>
-{
-  const reads: Record<string, TextFileReadResult> = {
-    'big.ts': {
-      ok: false,
-      path: 'big.ts',
-      reason: 'oversized',
-      message: 'too big',
-    },
-    'gone.ts': {
-      ok: false,
-      path: 'gone.ts',
-      reason: 'missing',
-      message: 'gone',
-    },
-    'bin.dat': {
-      ok: true,
-      path: 'bin.dat',
-      content: `x${String.fromCharCode(0)}y`,
-      existed: true,
-    },
-  }
-  const read = async (path: string) =>
-    reads[path] ?? {
-      ok: false as const,
-      path,
-      reason: 'missing' as const,
-      message: 'gone',
-    }
-
-  const result = await buildMentionContext('@big.ts @gone.ts @bin.dat', read)
-  assert.equal(result.context, null)
-  assert.deepEqual(result.skipped, [
-    { path: 'big.ts', reason: 'too large' },
-    { path: 'gone.ts', reason: 'not found' },
-    { path: 'bin.dat', reason: 'binary' },
-  ])
-})
-
-test('buildMentionContext enforces a shared budget across mentions', async () =>
-{
-  const reads: Record<string, TextFileReadResult> = {
-    'big1.txt': {
-      ok: true,
-      path: 'big1.txt',
-      content: 'a'.repeat(400),
-      existed: true,
-    },
-    'big2.txt': {
-      ok: true,
-      path: 'big2.txt',
-      content: 'b'.repeat(400),
-      existed: true,
-    },
-  }
-  const read = async (path: string) =>
-    reads[path] ?? {
-      ok: false as const,
-      path,
-      reason: 'missing' as const,
-      message: 'gone',
-    }
-
-  // budget fits part of the first file, nothing for the second
-  const result = await buildMentionContext('@big1.txt @big2.txt', read, 300)
-  assert.deepEqual(result.attached, [{ path: 'big1.txt', truncated: true }])
-  assert.deepEqual(result.skipped, [
-    { path: 'big2.txt', reason: 'over budget' },
-  ])
-  assert.ok(result.context)
-  assert.match(result.context, /big1\.txt \(truncated\)/)
-})
-
 test('formatMentionNotice summarizes truncations & skips, else null', () =>
 {
   assert.equal(
@@ -363,6 +216,7 @@ test('formatMentionNotice summarizes truncations & skips, else null', () =>
       context: 'x',
       attached: [{ path: 'a.ts', truncated: false }],
       skipped: [],
+      usedChars: 1,
     }),
     null
   )
@@ -371,6 +225,7 @@ test('formatMentionNotice summarizes truncations & skips, else null', () =>
     context: 'x',
     attached: [{ path: 'big.ts', truncated: true }],
     skipped: [{ path: 'img.png', reason: 'binary' }],
+    usedChars: 1,
   })
   assert.equal(
     notice,

@@ -7,8 +7,8 @@ import type { McpServerStatus, McpStatus } from '../../mcp/types.js'
 import type { ResumeSessionResolution } from '../../session/resume.js'
 import type { SessionMeta } from '../../session/store.js'
 import type { IndexStats } from '../../retrieval/types.js'
-import type { TodoItem } from '../../tools/todo-store.js'
-import { isMissingModelError, withPullHint } from '../../utils/errors.js'
+import type { TodoItem } from '../../types/todo.js'
+import { withPullHint } from '../../utils/errors.js'
 import { formatTokenCount } from './metrics.js'
 import { getTheme, style, type Role, type RoleColor } from '../theme.js'
 import { THEMES } from '../themes.js'
@@ -356,11 +356,12 @@ export function formatIndexResult(stats: IndexStats): string
 
 export function formatIndexError(
   embeddingModel: string,
-  message: string
+  message: string,
+  missingModel = false
 ): string
 {
   const base = `Index build failed (embedding model ${embeddingModel}): ${message}`
-  if (!isMissingModelError(message)) return base
+  if (!missingModel) return base
   return withPullHint(base, embeddingModel, '\n')
 }
 

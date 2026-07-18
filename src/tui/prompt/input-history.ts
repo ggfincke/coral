@@ -2,18 +2,26 @@
 // persistent input history w/ JSONL storage & navigation state machine
 
 import {
-  readFileSync,
-  appendFileSync,
-  writeFileSync,
+  closeSync,
+  constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
+  openSync,
+  readSync,
+  writeSync,
 } from 'node:fs'
 import { coralHomePath } from '../../utils/coral-home.js'
 import { ensureParentDir } from '../../utils/fs.js'
 import { isPlainObject } from '../../utils/guards.js'
 import { tryParseJson } from '../../utils/json.js'
 
-// maximum entries kept in the history file
-const MAX_ENTRIES = 500
+// maximum entries retained for prompt navigation in one process
+export const MAX_HISTORY_ENTRIES = 500
+
+const HISTORY_READ_CHUNK_BYTES = 64 * 1024
+// cap one row so a missing delimiter cannot make the reverse scan unbounded
+const MAX_HISTORY_RECORD_BYTES = 1024 * 1024
 
 export interface HistoryEntry
 {
@@ -36,76 +44,151 @@ export interface NavigationResult
   text: string | null
 }
 
-// load all entries from disk, skip corrupt lines, trim if needed
+function parseHistoryLine(line: Buffer): HistoryEntry | undefined
+{
+  if (line.length === 0) return undefined
+
+  const parsed = tryParseJson(line.toString('utf-8').trim())
+  if (!isPlainObject(parsed)) return undefined
+
+  if (typeof parsed.text !== 'string' || typeof parsed.timestamp !== 'number')
+  {
+    return undefined
+  }
+
+  return {
+    text: parsed.text,
+    timestamp: parsed.timestamp,
+    sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+  }
+}
+
+// load the newest valid entries without mutating the append-only history file
 export function loadHistory(): HistoryEntry[]
 {
   const path = historyPath()
   if (!existsSync(path)) return []
 
-  let raw: string
+  let fd: number
   try
   {
-    raw = readFileSync(path, 'utf-8')
+    fd = openSync(path, constants.O_RDONLY)
   }
   catch
   {
     return []
   }
 
-  const entries: HistoryEntry[] = []
+  const newestFirst: HistoryEntry[] = []
+  let segments: Buffer[] = []
+  let recordBytes = 0
+  let recordTooLarge = false
 
-  for (const line of raw.split('\n'))
+  const addSegment = (segment: Buffer): void =>
   {
-    if (!line.trim()) continue
+    if (segment.length === 0 || recordTooLarge) return
+    if (recordBytes + segment.length > MAX_HISTORY_RECORD_BYTES)
+    {
+      segments = []
+      recordBytes = 0
+      recordTooLarge = true
+      return
+    }
+    segments.unshift(segment)
+    recordBytes += segment.length
+  }
 
-    const parsed = tryParseJson(line)
-    if (!isPlainObject(parsed)) continue
+  const finishRecord = (): void =>
+  {
+    if (!recordTooLarge)
+    {
+      const entry = parseHistoryLine(Buffer.concat(segments, recordBytes))
+      if (entry) newestFirst.push(entry)
+    }
+    segments = []
+    recordBytes = 0
+    recordTooLarge = false
+  }
+
+  try
+  {
+    let position = fstatSync(fd).size
+    while (position > 0 && newestFirst.length < MAX_HISTORY_ENTRIES)
+    {
+      const bytesToRead = Math.min(HISTORY_READ_CHUNK_BYTES, position)
+      position -= bytesToRead
+      const chunk = Buffer.allocUnsafe(bytesToRead)
+      const bytesRead = readSync(fd, chunk, 0, bytesToRead, position)
+      let segmentEnd = bytesRead
+
+      for (let index = bytesRead - 1; index >= 0; index--)
+      {
+        if (chunk[index] !== 0x0a) continue
+
+        addSegment(chunk.subarray(index + 1, segmentEnd))
+        finishRecord()
+        if (newestFirst.length >= MAX_HISTORY_ENTRIES) break
+        segmentEnd = index
+      }
+
+      if (newestFirst.length < MAX_HISTORY_ENTRIES)
+      {
+        addSegment(chunk.subarray(0, segmentEnd))
+      }
+    }
 
     if (
-      typeof parsed.text === 'string' &&
-      typeof parsed.timestamp === 'number'
+      position === 0 &&
+      newestFirst.length < MAX_HISTORY_ENTRIES &&
+      (recordBytes > 0 || recordTooLarge)
     )
     {
-      entries.push({
-        text: parsed.text,
-        timestamp: parsed.timestamp,
-        sessionId:
-          typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
-      })
+      finishRecord()
     }
   }
-
-  // trim to MAX_ENTRIES if needed (keep newest)
-  if (entries.length > MAX_ENTRIES)
+  catch
   {
-    const trimmed = entries.slice(-MAX_ENTRIES)
-    writeHistoryFile(trimmed)
-    return trimmed
+    return []
+  }
+  finally
+  {
+    closeSync(fd)
   }
 
-  return entries
+  return newestFirst.reverse()
 }
 
-// append a single entry to disk — O(1), no full-file read
-// the MAX_ENTRIES cap is enforced on load (loadHistory trims & rewrites), so the
-// file may briefly exceed the cap within a long session but never on disk reload
+// append one complete JSONL record through a private O_APPEND descriptor
 export function appendHistoryEntry(entry: HistoryEntry): void
 {
   const path = historyPath()
   ensureParentDir(path)
-  appendFileSync(path, JSON.stringify(entry) + '\n', 'utf-8')
-}
-
-// rewrite the history file w/ the given entries
-function writeHistoryFile(entries: HistoryEntry[]): void
-{
-  const path = historyPath()
-  ensureParentDir(path)
-  writeFileSync(
+  // begin every record w/ a delimiter so a crash-truncated tail cannot absorb
+  // the next successful append into one corrupt JSONL row
+  const record = Buffer.from(`\n${JSON.stringify(entry)}\n`, 'utf-8')
+  const fd = openSync(
     path,
-    entries.map((e) => JSON.stringify(e)).join('\n') + '\n',
-    'utf-8'
+    constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY,
+    0o600
   )
+
+  try
+  {
+    // repair history created by older versions under a permissive umask
+    if (process.platform !== 'win32') fchmodSync(fd, 0o600)
+
+    const written = writeSync(fd, record, 0, record.length)
+    if (written !== record.length)
+    {
+      throw new Error(
+        `Failed to append complete input history record: wrote ${written} of ${record.length} bytes`
+      )
+    }
+  }
+  finally
+  {
+    closeSync(fd)
+  }
 }
 
 // navigate up (older) in history
