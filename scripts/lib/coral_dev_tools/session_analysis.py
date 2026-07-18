@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 import hashlib
 import json
+import re
 
 from .report_render import render_counter, render_counter_md
 
@@ -17,10 +18,23 @@ JsonObject = dict[str, Any]
 
 # ! keep in sync w/ src/utils/limits.ts CHARS_PER_TOKEN
 CHARS_PER_TOKEN = 4
-# ! keep in sync w/ src/session/store.ts SESSION_INDEX_VERSION
-SESSION_INDEX_VERSION = 1
-# ! keep in sync w/ src/config/permissions.ts DEFAULT_TOOL_POLICIES
-DEFAULT_APPROVAL_GATED_TOOLS = {
+SESSION_FILE_PATTERN = re.compile(r"^[0-9a-f]{8}\.json$")
+# ! checked against the runtime catalog by scripts/check-dev-tools.mjs
+DEFAULT_UNKNOWN_TOOL_POLICY = "require_approval"
+DEFAULT_ALWAYS_ALLOWED_TOOLS = {
+    "code_intel",
+    "git_diff",
+    "git_log",
+    "git_status",
+    "glob",
+    "grep",
+    "list_files",
+    "read_file",
+    "search_code",
+    "task",
+    "todo_write",
+}
+DEFAULT_GATED_BUILT_IN_TOOLS = {
     "bash",
     "edit_file",
     "git_add",
@@ -29,6 +43,14 @@ DEFAULT_APPROVAL_GATED_TOOLS = {
     "git_switch",
     "write_file",
 }
+
+
+def is_default_gated_tool(name: str) -> bool:
+    if name in DEFAULT_ALWAYS_ALLOWED_TOOLS:
+        return False
+    if name in DEFAULT_GATED_BUILT_IN_TOOLS:
+        return True
+    return DEFAULT_UNKNOWN_TOOL_POLICY != "always_allow"
 
 
 @dataclass(frozen=True)
@@ -66,7 +88,7 @@ class SessionMetrics:
     assistant_messages: int
     tool_messages: int
     tool_calls: int
-    risky_tool_calls: int
+    default_gated_tool_calls: int
     unmatched_tool_delta: int
     compaction_count: int
     estimated_tokens: int
@@ -87,7 +109,7 @@ class SessionMetrics:
             "assistantMessages": self.assistant_messages,
             "toolMessages": self.tool_messages,
             "toolCalls": self.tool_calls,
-            "riskyToolCalls": self.risky_tool_calls,
+            "defaultGatedToolCalls": self.default_gated_tool_calls,
             "unmatchedToolDelta": self.unmatched_tool_delta,
             "compactionCount": self.compaction_count,
             "estimatedTokens": self.estimated_tokens,
@@ -140,8 +162,6 @@ class HistorySummary:
 class AnalysisReport:
     home: Path
     sessions_dir: Path
-    index_path: Path
-    index_count: int
     session_count: int
     history: HistorySummary
     sessions: list[SessionMetrics]
@@ -155,8 +175,6 @@ class AnalysisReport:
         return {
             "home": str(self.home),
             "sessionsDir": str(self.sessions_dir),
-            "indexPath": str(self.index_path),
-            "indexCount": self.index_count,
             "sessionCount": self.session_count,
             "history": self.history.to_json(show_prompts=show_prompts),
             "sessions": [session.to_json() for session in self.sessions],
@@ -178,39 +196,6 @@ def read_json(path: Path) -> tuple[Any | None, str | None]:
         return None, f"invalid JSON in {path}: {err}"
 
 
-def load_index(index_path: Path) -> tuple[list[JsonObject], list[Issue]]:
-    if not index_path.exists():
-        return [], []
-
-    raw, error = read_json(index_path)
-    if error:
-        return [], [Issue("error", error)]
-    if not isinstance(raw, dict):
-        return [], [Issue("error", f"{index_path} is not a JSON object")]
-
-    version = raw.get("version")
-    if version != SESSION_INDEX_VERSION:
-        return [], [
-            Issue(
-                "warning",
-                f"{index_path} version is {version}, expected {SESSION_INDEX_VERSION}",
-            )
-        ]
-
-    sessions = raw.get("sessions")
-    if not isinstance(sessions, list):
-        return [], [Issue("error", f"{index_path} sessions field is not a list")]
-
-    valid = [item for item in sessions if isinstance(item, dict)]
-    invalid = len(sessions) - len(valid)
-    issues = []
-    if invalid:
-        issues.append(
-            Issue("warning", f"{index_path} contains {invalid} invalid index rows")
-        )
-    return valid, issues
-
-
 def load_sessions(sessions_dir: Path) -> tuple[list[LoadedSession], list[Issue]]:
     if not sessions_dir.exists():
         return [], []
@@ -218,7 +203,7 @@ def load_sessions(sessions_dir: Path) -> tuple[list[LoadedSession], list[Issue]]
     sessions: list[LoadedSession] = []
     issues: list[Issue] = []
     for path in sorted(sessions_dir.glob("*.json")):
-        if path.name == "index.json":
+        if not SESSION_FILE_PATTERN.fullmatch(path.name):
             continue
 
         raw, error = read_json(path)
@@ -335,7 +320,7 @@ def metrics_for_session(
     role_counts.update(role_counter)
 
     tool_calls = 0
-    risky_tool_calls = 0
+    default_gated_tool_calls = 0
     largest_tool_output_chars = 0
     largest_tool_output_name = ""
     estimated_tokens = 0
@@ -345,8 +330,8 @@ def metrics_for_session(
         names = tool_call_names(message)
         tool_calls += len(names)
         tool_counts.update(names)
-        risky_tool_calls += sum(
-            1 for name in names if name in DEFAULT_APPROVAL_GATED_TOOLS
+        default_gated_tool_calls += sum(
+            1 for name in names if is_default_gated_tool(name)
         )
 
         if message.get("role") == "tool":
@@ -404,7 +389,7 @@ def metrics_for_session(
         assistant_messages=role_counter["assistant"],
         tool_messages=tool_messages,
         tool_calls=tool_calls,
-        risky_tool_calls=risky_tool_calls,
+        default_gated_tool_calls=default_gated_tool_calls,
         unmatched_tool_delta=unmatched_tool_delta,
         compaction_count=compaction_count,
         estimated_tokens=estimated_tokens,
@@ -428,30 +413,31 @@ def analyze_history(path: Path) -> HistorySummary:
     prompts: Counter[str] = Counter()
 
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        with path.open("r", encoding="utf-8") as file:
+            for line in file:
+                if not line.strip():
+                    continue
+
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    corrupt_lines += 1
+                    continue
+
+                if not isinstance(raw, dict) or not isinstance(
+                    raw.get("text"), str
+                ):
+                    corrupt_lines += 1
+                    continue
+
+                entry_count += 1
+                text = normalize_prompt(raw["text"])
+                if text:
+                    prompts[text] += 1
+                if isinstance(raw.get("sessionId"), str):
+                    session_linked_entries += 1
     except OSError:
         return HistorySummary(str(path), 0, 1, 0, [])
-
-    for line in lines:
-        if not line.strip():
-            continue
-
-        try:
-            raw = json.loads(line)
-        except json.JSONDecodeError:
-            corrupt_lines += 1
-            continue
-
-        if not isinstance(raw, dict) or not isinstance(raw.get("text"), str):
-            corrupt_lines += 1
-            continue
-
-        entry_count += 1
-        text = normalize_prompt(raw["text"])
-        if text:
-            prompts[text] += 1
-        if isinstance(raw.get("sessionId"), str):
-            session_linked_entries += 1
 
     repeated_prompts = [
         (text, count) for text, count in prompts.most_common() if count > 1
@@ -465,26 +451,6 @@ def analyze_history(path: Path) -> HistorySummary:
     )
 
 
-def compare_index_to_files(
-    index_rows: list[JsonObject],
-    sessions: list[LoadedSession],
-) -> list[Issue]:
-    issues: list[Issue] = []
-    file_ids = {session.session_id for session in sessions}
-    index_ids = {
-        value
-        for row in index_rows
-        if isinstance(value := row.get("id"), str) and value
-    }
-
-    for missing in sorted(index_ids - file_ids):
-        issues.append(Issue("warning", f"index contains {missing} with no file"))
-    for missing in sorted(file_ids - index_ids):
-        issues.append(Issue("warning", f"session file {missing} is missing from index"))
-
-    return issues
-
-
 def analyze_coral_home(
     home: Path,
     *,
@@ -492,9 +458,7 @@ def analyze_coral_home(
 ) -> AnalysisReport:
     home = home.expanduser().resolve()
     sessions_dir = (sessions_dir or home / "sessions").expanduser().resolve()
-    index_path = sessions_dir / "index.json"
 
-    index_rows, index_issues = load_index(index_path)
     sessions, session_issues = load_sessions(sessions_dir)
     history = analyze_history(home / "history.jsonl")
 
@@ -504,9 +468,7 @@ def analyze_coral_home(
     role_counts: Counter[str] = Counter()
     metrics: list[SessionMetrics] = []
     issues: list[Issue] = []
-    issues.extend(index_issues)
     issues.extend(session_issues)
-    issues.extend(compare_index_to_files(index_rows, sessions))
 
     if history.corrupt_lines:
         issues.append(
@@ -532,8 +494,6 @@ def analyze_coral_home(
     return AnalysisReport(
         home=home,
         sessions_dir=sessions_dir,
-        index_path=index_path,
-        index_count=len(index_rows),
         session_count=len(sessions),
         history=history,
         sessions=metrics,
@@ -649,7 +609,6 @@ def render_text(
         "",
         "Summary",
         f"  Sessions loaded: {report.session_count}",
-        f"  Index entries: {report.index_count}",
         f"  Messages: {total_messages}",
         f"  Tool calls: {total_tool_calls}",
         f"  Compactions: {total_compactions}",
@@ -707,7 +666,6 @@ def render_markdown(
                 ("Home", f"`{report.home}`"),
                 ("Sessions dir", f"`{report.sessions_dir}`"),
                 ("Sessions loaded", str(report.session_count)),
-                ("Index entries", str(report.index_count)),
                 ("Messages", str(total_messages)),
                 ("Tool calls", str(total_tool_calls)),
                 ("Compactions", str(total_compactions)),

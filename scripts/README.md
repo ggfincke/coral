@@ -16,6 +16,7 @@ participate in the shipped Node runtime.
 
 ```bash
 npm run check:dev-tools
+npm run check:architecture
 npm run typecheck:scripts
 npm run sessions:analyze
 npm run reference:inventory
@@ -23,6 +24,9 @@ npm run reference:inventory
 
 `check:dev-tools` compiles the Python dev-tool sources, runs focused dev-tool
 regressions, and checks analyzer constants against runtime policy defaults.
+`check:architecture` resolves local TypeScript imports and enforces Coral's
+runtime-cycle, application-entry, subsystem-direction, lazy-MCP, and ambient-cwd
+boundaries.
 `typecheck:scripts` typechecks the TypeScript eval and benchmark entrypoints.
 
 Direct invocations are also supported:
@@ -34,9 +38,10 @@ uv run python scripts/mine-reference.py reference --format md
 ```
 
 `analyze-sessions.py` is read-only. It scans `CORAL_HOME` or `~/.coral` for
-`sessions/index.json`, `sessions/*.json`, and `history.jsonl`, then reports
-aggregate usage, tool-call counts, largest tool outputs, repeated prompts, and
-session-store consistency checks.
+authoritative eight-character session JSON files and `history.jsonl`, then
+reports aggregate usage, tool-call counts, largest tool outputs, repeated
+prompts, and session-file consistency checks. Legacy `sessions/index.json`
+files are ignored because the runtime no longer treats them as authoritative.
 
 `mine-reference.py` scans the git-excluded `reference/` tree for design-research
 candidates: prompt/instruction files, tool-related files, permission/policy

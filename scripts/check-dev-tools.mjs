@@ -45,24 +45,34 @@ function extractPythonStringSet(text, name)
   return [...match[1].matchAll(/"([^"]+)"/g)].map((item) => item[1]).sort()
 }
 
-function extractTsRequireApprovalTools(text)
+function extractPythonString(text, name)
 {
   const match = requireMatch(
     text,
-    /const DEFAULT_TOOL_POLICIES: ToolPermissions = \{([\s\S]*?)\n\}/,
-    'DEFAULT_TOOL_POLICIES'
+    new RegExp(`^${name} = "([^"]+)"$`, 'm'),
+    name
   )
-  if (!match) return []
+  return match?.[1]
+}
 
-  const tools = []
-  for (const item of match[1].matchAll(/^\s*([A-Za-z0-9_]+): '([^']+)'/gm))
-  {
-    if (item[2] === 'require_approval')
-    {
-      tools.push(item[1])
-    }
-  }
-  return tools.sort()
+function loadRuntimeToolDefaults()
+{
+  const source = `
+    import {
+      builtInToolRegistrations,
+      UNKNOWN_TOOL_DEFAULT_POLICY,
+    } from './src/tools/catalog.ts'
+    process.stdout.write(JSON.stringify({
+      registrations: builtInToolRegistrations,
+      unknownPolicy: UNKNOWN_TOOL_DEFAULT_POLICY,
+    }))
+  `
+  const output = execFileSync(
+    process.execPath,
+    ['--import', 'tsx', '--input-type=module', '--eval', source],
+    { encoding: 'utf8' }
+  )
+  return JSON.parse(output)
 }
 
 function compare(label, left, right)
@@ -89,8 +99,7 @@ function checkRuntimeDrift()
 {
   const analyzer = read('scripts/lib/coral_dev_tools/session_analysis.py')
   const limits = read('src/utils/limits.ts')
-  const sessionStore = read('src/session/store.ts')
-  const permissions = read('src/config/permissions.ts')
+  const toolDefaults = loadRuntimeToolDefaults()
 
   compare(
     'CHARS_PER_TOKEN',
@@ -101,23 +110,26 @@ function checkRuntimeDrift()
       'runtime CHARS_PER_TOKEN'
     )
   )
-  compare(
-    'SESSION_INDEX_VERSION',
-    extractNumber(
-      analyzer,
-      /^SESSION_INDEX_VERSION = (\d+)$/m,
-      'SESSION_INDEX_VERSION'
-    ),
-    extractNumber(
-      sessionStore,
-      /^const SESSION_INDEX_VERSION = (\d+)$/m,
-      'runtime SESSION_INDEX_VERSION'
-    )
+  compareLists(
+    'default always-allowed tool policy',
+    extractPythonStringSet(analyzer, 'DEFAULT_ALWAYS_ALLOWED_TOOLS'),
+    toolDefaults.registrations
+      .filter((registration) => registration.defaultPolicy === 'always_allow')
+      .map((registration) => registration.name)
+      .sort()
   )
   compareLists(
-    'require-approval tool policy',
-    extractPythonStringSet(analyzer, 'DEFAULT_APPROVAL_GATED_TOOLS'),
-    extractTsRequireApprovalTools(permissions)
+    'default-gated built-in tool policy',
+    extractPythonStringSet(analyzer, 'DEFAULT_GATED_BUILT_IN_TOOLS'),
+    toolDefaults.registrations
+      .filter((registration) => registration.defaultPolicy !== 'always_allow')
+      .map((registration) => registration.name)
+      .sort()
+  )
+  compare(
+    'unknown tool default policy',
+    extractPythonString(analyzer, 'DEFAULT_UNKNOWN_TOOL_POLICY'),
+    toolDefaults.unknownPolicy
   )
 }
 

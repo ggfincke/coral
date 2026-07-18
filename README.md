@@ -79,8 +79,10 @@ ollama pull nomic-embed-text
 
 - Type a normal prompt to start an agent turn.
 - Type `/` to autocomplete slash commands.
-- Type `@` to pick a project file. Mentioned text files are attached to that
-  turn within a bounded context budget.
+- Type `@` to pick a project file. The picker refreshes a session-owned project
+  file catalog, and the Agent captures mentioned text only after it knows the
+  final context/tool budget. Attachments are fitted in mention order within the
+  same whole-request limit as history, tools, Git context, and the response.
 - Press `Ctrl+P` to search commands and keybindings in the command palette.
 - Approval boxes show pending write/edit diffs when a preview is available.
 - The first launch of each MCP server shows its full launch identity in a
@@ -208,6 +210,13 @@ Project permission settings may tighten user/default policy but cannot loosen
 it. For example, a cloned project may deny `bash`, but it cannot silently make a
 user-gated tool auto-allowed.
 
+Each configuration section is parsed independently. Invalid JSON shapes and
+wrong-typed permission, retrieval, context, and verification fields are ignored
+in favor of their defaults; valid sibling fields still apply. Numeric context
+limits are still normalized to supported token bounds. MCP keeps its stricter
+diagnostic behavior: invalid server definitions are excluded and their issues
+appear in `/mcp`.
+
 Example project `.coral.json`:
 
 ```json
@@ -233,6 +242,18 @@ Example project `.coral.json`:
 window that fits its memory-aware budget and the model's native limit. The
 resolved window remains stable for the session so Ollama does not reload the
 runner between turns.
+
+Configuration is pinned to the lifetime of its owner rather than live-reloaded:
+permissions and verification resolve when an Agent is created, MCP config when
+the interactive application starts, context when the active model session
+begins, and retrieval whenever an indexer is constructed.
+
+Before opening a persistent retrieval cache, Coral resolves the configured
+embedding tag through Ollama's model list and binds the cache to the normalized
+host plus the model manifest digest. A missing, ambiguous, or malformed digest
+fails closed instead of reusing vectors under a mutable display tag. Coral also
+rechecks the digest around embedding requests because Ollama's embed endpoint
+accepts a model name, not a digest-pinned artifact reference.
 
 ### Local MCP servers
 
@@ -315,8 +336,9 @@ context size, model, or discovered tools require a fresh manager or session.
 On first use, Coral resolves the executable to its real path and asks you to
 approve the alias, configured command, resolved executable, complete ordered
 arguments, neutral home-directory working directory, environment names,
-enabled tools, and SHA-256 launch fingerprint. Approval is stored in
-`CORAL_HOME/mcp-trust.json`. Any fingerprinted configuration or executable-path
+enabled tools, and SHA-256 launch fingerprint. Legacy approval is read from
+`CORAL_HOME/mcp-trust.json`; new approvals are stored as per-alias records under
+`CORAL_HOME/mcp-trust.d/`. Any fingerprinted configuration or executable-path
 change requires approval again. The fingerprint does not hash executable
 contents or resolve a mutable container tag, so an update at the same path or
 tag does not trigger reapproval.
@@ -362,18 +384,34 @@ never launches a server. Common states:
 
 By default Coral stores:
 
-| Path                              | Contents                                                         |
-| --------------------------------- | ---------------------------------------------------------------- |
-| `~/.coral/sessions/`              | Saved conversations, todo state, and bounded undo/redo snapshots |
-| `~/.coral/history.jsonl`          | Prompt history                                                   |
-| `~/.coral/prefs.json`             | Mutable UI preferences such as the selected theme                |
-| `~/.coral/telemetry.json`         | Interactive per-model reliability counters                       |
-| `~/.coral/eval-telemetry.json`    | Optional eval-harness reliability counters                       |
-| `~/.coral/retrieval/index.sqlite` | Local semantic code index and embeddings                         |
-| `~/.coral/mcp-trust.json`         | Approved MCP launch fingerprints                                 |
+| Path                                      | Contents                                                               |
+| ----------------------------------------- | ---------------------------------------------------------------------- |
+| `~/.coral/sessions/*.json`                | Authoritative saved conversations, todos, and bounded undo/redo        |
+| `~/.coral/history.jsonl`                  | Append-only prompt history; navigation loads the newest 500 valid rows |
+| `~/.coral/prefs.json`                     | Mutable UI preferences such as the selected theme                      |
+| `~/.coral/telemetry.json` + `telemetry.d` | Legacy baseline plus immutable per-Agent-lifetime counter deltas       |
+| `~/.coral/eval-telemetry.json` + `.d`     | Legacy eval baseline plus optional immutable eval counter deltas       |
+| `~/.coral/retrieval/v2/spaces/*.sqlite`   | Versioned semantic indexes, one per verified embedding space           |
+| `~/.coral/retrieval/index.sqlite`         | Preserved legacy retrieval cache; current Coral does not open it       |
+| `~/.coral/mcp-trust.json` + `.d`          | Legacy trust baseline plus atomic per-alias approval records           |
 
 `CORAL_HOME` relocates every path in this table. The separate read-only user
 configuration remains `~/.coral.json`.
+
+Multiple Coral processes may share one `CORAL_HOME`. Atomic replacements use
+private unique temporary files. Session discovery scans the authoritative
+session files, so a stale legacy `sessions/index.json` cannot hide a session;
+concurrent saves of the same session ID are complete-file last-writer-wins and
+do not merge divergent conversations. Telemetry deltas and per-alias trust
+records avoid unrelated lost updates. Preferences remain whole-file
+last-writer-wins. History is not compacted during ordinary reads, so its file
+can grow beyond the 500 entries retained for navigation.
+
+Retrieval databases use a bounded SQLite wait and WAL transactions when two
+processes index the same workspace and embedding space. Coral preserves old and
+superseded caches because deleting a database another process may still have
+open is unsafe. To clear them, first close every Coral process, then remove the
+desired files under `CORAL_HOME/retrieval/`; they are reproducible caches.
 
 Coral does not upload these files or emit remote telemetry. If you set `--host`
 to a non-local Ollama server, prompts, attached files, tool results, and

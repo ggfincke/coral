@@ -18,6 +18,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dedicated conversation-state boundary:** move stored messages, exact cached
+  estimates, frozen compaction state, active-turn anchors, undo/redo records,
+  and compaction metrics behind one revision-checked `ConversationState` while
+  Agent retains inference, tools, external replay, callbacks, request
+  projection, and persistence. Narrow inference, read-only-subagent, and MCP
+  constructor seams replace private test patching without introducing a
+  provider or transcript framework.
+- **Unified request-context budgeting:** submit `@` mentions as semantic paths,
+  accept one clean turn before cancelable work, and let the Agent capture
+  workspace files atomically only after the pinned context window, active tool
+  catalog, history, project/Git context, framing, and response reserve are
+  known. Attachments are fitted in mention order, use bounded durable
+  truncated/skipped provenance without sending that metadata to Ollama, and
+  remain byte-stable across resume/redo. Parallel tool rounds now reserve every
+  sibling reply and share one cumulative allowance. The file picker uses a
+  cancellable session-owned catalog with explicit refresh/invalidation, and an
+  unavailable `/api/show` result sends the same explicit 8K fallback window
+  used for budgeting.
+- **Joined interactive-session lifecycle:** move Agent generation, admitted
+  turns and commands, prompts, model/permission transitions, session binding,
+  persistence, and shutdown behind one lifecycle owner. Cancellation now joins
+  active work and Agent retirements, rejects callbacks from retired generations,
+  rolls back interrupted undo/redo file replay, and reports committed terminal
+  outcomes and save failures instead of silently losing or misattributing them.
+- **Multi-process local-state safety:** make session files authoritative, use
+  collision-free private atomic replacements, preserve concurrent telemetry as
+  immutable deltas, shard new MCP trust by alias, and keep prompt history
+  append-only with a bounded navigation tail. Concurrent saves of one session
+  and preference writes are explicitly complete-file last-writer-wins.
+- **Verified retrieval spaces:** bind persisted vectors to the normalized
+  Ollama host and verified model-manifest digest, isolate spaces in versioned
+  side-by-side SQLite caches, and use bounded WAL transactions for concurrent
+  indexers. Mutable or unavailable artifact identity now fails closed, while
+  legacy and superseded reproducible caches remain untouched.
+- **Capability-aware tool catalog:** derive each Agent's lookup, Ollama schemas,
+  token cost, prompt guidance, and trusted execution profile from one immutable
+  active catalog. Restricted and custom profiles no longer receive instructions
+  for absent tools; dynamic MCP tools remain Agent-local, default to approval,
+  and cannot self-grant path, parallel, or subagent authority.
 - **Bounded approval prompts:** tool approval, MCP launch-trust, and confirm
   prompts render inside a terminal-height viewport with pinned title and action
   rows, `↑`/`↓` and `PgUp`/`PgDn` scrolling, and a position indicator, so long

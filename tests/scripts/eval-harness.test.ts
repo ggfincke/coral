@@ -3,6 +3,7 @@
 
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -12,7 +13,7 @@ import {
   treeContains,
   treeFreeOf,
 } from './eval/grade.js'
-import { aggregateModel, aggregateTask } from './eval/harness.js'
+import { aggregateModel, aggregateTask, runRep } from './eval/harness.js'
 import { taskById } from './eval/tasks.js'
 import { makeReliabilityStats } from '../../src/types/inference.js'
 import type {
@@ -128,6 +129,58 @@ describe('eval CLI argument parsing', () =>
       /unknown flag: --bogus/
     )
     assert.match(runEvalCli(['--reps']).stderr, /--reps requires a value/)
+  })
+})
+
+describe('runRep lifecycle', () =>
+{
+  it('disposes a failed per-rep Agent before removing its scratch workspace', async () =>
+  {
+    let scratchDir = ''
+    let disposed = false
+    const task: EvalTask = {
+      id: 'lifecycle',
+      description: 'lifecycle',
+      prompt: 'finish',
+      async setup(dir)
+      {
+        scratchDir = dir
+        await writeFile(join(dir, 'input.txt'), 'ready\n', 'utf8')
+      },
+      async grade()
+      {
+        return { passed: true, detail: 'ok' }
+      },
+    }
+
+    const result = await runRep(
+      'fake-model',
+      task,
+      {},
+      {
+        createAgent()
+        {
+          return {
+            run: async () =>
+            {
+              throw new Error('simulated run failure')
+            },
+            getMessages: () => [{ role: 'assistant', content: 'finished' }],
+            getReliabilityStats: () => makeReliabilityStats(),
+            dispose: async () =>
+            {
+              assert.equal(existsSync(scratchDir), true)
+              disposed = true
+            },
+          }
+        },
+      }
+    )
+
+    assert.equal(result.passed, false)
+    assert.equal(result.errored, true)
+    assert.equal(disposed, true)
+    assert.equal(existsSync(scratchDir), false)
   })
 })
 
