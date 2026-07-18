@@ -2,19 +2,27 @@
 // Ollama-backed embedding provider
 
 import { OllamaClient } from '../ollama/client.js'
-import { DEFAULT_EMBEDDING_MODEL, type Embedder } from './types.js'
+import { assertOllamaEmbeddingSpace } from './embedding-space.js'
+import type { Embedder, EmbeddingSpace } from './types.js'
 
 export class OllamaEmbedder implements Embedder
 {
   constructor(
     private client: OllamaClient,
-    public model = DEFAULT_EMBEDDING_MODEL,
+    public space: EmbeddingSpace,
     private signal?: AbortSignal
   )
   {}
 
   async embed(texts: string[]): Promise<number[][]>
   {
-    return this.client.embed(this.model, texts, this.signal)
+    await assertOllamaEmbeddingSpace(this.client, this.space, this.signal)
+    const embeddings = await this.client.embed(
+      this.space.displayModel,
+      texts,
+      this.signal
+    )
+    await assertOllamaEmbeddingSpace(this.client, this.space, this.signal)
+    return embeddings
   }
 }

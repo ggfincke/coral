@@ -17,6 +17,7 @@ interface NetChange
 interface ReplayOptions
 {
   cwd: string
+  signal?: AbortSignal
 }
 
 interface ReplayChange extends NetChange
@@ -50,7 +51,10 @@ function mergeFileChanges(changes: UndoFileChange[]): NetChange[]
   return [...byPath.values()].filter((change) => change.before !== change.after)
 }
 
-async function readCurrentFile(path: string): Promise<{
+async function readCurrentFile(
+  path: string,
+  signal?: AbortSignal
+): Promise<{
   exists: boolean
   content: string
   error?: string
@@ -58,7 +62,10 @@ async function readCurrentFile(path: string): Promise<{
 {
   try
   {
-    return { exists: true, content: await readFile(path, 'utf-8') }
+    return {
+      exists: true,
+      content: await readFile(path, { encoding: 'utf-8', signal }),
+    }
   }
   catch (err)
   {
@@ -79,7 +86,9 @@ async function validateReplayPaths(
 
   for (const change of changes)
   {
+    options.signal?.throwIfAborted()
     const allowed = await checkWorkspacePath(options.cwd, change.path, false)
+    options.signal?.throwIfAborted()
     if (!allowed.ok)
     {
       return {
@@ -95,13 +104,16 @@ async function validateReplayPaths(
 
 async function preflightChanges(
   changes: ReplayChange[],
-  direction: 'undo' | 'redo'
+  direction: 'undo' | 'redo',
+  signal?: AbortSignal
 ): Promise<string | null>
 {
   for (const change of changes)
   {
+    signal?.throwIfAborted()
     const expected = direction === 'undo' ? change.after : change.before
-    const current = await readCurrentFile(change.resolvedPath)
+    const current = await readCurrentFile(change.resolvedPath, signal)
+    signal?.throwIfAborted()
     if (current.error)
     {
       return `Cannot read ${change.resolvedPath}: ${current.error}`
@@ -125,7 +137,8 @@ async function preflightChanges(
 
 async function applyChanges(
   changes: ReplayChange[],
-  contentFor: (change: ReplayChange) => string | null
+  contentFor: (change: ReplayChange) => string | null,
+  signal?: AbortSignal
 ): Promise<{ ok: true; files: number } | { ok: false; error: string }>
 {
   let files = 0
@@ -134,7 +147,9 @@ async function applyChanges(
   {
     for (const change of changes)
     {
-      const previous = await readCurrentFile(change.resolvedPath)
+      signal?.throwIfAborted()
+      const previous = await readCurrentFile(change.resolvedPath, signal)
+      signal?.throwIfAborted()
       if (previous.error)
       {
         throw new Error(`Cannot read ${change.resolvedPath}: ${previous.error}`)
@@ -153,8 +168,13 @@ async function applyChanges(
       else
       {
         await mkdir(dirname(change.resolvedPath), { recursive: true })
-        await writeFile(change.resolvedPath, content, 'utf-8')
+        signal?.throwIfAborted()
+        await writeFile(change.resolvedPath, content, {
+          encoding: 'utf-8',
+          signal,
+        })
       }
+      signal?.throwIfAborted()
       files++
     }
   }
@@ -207,20 +227,33 @@ export async function revertFileChanges(
   options: ReplayOptions
 ): Promise<{ ok: true; changedFiles: number } | { ok: false; error: string }>
 {
-  const netChanges = mergeFileChanges(changes)
-  const validated = await validateReplayPaths(netChanges, options)
-  if (!validated.ok) return validated
+  try
+  {
+    options.signal?.throwIfAborted()
+    const netChanges = mergeFileChanges(changes)
+    const validated = await validateReplayPaths(netChanges, options)
+    if (!validated.ok) return validated
 
-  const preflightError = await preflightChanges(validated.changes, 'undo')
-  if (preflightError) return { ok: false, error: preflightError }
+    const preflightError = await preflightChanges(
+      validated.changes,
+      'undo',
+      options.signal
+    )
+    if (preflightError) return { ok: false, error: preflightError }
 
-  const applied = await applyChanges(
-    validated.changes,
-    (change) => change.before
-  )
-  if (!applied.ok) return applied
+    const applied = await applyChanges(
+      validated.changes,
+      (change) => change.before,
+      options.signal
+    )
+    if (!applied.ok) return applied
 
-  return { ok: true, changedFiles: applied.files }
+    return { ok: true, changedFiles: applied.files }
+  }
+  catch (error)
+  {
+    return { ok: false, error: toErrorMessage(error) }
+  }
 }
 
 export async function applyFileChanges(
@@ -228,18 +261,31 @@ export async function applyFileChanges(
   options: ReplayOptions
 ): Promise<{ ok: true; changedFiles: number } | { ok: false; error: string }>
 {
-  const netChanges = mergeFileChanges(changes)
-  const validated = await validateReplayPaths(netChanges, options)
-  if (!validated.ok) return validated
+  try
+  {
+    options.signal?.throwIfAborted()
+    const netChanges = mergeFileChanges(changes)
+    const validated = await validateReplayPaths(netChanges, options)
+    if (!validated.ok) return validated
 
-  const preflightError = await preflightChanges(validated.changes, 'redo')
-  if (preflightError) return { ok: false, error: preflightError }
+    const preflightError = await preflightChanges(
+      validated.changes,
+      'redo',
+      options.signal
+    )
+    if (preflightError) return { ok: false, error: preflightError }
 
-  const applied = await applyChanges(
-    validated.changes,
-    (change) => change.after
-  )
-  if (!applied.ok) return applied
+    const applied = await applyChanges(
+      validated.changes,
+      (change) => change.after,
+      options.signal
+    )
+    if (!applied.ok) return applied
 
-  return { ok: true, changedFiles: applied.files }
+    return { ok: true, changedFiles: applied.files }
+  }
+  catch (error)
+  {
+    return { ok: false, error: toErrorMessage(error) }
+  }
 }

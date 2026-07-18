@@ -3,14 +3,19 @@
 
 import type { Tool, ToolResult } from './tool.js'
 import { pluralize } from '../utils/pluralize.js'
-import { cloneTodoItems } from '../types/undo.js'
 import {
-  getTodos,
-  setTodos,
-  STATUS_MARK,
+  cloneTodoItems,
   validateTodoList,
   type TodoItem,
-} from './todo-store.js'
+  type TodoStatus,
+} from '../types/todo.js'
+
+// model-facing confirmation glyphs
+const STATUS_MARK: Record<TodoStatus, string> = {
+  pending: '[ ]',
+  in_progress: '[~]',
+  completed: '[x]',
+}
 
 // render the stored list back to the model as a confirmation
 function renderTodos(todos: TodoItem[]): string
@@ -47,16 +52,21 @@ export const todoWriteTool: Tool = {
     },
     required: ['todos'],
   },
-  async execute(args): Promise<ToolResult>
+  async execute(args, context): Promise<ToolResult>
   {
+    if (!context?.todoState)
+    {
+      return { output: '', error: 'todo_write requires session todo state' }
+    }
+
     const result = validateTodoList(args.todos)
     if (!result.ok)
     {
       return { output: '', error: result.error }
     }
 
-    const before = cloneTodoItems(getTodos())
-    setTodos(result.todos)
+    const before = context.todoState.snapshot()
+    context.todoState.replace(result.todos)
     return {
       output: renderTodos(result.todos),
       todoChange: {

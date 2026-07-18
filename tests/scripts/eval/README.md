@@ -92,20 +92,23 @@ loudly), `--host <url>`, plus `--max-iterations <n>`, `--timeout <ms>`,
 Each rep already captures the model's reliability counters, but they normally
 die with the process. With `--save-telemetry`, the harness sums every rep across
 every task for a model into one entry and folds it into
-`~/.coral/eval-telemetry.json`, so reliability becomes comparable across runs
-over time instead of just per-invocation.
+an immutable record under `~/.coral/eval-telemetry.d/`, so reliability becomes
+comparable across runs over time instead of just per-invocation. A legacy
+`eval-telemetry.json` snapshot remains a read-only baseline when present.
 
-This is a **separate file** from the interactive `~/.coral/telemetry.json` that
+This is a **separate store** from the interactive `~/.coral/telemetry.d/` that
 the TUI's `/telemetry` reads: synthetic benchmark counters are kept out of the
-real-usage signal. The file's `sessions` count therefore reads as "number of
-eval runs that included this model". After a saving run, the cumulative lifetime
-view is printed below the per-run report (suppressed under `--json`).
+real-usage signal. Its `sessions` count therefore reads as "number of eval runs
+that included this model". After a saving run, the cumulative lifetime view is
+printed below the per-run report (suppressed under `--json`).
 
 ## Caveats
 
 - The harness uses Coral's built-in default tool permissions and **auto-approves
   every gated tool call** so runs are fully headless. User/project permission
-  overrides are ignored to keep reports comparable.
+  overrides are ignored to keep reports comparable. Eval agents do not opt into
+  user-configured MCP servers, so local MCP availability cannot change a
+  benchmark's toolset or results.
 - Each rep executes in a fresh **throwaway temp dir** under the OS temp root
   (`coral-eval-*`, removed after the rep). It is not a sandbox — the agent can
   still run `bash`/`node` on the host, so only point it at models you trust.
@@ -113,6 +116,8 @@ view is printed below the per-run report (suppressed under `--json`).
   timeout (default 120s); a hit cap or timeout yields a failed/aborted outcome
   rather than hanging the suite.
 - Tasks run **sequentially**, not in parallel: a single local Ollama runner serves
-  every rep, so concurrent reps would thrash model load/unload and contend for the
-  host. Models are kept warm across their own tasks and unloaded only when
-  switching models.
+  every rep, so concurrent reps would contend for the host. Each per-rep Agent is
+  disposed before its throwaway workspace is removed, while Ollama's request
+  `keep_alive` keeps the model warm across tasks. The harness does not assume
+  exclusive ownership of the configured host, so it never issues a host-global
+  model eviction; Ollama releases the model after `keep_alive` expires.

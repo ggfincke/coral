@@ -3,6 +3,7 @@
   "version": "0.12.0",
   "description": "A local-first CLI/TUI coding agent for Ollama",
   "type": "module",
+  "exports": {},
   "files": [
     "dist",
     "README.md",
@@ -24,6 +25,7 @@
   },
   "scripts": {
     "build": "node node_modules/typescript-7/bin/tsc",
+    "postbuild": "node -e \"require('node:fs').chmodSync('dist/cli/main.js',0o755)\"",
     "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
     "typecheck:scripts": "node node_modules/typescript-7/bin/tsc -p tsconfig.scripts.json",
     "dev": "tsx src/cli/main.tsx",
@@ -34,6 +36,7 @@
     "bench:compaction": "tsx tests/scripts/bench-compaction.ts",
     "eval": "tsx tests/scripts/eval/run.ts",
     "check:dev-tools": "node scripts/check-dev-tools.mjs",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "test:watch": "node --import tsx --test --watch 'tests/**/*.test.ts'",
     "lint": "eslint .",
     "lint:fix": "eslint --fix .",
@@ -57,6 +60,9 @@
     "arrowParens": "always"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "better-sqlite3": "^12.10.1",
     "chalk": "^5.6.2",
     "cli-highlight": "^2.1.11",
@@ -65,6 +71,7 @@
     "ink": "^7.0.6",
     "marked": "^18.0.5",
     "react": "^19.2.7",
+    "string-width": "^8.2.2",
     "strip-ansi": "^7.2.0",
     "typescript": "^6.0.3",
     "typescript-language-server": "^5.3.0",
@@ -84,7 +91,8 @@
     "prettier-plugin-brace-style": "^0.10.2",
     "tsx": "^4.23.0",
     "typescript-7": "npm:typescript@^7.0.2",
-    "typescript-eslint": "^8.62.1"
+    "typescript-eslint": "^8.62.1",
+    "zod": "^4.4.3"
   },
   "allowScripts": {
     "better-sqlite3@12.11.1": true,

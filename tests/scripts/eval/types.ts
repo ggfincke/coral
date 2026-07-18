@@ -97,6 +97,6 @@ export interface EvalOptions
   think?: boolean | 'low' | 'medium' | 'high'
   // run only tasks whose id is in this list
   taskFilter?: string[]
-  // fold each model's summed run reliability into ~/.coral/eval-telemetry.json
+  // append each model's summed run reliability under ~/.coral/eval-telemetry.d
   saveTelemetry?: boolean
 }

@@ -3,11 +3,12 @@
 
 import { writeFile } from 'node:fs/promises'
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
+import { applyEdit, describeEditMiss } from './edit-operation.js'
 import { readFileGuarded } from './file-utils.js'
 import { checkWorkspacePath } from './path-policy.js'
 import { getCwd } from '../cwd.js'
-import { applyEdit, computeDiff, describeEditMiss } from '../utils/diff.js'
 import { formatBytes } from '../utils/bytes.js'
+import { computeDiff } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { pluralize } from '../utils/pluralize.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../utils/file-read.js'

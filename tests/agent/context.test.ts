@@ -72,5 +72,5 @@ test('gatherProjectContext respects an explicit total budget', async () =>
   const ctx = gatherProjectContext(dir, { maxTotalChars: 300 })
 
   assert.match(ctx, /truncated to fit budget/)
-  assert.ok(ctx.length < 800)
+  assert.ok(ctx.length <= 300)
 })

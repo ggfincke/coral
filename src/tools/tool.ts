@@ -2,9 +2,11 @@
 // tool interface & conversion to Ollama format
 
 import type { OllamaTool, JsonSchema } from '../types/inference.js'
+import { estimateModelRequestValue } from '../utils/limits.js'
 import type { SubagentRunner } from './subagent.js'
 import type { UndoFileChange, UndoTodoChange } from '../types/undo.js'
 import type { CodeIntelService } from '../lsp/client.js'
+import type { TodoState } from '../types/todo.js'
 
 // result returned after tool execution
 export interface ToolResult
@@ -31,6 +33,18 @@ export interface ToolDisplay
   summarize?(args: Record<string, unknown>): string
 }
 
+// immutable presentation snapshot taken at call emission — carries dynamic
+// (MCP) labels & formatting hints past later tool refreshes w/o a live manager
+export interface ToolCallPresentation
+{
+  label: string
+  // MCP calls render raw pretty-JSON args & MCP approval copy
+  mcp: boolean
+}
+
+export type ToolArgumentValidation =
+  { ok: true; args: Record<string, unknown> } | { ok: false; error: string }
+
 // request-scoped values passed by the agent when a tool runs
 export interface ToolExecutionContext
 {
@@ -39,6 +53,7 @@ export interface ToolExecutionContext
   allowOutsideWorkspace?: boolean
   subagentRunner?: SubagentRunner
   codeIntel?: CodeIntelService
+  todoState?: TodoState
   signal?: AbortSignal
 }
 
@@ -54,6 +69,8 @@ export interface Tool
   parallelSafe?: boolean
   // omitted label falls back to the tool name; omitted summarize to compact JSON
   display?: ToolDisplay
+  // override built-in coercion for tools w/ richer input schemas
+  validateArgs?(args: Record<string, unknown>): ToolArgumentValidation
   execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext
@@ -71,4 +88,15 @@ export function toolToOllamaFormat(tool: Tool): OllamaTool
       parameters: tool.parameters,
     },
   }
+}
+
+// estimate the separate model-tool payload that Ollama adds to the prompt
+export function estimateOllamaToolTokens(tools: readonly OllamaTool[]): number
+{
+  return estimateModelRequestValue(tools).tokens
+}
+
+export function estimateToolDefinitionTokens(tools: readonly Tool[]): number
+{
+  return estimateOllamaToolTokens(tools.map(toolToOllamaFormat))
 }

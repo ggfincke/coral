@@ -1,23 +1,19 @@
 // src/tui/App.tsx
-// main TUI component w/ model picking, approvals, scrollback, & session persistence
+// render the interactive terminal view & route user input
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
-import { existsSync } from 'node:fs'
-import { Agent } from '../agent/agent.js'
 import { OllamaClient } from '../ollama/client.js'
+import type { Agent } from '../agent/agent.js'
 import { clamp } from '../utils/clamp.js'
 import { pluralize } from '../utils/pluralize.js'
 import type { Model } from '../types/inference.js'
 import { buildModelPickerLines, sortModels } from './model/model-picker.js'
 import { buildWelcomeLines } from './shell/welcome.js'
 import {
-  createShutdownCoordinator,
-  registerSignalHandlers,
-} from './shell/shutdown.js'
-import {
   buildTranscriptLines,
   centerLinesVertical,
+  failPendingToolCalls,
   maxScrollOffset,
   padLinesTop,
   sliceViewport,
@@ -29,7 +25,7 @@ import PromptInput from './components/prompt-input.js'
 import CommandPalette from './components/command-palette.js'
 import { getThemeGeneration, inkColor, style } from './theme.js'
 import { toErrorMessage } from '../utils/errors.js'
-import { previewToolDiff } from '../utils/diff.js'
+import { previewToolDiff } from '../tools/preview.js'
 import {
   commandCompletions,
   commandInfos,
@@ -38,22 +34,20 @@ import {
   type CommandContext,
   type KeybindingAction,
 } from './shell/commands.js'
-import { buildMentionContext, formatMentionNotice } from './prompt/mentions.js'
-import { listProjectFiles } from './prompt/file-suggestions.js'
+import { formatMentionNotice, parseMentions } from './prompt/mentions.js'
 import {
   formatAutoCompactionResult,
   formatPermissionModeChange,
+  formatPermissionModeLocked,
+  formatPermissionModeUnchanged,
 } from './shell/command-output.js'
 import { useAnimationTimer } from './hooks/use-animation-timer.js'
 import { useStreamBuffer } from './hooks/use-stream-buffer.js'
-import { useSessionPersistence } from './hooks/use-session-persistence.js'
 import { useInputHistory } from './hooks/use-input-history.js'
-import { recordReliability } from '../telemetry/store.js'
 import {
-  loadSession,
-  renameSession,
-  type SessionData,
-} from '../session/store.js'
+  resolveStartupSession,
+  useInteractiveSession,
+} from './hooks/use-interactive-session.js'
 import { getCwd } from '../cwd.js'
 import { type RunStage } from './run/run-stage.js'
 import {
@@ -63,7 +57,12 @@ import {
   formatTokenCount,
   formatTokensPerSecond,
 } from './shell/metrics.js'
-import { buildApprovalBox, buildConfirmBox } from './run/approval-box.js'
+import {
+  buildApprovalContent,
+  buildConfirmContent,
+  buildMcpApprovalContent,
+  renderPromptBox,
+} from './run/approval-box.js'
 import {
   buildRestoredBlocks,
   truncateToolResult,
@@ -75,18 +74,11 @@ import {
 } from './run/status-line.js'
 import { LineList } from './components/line-list.js'
 import { buildTodoPanel } from './transcript/todo-panel.js'
-import {
-  getTodos,
-  clearTodos,
-  onTodosChanged,
-  sanitizeTodos,
-  setTodos as restoreStoreTodos,
-  type TodoItem,
-} from '../tools/todo-store.js'
 import { restoredSessionForPickerSelection } from './model/model-activation.js'
 import { buildPaletteEntries, type PaletteEntry } from './palette.js'
+import type { OperationHandle } from './session/interactive-runtime.js'
 
-interface Props
+export interface AppProps
 {
   model?: string
   host: string
@@ -95,30 +87,14 @@ interface Props
   resumeSessionId?: string
 }
 
-interface ApprovalPrompt
-{
-  toolName: string
-  args: Record<string, unknown>
-  // pre-computed change preview — rendered inside the approval box
-  diff?: string
-  previewMessage?: string
-  resolve: (approved: boolean) => void
-}
-
-// generic yes/no prompt — currently the doom-loop pause
-interface ConfirmPrompt
-{
-  message: string
-  resolve: (proceed: boolean) => void
-}
-
 const FLUSH_INTERVAL = 32
 const SPINNER_INTERVAL = 80
 const SCROLL_LINES = 3
 
-function canResumeInCwd(cwd: string): boolean
+interface SlashDispatchResult
 {
-  return existsSync(cwd)
+  admitted: boolean
+  handled: boolean
 }
 
 // zeroed token-usage state — initial value & reset target
@@ -139,43 +115,22 @@ export default function App({
   think,
   yolo: initialYolo,
   resumeSessionId,
-}: Props)
+}: AppProps)
 {
   const { exit } = useApp()
   const { stdout } = useStdout()
   const terminal = stdout as typeof process.stdout
 
-  const { sessionIdRef, sessionMetaRef, getResumeSession, persistSession } =
-    useSessionPersistence(resumeSessionId)
-  const loadedResumeSession = getResumeSession()
-  const resumeSession =
-    loadedResumeSession && canResumeInCwd(loadedResumeSession.meta.cwd)
-      ? loadedResumeSession
-      : null
-  const resumeSessionUnavailable = Boolean(
-    loadedResumeSession && !resumeSession
+  const [resumeSession] = useState(
+    () => resolveStartupSession(resumeSessionId).session
   )
-
-  const [activeModel, setActiveModel] = useState(
-    model ?? resumeSession?.meta.model ?? ''
-  )
-  const [agent, setAgent] = useState<Agent | null>(() =>
-  {
-    if (!model) return null
-
-    const nextAgent = new Agent(model, host, resumeSession?.meta.cwd, { think })
-    if (resumeSession)
-    {
-      nextAgent.restoreMessages(resumeSession.messages)
-      nextAgent.restoreUndoStack(resumeSession.undo, resumeSession.redo)
-    }
-
-    return nextAgent
-  })
   const [pickerState, setPickerState] = useState<
     'hidden' | 'loading' | 'ready' | 'error'
   >(model ? 'hidden' : 'loading')
   const [paletteOpen, setPaletteOpen] = useState(false)
+  const [pickerErrorTitle, setPickerErrorTitle] = useState(
+    'Failed to load Ollama models'
+  )
   const [pickerError, setPickerError] = useState('')
   const [models, setModels] = useState<Model[]>([])
   const [selectedModelIndex, setSelectedModelIndex] = useState(0)
@@ -184,7 +139,6 @@ export default function App({
     resumeSession ? buildRestoredBlocks(resumeSession.messages) : []
   )
   const [showThinking, setShowThinking] = useState(true)
-  const [yolo, setYolo] = useState(initialYolo)
   // mirrors the module-level theme generation so theme switches re-render
   const [themeGeneration, setThemeGeneration] = useState(getThemeGeneration)
   const [runStage, setRunStage] = useState<RunStage>('idle')
@@ -192,18 +146,11 @@ export default function App({
   // still in flight — keeps command/chat turns from overlapping & stops a fast
   // submit from running against the pre-switch model
   const [commandRunning, setCommandRunning] = useState(false)
-  const [switchingModel, setSwitchingModel] = useState(false)
-  const [approval, setApproval] = useState<ApprovalPrompt | null>(null)
-  const [confirm, setConfirm] = useState<ConfirmPrompt | null>(null)
+  // body scroll position inside the active approval/confirm prompt
+  const [promptScrollOffset, setPromptScrollOffset] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [runElapsed, setRunElapsed] = useState<string | null>(null)
-  const [sessionLabelId, setSessionLabelId] = useState<string | null>(
-    resumeSession?.meta.id ?? null
-  )
   const [tokenUsage, setTokenUsage] = useState(EMPTY_TOKEN_USAGE)
-  const [contextWindow, setContextWindow] = useState(0)
-  // live task list mirrored from the todo tool's in-memory store
-  const [todos, setTodos] = useState<TodoItem[]>(() => getTodos())
   const [terminalSize, setTerminalSize] = useState({
     columns: terminal.columns ?? 80,
     rows: terminal.rows ?? 24,
@@ -224,6 +171,99 @@ export default function App({
     stopWaiting,
     resetAnimation,
   } = useAnimationTimer(runStage, SPINNER_INTERVAL)
+  const previousLineCountRef = useRef(0)
+  const runStartTimeRef = useRef<number | null>(null)
+  // per-call start times keyed by callId — parallel batches run several at once
+  const toolStartTimesRef = useRef<Map<number, number>>(new Map())
+  const modelLoadAbortRef = useRef<AbortController | null>(null)
+
+  const restoreSessionView = useCallback(
+    (session: NonNullable<typeof resumeSession>) =>
+    {
+      setOutput(buildRestoredBlocks(session.messages))
+      setScrollOffset(0)
+      setTokenUsage(EMPTY_TOKEN_USAGE)
+      setRunStage('idle')
+      runStartTimeRef.current = null
+      toolStartTimesRef.current.clear()
+      resetStreamBuffer()
+      resetAnimation()
+    },
+    [resetAnimation, resetStreamBuffer]
+  )
+  const clearSessionView = useCallback(() =>
+  {
+    setOutput([])
+    setScrollOffset(0)
+    setTokenUsage(EMPTY_TOKEN_USAGE)
+    setRunStage('idle')
+    runStartTimeRef.current = null
+    toolStartTimesRef.current.clear()
+    resetStreamBuffer()
+    resetAnimation()
+  }, [resetAnimation, resetStreamBuffer])
+  const resetTokenUsageView = useCallback(() =>
+  {
+    setTokenUsage(EMPTY_TOKEN_USAGE)
+  }, [])
+  const interactiveView = useMemo(
+    () => ({
+      restoreSession: restoreSessionView,
+      clearSession: clearSessionView,
+      resetTokenUsage: resetTokenUsageView,
+    }),
+    [clearSessionView, resetTokenUsageView, restoreSessionView]
+  )
+
+  const interactive = useInteractiveSession({
+    model,
+    host,
+    think,
+    initialYolo,
+    initialSession: resumeSession,
+    exit,
+    view: interactiveView,
+  })
+  const {
+    agent,
+    activeModel,
+    yolo,
+    contextWindow,
+    transition: sessionTransition,
+    activePrompt,
+    sessionLabelId,
+    todos,
+    refreshProjectFiles,
+    activateModel,
+    switchModel,
+    resumeSession: resumeSessionById,
+    saveOperationSession,
+    renameCurrentSession,
+    clearCurrentSession: clearSession,
+    resetTokenUsage,
+    setPermissionMode: transitionPermissionMode,
+    beginOperation,
+    acceptsEvent,
+    acceptsCommandEvent,
+    acceptsCommandTerminal,
+    requestPrompt,
+    settlePrompt,
+    completeTurn,
+    finishCommand,
+    runOperation,
+    abortActive: abortRun,
+    hasActiveOperation,
+    getSessionId,
+    isYolo,
+    isAcceptingTransitions,
+    shutdown: shutdownInteractive,
+  } = interactive
+  const transitioningSession = sessionTransition !== null
+  const shutdown = useCallback(() =>
+  {
+    modelLoadAbortRef.current?.abort()
+    return shutdownInteractive()
+  }, [shutdownInteractive])
   const {
     navigateUp,
     navigateDown,
@@ -231,18 +271,10 @@ export default function App({
     resetNavigation,
   } = useInputHistory()
 
-  const agentRef = useRef<Agent | null>(agent)
-  const previousLineCountRef = useRef(0)
-  const disposedAgentsRef = useRef(new WeakSet<Agent>())
-  const runStartTimeRef = useRef<number | null>(null)
-  // per-call start times keyed by callId — parallel batches run several at once
-  const toolStartTimesRef = useRef<Map<number, number>>(new Map())
-  const runAbortRef = useRef<AbortController | null>(null)
-  const shutdownCoordinatorRef = useRef<(() => Promise<void>) | null>(null)
-  // live permission mode — read at approval time so a mid-run toggle takes effect
-  const yoloRef = useRef(yolo)
   const maxOffsetRef = useRef(0)
   const chatViewportHeightRef = useRef(6)
+  // prompt viewport geometry for the modal scroll keys
+  const promptViewportRef = useRef({ maxOffset: 0, pageSize: 1 })
 
   const isRunning = runStage !== 'idle'
   const currentCwd = agent?.getCwd() ?? getCwd()
@@ -250,38 +282,67 @@ export default function App({
   const pickerVisible = pickerState !== 'hidden'
   const paletteVisible = paletteOpen && !pickerVisible && Boolean(agent)
 
-  const approvalBoxLines = useMemo(
-    () =>
-      approval
-        ? buildApprovalBox(
-            approval.toolName,
-            approval.args,
-            transcriptWidth,
-            approval.diff,
-            approval.previewMessage
-          )
-        : [],
-    [approval, transcriptWidth]
-  )
-  const confirmBoxLines = useMemo(
-    () =>
-      confirm
-        ? buildConfirmBox(confirm.message, transcriptWidth, 'doom loop')
-        : [],
-    [confirm, transcriptWidth]
-  )
+  // render the controller's one active blocking prompt
+  const activePromptContent = useMemo(() =>
+  {
+    if (activePrompt?.kind === 'mcp')
+    {
+      return buildMcpApprovalContent(activePrompt.request, transcriptWidth)
+    }
+    if (activePrompt?.kind === 'tool')
+    {
+      return buildApprovalContent(
+        activePrompt.toolName,
+        activePrompt.args,
+        transcriptWidth,
+        activePrompt.diff,
+        activePrompt.previewMessage,
+        activePrompt.presentation
+      )
+    }
+    if (activePrompt?.kind === 'doom')
+    {
+      return buildConfirmContent(
+        activePrompt.message,
+        transcriptWidth,
+        'doom loop'
+      )
+    }
+    return null
+  }, [activePrompt, transcriptWidth])
   const todoPanelLines = useMemo(
     () => buildTodoPanel(todos, transcriptWidth),
     [todos, transcriptWidth]
   )
   const headerHeight = 2
-  // either prompt takes over the input row
-  const promptActive = Boolean(approval) || Boolean(confirm)
+  // any modal prompt takes over the input row
+  const promptActive = Boolean(activePromptContent)
   const inputHeight = promptActive || paletteVisible ? 0 : 3
   const statusHeight = 1
-  const promptBoxLines = approval ? approvalBoxLines : confirmBoxLines
+  // bound the prompt so chat keeps six rows whenever terminal geometry permits
+  const promptCapacity = Math.max(
+    terminalSize.rows - headerHeight - statusHeight,
+    1
+  )
+  const maxPromptRows = Math.min(
+    Math.max(promptCapacity - 7, 10),
+    promptCapacity
+  )
+  const promptRender = useMemo(
+    () =>
+      activePromptContent
+        ? renderPromptBox(
+            activePromptContent,
+            transcriptWidth,
+            maxPromptRows,
+            promptScrollOffset
+          )
+        : null,
+    [activePromptContent, maxPromptRows, promptScrollOffset, transcriptWidth]
+  )
+  const promptBoxLines = promptRender?.lines ?? []
   const approvalHeight = promptActive ? promptBoxLines.length + 1 : 0
-  const todoHeight = todoPanelLines.length
+  const todoHeight = promptActive ? 0 : todoPanelLines.length
   const chatViewportHeight = Math.max(
     terminalSize.rows -
       headerHeight -
@@ -289,7 +350,7 @@ export default function App({
       statusHeight -
       approvalHeight -
       todoHeight,
-    6
+    promptActive ? 0 : 6
   )
   const pickerViewportHeight = Math.max(
     terminalSize.rows - headerHeight - statusHeight,
@@ -339,7 +400,7 @@ export default function App({
         )
       : pickerState === 'loading'
         ? ['Loading Ollama models…', `Host: ${host}`]
-        : ['Failed to load Ollama models', `Host: ${host}`, '', pickerError]
+        : [pickerErrorTitle, `Host: ${host}`, '', pickerError]
   const visiblePicker = padLinesTop(
     pickerLines.slice(-pickerViewportHeight),
     pickerViewportHeight
@@ -363,306 +424,103 @@ export default function App({
   )
   const paddedWelcome = centerLinesVertical(welcomeLines, chatViewportHeight)
 
-  const disposeAgent = useCallback(async (agentInstance: Agent | null) =>
-  {
-    if (!agentInstance || disposedAgentsRef.current.has(agentInstance)) return
-
-    disposedAgentsRef.current.add(agentInstance)
-    // fold this agent's reliability counters into the persistent per-model
-    // telemetry, but only once a model has produced a turn — skips agents
-    // abandoned in the picker. entries are already grouped per produced model
-    try
+  const rebuildTranscript = useCallback(
+    (target = agent) =>
     {
-      if (agentInstance.hasProducedTurn())
-      {
-        for (const entry of agentInstance.getReliabilityTelemetry())
-        {
-          recordReliability(entry.model, entry.stats)
-        }
-      }
-    }
-    catch
-    {
-      // telemetry persistence is non-fatal
-    }
-    await agentInstance.dispose()
-  }, [])
-
-  const shutdown = useCallback(() =>
-  {
-    shutdownCoordinatorRef.current ??= createShutdownCoordinator(
-      () => disposeAgent(agentRef.current),
-      () => exit()
-    )
-
-    return shutdownCoordinatorRef.current()
-  }, [disposeAgent, exit])
-
-  // clear transcript, scroll, & session label — used by /clear
-  const clearSession = useCallback(() =>
-  {
-    setOutput([])
-    setScrollOffset(0)
-    setSessionLabelId(null)
-    setTokenUsage(EMPTY_TOKEN_USAGE)
-    // task list is session-scoped & not persisted — drop it w/ the conversation
-    clearTodos()
-    sessionIdRef.current = null
-  }, [sessionIdRef])
-
-  const rebuildTranscript = useCallback(() =>
-  {
-    const currentAgent = agentRef.current
-    setOutput(
-      currentAgent ? buildRestoredBlocks(currentAgent.getMessages()) : []
-    )
-    setScrollOffset(0)
-  }, [])
-
-  // zero header gauges & agent cumulative counters (match resume after undo/redo)
-  const resetTokenUsage = useCallback(() =>
-  {
-    setTokenUsage(EMPTY_TOKEN_USAGE)
-    agentRef.current?.resetTokenUsage()
-  }, [])
-
-  // fetch context window size from Ollama & update state
-  const fetchContextWindowForAgent = useCallback((agentInstance: Agent) =>
-  {
-    void agentInstance.fetchContextWindow().then((size) =>
-    {
-      if (size > 0) setContextWindow(size)
-    })
-  }, [])
-
-  // force-save the current session to disk — used by /new & /resume
-  const saveCurrentSession = useCallback((): string | null =>
-  {
-    const currentAgent = agentRef.current
-    if (!currentAgent) return null
-    // skip new empty sessions; persist existing sessions emptied by undo
-    if (currentAgent.getMessageCount() === 0 && !sessionIdRef.current)
-      return null
-    const meta = persistSession(currentAgent)
-    if (meta)
-    {
-      setSessionLabelId(meta.id)
-    }
-    return meta?.id ?? null
-  }, [persistSession, sessionIdRef])
-
-  // rename the current session's title & update cached meta
-  const renameCurrentSession = useCallback(
-    (title: string): boolean =>
-    {
-      if (!sessionIdRef.current) return false
-      const result = renameSession(sessionIdRef.current, title)
-      if (result && sessionMetaRef.current)
-      {
-        sessionMetaRef.current = {
-          ...sessionMetaRef.current,
-          title,
-          updatedAt: result.updatedAt,
-        }
-      }
-      return result !== undefined
-    },
-    [sessionIdRef, sessionMetaRef]
-  )
-
-  // resume a session by ID — disposes current agent, loads & restores target
-  const resumeSessionById = useCallback(
-    (sessionId: string): boolean =>
-    {
-      const target = loadSession(sessionId)
-      if (!target) return false
-      if (!canResumeInCwd(target.meta.cwd)) return false
-
-      const currentAgent = agentRef.current
-      if (currentAgent)
-      {
-        void disposeAgent(currentAgent)
-      }
-
-      // rebuild transcript from saved messages
-      setOutput(buildRestoredBlocks(target.messages))
+      setOutput(target ? buildRestoredBlocks(target.getMessages()) : [])
       setScrollOffset(0)
-      setTokenUsage(EMPTY_TOKEN_USAGE)
-      setContextWindow(0)
-      // restore the saved task list so the todo panel survives resume
-      restoreStoreTodos(sanitizeTodos(target.todos))
-
-      // create fresh agent w/ restored messages
-      const nextAgent = new Agent(target.meta.model, host, target.meta.cwd, {
-        think,
-      })
-      nextAgent.restoreMessages(target.messages)
-      nextAgent.restoreUndoStack(target.undo, target.redo)
-
-      // update session tracking
-      sessionIdRef.current = target.meta.id
-      sessionMetaRef.current = target.meta
-
-      // update React state
-      setAgent(nextAgent)
-      setActiveModel(target.meta.model)
-      setSessionLabelId(target.meta.id)
-
-      // fetch context window for new model
-      fetchContextWindowForAgent(nextAgent)
-
-      return true
     },
-    [
-      disposeAgent,
-      fetchContextWindowForAgent,
-      host,
-      sessionIdRef,
-      sessionMetaRef,
-      think,
-    ]
+    [agent]
   )
 
   // show the model picker — preserves current agent for in-place switching
   // uses loadModelsRef to avoid circular dependency w/ loadModels/activateModel
   const loadModelsRef = useRef<(() => Promise<void>) | undefined>(undefined)
+  const modelLoadGenerationRef = useRef(0)
+  const initialModelLoadStartedRef = useRef(false)
+  const pickerSelectionPendingRef = useRef(false)
   const reopenModelPicker = useCallback(() =>
   {
     void loadModelsRef.current?.()
   }, [])
 
-  const completeModelSwitch = useCallback(
-    (agentInstance: Agent, modelName: string) =>
+  const chooseModel = useCallback(
+    (nextModel: string, restoredSession: typeof resumeSession) =>
     {
-      setActiveModel(modelName)
-      setContextWindow(0)
-      fetchContextWindowForAgent(agentInstance)
-    },
-    [fetchContextWindowForAgent]
-  )
-
-  // switch model in-place — keeps conversation history, unloads old model
-  const switchModel = useCallback(
-    async (modelName: string) =>
-    {
-      const currentAgent = agentRef.current
-      if (!currentAgent) return
-
-      await currentAgent.switchModel(modelName)
-      completeModelSwitch(currentAgent, modelName)
-    },
-    [completeModelSwitch]
-  )
-
-  // abort the current agent run — called by Ctrl+C & Escape while running
-  // resolve a pending tool approval & clear the prompt
-  const resolveApproval = useCallback(
-    (approved: boolean) =>
-    {
-      approval?.resolve(approved)
-      setApproval(null)
-    },
-    [approval]
-  )
-
-  // resolve a pending doom-loop confirm & clear the prompt
-  const resolveConfirm = useCallback(
-    (proceed: boolean) =>
-    {
-      confirm?.resolve(proceed)
-      setConfirm(null)
-    },
-    [confirm]
-  )
-
-  const abortRun = useCallback(() =>
-  {
-    const controller = runAbortRef.current
-    if (controller && !controller.signal.aborted)
-    {
-      controller.abort()
-      // dismiss any pending prompts
-      resolveApproval(false)
-      resolveConfirm(false)
-    }
-  }, [resolveApproval, resolveConfirm])
-
-  const activateModel = useCallback(
-    (nextModel: string, restoredSession: SessionData | null) =>
-    {
-      const existingAgent = agentRef.current
-
-      // if there's an existing agent, switch in-place to preserve history
-      if (existingAgent && !restoredSession)
-      {
-        // hide the picker now, but defer the model UI update & block submits
-        // until the switch completes — switchModel() unloads the old model
-        // before adopting the new one, so a fast submit would otherwise run the
-        // next prompt against the pre-switch model
-        setPickerState('hidden')
-        setSwitchingModel(true)
-        void (async () =>
-        {
-          try
-          {
-            await existingAgent.switchModel(nextModel)
-            completeModelSwitch(existingAgent, nextModel)
-          }
-          catch
-          {
-            // switch failed — keep the previous model & let the user retry
-          }
-          finally
-          {
-            setSwitchingModel(false)
-          }
-        })()
-        return
-      }
-
-      // no existing agent (or restoring a session) — create a fresh one
-      if (existingAgent)
-      {
-        void disposeAgent(existingAgent)
-      }
-
-      setActiveModel(nextModel)
-      setContextWindow(0)
-
-      const nextAgent = new Agent(nextModel, host, restoredSession?.meta.cwd, {
-        think,
-      })
-      if (restoredSession)
-      {
-        nextAgent.restoreMessages(restoredSession.messages)
-        nextAgent.restoreUndoStack(restoredSession.undo, restoredSession.redo)
-        setOutput(buildRestoredBlocks(restoredSession.messages))
-      }
-
-      setAgent(nextAgent)
+      if (pickerSelectionPendingRef.current) return
+      pickerSelectionPendingRef.current = true
       setPickerState('hidden')
-      fetchContextWindowForAgent(nextAgent)
+      void activateModel(nextModel, restoredSession)
+        .then((result) =>
+        {
+          if (result.status === 'changed')
+          {
+            if (result.persistence.status === 'error')
+            {
+              setOutput((previous) => [
+                ...previous,
+                {
+                  type: 'error' as const,
+                  content:
+                    'Model changed, but the current session could not be saved.',
+                },
+              ])
+            }
+            return
+          }
+          if (result.status === 'unchanged') return
+          if (result.status === 'stale' || result.status === 'aborted') return
+
+          pickerSelectionPendingRef.current = false
+          setPickerErrorTitle('Failed to activate model')
+          setPickerError('Another session update is still running.')
+          setPickerState('error')
+        })
+        .catch((error: unknown) =>
+        {
+          if (!isAcceptingTransitions()) return
+          pickerSelectionPendingRef.current = false
+          setPickerErrorTitle('Failed to activate model')
+          setPickerError(toErrorMessage(error))
+          setPickerState('error')
+        })
     },
-    [completeModelSwitch, disposeAgent, fetchContextWindowForAgent, host, think]
+    [activateModel, isAcceptingTransitions]
   )
 
   const loadModels = useCallback(async () =>
   {
+    modelLoadAbortRef.current?.abort()
+    const controller = new AbortController()
+    modelLoadAbortRef.current = controller
+    const loadGeneration = ++modelLoadGenerationRef.current
+    pickerSelectionPendingRef.current = false
     setPickerState('loading')
+    setPickerErrorTitle('Failed to load Ollama models')
     setPickerError('')
 
     try
     {
       const client = new OllamaClient(host)
-      const loadedModels = sortModels(await client.listModels())
-      const isReopening = Boolean(agentRef.current)
+      const loadedModels = sortModels(
+        await client.listModels(controller.signal)
+      )
+      if (
+        controller.signal.aborted ||
+        loadGeneration !== modelLoadGenerationRef.current ||
+        !isAcceptingTransitions()
+      )
+      {
+        return
+      }
+      const isReopening = Boolean(agent)
 
       // when reopening mid-session, always show the picker — don't auto-select
       if (!isReopening)
       {
         if (loadedModels.length === 1)
         {
-          activateModel(loadedModels[0]!.name, resumeSession)
+          chooseModel(loadedModels[0]!.name, resumeSession)
           return
         }
 
@@ -673,7 +531,7 @@ export default function App({
           )
           if (sessionModel)
           {
-            activateModel(sessionModel.name, resumeSession)
+            chooseModel(sessionModel.name, resumeSession)
             return
           }
         }
@@ -681,7 +539,7 @@ export default function App({
 
       // pre-select the current model in the picker list
       const currentModelIndex = isReopening
-        ? loadedModels.findIndex((m) => m.name === agentRef.current?.getModel())
+        ? loadedModels.findIndex((m) => m.name === agent?.getModel())
         : 0
 
       setModels(loadedModels)
@@ -690,23 +548,37 @@ export default function App({
     }
     catch (err)
     {
+      if (
+        controller.signal.aborted ||
+        loadGeneration !== modelLoadGenerationRef.current ||
+        !isAcceptingTransitions()
+      )
+      {
+        return
+      }
       setPickerError(toErrorMessage(err))
       setPickerState('error')
     }
-  }, [activateModel, host, resumeSession])
+    finally
+    {
+      if (modelLoadAbortRef.current === controller)
+      {
+        modelLoadAbortRef.current = null
+      }
+    }
+  }, [agent, chooseModel, host, isAcceptingTransitions, resumeSession])
 
   useEffect(() =>
   {
     loadModelsRef.current = loadModels
   }, [loadModels])
 
+  useEffect(() => () => modelLoadAbortRef.current?.abort(), [])
+
   useEffect(() =>
   {
-    if (!resumeSessionUnavailable) return
-
-    sessionIdRef.current = null
-    sessionMetaRef.current = null
-  }, [resumeSessionUnavailable, sessionIdRef, sessionMetaRef])
+    modelLoadGenerationRef.current++
+  }, [agent])
 
   useEffect(() =>
   {
@@ -715,21 +587,24 @@ export default function App({
 
   useEffect(() =>
   {
-    chatViewportHeightRef.current = chatViewportHeight
-  }, [chatViewportHeight])
+    promptViewportRef.current = promptRender
+      ? { maxOffset: promptRender.maxOffset, pageSize: promptRender.pageSize }
+      : { maxOffset: 0, pageSize: 1 }
+  }, [promptRender])
 
-  // mirror the todo store into local state for the panel; detach on unmount
-  // (initial state already seeded from getTodos() via useState)
+  // restart at the top whenever the prompt identity or width changes
   useEffect(() =>
   {
-    onTodosChanged(setTodos)
-    // hydrate the store from a resumed session so its task list shows on mount
-    if (resumeSession?.todos?.length)
+    queueMicrotask(() =>
     {
-      restoreStoreTodos(sanitizeTodos(resumeSession.todos))
-    }
-    return () => onTodosChanged(null)
-  }, [resumeSession])
+      setPromptScrollOffset(0)
+    })
+  }, [activePrompt, transcriptWidth])
+
+  useEffect(() =>
+  {
+    chatViewportHeightRef.current = chatViewportHeight
+  }, [chatViewportHeight])
 
   useEffect(() =>
   {
@@ -752,49 +627,13 @@ export default function App({
 
   useEffect(() =>
   {
-    if (model) return
+    if (model || initialModelLoadStartedRef.current) return
+    initialModelLoadStartedRef.current = true
     queueMicrotask(() =>
     {
       void loadModels()
     })
   }, [loadModels, model])
-
-  useEffect(() =>
-  {
-    agentRef.current = agent
-  }, [agent])
-
-  useEffect(() =>
-  {
-    yoloRef.current = yolo
-  }, [yolo])
-
-  // fetch context window when agent becomes available (including initial mount)
-  useEffect(() =>
-  {
-    if (agent && contextWindow === 0)
-    {
-      fetchContextWindowForAgent(agent)
-    }
-  }, [agent, contextWindow, fetchContextWindowForAgent])
-
-  useEffect(() =>
-  {
-    const onSignal = () =>
-    {
-      void shutdown()
-    }
-
-    return registerSignalHandlers(process, onSignal)
-  }, [shutdown])
-
-  useEffect(() =>
-  {
-    return () =>
-    {
-      void disposeAgent(agent)
-    }
-  }, [agent, disposeAgent])
 
   useEffect(() =>
   {
@@ -852,29 +691,74 @@ export default function App({
   useInput(
     (ch, key) =>
     {
-      if (approval)
+      // scroll keys work inside every modal prompt viewport
+      if (activePrompt)
       {
-        if (ch === 'y' || ch === 'Y')
+        const { maxOffset: promptMax, pageSize } = promptViewportRef.current
+        const step = key.pageUp || key.pageDown ? pageSize : 1
+        if (key.upArrow || key.pageUp)
         {
-          resolveApproval(true)
+          setPromptScrollOffset((current) => Math.max(current - step, 0))
+          return
         }
-        else if (ch === 'n' || ch === 'N' || key.escape)
+        if (key.downArrow || key.pageDown)
         {
-          resolveApproval(false)
+          setPromptScrollOffset((current) =>
+            Math.min(current + step, promptMax)
+          )
+          return
+        }
+      }
+
+      if (activePrompt?.kind === 'mcp')
+      {
+        if ((key.ctrl && ch.toLowerCase() === 'c') || key.escape)
+        {
+          abortRun()
+        }
+        else if (ch === 'y' || ch === 'Y')
+        {
+          settlePrompt(activePrompt.id, true)
+        }
+        else if (ch === 'n' || ch === 'N')
+        {
+          settlePrompt(activePrompt.id, false)
         }
 
         return
       }
 
-      if (confirm)
+      if (activePrompt?.kind === 'tool')
       {
-        if (ch === 'y' || ch === 'Y')
+        if (key.ctrl && ch.toLowerCase() === 'c')
         {
-          resolveConfirm(true)
+          abortRun()
+        }
+        else if (ch === 'y' || ch === 'Y')
+        {
+          settlePrompt(activePrompt.id, true)
         }
         else if (ch === 'n' || ch === 'N' || key.escape)
         {
-          resolveConfirm(false)
+          settlePrompt(activePrompt.id, false)
+        }
+
+        return
+      }
+
+      if (activePrompt?.kind === 'doom')
+      {
+        if (key.ctrl && ch.toLowerCase() === 'c')
+        {
+          abortRun()
+        }
+        else if (ch === 'y' || ch === 'Y')
+        {
+          settlePrompt(activePrompt.id, true)
+        }
+        else if (ch === 'n' || ch === 'N' || key.escape)
+        {
+          settlePrompt(activePrompt.id, false)
         }
 
         return
@@ -887,6 +771,8 @@ export default function App({
         {
           if (agent)
           {
+            modelLoadAbortRef.current?.abort()
+            modelLoadGenerationRef.current++
             setPickerState('hidden')
           }
           else
@@ -936,7 +822,7 @@ export default function App({
           if (selected)
           {
             // when reopening mid-session, switch in-place (no restore session)
-            activateModel(
+            chooseModel(
               selected.name,
               restoredSessionForPickerSelection(Boolean(agent), resumeSession)
             )
@@ -948,7 +834,9 @@ export default function App({
         }
       }
     },
-    { isActive: pickerVisible || Boolean(approval) || Boolean(confirm) }
+    {
+      isActive: pickerVisible || Boolean(activePrompt),
+    }
   )
 
   // slash-command list & project-file lookup for prompt autocomplete
@@ -957,80 +845,161 @@ export default function App({
     () => buildPaletteEntries(commandInfos(), keybindingInfos()),
     []
   )
-  const listFiles = useCallback(
-    () => listProjectFiles(currentCwd),
-    [currentCwd]
+  const refreshFiles = useCallback(
+    () => refreshProjectFiles(currentCwd),
+    [currentCwd, refreshProjectFiles]
+  )
+
+  // single owner of the ask/yolo transition — no-op check, success/failure
+  // output, & error containment for both ctrl+y & /permissions
+  const setPermissionMode = useCallback(
+    async (nextYolo: boolean, operation: OperationHandle<Agent>) =>
+    {
+      const result = await transitionPermissionMode(nextYolo, operation)
+      if (result.status === 'unchanged')
+      {
+        if (!acceptsCommandEvent(operation)) return
+        setOutput((prev) => [
+          ...prev,
+          {
+            type: 'system' as const,
+            content: formatPermissionModeUnchanged(nextYolo),
+          },
+        ])
+        return
+      }
+      if (result.status === 'changed')
+      {
+        if (!acceptsCommandTerminal(operation)) return
+        setOutput((prev) => [
+          ...prev,
+          {
+            type: 'system' as const,
+            content: formatPermissionModeChange(nextYolo),
+          },
+        ])
+        return
+      }
+      if (result.status === 'error')
+      {
+        const acceptsResult = result.committed
+          ? acceptsCommandTerminal(operation)
+          : acceptsCommandEvent(operation)
+        if (!acceptsResult) return
+        setOutput((prev) => [
+          ...prev,
+          {
+            type: 'error' as const,
+            content: result.committed
+              ? `Permission mode changed, but MCP cleanup failed: ${toErrorMessage(result.error)}`
+              : `Failed to change permission mode: ${toErrorMessage(result.error)}`,
+          },
+        ])
+      }
+    },
+    [acceptsCommandEvent, acceptsCommandTerminal, transitionPermissionMode]
   )
 
   const runSlashCommand = useCallback(
-    async (value: string): Promise<boolean> =>
+    async (value: string): Promise<SlashDispatchResult> =>
     {
-      if (!agent) return false
+      const commandOperation = beginOperation('command')
+      if (!commandOperation) return { admitted: false, handled: false }
+      const commandAgent = commandOperation.agent
+      const acceptsCommand = () => acceptsCommandEvent(commandOperation)
+      const acceptsTerminal = () => acceptsCommandTerminal(commandOperation)
+
+      addHistoryEntry(value.trim(), getSessionId())
 
       setInput('')
       setScrollOffset(0)
-      const commandController = new AbortController()
-      runAbortRef.current = commandController
       // lock submits for the command's lifetime so a long command (/index,
       // /compact, …) can't overlap w/ a chat turn or another command
       setCommandRunning(true)
 
       const cmdCtx: CommandContext = {
-        agent,
-        activeModel,
+        agent: commandAgent,
+        activeModel: commandAgent.getModel(),
         host,
-        yolo,
-        sessionLabelId,
-        signal: commandController.signal,
-        getCwd: () => agent.getCwd(),
+        yolo: isYolo(),
+        sessionLabelId: getSessionId(),
+        signal: commandOperation.signal,
+        getCwd: () => commandAgent.getCwd(),
         pushOutput: (...blocks) =>
         {
-          setOutput((prev) => [...prev, ...blocks])
+          if (acceptsCommand()) setOutput((prev) => [...prev, ...blocks])
         },
-        clearSession,
-        rebuildTranscript,
-        resetTokenUsage,
-        reopenModelPicker,
-        switchModel,
-        setYolo,
+        pushTerminalOutput: (...blocks) =>
+        {
+          if (acceptsTerminal()) setOutput((prev) => [...prev, ...blocks])
+        },
+        clearSession: () =>
+        {
+          if (acceptsCommand()) clearSession()
+        },
+        rebuildTranscript: () =>
+        {
+          if (acceptsTerminal()) rebuildTranscript(commandAgent)
+        },
+        resetTokenUsage: () =>
+        {
+          if (acceptsTerminal()) resetTokenUsage()
+        },
+        reopenModelPicker: () =>
+        {
+          if (acceptsCommand()) reopenModelPicker()
+        },
+        switchModel: (nextModel) => switchModel(nextModel, commandOperation),
+        setYolo: (nextYolo) => setPermissionMode(nextYolo, commandOperation),
         exitApp: () =>
         {
-          void shutdown()
+          if (acceptsCommand()) void shutdown()
         },
-        resumeSession: resumeSessionById,
-        saveCurrentSession,
-        renameCurrentSession,
-        notifyThemeChanged: () => setThemeGeneration(getThemeGeneration()),
+        resumeSession: (id) =>
+          acceptsCommand() && resumeSessionById(id, commandOperation),
+        saveCurrentSession: () => saveOperationSession(commandOperation),
+        renameCurrentSession: (title) =>
+          acceptsCommand() && renameCurrentSession(title),
+        notifyThemeChanged: () =>
+        {
+          if (acceptsCommand()) setThemeGeneration(getThemeGeneration())
+        },
       }
 
-      try
+      return runOperation(commandOperation, async () =>
       {
-        return await dispatchCommand(value.trim(), cmdCtx)
-      }
-      finally
-      {
-        if (runAbortRef.current === commandController)
+        try
         {
-          runAbortRef.current = null
+          const handled = await dispatchCommand(value.trim(), cmdCtx)
+          return { admitted: true, handled }
         }
-        setCommandRunning(false)
-      }
+        finally
+        {
+          finishCommand(commandOperation)
+          setCommandRunning(false)
+        }
+      })
     },
     [
-      activeModel,
-      agent,
+      acceptsCommandEvent,
+      acceptsCommandTerminal,
+      addHistoryEntry,
+      beginOperation,
       clearSession,
+      finishCommand,
+      getSessionId,
       host,
+      isYolo,
       rebuildTranscript,
       renameCurrentSession,
       reopenModelPicker,
       resetTokenUsage,
       resumeSessionById,
-      saveCurrentSession,
-      sessionLabelId,
+      runOperation,
+      saveOperationSession,
+      setPermissionMode,
       shutdown,
       switchModel,
-      yolo,
     ]
   )
 
@@ -1038,29 +1007,34 @@ export default function App({
     async (value: string) =>
     {
       if (
-        !agent ||
         !value.trim() ||
         runStage !== 'idle' ||
         promptActive ||
         commandRunning ||
-        switchingModel
+        transitioningSession
       )
       {
         return
       }
 
-      // record input in history (all non-empty submissions including slash commands)
-      addHistoryEntry(value.trim(), sessionIdRef.current)
-
       // intercept slash commands before sending to the agent
+      let historyRecorded = false
       if (value.trim().startsWith('/'))
       {
-        if (await runSlashCommand(value.trim())) return
+        const result = await runSlashCommand(value.trim())
+        if (!result.admitted || result.handled) return
+        historyRecorded = true
       }
 
-      const controller = new AbortController()
-      runAbortRef.current = controller
-
+      const operation = beginOperation('turn')
+      if (!operation) return
+      const runAgent = operation.agent
+      // accept the clean turn before runOperation's registered microtask so an
+      // immediate cancel/shutdown cannot leave the visible & saved histories split
+      const acceptedTurn = runAgent.acceptTurn({
+        content: value,
+        attachmentPaths: parseMentions(value),
+      })
       const resetRunState = () =>
       {
         resetStreamBuffer()
@@ -1068,280 +1042,320 @@ export default function App({
         setRunStage('idle')
         runStartTimeRef.current = null
         toolStartTimesRef.current.clear()
-        runAbortRef.current = null
       }
-
-      // persist the session & cache its id as the active label
-      const persistAndLabel = (a: Agent) =>
+      const completeFailedTurn = (message: string) =>
       {
-        const meta = persistSession(a)
-        if (meta) setSessionLabelId(meta.id)
+        const completion = completeTurn(operation)
+        if (!completion.accepted) return
+        const pendingBlocks = consumeBufferedBlocks()
+        const toolStarts = new Map(toolStartTimesRef.current)
+        const finishedAt = Date.now()
+        setOutput((prev) => [
+          ...failPendingToolCalls(prev, toolStarts, finishedAt),
+          ...pendingBlocks,
+          { type: 'error', content: message },
+          ...(completion.persistence === 'error'
+            ? [
+                {
+                  type: 'error' as const,
+                  content:
+                    'Session save failed; this turn may not be available after exit.',
+                },
+              ]
+            : []),
+        ])
+        resetRunState()
       }
 
-      setInput('')
-      setScrollOffset(0)
-      setOutput((prev) => [...prev, { type: 'user', content: value }])
-      setRunStage('waiting')
-      runStartTimeRef.current = Date.now()
-      startWaiting()
-      resetStreamBuffer()
-
-      // expand @-mentions into attached file context for the model — the
-      // transcript above still shows the clean prompt the user typed, w/ a
-      // system note when files are truncated or skipped
-      let prompt = value
-      try
+      const task = runOperation(operation, async () =>
       {
-        const expansion = await buildMentionContext(
-          value,
-          undefined,
-          undefined,
-          agent.getCwd()
-        )
-        if (expansion.context) prompt = `${value}\n\n${expansion.context}`
-        const notice = formatMentionNotice(expansion)
-        if (notice)
-        {
-          setOutput((prev) => [...prev, { type: 'system', content: notice }])
-        }
-      }
-      catch
-      {
-        prompt = value
-      }
+        if (!historyRecorded) addHistoryEntry(value.trim(), getSessionId())
 
-      await agent.run(
-        prompt,
-        {
-          onThinking(thinking)
+        setInput('')
+        setScrollOffset(0)
+        setOutput((prev) => [...prev, { type: 'user', content: value }])
+        setRunStage('waiting')
+        runStartTimeRef.current = Date.now()
+        startWaiting()
+        resetStreamBuffer()
+
+        await runAgent.runAcceptedTurn(
+          acceptedTurn,
           {
-            stopWaiting()
-            setRunStage('thinking')
-            appendThinking(thinking)
-          },
-          onToken(token)
-          {
-            stopWaiting()
-            setRunStage('responding')
-            appendText(token)
-          },
-          onToolCall(name, args, callId)
-          {
-            stopWaiting()
-
-            const pendingBlocks = consumeBufferedBlocks()
-            setRunStage(`tool:${name}`)
-            toolStartTimesRef.current.set(callId, Date.now())
-
-            setOutput((prev) => [
-              ...prev,
-              ...pendingBlocks,
-              {
-                type: 'tool_call',
-                toolName: name,
-                args,
-                callId,
-              } satisfies ToolCallBlock,
-            ])
-          },
-          async onToolApproval(name, args)
-          {
-            if (yoloRef.current) return true
-
-            // compute the change preview before showing the box (best-effort)
-            const preview = await previewToolDiff(name, args, {
-              cwd: agent.getCwd(),
-            })
-
-            return new Promise<boolean>((resolve) =>
+            onAttachments(expansion)
             {
-              setApproval({
+              if (!acceptsEvent(operation)) return
+              const notice = formatMentionNotice(expansion)
+              if (notice)
+              {
+                setOutput((prev) => [
+                  ...prev,
+                  { type: 'system', content: notice },
+                ])
+              }
+            },
+            onThinking(thinking)
+            {
+              if (!acceptsEvent(operation)) return
+              stopWaiting()
+              setRunStage('thinking')
+              appendThinking(thinking)
+            },
+            onToken(token)
+            {
+              if (!acceptsEvent(operation)) return
+              stopWaiting()
+              setRunStage('responding')
+              appendText(token)
+            },
+            onToolCall(name, args, callId, presentation)
+            {
+              if (!acceptsEvent(operation)) return
+              stopWaiting()
+
+              const pendingBlocks = consumeBufferedBlocks()
+              setRunStage(`tool:${presentation?.label ?? name}`)
+              toolStartTimesRef.current.set(callId, Date.now())
+
+              setOutput((prev) => [
+                ...prev,
+                ...pendingBlocks,
+                {
+                  type: 'tool_call',
+                  toolName: name,
+                  args,
+                  callId,
+                  display: presentation,
+                } satisfies ToolCallBlock,
+              ])
+            },
+            async onToolApproval(name, args, presentation)
+            {
+              if (!acceptsEvent(operation)) return false
+              if (isYolo()) return true
+
+              // compute the change preview before showing the box (best-effort)
+              const preview = await previewToolDiff(name, args, {
+                cwd: runAgent.getCwd(),
+              })
+              if (!acceptsEvent(operation)) return false
+
+              return requestPrompt(operation, {
+                kind: 'tool',
                 toolName: name,
                 args,
                 diff: preview?.kind === 'diff' ? preview.diff : undefined,
                 previewMessage:
                   preview?.kind === 'message' ? preview.message : undefined,
-                resolve,
+                presentation,
               })
-            })
-          },
-          onDoomLoop(message)
-          {
-            stopWaiting()
-            return new Promise<boolean>((resolve) =>
+            },
+            onMcpLaunchApproval(request)
             {
-              setConfirm({ message, resolve })
-            })
-          },
-          onVerification(result)
-          {
-            const label = pluralize(result.editCount, 'edit')
-            let content: string
-            if (result.status === 'pass')
+              if (!acceptsEvent(operation)) return Promise.resolve(false)
+              stopWaiting()
+              return requestPrompt(operation, { kind: 'mcp', request })
+            },
+            onDoomLoop(message)
             {
-              content = `${style('success')('✓ self-check passed')} — ${label} reviewed`
-            }
-            else if (result.status === 'fail')
+              if (!acceptsEvent(operation)) return Promise.resolve(false)
+              stopWaiting()
+              return requestPrompt(operation, { kind: 'doom', message })
+            },
+            onVerification(result)
             {
-              const reason = result.reason ?? 'change may not match the request'
-              content = `${style('warning')(`⚠ self-check flagged ${label}`)}: ${reason}${
-                result.retrying ? ' — asking the model to fix it' : ''
-              }`
-            }
-            else
-            {
-              content = `self-check inconclusive — ${label} reviewed`
-            }
-            setOutput((prev) => [...prev, { type: 'system', content }])
-          },
-          onToolResult(name, result, error, callId, diff)
-          {
-            const startedAt = toolStartTimesRef.current.get(callId)
-            const duration =
-              startedAt != null ? Date.now() - startedAt : undefined
-            toolStartTimesRef.current.delete(callId)
-
-            setRunStage('waiting')
-            startWaiting()
-
-            setOutput((prev) =>
-            {
-              const next = [...prev]
-
-              for (let i = next.length - 1; i >= 0; i--)
+              if (!acceptsEvent(operation)) return
+              const label = pluralize(result.editCount, 'edit')
+              let content: string
+              if (result.status === 'pass')
               {
-                const block = next[i]!
-                if (
-                  block.type === 'tool_call' &&
-                  block.callId === callId &&
-                  !block.status
-                )
+                content = `${style('success')('✓ self-check passed')} — ${label} reviewed`
+              }
+              else if (result.status === 'fail')
+              {
+                const reason =
+                  result.reason ?? 'change may not match the request'
+                content = `${style('warning')(`⚠ self-check flagged ${label}`)}: ${reason}${
+                  result.retrying ? ' — asking the model to fix it' : ''
+                }`
+              }
+              else
+              {
+                content = `self-check inconclusive — ${label} reviewed`
+              }
+              setOutput((prev) => [...prev, { type: 'system', content }])
+            },
+            onToolResult(name, result, error, callId, diff)
+            {
+              if (!acceptsEvent(operation)) return
+              const startedAt = toolStartTimesRef.current.get(callId)
+              const duration =
+                startedAt != null ? Date.now() - startedAt : undefined
+              toolStartTimesRef.current.delete(callId)
+
+              setRunStage('waiting')
+              startWaiting()
+
+              setOutput((prev) =>
+              {
+                const next = [...prev]
+
+                for (let i = next.length - 1; i >= 0; i--)
                 {
-                  next[i] = {
-                    ...block,
-                    status: error ? 'error' : 'success',
-                    duration,
+                  const block = next[i]!
+                  if (
+                    block.type === 'tool_call' &&
+                    block.callId === callId &&
+                    !block.status
+                  )
+                  {
+                    next[i] = {
+                      ...block,
+                      status: error ? 'error' : 'success',
+                      duration,
+                    }
+                    break
                   }
-                  break
                 }
-              }
 
-              if (error)
-              {
-                next.push({
-                  type: 'tool_result',
-                  toolName: name,
-                  content: error,
-                  isError: true,
-                })
-              }
-              else if (diff)
-              {
-                // the diff says it all — skip the redundant summary line
-                next.push({ type: 'diff', unified: diff } satisfies DiffBlock)
-              }
-              else if (result)
-              {
-                next.push({
-                  type: 'tool_result',
-                  toolName: name,
-                  content: truncateToolResult(result),
-                })
-              }
+                if (error)
+                {
+                  next.push({
+                    type: 'tool_result',
+                    toolName: name,
+                    content: error,
+                    isError: true,
+                  })
+                }
+                else if (diff)
+                {
+                  // the diff says it all — skip the redundant summary line
+                  next.push({ type: 'diff', unified: diff } satisfies DiffBlock)
+                }
+                else if (result)
+                {
+                  next.push({
+                    type: 'tool_result',
+                    toolName: name,
+                    content: truncateToolResult(result),
+                  })
+                }
 
-              return next
-            })
-          },
-          onUsage(usage)
-          {
-            const prefillTps = computeTokensPerSecond(
-              usage.promptTokens,
-              usage.promptEvalDurationNs
-            )
-            const decodeTps = computeTokensPerSecond(
-              usage.completionTokens,
-              usage.evalDurationNs
-            )
-            setTokenUsage((prev) => ({
-              prompt: usage.totalPromptTokens,
-              completion: usage.totalCompletionTokens,
-              context: usage.contextTokens,
-              // keep the previous throughput if the current turn reported nothing
-              // (e.g., a cache-only hit w/ zero decode tokens)
-              lastPrefillTps: prefillTps > 0 ? prefillTps : prev.lastPrefillTps,
-              lastDecodeTps: decodeTps > 0 ? decodeTps : prev.lastDecodeTps,
-            }))
-          },
-          onCompactionStart()
-          {
-            setRunStage('compacting')
-          },
-          onCompaction(result)
-          {
-            // rebuild from agent messages so the UI matches cleared undo stacks
-            rebuildTranscript()
-            setOutput((prev) => [
-              ...prev,
-              { type: 'system', content: formatAutoCompactionResult(result) },
-            ])
-            setRunStage('waiting')
-            startWaiting()
-          },
-          onDone()
-          {
-            const wasAborted = controller.signal.aborted
-            const pendingBlocks = consumeBufferedBlocks()
-
-            if (wasAborted)
+                return next
+              })
+            },
+            onUsage(usage)
             {
+              if (!acceptsEvent(operation)) return
+              const prefillTps = computeTokensPerSecond(
+                usage.promptTokens,
+                usage.promptEvalDurationNs
+              )
+              const decodeTps = computeTokensPerSecond(
+                usage.completionTokens,
+                usage.evalDurationNs
+              )
+              setTokenUsage((prev) => ({
+                prompt: usage.totalPromptTokens,
+                completion: usage.totalCompletionTokens,
+                context: usage.contextTokens,
+                // keep the previous throughput if the current turn reported nothing
+                // (e.g., a cache-only hit w/ zero decode tokens)
+                lastPrefillTps:
+                  prefillTps > 0 ? prefillTps : prev.lastPrefillTps,
+                lastDecodeTps: decodeTps > 0 ? decodeTps : prev.lastDecodeTps,
+              }))
+            },
+            onCompactionStart()
+            {
+              if (!acceptsEvent(operation)) return
+              setRunStage('compacting')
+            },
+            onCompaction(result)
+            {
+              if (!acceptsEvent(operation)) return
+              // rebuild from agent messages so the UI matches cleared undo stacks
+              rebuildTranscript(runAgent)
               setOutput((prev) => [
                 ...prev,
-                ...pendingBlocks,
-                { type: 'system', content: 'Generation interrupted' },
+                { type: 'system', content: formatAutoCompactionResult(result) },
               ])
-            }
-            else
+              setRunStage('waiting')
+              startWaiting()
+            },
+            onDone()
             {
-              setOutput((prev) => [...prev, ...pendingBlocks])
-            }
+              const completion = completeTurn(operation)
+              if (!completion.accepted) return
+              const pendingBlocks = consumeBufferedBlocks()
+              const persistenceBlocks: OutputBlock[] =
+                completion.persistence === 'error'
+                  ? [
+                      {
+                        type: 'error',
+                        content:
+                          'Session save failed; this turn may not be available after exit.',
+                      },
+                    ]
+                  : []
 
-            resetRunState()
-            persistAndLabel(agent)
+              if (completion.aborted)
+              {
+                const toolStarts = new Map(toolStartTimesRef.current)
+                const finishedAt = Date.now()
+                setOutput((prev) => [
+                  ...failPendingToolCalls(prev, toolStarts, finishedAt),
+                  ...pendingBlocks,
+                  { type: 'system', content: 'Generation interrupted' },
+                  ...persistenceBlocks,
+                ])
+              }
+              else
+              {
+                setOutput((prev) => [
+                  ...prev,
+                  ...pendingBlocks,
+                  ...persistenceBlocks,
+                ])
+              }
+
+              resetRunState()
+            },
+            onError(error)
+            {
+              completeFailedTurn(error.message)
+            },
           },
-          onError(error)
-          {
-            const pendingBlocks = consumeBufferedBlocks()
-            setOutput((prev) => [
-              ...prev,
-              ...pendingBlocks,
-              { type: 'error', content: error.message },
-            ])
-            resetRunState()
-            persistAndLabel(agent)
-          },
-        },
-        controller.signal,
-        { displayContent: value }
-      )
+          operation.signal
+        )
+      })
+      return task.catch((error: unknown) =>
+      {
+        completeFailedTurn(toErrorMessage(error))
+      })
     },
     [
       addHistoryEntry,
-      agent,
+      acceptsEvent,
+      beginOperation,
+      completeTurn,
+      getSessionId,
+      isYolo,
       promptActive,
       appendText,
       appendThinking,
       commandRunning,
       consumeBufferedBlocks,
-      persistSession,
       rebuildTranscript,
       resetAnimation,
       resetStreamBuffer,
       runStage,
       runSlashCommand,
-      sessionIdRef,
+      requestPrompt,
+      runOperation,
       startWaiting,
       stopWaiting,
-      switchingModel,
+      transitioningSession,
     ]
   )
 
@@ -1412,11 +1426,26 @@ export default function App({
       transcriptWidth
     )
   }
-  else if (switchingModel)
+  else if (sessionTransition)
   {
+    const transitionLabel =
+      sessionTransition.kind === 'model'
+        ? sessionTransition.phase === 'precommit'
+          ? 'switching model…'
+          : 'finishing model update…'
+        : sessionTransition.kind === 'permission'
+          ? 'finishing permission update…'
+          : 'finishing session update…'
+    const transitionHint =
+      sessionTransition.owner === 'command' &&
+      sessionTransition.phase === 'precommit'
+        ? 'ctrl+c interrupts'
+        : sessionTransition.phase === 'committed_cleanup'
+          ? 'cleanup in progress'
+          : 'esc quits'
     statusLine = buildStatusLine(
-      'switching model…',
-      'esc quits',
+      transitionLabel,
+      transitionHint,
       transcriptWidth
     )
   }
@@ -1486,19 +1515,48 @@ export default function App({
 
   const onTogglePermissions = useCallback(() =>
   {
-    setYolo((current) =>
+    if (!agent) return
+    if (isRunning || commandRunning || transitioningSession || promptActive)
     {
-      const next = !current
+      // deliberate: mid-run MCP enable/disable is unsafe, so say so instead
+      // of silently swallowing the keypress
       setOutput((prev) => [
         ...prev,
         {
           type: 'system' as const,
-          content: formatPermissionModeChange(next),
+          content: formatPermissionModeLocked(),
         },
       ])
-      return next
+      return
+    }
+
+    const operation = beginOperation('command')
+    if (!operation) return
+    setCommandRunning(true)
+    void runOperation(operation, async () =>
+    {
+      try
+      {
+        await setPermissionMode(!isYolo(), operation)
+      }
+      finally
+      {
+        finishCommand(operation)
+        setCommandRunning(false)
+      }
     })
-  }, [])
+  }, [
+    agent,
+    beginOperation,
+    commandRunning,
+    finishCommand,
+    isYolo,
+    isRunning,
+    promptActive,
+    runOperation,
+    setPermissionMode,
+    transitioningSession,
+  ])
 
   const openPalette = useCallback(() =>
   {
@@ -1506,14 +1564,14 @@ export default function App({
       !agent ||
       isRunning ||
       commandRunning ||
-      switchingModel ||
+      transitioningSession ||
       promptActive
     )
     {
       return
     }
     setPaletteOpen(true)
-  }, [agent, commandRunning, isRunning, promptActive, switchingModel])
+  }, [agent, commandRunning, isRunning, promptActive, transitioningSession])
 
   const runKeybindingAction = useCallback(
     (action: KeybindingAction) =>
@@ -1544,7 +1602,6 @@ export default function App({
       setPaletteOpen(false)
       if (entry.command)
       {
-        addHistoryEntry(entry.command, sessionIdRef.current)
         void runSlashCommand(entry.command)
         return
       }
@@ -1553,7 +1610,7 @@ export default function App({
         runKeybindingAction(entry.action)
       }
     },
-    [addHistoryEntry, runKeybindingAction, runSlashCommand, sessionIdRef]
+    [runKeybindingAction, runSlashCommand]
   )
 
   const onHistoryUp = useCallback(() =>
@@ -1587,7 +1644,7 @@ export default function App({
   // escape or Ctrl+C aborts a running turn; when idle it exits
   const abortOrExit = useCallback(() =>
   {
-    if (runAbortRef.current && !runAbortRef.current.signal.aborted)
+    if (hasActiveOperation())
     {
       abortRun()
     }
@@ -1595,7 +1652,7 @@ export default function App({
     {
       void shutdown()
     }
-  }, [abortRun, shutdown])
+  }, [abortRun, hasActiveOperation, shutdown])
 
   return (
     <Box flexDirection="column" height={terminalSize.rows}>
@@ -1650,14 +1707,11 @@ export default function App({
       {!pickerVisible &&
         !paletteVisible &&
         agent &&
+        !promptActive &&
         todoPanelLines.length > 0 && <LineList lines={todoPanelLines} dim />}
 
-      {!pickerVisible && agent && approval && (
-        <LineList lines={approvalBoxLines} />
-      )}
-
-      {!pickerVisible && agent && !approval && confirm && (
-        <LineList lines={confirmBoxLines} />
+      {!pickerVisible && agent && promptActive && (
+        <LineList lines={promptBoxLines} />
       )}
 
       {!pickerVisible && !paletteVisible && agent && !promptActive && (
@@ -1673,7 +1727,7 @@ export default function App({
               value={input}
               filesCacheKey={currentCwd}
               completionCommands={completionCommands}
-              listFiles={listFiles}
+              refreshFiles={refreshFiles}
               onChange={handleInputChange}
               onSubmit={handleSubmit}
               onEscape={abortOrExit}

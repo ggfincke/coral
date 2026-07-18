@@ -3,7 +3,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { capToolOutput, capErrorMessage } from '../../src/agent/tool-output.js'
+import { capToolOutput, capErrorMessage } from '../../src/tools/tool-output.js'
 import {
   MAX_TOOL_OUTPUT_CHARS,
   MAX_ERROR_MESSAGE_CHARS,

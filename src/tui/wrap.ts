@@ -1,13 +1,13 @@
 // src/tui/wrap.ts
 // shared ANSI-aware line wrapping for TUI renderers
 
-import stripAnsi from 'strip-ansi'
+import stringWidth from 'string-width'
 import wrapAnsi from 'wrap-ansi'
 
-// visible terminal width after stripping ANSI escape codes
+// visible terminal columns (ANSI-aware & fullwidth-aware, matching wrap-ansi)
 export function visibleWidth(text: string): number
 {
-  return stripAnsi(text).length
+  return stringWidth(text)
 }
 
 // right-pad a possibly ANSI-styled string to a visible width

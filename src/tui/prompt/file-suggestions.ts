@@ -6,21 +6,21 @@ import { isLikelyTextPath } from '../../shared/text-paths.js'
 export { isLikelyTextPath } from '../../shared/text-paths.js'
 
 const MAX_SUGGESTION_FILES = 5_000
-const cache = new Map<string, string[]>()
 
-// ignore-aware project file paths (stat-only walk — no file contents read),
-// filtered to text-ish files. cached per cwd for the session; new files
-// mid-session won't appear until restart
-export async function listProjectFiles(cwd: string): Promise<string[]>
+// collect ignore-aware text-ish paths w/o reading file contents
+export async function collectProjectFileSuggestions(
+  cwd: string,
+  signal?: AbortSignal
+): Promise<string[]>
 {
-  const cached = cache.get(cwd)
-  if (cached) return cached
-
   const files = await collectProjectFiles(cwd, {
     maxFiles: MAX_SUGGESTION_FILES,
     includePath: isLikelyTextPath,
+    signal,
   })
-  const paths = files.map((file) => file.path)
-  cache.set(cwd, paths)
-  return paths
+  signal?.throwIfAborted()
+  return files.map((file) => file.path)
 }
+
+// retain the original collector name for framework-neutral callers
+export const listProjectFiles = collectProjectFileSuggestions

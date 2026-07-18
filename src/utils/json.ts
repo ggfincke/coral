@@ -1,7 +1,15 @@
 // src/utils/json.ts
 // JSON parse & file helpers
 
-import { chmodSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import {
+  chmodSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { isPlainObject } from './guards.js'
 import { ensureParentDir } from './fs.js'
 
@@ -40,17 +48,42 @@ export function readJsonObjectFile<T extends object = Record<string, unknown>>(
   return isPlainObject(parsed) ? (parsed as T) : undefined
 }
 
-// write a value as pretty-printed JSON, creating the parent dir if needed.
-// write-then-rename so a crash mid-write can't leave a truncated file — the
-// rename is atomic, so readers see either the old contents or the new
+// write a value as pretty-printed JSON through a unique same-dir temp. exclusive
+// temp creation prevents writers from colliding, while rename keeps each final
+// value whole. the caller still owns any domain-level merge semantics
 export function writeJsonFile(path: string, value: unknown): void
 {
   ensureParentDir(path)
-  const tmp = `${path}.tmp`
-  writeFileSync(tmp, JSON.stringify(value, null, 2), {
-    encoding: 'utf-8',
-    mode: 0o600,
-  })
-  if (process.platform !== 'win32') chmodSync(tmp, 0o600)
-  renameSync(tmp, path)
+  const tmp = join(
+    dirname(path),
+    `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`
+  )
+  let writeFailure: { error: unknown } | undefined
+
+  try
+  {
+    writeFileSync(tmp, JSON.stringify(value, null, 2), {
+      encoding: 'utf-8',
+      flag: 'wx',
+      mode: 0o600,
+    })
+    if (process.platform !== 'win32') chmodSync(tmp, 0o600)
+    renameSync(tmp, path)
+  }
+  catch (error)
+  {
+    writeFailure = { error }
+  }
+  let cleanupFailure: { error: unknown } | undefined
+  try
+  {
+    rmSync(tmp, { force: true })
+  }
+  catch (error)
+  {
+    cleanupFailure = { error }
+  }
+
+  if (writeFailure) throw writeFailure.error
+  if (cleanupFailure) throw cleanupFailure.error
 }

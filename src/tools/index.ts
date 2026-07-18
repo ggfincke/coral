@@ -22,9 +22,10 @@ import {
 import { taskTool } from './task.js'
 import { todoWriteTool } from './todo.js'
 import { codeIntelTool } from './code-intel.js'
+import { assertBuiltInToolsRegistered, ToolCatalog } from './catalog.js'
 
 // all available tools
-export const allTools: Tool[] = [
+export const allTools: readonly Tool[] = Object.freeze([
   readTool,
   writeTool,
   editTool,
@@ -43,13 +44,35 @@ export const allTools: Tool[] = [
   gitPushTool,
   taskTool,
   todoWriteTool,
-]
+])
+
+assertBuiltInToolsRegistered(allTools)
+
+const builtInCatalog = new ToolCatalog({ trustedTools: allTools })
 
 // safe subset handed to research subagents — no edit, shell, commit, or task
 // tools, so subagents cannot mutate project state or recurse
-export const subagentTools: Tool[] = allTools.filter(
-  (t) => t.subagentSafe === true
-)
+export const subagentTools: readonly Tool[] = builtInCatalog.subagentTools
 
-export type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
-export { toolToOllamaFormat } from './tool.js'
+export type {
+  Tool,
+  ToolArgumentValidation,
+  ToolCallPresentation,
+  ToolExecutionContext,
+  ToolResult,
+} from './tool.js'
+export {
+  estimateOllamaToolTokens,
+  estimateToolDefinitionTokens,
+  toolToOllamaFormat,
+} from './tool.js'
+export {
+  builtInToolRegistrations,
+  getBuiltInToolRegistration,
+  ToolCatalog,
+  UNKNOWN_TOOL_DEFAULT_POLICY,
+  type BuiltInToolRegistration,
+  type DefaultToolPolicy,
+  type ToolCapabilityProfile,
+  type WorkspacePathRule,
+} from './catalog.js'

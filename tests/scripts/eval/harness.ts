@@ -35,6 +35,16 @@ const DEFAULT_REPS = 1
 const DEFAULT_MAX_ITERATIONS = 15
 const DEFAULT_TIMEOUT_MS = 120000
 
+type EvalAgent = Pick<
+  Agent,
+  'dispose' | 'getMessages' | 'getReliabilityStats' | 'run'
+>
+
+interface RunRepDependencies
+{
+  createAgent?: () => EvalAgent
+}
+
 // compensations = repair/name/stall/validation/editRepair/reprompt counters.
 // doomLoopTrips, verifyFlags, & verifyReprompts are reported but EXCLUDED — not
 // tool-format issues
@@ -89,7 +99,8 @@ function extractFinalText(
 export async function runRep(
   model: string,
   task: EvalTask,
-  opts: EvalOptions
+  opts: EvalOptions,
+  dependencies: RunRepDependencies = {}
 ): Promise<RunOutcome>
 {
   const host = opts.host ?? DEFAULT_OLLAMA_HOST
@@ -105,19 +116,22 @@ export async function runRep(
   let lastUsage: TokenUsage | undefined
   let aborted = false
   let errored = false
+  let agent: EvalAgent | undefined
 
   try
   {
     // seed the scratch dir before the agent sees it
     await task.setup(dir)
 
-    // reps run sequentially — one local runner serves every rep, so parallel
-    // reps would thrash model load/unload on the shared host
-    const agent = new Agent(model, host, dir, {
-      maxIterations,
-      think: opts.think,
-      permissions: defaultToolPermissions(),
-    })
+    // reps run sequentially — one local runner serves every rep, while each
+    // rep owns a fresh Agent scope around its throwaway workspace
+    agent =
+      dependencies.createAgent?.() ??
+      new Agent(model, host, dir, {
+        maxIterations,
+        think: opts.think,
+        permissions: defaultToolPermissions(),
+      })
 
     // abort the run on timeout & mark it as aborted
     const controller = new AbortController()
@@ -211,9 +225,6 @@ export async function runRep(
     const reliability = agent.getReliabilityStats()
     const compensations = countCompensations(reliability)
 
-    // intentionally no dispose() here — runEval keeps the model warm across a
-    // model's tasks & only unloads when switching models
-
     const metrics: RunMetrics = {
       toolCallsExecuted,
       toolErrors,
@@ -249,8 +260,16 @@ export async function runRep(
   }
   finally
   {
-    // always clean up the scratch dir, even on setup/grade failure
-    await rm(dir, { recursive: true, force: true })
+    try
+    {
+      // release every Agent-local resource before its workspace disappears
+      await agent?.dispose()
+    }
+    finally
+    {
+      // always clean up the scratch dir, even on setup/grade/disposal failure
+      await rm(dir, { recursive: true, force: true })
+    }
   }
 }
 
@@ -339,8 +358,8 @@ export function aggregateModel(
 }
 
 // run every model over every task. tasks run SEQUENTIALLY because a single local
-// Ollama runner serves every rep — parallel reps would thrash model load/unload —
-// keeping each model warm across its tasks & disposing only on switch
+// Ollama runner serves every rep — parallel reps would contend for the shared
+// host. each request's keep_alive keeps the model warm while Agents close locally
 export async function runEval(
   models: string[],
   tasks: EvalTask[],
@@ -392,10 +411,8 @@ export async function runEval(
       )
     }
 
-    // unload this model before moving on so the next one starts cold & the
-    // host frees its KV cache. a fresh disposer agent unloads w/o a run
-    const disposer = new Agent(model, host)
-    await disposer.dispose()
+    // there is no exclusive-host authorization here, so do not issue a
+    // host-global eviction; Ollama releases the model after keep_alive expires
   }
 
   return { models: modelReports, host, reps }

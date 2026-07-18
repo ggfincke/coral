@@ -4,15 +4,16 @@
 import type { OllamaMessage } from '../types/inference.js'
 import {
   cloneMessages,
-  cloneTodoItems,
   isUndoTurnAligned,
+  MAX_UNDO_TURNS,
   type UndoFileChange,
   type UndoTodoChange,
   type UndoTurn,
 } from '../types/undo.js'
+import { cloneTodoItems } from '../types/todo.js'
 
 // two-layer undo bounds: count caps live memory; byte cap caps disk snapshots
-export const MAX_UNDO_TURNS = 10
+export { MAX_UNDO_TURNS } from '../types/undo.js'
 export const DEFAULT_PERSISTED_UNDO_BYTE_CAP = 8 * 1024 * 1024
 
 export interface PersistedUndoTurn

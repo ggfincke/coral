@@ -70,9 +70,11 @@ test('repairs a tool call emitted as text content & dispatches it', async () =>
   assert.equal(agent.getReliabilityStats().repairedToolCalls, 1)
 
   // history carries the recovered tool_calls, not just raw JSON text
-  const repairedTurn = agent.messages.find(
-    (message) => message.role === 'assistant' && message.tool_calls?.length
-  )
+  const repairedTurn = agent
+    .getMessages()
+    .find(
+      (message) => message.role === 'assistant' && message.tool_calls?.length
+    )
   assert.ok(repairedTurn)
   assert.equal(repairedTurn.tool_calls?.[0]?.function.name, 'read_file')
 })
@@ -97,10 +99,12 @@ test('nudges a fully empty turn & stops at the nudge cap', async () =>
   assert.equal(streams(), MAX_STALL_NUDGES + 1)
   assert.equal(doneCount, 1)
 
-  const nudges = agent.messages.filter(
-    (message) =>
-      message.role === 'user' && message.content === STALL_NUDGE_MESSAGE
-  )
+  const nudges = agent
+    .getMessages()
+    .filter(
+      (message) =>
+        message.role === 'user' && message.content === STALL_NUDGE_MESSAGE
+    )
   assert.equal(nudges.length, MAX_STALL_NUDGES)
 })
 

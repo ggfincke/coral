@@ -15,6 +15,17 @@ import { HAS_GIT, initTestRepo } from '../helpers/git.js'
 
 const { tempDir } = makeTempDirPool()
 
+test('buildGitContextMessage propagates a pre-aborted request', async () =>
+{
+  const dir = await tempDir('coral-git-context-abort-')
+  const controller = new AbortController()
+  controller.abort()
+
+  await assert.rejects(buildGitContextMessage(dir, controller.signal), {
+    name: 'AbortError',
+  })
+})
+
 test(
   'buildGitContextMessage includes staged, unstaged, and untracked files',
   { skip: !HAS_GIT },

@@ -19,6 +19,7 @@
 - [ ] Script typecheck passes (`npm run typecheck:scripts`)
 - [ ] Unit tests pass (`npm test`)
 - [ ] Dev-tool checks pass (`npm run check:dev-tools`)
+- [ ] Architecture boundaries pass (`npm run check:architecture`)
 - [ ] Build passes (`npm run build`)
 
 ## Related Issues

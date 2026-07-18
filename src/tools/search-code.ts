@@ -4,7 +4,11 @@
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
-import { buildIndexer, type RetrievalDeps } from '../retrieval/build.js'
+import {
+  buildIndexer,
+  describeRetrievalFailure,
+  type RetrievalDeps,
+} from '../retrieval/build.js'
 import { DEFAULT_LIMIT } from '../retrieval/indexer.js'
 import {
   DEFAULT_EMBEDDING_MODEL,
@@ -12,11 +16,7 @@ import {
   type SearchHit,
 } from '../retrieval/types.js'
 import { formatAttachedFileBlock } from '../utils/attached-file.js'
-import {
-  isMissingModelError,
-  toErrorMessage,
-  withPullHint,
-} from '../utils/errors.js'
+import { withPullHint } from '../utils/errors.js'
 
 const MAX_SNIPPET_LINES = 12
 const MAX_SNIPPET_CHARS = 1_200
@@ -60,10 +60,14 @@ function formatHits(hits: SearchHit[]): string
     .join('\n\n')
 }
 
-function formatSearchError(embeddingModel: string, message: string): string
+function formatSearchError(
+  embeddingModel: string,
+  message: string,
+  missingModel: boolean
+): string
 {
   const base = `search_code failed while using embedding model ${embeddingModel}: ${message}`
-  if (!isMissingModelError(message)) return base
+  if (!missingModel) return base
 
   return withPullHint(base, embeddingModel, '. ')
 }
@@ -113,7 +117,7 @@ export function createSearchCodeTool(dependencies: RetrievalDeps = {}): Tool
 
       try
       {
-        const built = buildIndexer(
+        const built = await buildIndexer(
           cwd,
           ollamaHost,
           context?.signal,
@@ -128,10 +132,14 @@ export function createSearchCodeTool(dependencies: RetrievalDeps = {}): Tool
       }
       catch (err)
       {
-        const message = toErrorMessage(err)
+        const failure = describeRetrievalFailure(err, embeddingModel)
         return {
           output: '',
-          error: formatSearchError(embeddingModel, message),
+          error: formatSearchError(
+            failure.embeddingModel,
+            failure.message,
+            failure.missingModel
+          ),
         }
       }
       finally

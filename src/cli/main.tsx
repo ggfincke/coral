@@ -16,6 +16,7 @@ import {
   formatCliResumeError,
   formatCliSessionList,
 } from '../tui/shell/command-output.js'
+import { launchCliApp } from './app-launch.js'
 
 const require = createRequire(import.meta.url)
 const { version } = require('../../package.json') as { version: string }
@@ -29,7 +30,7 @@ const program = new Command()
   .option('--no-think', 'disable streamed reasoning requests')
   .option(
     '--yolo',
-    'auto-approve approval-gated calls (always_deny remains blocked)'
+    'auto-approve gated calls; always_deny stays blocked; MCP is disabled'
   )
   .option('--resume', 'resume the most recent session')
   .option('--session <id>', 'resume a specific session by ID')
@@ -110,13 +111,19 @@ else if (opts.resume)
   resumeSessionId = resolution.session.id
 }
 
-render(
-  <App
-    model={opts.model}
-    host={opts.host}
-    think={opts.think ?? true}
-    yolo={opts.yolo ?? false}
-    resumeSessionId={resumeSessionId}
-  />,
-  { exitOnCtrlC: false }
+const exitCode = launchCliApp(
+  {
+    model: opts.model,
+    host: opts.host,
+    think: opts.think ?? true,
+    yolo: opts.yolo ?? false,
+    resumeSessionId,
+  },
+  (props) =>
+  {
+    render(<App {...props} />, { exitOnCtrlC: false })
+  },
+  (message) => console.error(message)
 )
+
+if (exitCode !== 0) process.exitCode = exitCode

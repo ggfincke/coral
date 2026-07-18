@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Safe local MCP tools:** add a user-configured stdio MCP client for explicitly
+  allowlisted tools from up to four local server processes and twelve tools
+  total. Tools are namespaced as `mcp__<server>__<tool>`, validated against
+  server JSON Schemas, executed serially, bounded for output and diagnostics,
+  excluded from read-only subagents, and observable through `/mcp`. MCP is
+  available in ask mode only for this initial release.
+
+### Changed
+
+- **Dedicated conversation-state boundary:** move stored messages, exact cached
+  estimates, frozen compaction state, active-turn anchors, undo/redo records,
+  and compaction metrics behind one revision-checked `ConversationState` while
+  Agent retains inference, tools, external replay, callbacks, request
+  projection, and persistence. Narrow inference, read-only-subagent, and MCP
+  constructor seams replace private test patching without introducing a
+  provider or transcript framework.
+- **Unified request-context budgeting:** submit `@` mentions as semantic paths,
+  accept one clean turn before cancelable work, and let the Agent capture
+  workspace files atomically only after the pinned context window, active tool
+  catalog, history, project/Git context, framing, and response reserve are
+  known. Attachments are fitted in mention order, use bounded durable
+  truncated/skipped provenance without sending that metadata to Ollama, and
+  remain byte-stable across resume/redo. Parallel tool rounds now reserve every
+  sibling reply and share one cumulative allowance. The file picker uses a
+  cancellable session-owned catalog with explicit refresh/invalidation, and an
+  unavailable `/api/show` result sends the same explicit 8K fallback window
+  used for budgeting.
+- **Joined interactive-session lifecycle:** move Agent generation, admitted
+  turns and commands, prompts, model/permission transitions, session binding,
+  persistence, and shutdown behind one lifecycle owner. Cancellation now joins
+  active work and Agent retirements, rejects callbacks from retired generations,
+  rolls back interrupted undo/redo file replay, and reports committed terminal
+  outcomes and save failures instead of silently losing or misattributing them.
+- **Multi-process local-state safety:** make session files authoritative, use
+  collision-free private atomic replacements, preserve concurrent telemetry as
+  immutable deltas, shard new MCP trust by alias, and keep prompt history
+  append-only with a bounded navigation tail. Concurrent saves of one session
+  and preference writes are explicitly complete-file last-writer-wins.
+- **Verified retrieval spaces:** bind persisted vectors to the normalized
+  Ollama host and verified model-manifest digest, isolate spaces in versioned
+  side-by-side SQLite caches, and use bounded WAL transactions for concurrent
+  indexers. Mutable or unavailable artifact identity now fails closed, while
+  legacy and superseded reproducible caches remain untouched.
+- **Capability-aware tool catalog:** derive each Agent's lookup, Ollama schemas,
+  token cost, prompt guidance, and trusted execution profile from one immutable
+  active catalog. Restricted and custom profiles no longer receive instructions
+  for absent tools; dynamic MCP tools remain Agent-local, default to approval,
+  and cannot self-grant path, parallel, or subagent authority.
+- **Bounded approval prompts:** tool approval, MCP launch-trust, and confirm
+  prompts render inside a terminal-height viewport with pinned title and action
+  rows, `↑`/`↓` and `PgUp`/`PgDn` scrolling, and a position indicator, so long
+  prompts can no longer push their action keys off-screen. Box rows measure
+  fullwidth characters correctly and truncation never splits surrogate pairs.
+- **Permission-toggle feedback:** the ask/yolo transition has one owner shared
+  by `ctrl+y` and `/permissions`; toggling while a turn or command runs now
+  prints a lock notice instead of silently ignoring the keypress, and `/status`
+  states MCP availability per mode.
+- **Context-aware MCP discovery:** include model-visible tool definitions in
+  token estimates and admit dynamic MCP tools only within a context-relative
+  budget. Trust prompts remain sequential, while up to two approved servers
+  start concurrently and their tools are installed in deterministic config
+  order.
+- **Bounded MCP transport and results:** replace cumulative stdio frame copies
+  with one bounded line buffer, reject protocol messages above 16 MiB or 8,192
+  retained fragments, and sanitize, redact, and truncate large text results
+  incrementally before they enter model context.
+
+### Security
+
+- **Fingerprint-gated MCP launch trust:** accept MCP process definitions only
+  from `~/.coral.json`, resolve and disclose the executable before spawn, launch
+  without a shell from a neutral home-directory working directory, forward only
+  the SDK's minimal default environment plus explicitly named variables, and
+  persist approval for the exact alias/executable/args/env-name/tool allowlist
+  fingerprint. Project config may tighten namespaced MCP tool permissions but
+  cannot add servers or loosen user policy.
+
 ## [0.12.0] - 2026-07-10
 
 ### Added

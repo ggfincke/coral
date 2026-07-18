@@ -19,6 +19,7 @@ export interface ProjectFile
   absolutePath: string
   size: number
   mtimeMs: number
+  ctimeMs: number
 }
 
 export interface ProjectFileWalkerOptions
@@ -27,6 +28,7 @@ export interface ProjectFileWalkerOptions
   maxFileBytes?: number
   ignoredEntries?: Iterable<string>
   includePath?: (path: string) => boolean
+  signal?: AbortSignal
 }
 
 function hasIgnoredPathSegment(path: string, ignored: Set<string>): boolean
@@ -40,6 +42,7 @@ async function statProjectFile(
   options: ProjectFileWalkerOptions
 ): Promise<ProjectFile | null>
 {
+  options.signal?.throwIfAborted()
   const absolutePath = join(cwd, path)
 
   let info
@@ -47,10 +50,12 @@ async function statProjectFile(
   {
     // skip symlinks — only real files are indexable
     info = await lstat(absolutePath)
+    options.signal?.throwIfAborted()
     if (info.isSymbolicLink()) return null
   }
   catch
   {
+    options.signal?.throwIfAborted()
     return null
   }
 
@@ -65,16 +70,20 @@ async function statProjectFile(
     absolutePath,
     size: info.size,
     mtimeMs: info.mtimeMs,
+    ctimeMs: info.ctimeMs,
   }
 }
 
 // git's ignore-aware path list in deterministic order, or null outside a repo
-async function listGitProjectPaths(cwd: string): Promise<string[] | null>
+async function listGitProjectPaths(
+  cwd: string,
+  signal?: AbortSignal
+): Promise<string[] | null>
 {
   const result = await runGitCommand(
     ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
     cwd,
-    { maxBuffer: GIT_FILE_LIST_MAX_BUFFER }
+    { maxBuffer: GIT_FILE_LIST_MAX_BUFFER, signal }
   )
 
   if (result.error) return null
@@ -97,6 +106,7 @@ async function* iterateGitProjectFiles(
 
   for (const path of paths)
   {
+    options.signal?.throwIfAborted()
     if (options.maxFiles !== undefined && yielded >= options.maxFiles) return
     if (hasIgnoredPathSegment(path, ignored)) continue
     if (options.includePath && !options.includePath(path)) continue
@@ -120,15 +130,18 @@ async function* iterateFallbackProjectFiles(
 
   async function* walk(dir: string): AsyncGenerator<ProjectFile>
   {
+    options.signal?.throwIfAborted()
     if (options.maxFiles !== undefined && yielded >= options.maxFiles) return
 
     let entries
     try
     {
       entries = await readdir(dir, { withFileTypes: true })
+      options.signal?.throwIfAborted()
     }
     catch
     {
+      options.signal?.throwIfAborted()
       return
     }
 
@@ -141,6 +154,7 @@ async function* iterateFallbackProjectFiles(
 
     for (const entry of entries)
     {
+      options.signal?.throwIfAborted()
       if (options.maxFiles !== undefined && yielded >= options.maxFiles) return
       if (!shouldIncludeProjectTreeEntry(entry.name, ignored)) continue
       // skip symlinks — only real files are indexable
@@ -178,8 +192,9 @@ export async function* iterateProjectFiles(
   options: ProjectFileWalkerOptions = {}
 ): AsyncGenerator<ProjectFile>
 {
+  options.signal?.throwIfAborted()
   // prefer git's ignore-aware listing; fall back to a manual walk outside a repo
-  const gitPaths = await listGitProjectPaths(cwd)
+  const gitPaths = await listGitProjectPaths(cwd, options.signal)
   if (gitPaths)
   {
     yield* iterateGitProjectFiles(cwd, gitPaths, options)
@@ -197,7 +212,9 @@ export async function collectProjectFiles(
   const files: ProjectFile[] = []
   for await (const file of iterateProjectFiles(cwd, options))
   {
+    options.signal?.throwIfAborted()
     files.push(file)
   }
+  options.signal?.throwIfAborted()
   return files
 }

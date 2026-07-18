@@ -4,9 +4,12 @@ Coral is a local-first CLI/TUI coding agent powered by Ollama. It can inspect a
 codebase, search by text or meaning, edit files, run commands, work with Git,
 delegate read-only research, and preserve multi-turn sessions from a terminal.
 
-Coral has no cloud API or remote telemetry. Model requests go only to the Ollama
-host you configure (`http://localhost:11434` by default), and Coral's reliability
-telemetry stays in local files under `CORAL_HOME`.
+Coral has no cloud inference API or remote telemetry. Model requests go only to
+the Ollama host you configure (`http://localhost:11434` by default), and Coral's
+reliability telemetry stays in local files under `CORAL_HOME`. Optional MCP
+servers are separate subprocesses that you explicitly configure and trust; they
+may access local files, the host, or remote services according to their own
+behavior.
 
 > Coral is pre-1.0 and built for capable local models. Interfaces, session data,
 > and configuration may still change between minor releases.
@@ -18,6 +21,8 @@ telemetry stays in local files under `CORAL_HOME`.
 - At least one model already pulled into Ollama
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for the `grep` and
   `glob` tools
+- Optional: the executable or container runtime required by any MCP server you
+  configure
 - Optional: `nomic-embed-text` (or another configured Ollama embedding model)
   for semantic code search
 
@@ -57,27 +62,31 @@ ollama pull nomic-embed-text
 
 ## CLI options
 
-| Option                  | Behavior                                                                         |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| `-V`, `--version`       | Print the Coral version                                                          |
-| `-m`, `--model <model>` | Use an installed Ollama model without opening the picker                         |
-| `--host <url>`          | Set the Ollama host; defaults to `http://localhost:11434`                        |
-| `--no-think`            | Disable streamed reasoning requests                                              |
-| `--yolo`                | Auto-approve approval-gated calls; configured `always_deny` policies still block |
-| `--resume`              | Resume the most recent usable session                                            |
-| `--session <id>`        | Resume one exact session ID                                                      |
-| `--sessions`            | List saved sessions and exit                                                     |
-| `--theme <name>`        | Select a color theme; `/theme` lists available names                             |
-| `-h`, `--help`          | Show CLI help                                                                    |
+| Option                  | Behavior                                                                  |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `-V`, `--version`       | Print the Coral version                                                   |
+| `-m`, `--model <model>` | Use an installed Ollama model without opening the picker                  |
+| `--host <url>`          | Set the Ollama host; defaults to `http://localhost:11434`                 |
+| `--no-think`            | Disable streamed reasoning requests                                       |
+| `--yolo`                | Auto-approve gated calls; `always_deny` stays blocked; MCP is unavailable |
+| `--resume`              | Resume the most recent usable session                                     |
+| `--session <id>`        | Resume one exact session ID                                               |
+| `--sessions`            | List saved sessions and exit                                              |
+| `--theme <name>`        | Select a color theme; `/theme` lists available names                      |
+| `-h`, `--help`          | Show CLI help                                                             |
 
 ## Interactive use
 
 - Type a normal prompt to start an agent turn.
 - Type `/` to autocomplete slash commands.
-- Type `@` to pick a project file. Mentioned text files are attached to that
-  turn within a bounded context budget.
+- Type `@` to pick a project file. The picker refreshes a session-owned project
+  file catalog, and the Agent captures mentioned text only after it knows the
+  final context/tool budget. Attachments are fitted in mention order within the
+  same whole-request limit as history, tools, Git context, and the response.
 - Press `Ctrl+P` to search commands and keybindings in the command palette.
 - Approval boxes show pending write/edit diffs when a preview is available.
+- The first launch of each MCP server shows its full launch identity in a
+  separate trust prompt before Coral starts the process.
 - Press `Ctrl+C` or `Esc` during a run to interrupt it. The same keys exit when
   Coral is idle.
 - Use `PageUp`/`PageDown` to move through the transcript and Up/Down to recall
@@ -91,6 +100,7 @@ ollama pull nomic-embed-text
 | `/clear` (`/reset`)                            | Clear conversation history and the transcript                        |
 | `/compact`                                     | Summarize older conversation history to free context                 |
 | `/status`                                      | Show model, session, token, context, permission, and Git branch info |
+| `/mcp`                                         | Show MCP config, launch, server, and available-tool status           |
 | `/model [name]`                                | Open the model picker or switch to a named installed model           |
 | `/permissions [ask\|yolo]` (`/perm`, `/perms`) | Show or change approval mode                                         |
 | `/verify [on\|off]`                            | Toggle the post-edit read-only self-check                            |
@@ -134,6 +144,10 @@ Coral exposes a small structured toolset to the model:
 - A read-only `task` subagent for bounded research that should not consume the
   parent conversation's context
 - A persistent `todo_write` plan rendered in the TUI
+- Trusted, explicitly allowlisted MCP tools from local stdio server processes;
+  MCP tools are namespaced as `mcp__<server>__<tool>`, executed serially, and
+  admitted within the active model's context budget, and never exposed to
+  read-only subagents
 
 `code_intel` starts its bundled TypeScript language server only on first use,
 shares it with read-only subagents, and shuts it down when Coral disposes the
@@ -144,16 +158,36 @@ workspace-wide diagnostics are not part of the current MVP.
 ## Permissions and safety
 
 The default policy auto-allows read/search/code-intelligence operations and
-requires approval for file mutations, shell commands, and Git mutations.
-Project and user configuration can set any tool to:
+requires approval for file mutations, shell commands, Git mutations, and every
+MCP tool. Project and user configuration can set any tool to:
 
 - `always_allow`
 - `require_approval`
 - `always_deny`
 
-`yolo` skips prompts for approval-gated calls; it does not override
-`always_deny`. It is not a sandbox. The `bash` tool runs directly on the host and
-can access the network and files outside the project.
+`yolo` skips prompts for approval-gated built-in calls; it does not override
+`always_deny`. MCP is unavailable in yolo mode in v0.13. Switching back to ask
+mode creates a fresh MCP manager, and configured servers start on the next chat
+turn.
+
+MCP launch trust and MCP tool approval are different gates. Launch trust
+authorizes one exact process identity before spawn; normal tool policy then
+decides whether each namespaced tool call is allowed, prompted, or denied. A
+user may set a tool such as `mcp__github__get_me` to `always_allow` in
+`~/.coral.json`, while project configuration may only tighten that decision.
+
+Approval prompts that exceed the terminal height scroll inside a bounded
+viewport: `↑`/`↓` move one line, `PgUp`/`PgDn` move one page, and a position
+indicator shows where you are. The title and action keys stay pinned, so the
+complete launch identity remains inspectable before trusting a server.
+
+Neither `bash` nor MCP server processes are sandboxed. They run directly on the
+host and may access the network or files outside the project. MCP reduces
+ambient authority by launching without a shell, using the home directory as a
+neutral working directory, forwarding only a minimal process environment plus
+named variables, exposing only exact allowlisted tools, and refusing launch
+when every configured tool is denied. These controls do not make an untrusted
+server safe.
 
 File, search, and code-intelligence tools request separate approval for explicit
 paths outside the active workspace even when their normal policy is
@@ -168,13 +202,20 @@ that directory with the same care as the workspace.
 
 Coral reads JSON configuration from two places:
 
-- `~/.coral.json`: user-level permission defaults only
+- `~/.coral.json`: user-level permission defaults and MCP server definitions
 - `<workspace>/.coral.json`: project permissions plus retrieval, context, and
   verification settings
 
 Project permission settings may tighten user/default policy but cannot loosen
 it. For example, a cloned project may deny `bash`, but it cannot silently make a
 user-gated tool auto-allowed.
+
+Each configuration section is parsed independently. Invalid JSON shapes and
+wrong-typed permission, retrieval, context, and verification fields are ignored
+in favor of their defaults; valid sibling fields still apply. Numeric context
+limits are still normalized to supported token bounds. MCP keeps its stricter
+diagnostic behavior: invalid server definitions are excluded and their issues
+appear in `/mcp`.
 
 Example project `.coral.json`:
 
@@ -202,6 +243,135 @@ window that fits its memory-aware budget and the model's native limit. The
 resolved window remains stable for the session so Ollama does not reload the
 runner between turns.
 
+Configuration is pinned to the lifetime of its owner rather than live-reloaded:
+permissions and verification resolve when an Agent is created, MCP config when
+the interactive application starts, context when the active model session
+begins, and retrieval whenever an indexer is constructed.
+
+Before opening a persistent retrieval cache, Coral resolves the configured
+embedding tag through Ollama's model list and binds the cache to the normalized
+host plus the model manifest digest. A missing, ambiguous, or malformed digest
+fails closed instead of reusing vectors under a mutable display tag. Coral also
+rechecks the digest around embedding requests because Ollama's embed endpoint
+accepts a model name, not a digest-pinned artifact reference.
+
+### Local MCP servers
+
+Coral's v0.13 MCP client supports local stdio servers that expose tools. Server
+definitions are accepted only from the user-owned `~/.coral.json`; a cloned
+project cannot add a process launch through `<workspace>/.coral.json`.
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "github": {
+        "command": "docker",
+        "args": [
+          "run",
+          "-i",
+          "--rm",
+          "-e",
+          "GITHUB_PERSONAL_ACCESS_TOKEN",
+          "-e",
+          "GITHUB_READ_ONLY",
+          "-e",
+          "GITHUB_TOOLS",
+          "ghcr.io/github/github-mcp-server"
+        ],
+        "enabledTools": ["get_me", "get_file_contents", "pull_request_read"],
+        "passEnv": [
+          "GITHUB_PERSONAL_ACCESS_TOKEN",
+          "GITHUB_READ_ONLY",
+          "GITHUB_TOOLS"
+        ],
+        "startupTimeoutMs": 30000,
+        "toolTimeoutMs": 60000
+      }
+    }
+  },
+  "permissions": {
+    "mcp__github__get_me": "always_allow"
+  }
+}
+```
+
+Set the values in the environment that starts Coral; do not put secret values
+in the JSON file:
+
+```bash
+export GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token)"
+export GITHUB_READ_ONLY=1
+export GITHUB_TOOLS=get_me,get_file_contents,pull_request_read
+npm run dev
+```
+
+This example uses the official
+[GitHub MCP Server](https://github.com/github/github-mcp-server), restricts the
+server itself to read-only mode and three tools, then applies Coral's own exact
+three-tool allowlist. `always_allow` above is optional; without it, each MCP
+tool call requires approval. Pin the container image by digest when immutable
+server code is important to your threat model.
+
+Server fields:
+
+| Field              | Contract                                                                                                                                       |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`          | Required executable name resolved through `PATH`, or an absolute path; never passed through a shell; Windows accepts native `.exe`/`.com` only |
+| `args`             | Ordered argument array; defaults to `[]`; maximum 64 items                                                                                     |
+| `enabledTools`     | Required exact names using 1–128 letters, digits, `_`, or `-`; wildcards are rejected                                                          |
+| `passEnv`          | Environment-variable names to forward; values are read at launch and never shown by `/mcp`                                                     |
+| `startupTimeoutMs` | Total server startup/discovery timeout; default 10,000; allowed range 1,000–60,000                                                             |
+| `toolTimeoutMs`    | Per-call timeout; default 60,000; allowed range 1,000–600,000                                                                                  |
+
+Configuration is limited to four servers and twelve enabled tools total. Alias
+names must start with a lowercase letter or digit and contain only lowercase
+letters, digits, `_`, or `-`. If any environment variable named in `passEnv` is
+unset, Coral disables that server for the session rather than launching it with
+an incomplete environment. Coral also skips discovered definitions that would
+push the complete tool payload beyond the active model's context-relative
+budget; `/mcp` reports the skipped tool. Changes to server configuration,
+context size, model, or discovered tools require a fresh manager or session.
+
+On first use, Coral resolves the executable to its real path and asks you to
+approve the alias, configured command, resolved executable, complete ordered
+arguments, neutral home-directory working directory, environment names,
+enabled tools, and SHA-256 launch fingerprint. Legacy approval is read from
+`CORAL_HOME/mcp-trust.json`; new approvals are stored as per-alias records under
+`CORAL_HOME/mcp-trust.d/`. Any fingerprinted configuration or executable-path
+change requires approval again. The fingerprint does not hash executable
+contents or resolve a mutable container tag, so an update at the same path or
+tag does not trigger reapproval.
+
+Launch approval is requested sequentially in configuration order. After all
+required approvals finish, Coral starts at most two approved servers at once,
+then installs their tools in configuration order so collisions, budgets, and
+model-visible ordering remain deterministic.
+
+MCP stdio messages are newline-delimited and limited to 16 MiB or 8,192 retained
+fragments per unfinished message. Supported tool result content is sanitized and
+redacted incrementally; Coral retains at most a 100,000-character result body
+before appending an explicit omitted-character marker. A server that exceeds a
+protocol-message limit is stopped and shown as failed in `/mcp`.
+
+Use `/mcp` at any time to inspect configuration errors and each server's state,
+resolved executable, working directory, forwarded environment names, enabled or
+available tools, and bounded diagnostic text. The command is observational and
+never launches a server. Common states:
+
+- `configured`: valid config has not started yet; send a chat turn in ask mode
+- `needs_trust`: the launch needs interactive trust; restart in the TUI if the
+  current caller could not prompt
+- `blocked`: effective permissions deny every configured tool, so Coral did not
+  start the process
+- `failed`: inspect the bounded detail/stderr for a missing executable, missing
+  environment variable, Docker daemon failure, timeout, protocol error, or
+  allowlisted tool the server did not expose
+- `rejected`: launch trust was declined for this session
+- `stopped`: an interrupted/timed-out call retired the server; restart Coral to
+  use it again
+- `ready`: discovery succeeded and the listed namespaced tools are available
+
 ### Environment variables
 
 | Variable                | Behavior                                                                         |
@@ -214,21 +384,41 @@ runner between turns.
 
 By default Coral stores:
 
-| Path                              | Contents                                                         |
-| --------------------------------- | ---------------------------------------------------------------- |
-| `~/.coral/sessions/`              | Saved conversations, todo state, and bounded undo/redo snapshots |
-| `~/.coral/history.jsonl`          | Prompt history                                                   |
-| `~/.coral/prefs.json`             | Mutable UI preferences such as the selected theme                |
-| `~/.coral/telemetry.json`         | Interactive per-model reliability counters                       |
-| `~/.coral/eval-telemetry.json`    | Optional eval-harness reliability counters                       |
-| `~/.coral/retrieval/index.sqlite` | Local semantic code index and embeddings                         |
+| Path                                      | Contents                                                               |
+| ----------------------------------------- | ---------------------------------------------------------------------- |
+| `~/.coral/sessions/*.json`                | Authoritative saved conversations, todos, and bounded undo/redo        |
+| `~/.coral/history.jsonl`                  | Append-only prompt history; navigation loads the newest 500 valid rows |
+| `~/.coral/prefs.json`                     | Mutable UI preferences such as the selected theme                      |
+| `~/.coral/telemetry.json` + `telemetry.d` | Legacy baseline plus immutable per-Agent-lifetime counter deltas       |
+| `~/.coral/eval-telemetry.json` + `.d`     | Legacy eval baseline plus optional immutable eval counter deltas       |
+| `~/.coral/retrieval/v2/spaces/*.sqlite`   | Versioned semantic indexes, one per verified embedding space           |
+| `~/.coral/retrieval/index.sqlite`         | Preserved legacy retrieval cache; current Coral does not open it       |
+| `~/.coral/mcp-trust.json` + `.d`          | Legacy trust baseline plus atomic per-alias approval records           |
 
 `CORAL_HOME` relocates every path in this table. The separate read-only user
 configuration remains `~/.coral.json`.
 
-Coral does not upload these files. If you set `--host` to a non-local Ollama
-server, prompts, attached files, tool results, and conversation context are sent
-to that configured server.
+Multiple Coral processes may share one `CORAL_HOME`. Atomic replacements use
+private unique temporary files. Session discovery scans the authoritative
+session files, so a stale legacy `sessions/index.json` cannot hide a session;
+concurrent saves of the same session ID are complete-file last-writer-wins and
+do not merge divergent conversations. Telemetry deltas and per-alias trust
+records avoid unrelated lost updates. Preferences remain whole-file
+last-writer-wins. History is not compacted during ordinary reads, so its file
+can grow beyond the 500 entries retained for navigation.
+
+Retrieval databases use a bounded SQLite wait and WAL transactions when two
+processes index the same workspace and embedding space. Coral preserves old and
+superseded caches because deleting a database another process may still have
+open is unsafe. To clear them, first close every Coral process, then remove the
+desired files under `CORAL_HOME/retrieval/`; they are reproducible caches.
+
+Coral does not upload these files or emit remote telemetry. If you set `--host`
+to a non-local Ollama server, prompts, attached files, tool results, and
+conversation context are sent to that configured server. If you enable MCP,
+Coral sends model-generated MCP arguments to the trusted subprocess and returns
+its results to the model, so any remote service used by that subprocess becomes
+an additional data boundary.
 
 ## Development
 
@@ -252,6 +442,13 @@ evaluation harness.
 - Coral is pre-1.0 and currently optimized for large, capable local models.
 - TypeScript/JavaScript are the only languages with LSP-backed code intelligence.
 - `bash` is not sandboxed; use `ask` mode with models you do not fully trust.
+- MCP v0.13 supports local stdio tool servers in ask mode only. Remote transports,
+  OAuth, standalone resource discovery/reads, prompts, sampling, elicitation,
+  hot config/tool-list updates, MCP use from subagents, and parallel MCP calls
+  are deferred. Text resources embedded directly in a tool result are supported.
+- MCP processes are not sandboxed. Coral bounds each newline-delimited stdio
+  protocol message, but a trusted server can still consume host resources in
+  its own process; use only servers you trust.
 - Semantic search uses an in-process vector scan and is intended for ordinary
   project sizes, not giant monorepos.
 - The project does not currently declare a software license.

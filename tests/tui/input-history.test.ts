@@ -2,7 +2,7 @@
 // tests for input history persistence & navigation state
 
 import { strict as assert } from 'node:assert'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, beforeEach, test } from 'node:test'
 
@@ -36,7 +36,7 @@ after(async () =>
   await cleanup()
 })
 
-test('appendHistoryEntry persists entries and trims old prompts', () =>
+test('appendHistoryEntry persists privately and loadHistory returns a read-only tail', () =>
 {
   for (let i = 0; i < 505; i++)
   {
@@ -47,12 +47,28 @@ test('appendHistoryEntry persists entries and trims old prompts', () =>
     })
   }
 
+  const beforeLoad = readFileSync(historyPath())
   const entries = loadHistory()
+  const afterLoad = readFileSync(historyPath())
 
   assert.equal(entries.length, 500)
   assert.equal(entries[0]!.text, 'entry 5')
   assert.equal(entries.at(-1)!.text, 'entry 504')
   assert.equal(entries.at(-1)!.sessionId, 'abc12345')
+  assert.deepEqual(afterLoad, beforeLoad)
+  assert.equal(
+    beforeLoad
+      .toString('utf-8')
+      .split('\n')
+      .filter((line) => line.trim()).length,
+    505
+  )
+
+  if (process.platform !== 'win32')
+  {
+    assert.equal(statSync(historyPath()).mode & 0o777, 0o600)
+    assert.equal(statSync(process.env.CORAL_HOME!).mode & 0o777, 0o700)
+  }
 })
 
 test('loadHistory skips corrupt JSONL rows without dropping valid prompts', () =>
@@ -75,6 +91,37 @@ test('loadHistory skips corrupt JSONL rows without dropping valid prompts', () =
   assert.deepEqual(
     entries.map((entry) => entry.text),
     ['good one', 'good two']
+  )
+})
+
+test('history appends recover after a truncated tail and bound corrupt records', () =>
+{
+  const path = historyPath()
+  mkdirSync(join(path, '..'), { recursive: true })
+  const oldEntry = JSON.stringify({
+    text: 'good before corruption',
+    timestamp: 1,
+    sessionId: null,
+  })
+  writeFileSync(
+    path,
+    `${oldEntry}\n${'x'.repeat(1024 * 1024 + 1)}\n{"text":"truncated`,
+    'utf-8'
+  )
+
+  appendHistoryEntry({
+    text: 'good after crash',
+    timestamp: 2,
+    sessionId: 'deadbeef',
+  })
+
+  assert.deepEqual(loadHistory(), [
+    { text: 'good before corruption', timestamp: 1, sessionId: null },
+    { text: 'good after crash', timestamp: 2, sessionId: 'deadbeef' },
+  ])
+  assert.match(
+    readFileSync(path, 'utf-8'),
+    /\{"text":"truncated\n\{"text":"good after crash"/
   )
 })
 

@@ -3,6 +3,7 @@
 
 import { useCallback, useRef } from 'react'
 import {
+  MAX_HISTORY_ENTRIES,
   loadHistory,
   appendHistoryEntry,
   computeNavigateUp,
@@ -95,8 +96,12 @@ export function useInputHistory(): InputHistoryControls
         sessionId,
       }
 
-      entries.push(entry)
       appendHistoryEntry(entry)
+      entries.push(entry)
+      if (entries.length > MAX_HISTORY_ENTRIES)
+      {
+        entries.splice(0, entries.length - MAX_HISTORY_ENTRIES)
+      }
 
       resetNavigation()
     },

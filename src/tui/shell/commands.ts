@@ -13,7 +13,6 @@ import type { OutputBlock, SystemBlock } from '../transcript/transcript.js'
 import { runGitCommand } from '../../utils/git.js'
 import { copyToClipboard } from '../../utils/clipboard.js'
 import { lastAssistantText, lastCodeBlock } from './copy.js'
-import { getTodos, clearTodos } from '../../tools/todo-store.js'
 import {
   computeTokensPerSecond,
   formatDurationNs,
@@ -25,12 +24,13 @@ import { pluralize } from '../../utils/pluralize.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import {
   coralHeader,
+  describePermissionMode,
   formatIndexError,
   formatIndexProgress,
   formatIndexResult,
   formatIndexStart,
   formatManualCompactionResult,
-  formatPermissionModeChange,
+  formatMcpStatus,
   formatPermissionsHelp,
   formatThemeList,
   formatTodoList,
@@ -39,7 +39,10 @@ import {
   formatUnknownPermissionMode,
 } from './command-output.js'
 import type { CommandSummary } from '../prompt/completion.js'
-import { buildIndexer } from '../../retrieval/build.js'
+import {
+  buildIndexer,
+  describeRetrievalFailure,
+} from '../../retrieval/build.js'
 import type { BuiltIndexer } from '../../retrieval/build.js'
 import {
   DEFAULT_EMBEDDING_MODEL,
@@ -51,6 +54,10 @@ import {
   type KeybindingAction,
   type KeybindingSummary,
 } from '../keybindings.js'
+import type {
+  LifecycleChangeResult,
+  SessionSaveResult,
+} from '../session/interactive-runtime.js'
 
 export type { KeybindingAction, KeybindingSummary }
 
@@ -69,6 +76,8 @@ export interface CommandContext
   sessionLabelId: string | null
   // push blocks into the transcript
   pushOutput: (...blocks: OutputBlock[]) => void
+  // publish one exact-current terminal after cancellation or committed work
+  pushTerminalOutput: (...blocks: OutputBlock[]) => void
   // clear the transcript & reset conversation state
   clearSession: () => void
   // rebuild transcript from agent history after undo/redo changes
@@ -78,7 +87,7 @@ export interface CommandContext
   // reopen the model picker
   reopenModelPicker: () => void
   // switch model in-place (keeps conversation history)
-  switchModel: (modelName: string) => Promise<void>
+  switchModel: (modelName: string) => Promise<LifecycleChangeResult>
   // current session working directory
   getCwd: () => string
   // abort signal for long-running slash commands
@@ -88,15 +97,16 @@ export interface CommandContext
     cwd: string,
     ollamaHost: string,
     signal?: AbortSignal
-  ) => BuiltIndexer
+  ) => BuiltIndexer | Promise<BuiltIndexer>
   // set the permission mode at runtime
-  setYolo: (yolo: boolean) => void
+  // owns the full transition: no-op check, success/failure output, containment
+  setYolo: (yolo: boolean) => Promise<void>
   // exit the application
   exitApp: () => void
   // resume a session by ID — loads agent & transcript from disk
   resumeSession: (sessionId: string) => boolean
   // force-save the current session to disk (returns session ID or null)
-  saveCurrentSession: () => string | null
+  saveCurrentSession: () => SessionSaveResult
   // rename the current session's title & update cached meta
   renameCurrentSession: (title: string) => boolean
   // re-render the TUI after a theme switch (busts styled-line caches)
@@ -155,6 +165,18 @@ function findCommand(name: string, commands: Command[]): Command | undefined
 function systemBlock(content: string): SystemBlock
 {
   return { type: 'system', content }
+}
+
+function committedSaveWarning(
+  result: SessionSaveResult,
+  subject: string
+): SystemBlock | null
+{
+  if (result.status !== 'error' && result.status !== 'stale') return null
+  return systemBlock(
+    `${subject}, but the current session could not be saved. ` +
+      'The change may not be available after exit.'
+  )
 }
 
 // ── /help ──────────────────────────────────────────────────────────────
@@ -235,7 +257,7 @@ const compactCommand: Command = {
     {
       if (ctx.signal?.aborted)
       {
-        ctx.pushOutput(systemBlock('Compaction interrupted'))
+        ctx.pushTerminalOutput(systemBlock('Compaction interrupted'))
         return
       }
       ctx.pushOutput(
@@ -245,8 +267,12 @@ const compactCommand: Command = {
     }
 
     ctx.rebuildTranscript()
-    ctx.saveCurrentSession()
-    ctx.pushOutput(systemBlock(formatManualCompactionResult(result)))
+    const saved = ctx.saveCurrentSession()
+    const warning = committedSaveWarning(saved, 'Compaction completed')
+    ctx.pushTerminalOutput(
+      systemBlock(formatManualCompactionResult(result)),
+      ...(warning ? [warning] : [])
+    )
   },
 }
 
@@ -262,9 +288,7 @@ const statusCommand: Command = {
     const tokens = ctx.agent.getEstimatedTokens()
     const messages = ctx.agent.getMessageCount()
     const session = ctx.sessionLabelId ?? '(unsaved)'
-    const permissions = ctx.yolo
-      ? 'yolo (auto-approve gated; denies stay blocked)'
-      : 'ask (prompt before writes)'
+    const permissions = describePermissionMode(ctx.yolo)
     const gitBranch = await getGitBranch(cwd)
     const usage = ctx.agent.getTokenUsage()
 
@@ -393,6 +417,19 @@ const statusCommand: Command = {
   },
 }
 
+// ── /mcp ──────────────────────────────────────────────────────────────
+
+const mcpCommand: Command = {
+  name: 'mcp',
+  description: 'Show configured MCP server & tool status',
+  execute(_args, ctx)
+  {
+    ctx.pushOutput(
+      systemBlock(formatMcpStatus(ctx.agent.getMcpStatus(), ctx.yolo))
+    )
+  },
+}
+
 // get the current git branch, or null if not in a repo
 async function getGitBranch(cwd: string): Promise<string | null>
 {
@@ -455,11 +492,21 @@ const modelCommand: Command = {
     try
     {
       const client = new OllamaClient(ctx.host)
-      const models = await client.listModels()
+      const models = await client.listModels(ctx.signal)
+      if (ctx.signal?.aborted)
+      {
+        ctx.pushTerminalOutput(systemBlock('Model switch interrupted'))
+        return
+      }
       availableModels = models.map((m) => m.name)
     }
     catch
     {
+      if (ctx.signal?.aborted)
+      {
+        ctx.pushTerminalOutput(systemBlock('Model switch interrupted'))
+        return
+      }
       ctx.pushOutput(
         systemBlock('Failed to fetch models from Ollama — is it running?')
       )
@@ -512,14 +559,44 @@ const modelCommand: Command = {
     const previousModel = ctx.activeModel
     try
     {
-      await ctx.switchModel(resolvedModel)
-      ctx.saveCurrentSession()
-      ctx.pushOutput(
-        systemBlock(`Switched model: ${previousModel} → ${resolvedModel}`)
-      )
+      if (ctx.signal?.aborted)
+      {
+        ctx.pushTerminalOutput(systemBlock('Model switch interrupted'))
+        return
+      }
+      const result = await ctx.switchModel(resolvedModel)
+      if (result.status === 'changed')
+      {
+        const warning = result.persistence
+          ? committedSaveWarning(result.persistence, 'Model changed')
+          : null
+        ctx.pushTerminalOutput(
+          systemBlock(`Switched model: ${previousModel} → ${resolvedModel}`),
+          ...(warning ? [warning] : [])
+        )
+      }
+      else if (result.status === 'unchanged')
+      {
+        ctx.pushOutput(systemBlock(`Already using ${resolvedModel}`))
+      }
+      else if (result.status === 'busy' && !ctx.signal?.aborted)
+      {
+        ctx.pushOutput(
+          systemBlock('Another session transition is still running.')
+        )
+      }
+      else if (result.status === 'aborted' || ctx.signal?.aborted)
+      {
+        ctx.pushTerminalOutput(systemBlock('Model switch interrupted'))
+      }
     }
     catch (err)
     {
+      if (ctx.signal?.aborted)
+      {
+        ctx.pushTerminalOutput(systemBlock('Model switch interrupted'))
+        return
+      }
       const msg = toErrorMessage(err)
       ctx.pushOutput(systemBlock(`Failed to switch model: ${msg}`))
     }
@@ -532,7 +609,7 @@ const permissionsCommand: Command = {
   name: 'permissions',
   aliases: ['perm', 'perms'],
   description: 'Show or set permission mode (ask / yolo)',
-  execute(args, ctx)
+  async execute(args, ctx)
   {
     if (!args)
     {
@@ -542,20 +619,14 @@ const permissionsCommand: Command = {
 
     const mode = args.trim().toLowerCase()
 
-    if (mode === 'yolo')
-    {
-      ctx.setYolo(true)
-      ctx.pushOutput(systemBlock(formatPermissionModeChange(true)))
-    }
-    else if (mode === 'ask')
-    {
-      ctx.setYolo(false)
-      ctx.pushOutput(systemBlock(formatPermissionModeChange(false)))
-    }
-    else
+    if (mode !== 'yolo' && mode !== 'ask')
     {
       ctx.pushOutput(systemBlock(formatUnknownPermissionMode(mode)))
+      return
     }
+
+    // the interactive-session owner emits no-op/success/failure output
+    await ctx.setYolo(mode === 'yolo')
   },
 }
 
@@ -676,7 +747,8 @@ const undoCommand: Command = {
     'Undo the last turn & revert captured file edits (session snapshots under ~/.coral/sessions/ can duplicate file contents incl. secrets — treat like the workspace)',
   async execute(_args, ctx)
   {
-    const result = await ctx.agent.undoLastTurn()
+    if (ctx.signal?.aborted) return
+    const result = await ctx.agent.undoLastTurn(ctx.signal)
     if (!result.ok)
     {
       ctx.pushOutput(systemBlock(result.message))
@@ -685,8 +757,12 @@ const undoCommand: Command = {
 
     ctx.rebuildTranscript()
     ctx.resetTokenUsage()
-    ctx.saveCurrentSession()
-    ctx.pushOutput(systemBlock(formatUndoResult(result)))
+    const saved = ctx.saveCurrentSession()
+    const warning = committedSaveWarning(saved, 'Undo completed')
+    ctx.pushTerminalOutput(
+      systemBlock(formatUndoResult(result)),
+      ...(warning ? [warning] : [])
+    )
   },
 }
 
@@ -695,7 +771,8 @@ const redoCommand: Command = {
   description: 'Redo the last undone turn & reapply captured edits',
   async execute(_args, ctx)
   {
-    const result = await ctx.agent.redoLastTurn()
+    if (ctx.signal?.aborted) return
+    const result = await ctx.agent.redoLastTurn(ctx.signal)
     if (!result.ok)
     {
       ctx.pushOutput(systemBlock(result.message))
@@ -704,8 +781,12 @@ const redoCommand: Command = {
 
     ctx.rebuildTranscript()
     ctx.resetTokenUsage()
-    ctx.saveCurrentSession()
-    ctx.pushOutput(systemBlock(formatUndoResult(result)))
+    const saved = ctx.saveCurrentSession()
+    const warning = committedSaveWarning(saved, 'Redo completed')
+    ctx.pushTerminalOutput(
+      systemBlock(formatUndoResult(result)),
+      ...(warning ? [warning] : [])
+    )
   },
 }
 
@@ -800,10 +881,14 @@ const todoCommand: Command = {
 
     if (arg === 'clear')
     {
-      clearTodos()
+      ctx.agent.clearTodos()
       // flush the cleared list to disk so resume doesn't bring it back
-      ctx.saveCurrentSession()
-      ctx.pushOutput(systemBlock('Task list cleared'))
+      const saved = ctx.saveCurrentSession()
+      const warning = committedSaveWarning(saved, 'Task list cleared')
+      ctx.pushTerminalOutput(
+        systemBlock('Task list cleared'),
+        ...(warning ? [warning] : [])
+      )
       return
     }
 
@@ -818,7 +903,7 @@ const todoCommand: Command = {
       return
     }
 
-    const todos = getTodos()
+    const todos = ctx.agent.getTodos()
     if (todos.length === 0)
     {
       ctx.pushOutput(systemBlock('No tasks yet'))
@@ -870,7 +955,7 @@ const indexCommand: Command = {
     try
     {
       const build = ctx.buildIndexer ?? buildIndexer
-      const built = build(cwd, ctx.host, ctx.signal)
+      const built = await build(cwd, ctx.host, ctx.signal)
       store = built.store
       embeddingModel = built.embeddingModel
 
@@ -895,12 +980,26 @@ const indexCommand: Command = {
         },
       })
 
-      ctx.pushOutput(systemBlock(formatIndexResult(stats)))
+      const resultBlock = systemBlock(formatIndexResult(stats))
+      if (ctx.signal?.aborted) ctx.pushTerminalOutput(resultBlock)
+      else ctx.pushOutput(resultBlock)
     }
     catch (err)
     {
+      if (ctx.signal?.aborted)
+      {
+        ctx.pushTerminalOutput(systemBlock('Indexing interrupted'))
+        return
+      }
+      const failure = describeRetrievalFailure(err, embeddingModel)
       ctx.pushOutput(
-        systemBlock(formatIndexError(embeddingModel, toErrorMessage(err)))
+        systemBlock(
+          formatIndexError(
+            failure.embeddingModel,
+            failure.message,
+            failure.missingModel
+          )
+        )
       )
     }
     finally
@@ -949,7 +1048,14 @@ const resumeCommand: Command = {
       return
     }
 
-    ctx.saveCurrentSession()
+    const saved = ctx.saveCurrentSession()
+    if (saved.status === 'error' || saved.status === 'stale')
+    {
+      ctx.pushTerminalOutput(
+        systemBlock('Current session could not be saved; resume was canceled.')
+      )
+      return
+    }
 
     if (ctx.resumeSession(target.session.id))
     {
@@ -1011,14 +1117,24 @@ const newCommand: Command = {
   description: 'Save current session & start a new conversation',
   execute(_args, ctx)
   {
-    const savedId = ctx.saveCurrentSession()
+    const saved = ctx.saveCurrentSession()
+    if (saved.status === 'error' || saved.status === 'stale')
+    {
+      ctx.pushTerminalOutput(
+        systemBlock(
+          'Current session could not be saved; the new conversation was not started.'
+        )
+      )
+      return
+    }
+
     const cleared = ctx.agent.clearHistory()
     ctx.clearSession()
 
     const parts: string[] = []
-    if (savedId)
+    if (saved.status === 'saved')
     {
-      parts.push(`Session ${savedId} saved`)
+      parts.push(`Session ${saved.id} saved`)
     }
     parts.push(
       `New conversation started (${pluralize(cleared, 'message')} cleared)`
@@ -1036,6 +1152,7 @@ const commands: Command[] = [
   clearCommand,
   compactCommand,
   statusCommand,
+  mcpCommand,
   modelCommand,
   permissionsCommand,
   verifyCommand,

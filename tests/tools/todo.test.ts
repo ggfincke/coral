@@ -1,9 +1,9 @@
-// tests/tools/todo-store.test.ts
-// sanitizeTodos (lenient restore) & validateTodoList (strict todo_write)
+// tests/tools/todo.test.ts
+// todo parsing & validation contracts
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { sanitizeTodos, validateTodoList } from '../../src/tools/todo-store.js'
+import { sanitizeTodos, validateTodoList } from '../../src/types/todo.js'
 
 // --- sanitizeTodos (lenient restore path) ---
 

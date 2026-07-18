@@ -2,13 +2,20 @@
 // render the active task list into bordered status lines
 
 import chalk from 'chalk'
-import { TODO_MARK, type TodoItem } from '../../tools/todo-store.js'
+import type { TodoItem, TodoStatus } from '../../types/todo.js'
 import { ellipsize } from '../../utils/ellipsize.js'
 import { boxFrame } from '../run/status-line.js'
 import { padEnd } from '../wrap.js'
 
 // cap rendered rows so a long list can't swallow the transcript viewport
 const MAX_ROWS = 8
+
+// TUI task glyphs
+const TODO_MARK: Record<TodoStatus, string> = {
+  pending: '○',
+  in_progress: '◐',
+  completed: '●',
+}
 
 export function todoRowText(todo: TodoItem): string
 {

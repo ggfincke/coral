@@ -1,14 +1,11 @@
 // src/agent/tool-validation.ts
 // validate & coerce tool args against the tool's JSON schema pre-dispatch
 
-import type { Tool } from '../tools/index.js'
+import type { Tool, ToolArgumentValidation } from '../tools/index.js'
 import { paramEntries } from '../types/inference.js'
 import { ellipsize } from '../utils/ellipsize.js'
 import { tryParseJson } from '../utils/json.js'
 import { isPlainObject } from '../utils/guards.js'
-
-export type ValidationResult =
-  { ok: true; args: Record<string, unknown> } | { ok: false; error: string }
 
 // keep validation feedback model-friendly — a long list of problems makes weak
 // models halt or hallucinate, so show the first few & summarize the rest
@@ -19,8 +16,10 @@ const MAX_VALIDATION_PROBLEMS = 8
 export function validateToolArgs(
   tool: Tool,
   args: Record<string, unknown>
-): ValidationResult
+): ToolArgumentValidation
 {
+  if (tool.validateArgs) return tool.validateArgs(args)
+
   const problems: string[] = []
   const coerced: Record<string, unknown> = { ...args }
   const entries = paramEntries(tool.parameters)
@@ -46,7 +45,15 @@ export function validateToolArgs(
     // tolerate extra params — tools read named fields & ignore the rest
     if (!schema) continue
 
-    const result = coerceValue(value, schema.type, schema.items?.type)
+    if (typeof schema === 'boolean') continue
+    if (typeof schema.type !== 'string') continue
+    const itemType =
+      typeof schema.items === 'object' &&
+      schema.items !== null &&
+      typeof schema.items.type === 'string'
+        ? schema.items.type
+        : undefined
+    const result = coerceValue(value, schema.type, itemType)
     if (!result.ok)
     {
       problems.push(
@@ -57,7 +64,10 @@ export function validateToolArgs(
 
     coerced[key] = result.value
 
-    if (schema.enum && !schema.enum.includes(String(result.value)))
+    if (
+      schema.enum &&
+      !schema.enum.some((item) => Object.is(item, result.value))
+    )
     {
       problems.push(
         `parameter '${key}' must be one of: ${schema.enum.join(', ')}`

@@ -35,6 +35,7 @@ export type TextFileReadResult = TextFileReadSuccess | TextFileReadFailure
 export interface TextFileReadOptions
 {
   cwd?: string
+  signal?: AbortSignal
 }
 
 function isMissing(err: unknown): boolean
@@ -63,14 +64,17 @@ async function readTextFile(
 ): Promise<TextFileReadResult>
 {
   const path = resolvePath(rawPath, options.cwd)
+  options.signal?.throwIfAborted()
   let size: number
   try
   {
     const stats = await stat(path)
+    options.signal?.throwIfAborted()
     size = stats.size
   }
   catch (err)
   {
+    options.signal?.throwIfAborted()
     if (missingAsEmpty && isMissing(err))
     {
       return { ok: true, path, content: '', existed: false }
@@ -91,11 +95,16 @@ async function readTextFile(
 
   try
   {
-    const content = await readFile(path, 'utf-8')
+    const content = await readFile(path, {
+      encoding: 'utf-8',
+      signal: options.signal,
+    })
+    options.signal?.throwIfAborted()
     return { ok: true, path, content, existed: true }
   }
   catch (err)
   {
+    options.signal?.throwIfAborted()
     return {
       ok: false,
       path,
