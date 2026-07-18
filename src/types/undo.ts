@@ -1,8 +1,12 @@
 // src/types/undo.ts
 // shared undo/redo state contracts
 
-import type { TodoItem } from '../tools/todo-store.js'
 import type { OllamaMessage } from './inference.js'
+import { cloneAttachmentReport } from './attachments.js'
+import { cloneTodoItems, type TodoItem } from './todo.js'
+
+// cap live effect history independently from the persisted byte cap
+export const MAX_UNDO_TURNS = 10
 
 export interface UndoFileChange
 {
@@ -36,11 +40,6 @@ export interface UndoResult
   changedFiles?: number
 }
 
-export function cloneTodoItems(todos: TodoItem[]): TodoItem[]
-{
-  return todos.map((todo) => ({ ...todo }))
-}
-
 export interface UndoTurnAlignmentOptions
 {
   // live undo requires the turn to still be the message-history tip
@@ -68,16 +67,10 @@ export function cloneMessages(messages: OllamaMessage[]): OllamaMessage[]
 {
   return messages.map((message) =>
   {
-    const cloned: OllamaMessage = { ...message }
-    if (message.tool_calls)
+    const cloned = structuredClone(message)
+    if (message.attachmentReport)
     {
-      cloned.tool_calls = message.tool_calls.map((call) => ({
-        ...call,
-        function: {
-          ...call.function,
-          arguments: { ...call.function.arguments },
-        },
-      }))
+      cloned.attachmentReport = cloneAttachmentReport(message.attachmentReport)
     }
     return cloned
   })

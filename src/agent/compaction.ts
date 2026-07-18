@@ -3,7 +3,7 @@
 
 import type { OllamaMessage } from '../types/inference.js'
 import { ellipsize } from '../utils/ellipsize.js'
-import { CHARS_PER_TOKEN } from '../utils/limits.js'
+import { estimateModelRequestMessageTokens } from './request-budget.js'
 
 // default context window size (tokens) — conservative floor for compaction
 // estimates when the live num_ctx is unknown
@@ -73,22 +73,7 @@ export interface CompactionResult
 // estimate token count for a message
 export function estimateMessageTokens(msg: OllamaMessage): number
 {
-  let chars = msg.content.length
-
-  if (msg.thinking) chars += msg.thinking.length
-
-  if (msg.tool_calls)
-  {
-    for (const call of msg.tool_calls)
-    {
-      chars += call.function.name.length
-      chars += JSON.stringify(call.function.arguments).length
-    }
-  }
-
-  if (msg.tool_name) chars += msg.tool_name.length
-
-  return Math.ceil(chars / CHARS_PER_TOKEN)
+  return estimateModelRequestMessageTokens(msg)
 }
 
 // estimate total tokens for a list of messages
