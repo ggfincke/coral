@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-24
+
 ### Added
 
 - **Safe local MCP tools:** add a user-configured stdio MCP client for explicitly
@@ -615,7 +617,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
-[Unreleased]: https://github.com/ggfincke/coral/compare/v0.12.0...HEAD
+[0.13.0]: https://github.com/ggfincke/coral/compare/v0.12.0...b7864b23
 [0.12.0]: https://github.com/ggfincke/coral/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/ggfincke/coral/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/ggfincke/coral/compare/be8b243...1e4817e
