@@ -4,7 +4,7 @@
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { readFileGuarded } from './file-utils.js'
 import { getCwd } from '../cwd.js'
-import { checkWorkspacePath } from './path-policy.js'
+import { checkWorkspacePath } from '../shared/workspace-path.js'
 
 export const readTool: Tool = {
   name: 'read_file',

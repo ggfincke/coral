@@ -1,5 +1,5 @@
 // src/tools/git.ts
-// git tools for status, diff, & log
+// git tools for status, diff, and log
 
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
@@ -9,8 +9,8 @@ import {
   type GitCommandOptions,
 } from '../utils/git.js'
 
-// reject model-supplied refs that look like options — a ref like
-// '--output=<path>' would let git write to an arbitrary file
+// reject model-supplied refs that look like options because git could treat
+// '--output=<path>' as an arbitrary file target
 function isUnsafeRef(ref: string): boolean
 {
   return ref.startsWith('-')
@@ -107,7 +107,7 @@ export const gitDiffTool: Tool = {
     if (ref) flags.push(ref)
     if (path) flags.push('--', path)
 
-    // git diff can exit 1 w/ valid output in some configs — trust stdout here
+    // git diff can exit 1 with valid output in some configs, so trust stdout
     return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
       allowStdoutOnError: true,
     })
@@ -220,7 +220,7 @@ export const gitAddTool: Tool = {
       return { output: '', error: 'git_add requires paths or all:true' }
     }
 
-    // reject option-like paths — '--' separates them from flags below
+    // reject option-like paths so the explicit '--' separator stays authoritative
     const unsafe = paths.find(isUnsafeRef)
     if (unsafe)
     {

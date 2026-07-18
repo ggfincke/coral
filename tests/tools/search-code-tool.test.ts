@@ -209,27 +209,24 @@ test('search_code appends ollama pull hint for missing embedding models', async 
   }
 })
 
-test('search_code does not suggest pulling for invalid artifact identity', async () =>
+test('search_code does not suggest pulling for invalid or ambiguous identity', async () =>
 {
-  const dir = await tempDir('coral-search-invalid-identity-')
+  const invalidDir = await tempDir('coral-search-invalid-identity-')
   await withFetch(
     () => tagsResponse('not-a-digest'),
     async () =>
     {
       const result = await searchCodeTool.execute(
         { query: 'auth session' },
-        { cwd: dir, ollamaHost: 'http://ollama.test' }
+        { cwd: invalidDir, ollamaHost: 'http://ollama.test' }
       )
 
       assert.match(result.error ?? '', /no valid immutable SHA-256 digest/)
       assert.doesNotMatch(result.error ?? '', /ollama pull/)
     }
   )
-})
 
-test('search_code does not suggest pulling for ambiguous model identity', async () =>
-{
-  const dir = await tempDir('coral-search-ambiguous-identity-')
+  const ambiguousDir = await tempDir('coral-search-ambiguous-identity-')
   await withFetch(
     () =>
       new Response(
@@ -251,7 +248,7 @@ test('search_code does not suggest pulling for ambiguous model identity', async 
     {
       const result = await searchCodeTool.execute(
         { query: 'auth session' },
-        { cwd: dir, ollamaHost: 'http://ollama.test' }
+        { cwd: ambiguousDir, ollamaHost: 'http://ollama.test' }
       )
 
       assert.match(result.error ?? '', /matches multiple/)

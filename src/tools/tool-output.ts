@@ -13,7 +13,7 @@ export interface CapToolOutputOptions
   preserveTail?: boolean
 }
 
-// cap oversized tool output, keeping the head & noting how much was dropped
+// cap oversized tool output, keeping the head and noting what was dropped
 export function capToolOutput(
   output: string,
   maxChars = MAX_TOOL_OUTPUT_CHARS,
@@ -49,8 +49,8 @@ export function capToolOutput(
   )
 }
 
-// cap an oversized error string fed back to the model, keeping the head &
-// noting how much was dropped (mirrors capToolOutput, w/o the scope hint)
+// cap an oversized error string fed back to the model, keeping the head and
+// noting what was dropped
 export function capErrorMessage(error: string): string
 {
   const { head, omitted, truncated } = truncateToLineBoundary(

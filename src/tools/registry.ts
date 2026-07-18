@@ -1,5 +1,5 @@
-// src/tools/index.ts
-// tool registry & lookup
+// src/tools/registry.ts
+// compose and validate built-in executable tools and the subagent subset
 
 import type { Tool } from './tool.js'
 import { readTool } from './read.js'
@@ -50,29 +50,6 @@ assertBuiltInToolsRegistered(allTools)
 
 const builtInCatalog = new ToolCatalog({ trustedTools: allTools })
 
-// safe subset handed to research subagents — no edit, shell, commit, or task
-// tools, so subagents cannot mutate project state or recurse
+// expose a read-only subset to research subagents so they cannot mutate state or
+// recurse
 export const subagentTools: readonly Tool[] = builtInCatalog.subagentTools
-
-export type {
-  Tool,
-  ToolArgumentValidation,
-  ToolCallPresentation,
-  ToolExecutionContext,
-  ToolResult,
-} from './tool.js'
-export {
-  estimateOllamaToolTokens,
-  estimateToolDefinitionTokens,
-  toolToOllamaFormat,
-} from './tool.js'
-export {
-  builtInToolRegistrations,
-  getBuiltInToolRegistration,
-  ToolCatalog,
-  UNKNOWN_TOOL_DEFAULT_POLICY,
-  type BuiltInToolRegistration,
-  type DefaultToolPolicy,
-  type ToolCapabilityProfile,
-  type WorkspacePathRule,
-} from './catalog.js'

@@ -1,5 +1,5 @@
 // src/tools/file-utils.ts
-// shared file-read helpers w/ size guards
+// shared file-read helpers with size guards
 
 import type { ToolResult } from './tool.js'
 import {
@@ -24,7 +24,7 @@ export interface FileError
   result: ToolResult
 }
 
-// read a file w/ size guard to prevent loading huge files into memory
+// read a file with a size guard to prevent loading huge files into memory
 export async function readFileGuarded(
   rawPath: string,
   options: TextFileReadOptions = {}

@@ -108,7 +108,7 @@ export function createSearchCodeTool(dependencies: RetrievalDeps = {}): Tool
         return { output: '', error: 'search_code requires a non-empty query' }
       }
 
-      // clamping & defaulting live in ProjectIndexer.search
+      // clamping and defaulting live in ProjectIndexer.search
       const topK = typeof args.topK === 'number' ? args.topK : undefined
       const cwd = context?.cwd ?? getCwd()
       const ollamaHost = context?.ollamaHost ?? DEFAULT_OLLAMA_HOST
