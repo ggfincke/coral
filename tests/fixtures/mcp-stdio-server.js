@@ -31,7 +31,7 @@ if (stderrSplit > 0)
 
 const server = new McpServer({ name: 'coral-test-server', version: '1.0.0' })
 
-// emits prefixItems + items, valid only under draft-2020-12 semantics (F1)
+// emit prefixItems & items for draft-2020-12 validation
 const pairSchema = z.tuple([z.string(), z.number()]).rest(z.never())
 
 server.registerTool(

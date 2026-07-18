@@ -1,38 +1,32 @@
 // src/config/context.ts
-// memory-aware num_ctx sizing — pin the largest context window that fits the
-// host's memory budget, capped by the model's native window & any user override
+// memory-aware context-window sizing
 
 import { loadProjectConfig } from './project-config.js'
 import type { Model, ModelInfo } from '../types/inference.js'
 import { isPlainObject } from '../utils/guards.js'
 
-// fraction of unified memory the GPU may wire by default on Apple Silicon
-// (~75% above 32GiB); the remainder is left for the OS & other apps
+// reserve a fixed fraction of unified memory for the GPU on Apple Silicon
 const USABLE_MEMORY_FRACTION = 0.75
 
-// headroom reserved on top of weights + KV for compute/activation buffers,
-// the Ollama runtime, & the OS
+// reserve memory for weights, KV cache, compute buffers, Ollama, and the OS
 const MEMORY_RESERVE_BYTES = 6 * 1024 ** 3
 
-// KV cache element size — Ollama defaults to f16 (2 bytes). using the
-// unquantized size keeps the estimate conservative (real KV may be 8-bit)
+// estimate KV elements at f16 width so the memory bound stays conservative
 const KV_ELEMENT_BYTES = 2
 
-// floor for the pinned window so a tight budget never yields an unusable ctx
+// keep a tight memory budget from producing an unusable context window
 export const MIN_NUM_CTX = 8_192
 
-// round the pinned window down to this granularity for tidy KV allocation
+// round the pinned window down for predictable KV allocation
 const NUM_CTX_GRANULARITY = 1_024
 
-// architectures w/ interleaved sliding-window attention — KV is dominated by a
-// few global layers & stays small at long context, but gguf metadata reports
-// only the per-layer dims, which over-counts KV ~6x if treated as full
-// attention. pin native for these instead of trusting the inflated estimate
+// pin sliding-window architectures to their native window because their GGUF
+// metadata overstates long-context KV use when treated as full attention
 const SLIDING_WINDOW_ARCHS = new Set(['gemma', 'gemma2', 'gemma3', 'gemma4'])
 
 export interface ContextConfig
 {
-  // explicit ceiling from env or .coral.json; undefined when unset
+  // explicit ceiling from the environment or .coral.json
   maxNumCtx?: number
 }
 
@@ -54,8 +48,7 @@ export interface ResolvedContextWindow
   maxNumCtx?: number
 }
 
-// resolve an explicit num_ctx ceiling — env wins, then .coral.json. undefined
-// means "no override", so the memory budget decides the window
+// resolve the explicit context ceiling, with the environment taking precedence
 export function resolveContextConfig(cwd: string): ContextConfig
 {
   const env = Number.parseInt(process.env.CORAL_NUM_CTX ?? '', 10)
@@ -71,14 +64,11 @@ export function resolveContextConfig(cwd: string): ContextConfig
   return {}
 }
 
-// estimate full-attention KV-cache bytes per token across all layers. returns
-// undefined when the model omits KV dims — gemma exposes no kv-head count in
-// Ollama metadata, & such models are sliding-window & KV-light, so the caller
-// treats undefined as "no KV-memory constraint"
+// estimate full-attention KV-cache bytes per token, or return undefined when
+// the model metadata cannot describe a meaningful KV bound
 export function estimateKvBytesPerToken(info: ModelInfo): number | undefined
 {
-  // sliding-window families under-report KV as full-attention dims; treat them
-  // as KV-light so the caller pins native instead of over-estimating
+  // treat sliding-window families as KV-light so callers pin their native window
   if (info.architecture && SLIDING_WINDOW_ARCHS.has(info.architecture))
   {
     return undefined
@@ -99,25 +89,21 @@ export interface BudgetInputs
   totalMemBytes: number
   weightBytes: number
   nativeContext: number
-  // undefined => KV not estimable (sliding-window family); skip the KV bound
+  // undefined means the KV bound cannot be estimated
   kvBytesPerToken?: number
 }
 
-// largest num_ctx that fits the memory budget, capped to the native window.
-// KV-estimable models are bounded by available KV memory; KV-light models pin
-// native as long as their weights fit
+// choose the largest context window that fits memory and the native limit
 export function computeMemoryCappedContext(inputs: BudgetInputs): number
 {
   const { totalMemBytes, weightBytes, nativeContext, kvBytesPerToken } = inputs
   const usable = totalMemBytes * USABLE_MEMORY_FRACTION
   const forKv = usable - weightBytes - MEMORY_RESERVE_BYTES
 
-  // weights + reserve already overflow the budget — fall back to the floor
+  // fall back to the minimum when weights and reserve already exhaust memory
   if (forKv <= 0) return MIN_NUM_CTX
 
-  // ! sliding-window / unknown-KV model: SWA keeps KV small, so pin native &
-  // ! rely only on the weights-fit check above. set an explicit override on a
-  // ! memory-constrained host if this proves too aggressive
+  // sliding-window or unknown-KV models use the native window after the weight check
   if (kvBytesPerToken === undefined || kvBytesPerToken <= 0)
   {
     return nativeContext
@@ -128,7 +114,7 @@ export function computeMemoryCappedContext(inputs: BudgetInputs): number
   return roundDownToGranularity(capped)
 }
 
-// resolve the pinned num_ctx from live model metadata & local config
+// resolve the pinned context window from model metadata and local config
 export async function resolvePinnedContextWindow(
   deps: ContextWindowResolverDependencies,
   signal?: AbortSignal
@@ -161,8 +147,7 @@ export async function resolvePinnedContextWindow(
     kvBytesPerToken: estimateKvBytesPerToken(info),
   })
 
-  // floor the budget (incl. a too-small user override) at MIN_NUM_CTX, then
-  // clamp to native so a tiny-context model is never pinned above its window
+  // enforce the minimum and native bounds after applying the user ceiling
   const budget = Math.min(memoryCap, maxNumCtx ?? Number.POSITIVE_INFINITY)
   const contextWindow = Math.min(nativeContext, Math.max(MIN_NUM_CTX, budget))
 
@@ -175,14 +160,14 @@ export async function resolvePinnedContextWindow(
   }
 }
 
-// round down to the ctx granularity, but never below the granularity itself
+// round down to the context granularity without rounding small values to zero
 function roundDownToGranularity(value: number): number
 {
   if (value <= NUM_CTX_GRANULARITY) return value
   return Math.floor(value / NUM_CTX_GRANULARITY) * NUM_CTX_GRANULARITY
 }
 
-// look up active model weight size; unknown means "ignore weights"
+// look up active model weight size, treating unknown sizes as zero
 async function resolveModelWeightBytes(
   model: string,
   listModels: (signal?: AbortSignal) => Promise<Model[]>,

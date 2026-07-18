@@ -1,7 +1,12 @@
 // src/tools/catalog.ts
-// immutable active tools & trusted built-in security registration
+// immutable active tools and trusted built-in security registration
 
 import type { OllamaTool } from '../types/inference.js'
+import { ellipsize } from '../utils/ellipsize.js'
+import {
+  sanitizeUntrustedText,
+  stringifyForDisplay,
+} from '../utils/untrusted-text.js'
 import { normalizeToolName } from '../utils/tool-name.js'
 import {
   estimateOllamaToolTokens,
@@ -37,6 +42,9 @@ export interface ToolCapabilityProfile
 }
 
 export const UNKNOWN_TOOL_DEFAULT_POLICY: DefaultToolPolicy = 'require_approval'
+const MAX_PRESENTATION_LABEL_CHARS = 256
+const MAX_PRESENTATION_SUMMARY_CHARS = 8_000
+const PRESENTATION_SUMMARY_TRUNCATION = '… [tool argument summary truncated]'
 
 // host-owned security metadata; dynamic tools never extend this registration
 const REGISTRATIONS: BuiltInToolRegistration[] = [
@@ -128,7 +136,7 @@ export function getBuiltInToolRegistration(
   return registrationByName.get(name)
 }
 
-// fail closed when the executable built-in view & security metadata drift
+// fail closed when the executable built-in view and security metadata drift
 export function assertBuiltInToolsRegistered(tools: readonly Tool[]): void
 {
   const names = tools.map((tool) => tool.name)
@@ -227,6 +235,28 @@ function snapshotTool(tool: Tool): Tool
   return Object.freeze(snapshot)
 }
 
+function sanitizePresentationText(text: string, maxChars: number): string
+{
+  return ellipsize(
+    sanitizeUntrustedText(text).replace(/\s+/g, ' ').trim(),
+    maxChars
+  )
+}
+
+function fallbackSummary(args: Record<string, unknown>): string
+{
+  return ellipsize(sanitizeUntrustedText(stringifyForDisplay(args)).trim(), 60)
+}
+
+function sanitizePresentationSummary(text: string): string
+{
+  return ellipsize(
+    sanitizeUntrustedText(text).trim(),
+    MAX_PRESENTATION_SUMMARY_CHARS,
+    PRESENTATION_SUMMARY_TRUNCATION
+  )
+}
+
 export class ToolCatalog
 {
   readonly tools: readonly Tool[]
@@ -313,12 +343,47 @@ export class ToolCatalog
     return this.profilesByName.get(name)
   }
 
-  presentationFor(name: string): ToolCallPresentation | undefined
+  presentationFor(
+    name: string,
+    args: Record<string, unknown> = {}
+  ): ToolCallPresentation | undefined
   {
     const profile = this.getProfile(name)
-    if (profile?.source !== 'dynamic') return undefined
+    const tool = this.get(name)
+    if (!profile || !tool) return undefined
 
-    const tool = this.get(name)!
-    return { label: tool.display?.label ?? name, mcp: true }
+    let summary = fallbackSummary(args)
+    let customSummary = false
+    try
+    {
+      const summarizeArgs = cloneFrozenJson(args)
+      const value = tool.display?.summarize?.(summarizeArgs)
+      if (typeof value === 'string')
+      {
+        summary = value
+        customSummary = true
+      }
+    }
+    catch
+    {
+      // keep the fail-safe serialized summary when custom display code fails
+    }
+
+    const displayLabel = sanitizePresentationText(
+      tool.display?.label ?? '',
+      MAX_PRESENTATION_LABEL_CHARS
+    )
+    const nameLabel = sanitizePresentationText(
+      name,
+      MAX_PRESENTATION_LABEL_CHARS
+    )
+
+    return Object.freeze({
+      label: displayLabel || nameLabel || 'tool',
+      summary: customSummary
+        ? sanitizePresentationSummary(summary)
+        : fallbackSummary(args),
+      mcp: profile.source === 'dynamic',
+    })
   }
 }

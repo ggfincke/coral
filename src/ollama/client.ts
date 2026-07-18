@@ -1,5 +1,5 @@
 // src/ollama/client.ts
-// Ollama REST API client w/ streaming chat
+// streaming chat client for the Ollama REST API
 
 import type {
   ChatRequest,
@@ -62,8 +62,8 @@ function wireToolCall(call: OllamaToolCall): OllamaToolCall
   return projected
 }
 
-// independently reconstruct the transport shape so persisted/ui-only message
-// fields cannot cross the final fetch boundary through a structural type cast
+// reconstruct the transport shape so persisted and UI-only fields cannot cross
+// the final fetch boundary through a structural cast
 function wireMessage(message: ChatMessage): ModelRequestMessage
 {
   const projected: ModelRequestMessage = {
@@ -121,7 +121,7 @@ function numAt(info: Record<string, unknown>, key: string): number | undefined
   return typeof val === 'number' ? val : undefined
 }
 
-// fall back to any *.context_length key, skipping training-time/original caps
+// fall back to a context_length key while skipping training-time caps
 function scanContextLength(info: Record<string, unknown>): number
 {
   for (const [key, val] of Object.entries(info))
@@ -150,25 +150,24 @@ export class OllamaClient
     this.baseUrl = normalizeOllamaHost(baseUrl)
   }
 
-  // decide whether the server rejected the think field specifically
+  // identify whether the server rejected the think field specifically
   private shouldRetryWithoutThink(status: number, errorText: string): boolean
   {
     if (!THINK_FALLBACK_STATUS.has(status)) return false
 
     const normalized = errorText.toLowerCase()
-    // only retry when the error clearly references the think field
+    // retry only when the error clearly references the think field
     return normalized.includes('think') || normalized.includes('unknown field')
   }
 
-  // build a /api/chat payload while optionally omitting think
+  // build a /api/chat payload and optionally omit think
   private buildChatBody(
     request: ChatRequest,
     includeThink: boolean
   ): Record<string, unknown>
   {
-    // ! never add a `format` field to tool-bearing requests — it silently
-    // ! empties tool_calls (ollama#8095)
-    // num_ctx is a top-level convenience field — Ollama expects it under options
+    // ! never add `format` to tool-bearing requests because Ollama drops tool_calls
+    // place num_ctx under options because the top-level field is only a convenience
     const body: Record<string, unknown> = {
       model: request.model,
       messages: request.messages.map(wireMessage),
@@ -199,21 +198,19 @@ export class OllamaClient
     return body
   }
 
-  // read cached think capability for a specific model
+  // read cached think capability for one model
   private getThinkSupport(model: string): ThinkSupport
   {
     return this.thinkSupportByModel.get(model) ?? 'unknown'
   }
 
-  // record think capability for a specific model
+  // cache think capability for one model
   private setThinkSupport(model: string, support: ThinkSupport): void
   {
     this.thinkSupportByModel.set(model, support)
   }
 
-  // POST a chat body, mapping connection failures to an actionable message
-  // undici surfaces a dropped socket (server down, OOM, oversized request) as a
-  // bare "fetch failed", so translate it while letting aborts propagate as-is
+  // post a chat body and translate dropped-socket failures into an actionable error
   private async chatFetch(
     body: Record<string, unknown>,
     signal?: AbortSignal
@@ -239,7 +236,7 @@ export class OllamaClient
     }
   }
 
-  // fetch a non-streaming JSON endpoint w/ shared error handling
+  // fetch a non-streaming JSON endpoint with shared error handling
   private async jsonRequest<T>(
     path: string,
     options: JsonRequestOptions = {}
@@ -271,7 +268,7 @@ export class OllamaClient
     return (await res.json()) as T
   }
 
-  // open a chat stream & fall back when think is unsupported
+  // open a chat stream and fall back when think is unsupported
   private async postChat(
     request: ChatRequest,
     signal?: AbortSignal
@@ -322,7 +319,7 @@ export class OllamaClient
     return retry
   }
 
-  // remember the active model for callers that later choose explicit eviction
+  // remember the active model for explicit eviction callers
   startKeepAlive(model: string): void
   {
     this.lastModel = model
@@ -349,7 +346,7 @@ export class OllamaClient
     }
     catch
     {
-      // swallow — explicit host eviction is best-effort
+      // ignore best-effort eviction failures
     }
     finally
     {
@@ -360,7 +357,7 @@ export class OllamaClient
     }
   }
 
-  // fetch model details (context window, KV dims, etc.) from the Ollama instance
+  // fetch model details such as context window and KV dimensions
   async showModel(model: string, signal?: AbortSignal): Promise<ModelInfo>
   {
     const data = await this.jsonRequest<{
@@ -374,15 +371,14 @@ export class OllamaClient
         ? (info['general.architecture'] as string)
         : undefined
 
-    // prefer the exact arch-keyed value so we don't pick up training-time caps
-    // like mistral3.rope.scaling.original_context_length
+    // prefer the architecture-specific value so training-time caps are ignored
     let contextLength = (arch && numAt(info, `${arch}.context_length`)) || 0
     if (contextLength === 0)
     {
       contextLength = scanContextLength(info)
     }
 
-    // fallback: parse from parameters string (e.g., "num_ctx 8192")
+    // fall back to the parameters string when metadata omits the value
     if (contextLength === 0 && data.parameters)
     {
       const match = data.parameters.match(/num_ctx\s+(\d+)/)
@@ -528,7 +524,7 @@ export class OllamaClient
     return data.embeddings
   }
 
-  // stream chat completions via ndjson
+  // stream chat completions via NDJSON
   async *chatStream(
     request: ChatRequest,
     signal?: AbortSignal
@@ -539,7 +535,7 @@ export class OllamaClient
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
-    // collect partial-line chunks in an array to avoid O(n²) string concat
+    // collect partial-line chunks to avoid repeated string concatenation
     const remainderParts: string[] = []
 
     try

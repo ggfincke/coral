@@ -1,5 +1,5 @@
 // tests/fixtures/persistence-worker.ts
-// IPC-gated persistence operations for deterministic multiwriter tests
+// run IPC-gated persistence operations for deterministic multiwriter tests
 
 import { appendHistoryEntry } from '../../src/tui/prompt/input-history.js'
 import { ProjectIndexer } from '../../src/retrieval/indexer.js'

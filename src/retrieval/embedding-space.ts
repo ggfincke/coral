@@ -1,5 +1,5 @@
 // src/retrieval/embedding-space.ts
-// stable Ollama embedding-space identity & drift checks
+// embedding-space identity and drift checks for Ollama
 
 import { createHash } from 'node:crypto'
 import type { OllamaClient, OllamaModelArtifact } from '../ollama/client.js'
@@ -38,7 +38,7 @@ function artifactDigest(value: unknown): string
   return normalized
 }
 
-// validate deserialized spaces before they can select an on-disk cache
+// validate a deserialized space before it selects an on-disk cache
 export function assertEmbeddingSpace(space: EmbeddingSpace): void
 {
   if (typeof space?.id !== 'string' || !SHA256_HEX.test(space.id))

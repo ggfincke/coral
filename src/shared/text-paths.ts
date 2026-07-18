@@ -1,5 +1,5 @@
 // src/shared/text-paths.ts
-// path-level text-file heuristics for project discovery
+// text-file path heuristics
 
 const BINARY_EXTENSIONS = new Set([
   'png',
@@ -52,8 +52,8 @@ const BINARY_EXTENSIONS = new Set([
   'db',
 ])
 
-// true unless the path has a known-binary extension; extensionless files
-// (Makefile, LICENSE) & text formats (incl. .svg) pass
+// accept paths without known binary extensions, including extensionless files
+// such as Makefile and LICENSE and text formats such as .svg
 export function isLikelyTextPath(path: string): boolean
 {
   const base = path.slice(path.lastIndexOf('/') + 1)

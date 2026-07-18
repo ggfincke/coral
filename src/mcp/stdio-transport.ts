@@ -1,5 +1,5 @@
 // src/mcp/stdio-transport.ts
-// carry bounded stdio JSON-RPC messages w/o cumulative buffer copies
+// bounded stdio JSON-RPC transport
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { PassThrough, type Stream } from 'node:stream'
@@ -25,7 +25,7 @@ interface CoralStdioServerParameters
   cwd: string
 }
 
-// retain pipe chunks until one complete line is available, then copy once
+// retain pipe chunks until a complete line is available, then copy once
 class JsonLineBuffer
 {
   private chunks: Buffer[] = []
@@ -100,7 +100,7 @@ class JsonLineBuffer
   }
 }
 
-// mirror the SDK stdio lifecycle while keeping message buffering bounded
+// match the SDK stdio lifecycle while bounding message buffers
 export class CoralStdioClientTransport implements Transport
 {
   private readonly params: CoralStdioServerParameters
@@ -178,7 +178,7 @@ export class CoralStdioClientTransport implements Transport
       }
       catch
       {
-        // the process may already have closed its input
+        // ignore a close race when stdin is already closed
       }
 
       await Promise.race([closed, this.closeDelay()])
@@ -190,7 +190,7 @@ export class CoralStdioClientTransport implements Transport
         }
         catch
         {
-          // the process may have exited between the check & signal
+          // ignore a close race between the check and signal
         }
         await Promise.race([closed, this.closeDelay()])
       }
@@ -202,7 +202,7 @@ export class CoralStdioClientTransport implements Transport
         }
         catch
         {
-          // the process may have exited between the check & signal
+          // ignore a close race between the check and signal
         }
       }
     }

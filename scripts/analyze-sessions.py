@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # scripts/analyze-sessions.py
-# report on Coral session & history artifacts
+# report on Coral session and history artifacts
 
 from pathlib import Path
 import sys

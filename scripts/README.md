@@ -10,9 +10,9 @@ TypeScript language server and remains compatible with `typescript-eslint`.
 
 ## Dev tools
 
-These scripts are dev-only and run through `uv` with Python 3.14 from
-`.python-version`. Shared script code lives under `scripts/lib/`; it does not
-participate in the shipped Node runtime.
+These scripts are dev-only. Python maintenance tools run through `uv` with
+Python 3.14 from `.python-version`; repository gates use Node. Shared script
+code lives under `scripts/lib/`; it does not participate in the shipped runtime.
 
 ```bash
 npm run check:dev-tools
@@ -25,8 +25,9 @@ npm run reference:inventory
 `check:dev-tools` compiles the Python dev-tool sources, runs focused dev-tool
 regressions, and checks analyzer constants against runtime policy defaults.
 `check:architecture` resolves local TypeScript imports and enforces Coral's
-runtime-cycle, application-entry, subsystem-direction, lazy-MCP, and ambient-cwd
-boundaries.
+runtime-cycle, application-entry, subsystem-direction, I/O-free Agent state,
+App-only TUI adapter composition, ranked/pure session layers, lazy MCP ingress
+and SDK/AJV containment, and ambient-cwd boundaries.
 `typecheck:scripts` typechecks the TypeScript eval and benchmark entrypoints.
 
 Direct invocations are also supported:

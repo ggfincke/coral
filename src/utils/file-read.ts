@@ -1,5 +1,5 @@
 // src/utils/file-read.ts
-// text-file read helpers w/ explicit safety modes
+// text-file read helpers with explicit safety modes
 
 import { readFile, stat } from 'node:fs/promises'
 import { resolvePath } from '../cwd.js'

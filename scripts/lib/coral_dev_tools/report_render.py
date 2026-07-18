@@ -1,5 +1,5 @@
 # scripts/lib/coral_dev_tools/report_render.py
-# shared Counter -> text/markdown rendering for the dev report scripts
+# render Counter values as text and Markdown reports for dev scripts
 
 from __future__ import annotations
 

@@ -5,11 +5,11 @@ import { strict as assert } from 'node:assert'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { subagentTools } from '../../src/tools/index.js'
+import { subagentTools } from '../../src/tools/registry.js'
 import {
   STALL_NUDGE_MESSAGE,
   MAX_STALL_NUDGES,
-} from '../../src/agent/repair.js'
+} from '../../src/agent/loop/response-repair.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 import {
   makeFakeAgent,

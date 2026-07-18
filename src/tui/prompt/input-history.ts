@@ -1,5 +1,5 @@
 // src/tui/prompt/input-history.ts
-// persistent input history w/ JSONL storage & navigation state machine
+// persistent input history with JSONL storage and navigation state machine
 
 import {
   closeSync,
@@ -163,8 +163,8 @@ export function appendHistoryEntry(entry: HistoryEntry): void
 {
   const path = historyPath()
   ensureParentDir(path)
-  // begin every record w/ a delimiter so a crash-truncated tail cannot absorb
-  // the next successful append into one corrupt JSONL row
+  // begin every record with a delimiter so a crash-truncated tail cannot absorb
+  // the next append into one corrupt JSONL row
   const record = Buffer.from(`\n${JSON.stringify(entry)}\n`, 'utf-8')
   const fd = openSync(
     path,
@@ -174,7 +174,7 @@ export function appendHistoryEntry(entry: HistoryEntry): void
 
   try
   {
-    // repair history created by older versions under a permissive umask
+    // repair a history file created under a permissive umask
     if (process.platform !== 'win32') fchmodSync(fd, 0o600)
 
     const written = writeSync(fd, record, 0, record.length)

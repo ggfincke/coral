@@ -9,8 +9,8 @@ import {
   type ActivePrompt,
   type InteractiveLifetimeAgent,
 } from '../../src/tui/session/interactive-runtime.js'
-import { resolveStartupSession } from '../../src/tui/hooks/use-interactive-session.js'
-import type { SessionMeta } from '../../src/session/store.js'
+import { resolveStartupSession } from '../../src/tui/session/agent-session.js'
+import type { SessionMeta } from '../../src/session/types.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import { makeSessionMeta } from '../helpers/session.js'
 import { makeTempDirPool } from '../helpers/temp.js'

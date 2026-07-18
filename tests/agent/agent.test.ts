@@ -1,5 +1,5 @@
 // tests/agent/agent.test.ts
-// regression tests for the agent tool-use loop
+// test Agent tool-use loop contracts
 
 import { strict as assert } from 'node:assert'
 import { existsSync } from 'node:fs'
@@ -11,20 +11,21 @@ import {
   estimateOllamaToolTokens,
   type Tool,
   type ToolExecutionContext,
-} from '../../src/tools/index.js'
-import { AgentTodoState } from '../../src/agent/todo-state.js'
+} from '../../src/tools/tool.js'
+import { AgentTodoState } from '../../src/agent/state/todos.js'
 import {
   type ChatRequest,
   type OllamaMessage,
 } from '../../src/types/inference.js'
 import type { TodoItem } from '../../src/types/todo.js'
-import { GIT_CONTEXT_HEADING } from '../../src/agent/git-context.js'
-import type { CodeIntelService } from '../../src/lsp/client.js'
+import { GIT_CONTEXT_HEADING } from '../../src/agent/request/git-context.js'
+import type { CodeIntelService } from '../../src/lsp/contracts.js'
+import type { ToolCallPresentation } from '../../src/tools/tool.js'
 import {
   estimateTotalTokens,
   FROZEN_SUMMARY_MARKER,
-} from '../../src/agent/compaction.js'
-import { estimateRequestFramingTokens } from '../../src/agent/request-budget.js'
+} from '../../src/agent/state/compaction.js'
+import { estimateRequestFramingTokens } from '../../src/agent/request/projection.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../../src/utils/file-read.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 import { HAS_GIT, initTestRepo } from '../helpers/git.js'
@@ -104,6 +105,7 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
   ])
 
   const seenCalls: string[] = []
+  const seenPresentations: ToolCallPresentation[] = []
   const seenResults: string[] = []
   const seenThinking: string[] = []
 
@@ -114,9 +116,10 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
       {
         seenThinking.push(thinking)
       },
-      onToolCall(name)
+      onToolCall(name, _args, _callId, presentation)
       {
         seenCalls.push(name)
+        if (presentation) seenPresentations.push(presentation)
       },
       onToolResult(name, result, error)
       {
@@ -126,6 +129,10 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
   )
 
   assert.deepEqual(seenCalls, ['read_file', 'glob'])
+  assert.deepEqual(seenPresentations, [
+    { label: 'Read', summary: 'package.json', mcp: false },
+    { label: 'Glob', summary: 'src/**/*.ts', mcp: false },
+  ])
   assert.equal(seenResults.length, 2)
   assert.deepEqual(seenThinking, [
     'Inspect files. ',
@@ -153,6 +160,96 @@ test('Agent accumulates streamed tool calls, preserves thinking, & tags tool res
     toolMessages.map((message) => message.tool_name),
     ['read_file', 'glob']
   )
+})
+
+test('Agent snapshots custom tool presentation once for call and approval', async () =>
+{
+  const dir = await tempDir('coral-agent-presentation-')
+  let summaryPhase = 'initial'
+  let summaryCalls = 0
+  let executedArgs: Record<string, unknown> | undefined
+  let callPresentation: ToolCallPresentation | undefined
+  let approvalPresentation: ToolCallPresentation | undefined
+
+  const customTool: Tool = {
+    name: 'custom_fixture',
+    description: 'exercise custom presentation',
+    display: {
+      label: 'Custom Fixture',
+      summarize(args)
+      {
+        summaryCalls++
+        const nested = args.nested as { value: string }
+        try
+        {
+          nested.value = 'mutated'
+        }
+        catch
+        {
+          // the catalog intentionally supplies a frozen presentation clone
+        }
+        return `${summaryPhase}:${nested.value}`
+      },
+    },
+    parameters: {
+      type: 'object',
+      properties: { nested: { type: 'object' } },
+      required: ['nested'],
+    },
+    async execute(args)
+    {
+      executedArgs = args
+      return { output: 'ok' }
+    },
+  }
+  const { agent } = makeFakeAgent(
+    dir,
+    [
+      [
+        {
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                type: 'function',
+                function: {
+                  name: customTool.name,
+                  arguments: { nested: { value: 'original' } },
+                },
+              },
+            ],
+          },
+          done: true,
+        },
+      ],
+      [{ message: { role: 'assistant', content: 'done' }, done: true }],
+    ],
+    { tools: [customTool] }
+  )
+
+  await agent.run(
+    'use the custom tool',
+    makeAgentEvents({
+      onToolCall(_name, _args, _callId, presentation)
+      {
+        callPresentation = presentation
+        summaryPhase = 'changed'
+      },
+      onToolApproval(_name, _args, presentation)
+      {
+        approvalPresentation = presentation
+        return Promise.resolve(true)
+      },
+    })
+  )
+
+  assert.equal(summaryCalls, 1)
+  assert.ok(callPresentation)
+  assert.equal(Object.isFrozen(callPresentation), true)
+  assert.equal(callPresentation.summary, 'initial:original')
+  assert.equal(callPresentation, approvalPresentation)
+  assert.deepEqual(executedArgs, { nested: { value: 'original' } })
 })
 
 test('Agent undo and redo restore a tool-use turn with file edits', async () =>
@@ -912,7 +1009,7 @@ test('Agent.run keeps the accepted turn when context resolution aborts', async (
   await run
 
   // caller cancellation stops this run, but the shared lookup belongs to the
-  // Agent lifecycle so a later caller can still reuse it until model disposal
+  // agent lifecycle so a later caller can still reuse it until model disposal
   assert.equal(seenSignal?.aborted, false)
   // the accepted turn is recorded before cancelable bootstrap so the visible
   // & persisted transcripts agree after a cancel; no model request ran
@@ -1776,6 +1873,48 @@ test('Agent.switchModel adopts the new model without host eviction', async () =>
   // the next run targets the switched-in model, never the pre-switch one
   await agent.run('hello', makeAgentEvents())
   assert.equal(requestedModel, 'next-model')
+})
+
+test('a failed MCP retirement keeps the old model prompt and catalog aligned', async () =>
+{
+  const dir = await tempDir('coral-switch-retirement-failure-')
+  const dynamicTool: Tool = {
+    name: 'mcp__demo__ping',
+    description: 'ping the demo server',
+    parameters: { type: 'object', properties: {} },
+    async execute()
+    {
+      return { output: 'pong' }
+    },
+  }
+  const { agent } = makeFakeAgent(
+    dir,
+    [[{ message: { role: 'assistant', content: 'done' }, done: true }]],
+    {
+      mcp: true,
+      numCtx: 8_192,
+      mcpManagerFactory: async () => ({
+        async initialize()
+        {
+          return [dynamicTool]
+        },
+        getStatus: () => ({ configIssues: [], servers: [] }),
+        async dispose()
+        {
+          throw new Error('retirement failed')
+        },
+      }),
+    }
+  )
+
+  await agent.run('install the manager', makeAgentEvents())
+  assert.match(agent.getMessages()[0]!.content, /mcp__demo__ping/)
+
+  await assert.rejects(agent.switchModel('next-model'), /retirement failed/)
+  assert.equal(agent.getModel(), 'fake-model')
+  assert.doesNotMatch(agent.getMessages()[0]!.content, /mcp__demo__ping/)
+
+  await agent.dispose()
 })
 
 test('an aborted model switch leaves the old model and counters authoritative', async () =>

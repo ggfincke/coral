@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // src/cli/main.tsx
-// CLI entry point — parse args & render TUI
+// parse CLI args and render the TUI
 
 import { render } from 'ink'
 import { Command } from 'commander'
@@ -15,7 +15,7 @@ import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import {
   formatCliResumeError,
   formatCliSessionList,
-} from '../tui/shell/command-output.js'
+} from '../tui/commands/session-output.js'
 import { launchCliApp } from './app-launch.js'
 
 const require = createRequire(import.meta.url)
@@ -72,7 +72,7 @@ else
   }
 }
 
-// handle --sessions: list & exit
+// handle --sessions by listing sessions and exiting
 if (opts.sessions)
 {
   console.log(formatCliSessionList(listSessions()))

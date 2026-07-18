@@ -1,7 +1,7 @@
 // src/tui/prompt/prompt-edit.ts
 // apply readline-style edits for Coral's inline prompt
 
-import type { CoralKey } from '../hooks/use-coral-input.js'
+import type { CoralKey } from '../input/terminal-input.js'
 import { clamp } from '../../utils/clamp.js'
 
 const WORD_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' })

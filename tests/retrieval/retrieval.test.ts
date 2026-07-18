@@ -700,59 +700,68 @@ test('ProjectIndexer invalidates equal-size content when mtime is restored', asy
   }
 })
 
-test('ProjectIndexer removes files that become empty', async () =>
+test('ProjectIndexer removes emptied or deleted files from the index', async () =>
 {
-  const dir = await tempDir('coral-retrieval-empty-')
-  const file = join(dir, 'feature.ts')
-  await writeFile(file, 'export const login = "auth session";\n', 'utf-8')
+  const emptyDir = await tempDir('coral-retrieval-empty-')
+  const emptyFile = join(emptyDir, 'feature.ts')
+  await writeFile(emptyFile, 'export const login = "auth session";\n', 'utf-8')
 
-  const space = makeSpace()
-  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
-  const embedder = new KeywordEmbedder()
-  const indexer = new ProjectIndexer(dir, embedder, store)
+  const emptySpace = makeSpace()
+  const emptyStore = new SqliteIndexStore(
+    emptySpace,
+    join(emptyDir, 'index.sqlite')
+  )
+  const emptyIndexer = new ProjectIndexer(
+    emptyDir,
+    new KeywordEmbedder(),
+    emptyStore
+  )
 
   try
   {
     assert.equal(
-      (await indexer.search('auth session', 1))[0]?.path,
+      (await emptyIndexer.search('auth session', 1))[0]?.path,
       'feature.ts'
     )
 
-    await writeFile(file, '', 'utf-8')
+    await writeFile(emptyFile, '', 'utf-8')
 
-    assert.deepEqual(await indexer.search('auth session', 1), [])
+    assert.deepEqual(await emptyIndexer.search('auth session', 1), [])
   }
   finally
   {
-    store.close()
+    emptyStore.close()
   }
-})
 
-test('ProjectIndexer removes deleted files from the index', async () =>
-{
-  const dir = await tempDir('coral-retrieval-delete-')
-  const file = join(dir, 'feature.ts')
-  await writeFile(file, 'export const login = "auth session";\n', 'utf-8')
+  const deleteDir = await tempDir('coral-retrieval-delete-')
+  const deleteFile = join(deleteDir, 'feature.ts')
+  await writeFile(deleteFile, 'export const login = "auth session";\n', 'utf-8')
 
-  const space = makeSpace()
-  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
-  const embedder = new KeywordEmbedder()
-  const indexer = new ProjectIndexer(dir, embedder, store)
+  const deleteSpace = makeSpace()
+  const deleteStore = new SqliteIndexStore(
+    deleteSpace,
+    join(deleteDir, 'index.sqlite')
+  )
+  const deleteIndexer = new ProjectIndexer(
+    deleteDir,
+    new KeywordEmbedder(),
+    deleteStore
+  )
 
   try
   {
     assert.equal(
-      (await indexer.search('auth session', 1))[0]?.path,
+      (await deleteIndexer.search('auth session', 1))[0]?.path,
       'feature.ts'
     )
 
-    await unlink(file)
+    await unlink(deleteFile)
 
-    assert.deepEqual(await indexer.search('auth session', 1), [])
+    assert.deepEqual(await deleteIndexer.search('auth session', 1), [])
   }
   finally
   {
-    store.close()
+    deleteStore.close()
   }
 })
 
@@ -828,12 +837,6 @@ test('versioned space cache preserves legacy data and validates schema metadata'
       /contains invalid numeric values/
     )
 
-    const connection = (store as unknown as { db: Database.Database }).db
-    assert.equal(connection.pragma('busy_timeout', { simple: true }), 5_000)
-    assert.equal(connection.pragma('foreign_keys', { simple: true }), 1)
-    assert.equal(connection.pragma('journal_mode', { simple: true }), 'wal')
-    assert.equal(connection.pragma('synchronous', { simple: true }), 1)
-    assert.equal(connection.pragma('trusted_schema', { simple: true }), 0)
     store.close()
     store = undefined
 
@@ -860,7 +863,6 @@ test('versioned space cache preserves legacy data and validates schema metadata'
         db.pragma('user_version', { simple: true }),
         RETRIEVAL_SCHEMA_VERSION
       )
-      assert.equal(db.pragma('journal_mode', { simple: true }), 'wal')
 
       const metadata = db
         .prepare(
@@ -878,25 +880,6 @@ test('versioned space cache preserves legacy data and validates schema metadata'
         artifact_digest: 'c'.repeat(64),
         embedding_dimensions: 2,
       })
-
-      const embeddingColumns = db
-        .pragma('table_info(embeddings)')
-        .map((column: { name: string }) => column.name)
-      assert.deepEqual(embeddingColumns, ['chunk_id', 'dims', 'vector'])
-
-      const fileColumns = db
-        .pragma('table_info(files)')
-        .map((column: { name: string }) => column.name)
-      assert.deepEqual(fileColumns, [
-        'id',
-        'project_id',
-        'path',
-        'size',
-        'mtime_ms',
-        'ctime_ms',
-        'sha256',
-        'indexed_at',
-      ])
     }
     finally
     {

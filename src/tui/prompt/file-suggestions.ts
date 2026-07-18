@@ -3,11 +3,10 @@
 
 import { collectProjectFiles } from '../../shared/project-files.js'
 import { isLikelyTextPath } from '../../shared/text-paths.js'
-export { isLikelyTextPath } from '../../shared/text-paths.js'
 
 const MAX_SUGGESTION_FILES = 5_000
 
-// collect ignore-aware text-ish paths w/o reading file contents
+// collect ignore-aware text-like paths without reading file contents
 export async function collectProjectFileSuggestions(
   cwd: string,
   signal?: AbortSignal
@@ -21,6 +20,3 @@ export async function collectProjectFileSuggestions(
   signal?.throwIfAborted()
   return files.map((file) => file.path)
 }
-
-// retain the original collector name for framework-neutral callers
-export const listProjectFiles = collectProjectFileSuggestions

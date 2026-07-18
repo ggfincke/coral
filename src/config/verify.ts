@@ -9,7 +9,7 @@ export interface VerifyConfig
   enabled: boolean
 }
 
-// resolve the per-Agent verification setting w/o coercing malformed values
+// resolve the per-Agent verification setting without coercing malformed values
 export function resolveVerifyConfig(cwd: string): VerifyConfig
 {
   const raw = loadProjectConfig(cwd).verify

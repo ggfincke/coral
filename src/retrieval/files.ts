@@ -61,7 +61,7 @@ async function readSourceFile(
   }
 }
 
-// stat-first walk: files passing isCurrent are never read or hashed
+// use metadata first so current files are not read or hashed
 export async function collectIndexableFiles(
   cwd: string,
   isCurrent: (file: ProjectFileStat) => boolean
@@ -70,8 +70,7 @@ export async function collectIndexableFiles(
   const changed: SourceFile[] = []
   const unchangedPaths: string[] = []
 
-  // lazy walk: stop once MAX_PROJECT_FILES are accepted (a binary file w/ a
-  // text extension is dropped by readSourceFile & must not consume a slot)
+  // stop after the project-file limit; binary content does not consume a slot
   for await (const file of iterateProjectFiles(cwd, {
     maxFileBytes: MAX_INDEXABLE_FILE_BYTES,
     ignoredEntries: RETRIEVAL_IGNORED_ENTRIES,
@@ -93,7 +92,7 @@ export async function collectIndexableFiles(
   return { changed, unchangedPaths }
 }
 
-// verify bytes through one file descriptor immediately before persistence
+// revalidate bytes through one descriptor immediately before persistence
 export async function revalidateSourceFile(
   cwd: string,
   source: SourceFile

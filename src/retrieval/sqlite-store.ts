@@ -1,5 +1,5 @@
 // src/retrieval/sqlite-store.ts
-// versioned per-embedding-space SQLite semantic index
+// versioned SQLite semantic index per embedding space
 
 import Database from 'better-sqlite3'
 import { chmodSync } from 'node:fs'
@@ -518,7 +518,6 @@ export class SqliteIndexStore implements IndexStore
     }
   }
 
-  // current timestamp for row created_at/updated_at columns
   private now(): string
   {
     return new Date().toISOString()

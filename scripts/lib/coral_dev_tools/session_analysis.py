@@ -1,5 +1,5 @@
 # scripts/lib/coral_dev_tools/session_analysis.py
-# parse Coral session stores & build aggregate reports
+# parse Coral session stores and build aggregate reports
 
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ from .report_render import render_counter, render_counter_md
 
 JsonObject = dict[str, Any]
 
-# ! keep in sync w/ src/utils/limits.ts CHARS_PER_TOKEN
+# keep the token estimate aligned with src/utils/limits.ts CHARS_PER_TOKEN
 CHARS_PER_TOKEN = 4
 SESSION_FILE_PATTERN = re.compile(r"^[0-9a-f]{8}\.json$")
-# ! checked against the runtime catalog by scripts/check-dev-tools.mjs
+# keep this policy aligned with the runtime catalog via scripts/check-dev-tools.mjs
 DEFAULT_UNKNOWN_TOOL_POLICY = "require_approval"
 DEFAULT_ALWAYS_ALLOWED_TOOLS = {
     "code_intel",

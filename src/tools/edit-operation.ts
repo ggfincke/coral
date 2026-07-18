@@ -1,8 +1,7 @@
 // src/tools/edit-operation.ts
-// pure edit_file transformation & miss diagnosis
+// apply edit preconditions and compute the post-edit string
 
-// edit_file's pure mutation: validates preconditions & computes the post-edit
-// string. shared by editTool.execute & the approval preview so they can't drift
+// share this transformation between editTool.execute and the approval preview
 export type ApplyEditResult =
   | { ok: true; after: string; count: number; matchType: 'exact' | 'fuzzy' }
   | {
@@ -11,21 +10,21 @@ export type ApplyEditResult =
       count: number
     }
 
-// leading whitespace (spaces/tabs) of a line — used to re-base fuzzy matches
+// capture a line's leading whitespace for fuzzy-match re-basing
 function leadingWhitespace(line: string): string
 {
   const match = line.match(/^[ \t]*/)
   return match ? match[0] : ''
 }
 
-// per-line key for whitespace-tolerant matching: drop a trailing CR & trim both
-// ends, so indentation / trailing-space / CRLF drift can't block a match
+// normalize a line for whitespace-tolerant matching by dropping a trailing CR and
+// trimming both ends
 function editLineKey(line: string): string
 {
   return line.replace(/\r$/, '').trim()
 }
 
-// split into content lines, dropping the trailing '' a final newline produces
+// split into content lines and drop the trailing '' from a final newline
 // (it's a boundary, not a line to match or replace)
 function contentLines(text: string): string[]
 {
@@ -34,9 +33,8 @@ function contentLines(text: string): string[]
   return lines
 }
 
-// re-base a genuinely new/changed replacement line onto the file's indent,
-// preserving the line's own relative indentation. shift columns by the file-vs-
-// old base delta; unchanged lines never reach here (they reuse the file verbatim)
+// re-base a changed replacement line onto the file's indentation while preserving
+// its relative indentation; unchanged lines reuse the file verbatim
 function reindentNewLine(
   line: string,
   oldIndent: string,
@@ -53,12 +51,8 @@ function reindentNewLine(
   return unit.repeat(cols) + body
 }
 
-// whitespace-tolerant fallback for applyEdit: match old_string as a block of
-// lines compared by editLineKey, then splice in new_string. an unchanged line is
-// re-emitted from the file verbatim (its real indent & line ending survive); only
-// changed/new lines get re-indented. refuses an ambiguous match (returns null) so
-// a loose match can't hit the wrong block. null = no confident match; caller
-// keeps the exact 'not_found'
+// match an edit block by normalized lines, preserving unchanged file text and
+// refusing ambiguous matches
 function applyFuzzyEdit(
   before: string,
   oldString: string,
@@ -68,18 +62,16 @@ function applyFuzzyEdit(
 {
   const beforeLines = before.split('\n')
   const oldLines = contentLines(oldString)
-  // an empty new_string is a deletion — drop the block, don't leave a blank line
-  // (contentLines('') would yield [''] & splice a stray line in)
+  // treat an empty replacement as deletion instead of splicing a stray blank line
   const newLines = newString === '' ? [] : contentLines(newString)
   if (oldLines.length === 0) return null
 
   const oldKeys = oldLines.map(editLineKey)
-  // an all-blank old_string has no content to anchor on — it would match any
-  // blank-line run. refuse so the caller reports not_found instead of injecting
+  // reject an all-blank old_string because it can match any blank-line run
   if (oldKeys.every((key) => key === '')) return null
 
-  // collect non-overlapping block matches (mirrors String.replaceAll's
-  // non-overlap so overlapping splices can't clobber each other)
+  // collect non-overlapping block matches so overlapping splices cannot clobber
+  // one another
   const starts: number[] = []
   let prevEnd = -1
   for (let i = 0; i + oldLines.length <= beforeLines.length; i++)
@@ -106,15 +98,15 @@ function applyFuzzyEdit(
   const targets = replaceAll ? starts : [starts[0]]
   const oldIndent = leadingWhitespace(oldLines[0])
   const result = beforeLines.slice()
-  // splice from last to first so earlier indices stay valid
+  // splice from last to first so earlier indices remain valid
   for (let k = targets.length - 1; k >= 0; k--)
   {
     const start = targets[k]
     const fileLines = beforeLines.slice(start, start + oldLines.length)
     const fileIndent = leadingWhitespace(fileLines[0])
     const useCrlf = fileLines.some((line) => line.endsWith('\r'))
-    // map an unchanged line (by normalized key) back to its exact file text so
-    // its real indentation & line ending survive verbatim
+    // map unchanged lines back to their exact file text so indentation and line
+    // endings survive verbatim
     const keyToFileLine = new Map<string, string>()
     for (let j = 0; j < oldLines.length; j++)
     {
@@ -135,7 +127,7 @@ function applyFuzzyEdit(
   }
 
   const after = result.join('\n')
-  // a whitespace-only no-op isn't a real edit — let the caller report a miss
+  // report whitespace-only no-ops as misses
   if (after === before) return null
   return { after, count: targets.length }
 }
@@ -152,7 +144,7 @@ export function applyEdit(
   {
     return { ok: false, reason: 'identical', count: 0 }
   }
-  // non-overlapping occurrence count
+  // count non-overlapping occurrences
   const count = before.split(oldString).length - 1
   if (count > 1 && !replaceAll) return { ok: false, reason: 'multiple', count }
   if (count >= 1)
@@ -162,8 +154,7 @@ export function applyEdit(
       : before.replace(oldString, newString)
     return { ok: true, after, count, matchType: 'exact' }
   }
-  // exact miss: try a whitespace-tolerant block match before giving up, so a
-  // weak model that drifted indentation/trailing-space can still land the edit
+  // try a whitespace-tolerant block match after an exact miss
   const fuzzy = applyFuzzyEdit(before, oldString, newString, replaceAll)
   if (fuzzy)
   {
@@ -177,8 +168,7 @@ export function applyEdit(
   return { ok: false, reason: 'not_found', count: 0 }
 }
 
-// short, honest hint for an edit_file miss (after fuzzy matching also failed):
-// point at where old_string's first line does or doesn't appear in the file
+// describe the first-line mismatch after exact and fuzzy matching fail
 export function describeEditMiss(before: string, oldString: string): string
 {
   const lines = contentLines(oldString)

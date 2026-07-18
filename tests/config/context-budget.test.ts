@@ -148,24 +148,9 @@ test('the KV budget never exceeds the native window on a roomy host', () =>
   assert.equal(ctx, 32_768)
 })
 
-test('resolveContextConfig returns no override when unset', async () =>
-{
-  await withNumCtx(undefined, () =>
-  {
-    assert.deepEqual(resolveContextConfig(process.cwd()), {})
-  })
-})
-
-test('resolveContextConfig honors the env override', async () =>
-{
-  await withNumCtx('65536', () =>
-  {
-    assert.equal(resolveContextConfig(process.cwd()).maxNumCtx, 65_536)
-  })
-})
-
 test('resolveContextConfig validates project shape before applying precedence', async () =>
 {
+  const emptyCwd = await tempProject()
   const malformedCwd = await tempProject()
   const validCwd = await tempProject()
   await writeFile(
@@ -181,11 +166,13 @@ test('resolveContextConfig validates project shape before applying precedence', 
 
   await withNumCtx(undefined, () =>
   {
+    assert.deepEqual(resolveContextConfig(emptyCwd), {})
     assert.deepEqual(resolveContextConfig(malformedCwd), {})
     assert.deepEqual(resolveContextConfig(validCwd), { maxNumCtx: 32_768 })
   })
   await withNumCtx('65536', () =>
   {
+    assert.equal(resolveContextConfig(emptyCwd).maxNumCtx, 65_536)
     assert.deepEqual(resolveContextConfig(validCwd), { maxNumCtx: 65_536 })
   })
 })

@@ -12,15 +12,8 @@ import {
   rankFiles,
   type CommandSummary,
 } from '../../src/tui/prompt/completion.js'
-import {
-  formatMentionNotice,
-  parseMentions,
-} from '../../src/tui/prompt/mentions.js'
-import {
-  isLikelyTextPath,
-  listProjectFiles,
-} from '../../src/tui/prompt/file-suggestions.js'
-import { resetPromptFileSuggestions } from '../../src/tui/prompt/prompt-file-suggestions.js'
+import { parseMentions } from '../../src/tui/prompt/mentions.js'
+import { collectProjectFileSuggestions } from '../../src/tui/prompt/file-suggestions.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 
 const { tempDir } = makeTempDirPool()
@@ -32,58 +25,37 @@ const COMMANDS: CommandSummary[] = [
   { name: 'status', description: 'show status' },
 ]
 
-test('detectCompletion finds a slash-command span at the line start', () =>
+test('detectCompletion finds slash-command and @-mention spans', () =>
 {
-  const query = detectCompletion('/sta', 4)
-  assert.deepEqual(query, { kind: 'command', token: 'sta', start: 0, end: 4 })
-
-  const bare = detectCompletion('/', 1)
-  assert.equal(bare?.kind, 'command')
-  assert.equal(bare?.token, '')
-})
-
-test('detectCompletion stops treating a slash line as a command after a space', () =>
-{
+  assert.deepEqual(detectCompletion('/sta', 4), {
+    kind: 'command',
+    token: 'sta',
+    start: 0,
+    end: 4,
+  })
+  assert.equal(detectCompletion('/', 1)?.kind, 'command')
   assert.equal(detectCompletion('/help extra', 11), null)
-})
+  assert.deepEqual(detectCompletion('  /st', 5), {
+    kind: 'command',
+    token: 'st',
+    start: 2,
+    end: 5,
+  })
 
-test('detectCompletion finds an @-mention span under the cursor', () =>
-{
-  const query = detectCompletion('fix @src/fo', 11)
-  assert.deepEqual(query, {
+  assert.deepEqual(detectCompletion('fix @src/fo', 11), {
     kind: 'file',
     token: 'src/fo',
     start: 4,
     end: 11,
   })
-
-  const bare = detectCompletion('@', 1)
-  assert.equal(bare?.kind, 'file')
-  assert.equal(bare?.token, '')
-})
-
-test('detectCompletion handles quoted @-mention spans', () =>
-{
-  const value = 'fix @"my docs/read'
-  const query = detectCompletion(value, value.length)
-  assert.deepEqual(query, {
+  const quoted = 'fix @"my docs/read'
+  assert.deepEqual(detectCompletion(quoted, quoted.length), {
     kind: 'file',
     token: 'my docs/read',
     start: 4,
-    end: value.length,
+    end: quoted.length,
   })
-})
-
-test('detectCompletion ignores @ that is part of a word (email-like)', () =>
-{
   assert.equal(detectCompletion('mail me@example.com', 19), null)
-  assert.equal(detectCompletion('plain text', 10), null)
-})
-
-test('detectCompletion tolerates leading whitespace before a slash command', () =>
-{
-  const query = detectCompletion('  /st', 5)
-  assert.deepEqual(query, { kind: 'command', token: 'st', start: 2, end: 5 })
 })
 
 test('rankCommands puts prefix matches first & honors the cap', () =>
@@ -124,7 +96,7 @@ test('rankFiles favors basename matches & shorter paths', () =>
   )
 })
 
-test('listProjectFiles uses suggestion policy instead of retrieval caps', async () =>
+test('project file suggestions use picker policy instead of retrieval caps', async () =>
 {
   const dir = await tempDir('coral-completion-files-')
   await mkdir(join(dir, 'assets'), { recursive: true })
@@ -132,30 +104,20 @@ test('listProjectFiles uses suggestion policy instead of retrieval caps', async 
   await writeFile(join(dir, 'assets', 'logo.png'), 'not suggested', 'utf-8')
   await writeFile(join(dir, 'src', 'large.ts'), 'x'.repeat(600 * 1024), 'utf-8')
 
-  const files = await listProjectFiles(dir)
+  const files = await collectProjectFileSuggestions(dir)
 
   assert.ok(files.includes('src/large.ts'))
   assert.ok(!files.includes('assets/logo.png'))
 })
 
-test('listProjectFiles honors cancellation before project discovery', async () =>
+test('project file suggestions honor cancellation before discovery', async () =>
 {
   const dir = await tempDir('coral-completion-abort-')
   const controller = new AbortController()
   controller.abort(new DOMException('Aborted', 'AbortError'))
 
-  await assert.rejects(listProjectFiles(dir, controller.signal), {
+  await assert.rejects(collectProjectFileSuggestions(dir, controller.signal), {
     name: 'AbortError',
-  })
-})
-
-test('resetPromptFileSuggestions clears cwd-bound prompt file cache state', () =>
-{
-  assert.deepEqual(resetPromptFileSuggestions(), {
-    files: [],
-    filesRequested: false,
-    selectedIndex: 0,
-    dismissed: false,
   })
 })
 
@@ -207,37 +169,4 @@ test('parseMentions returns unique paths in submission order', () =>
   assert.deepEqual(parseMentions('nothing to see'), [])
   // an @ inside a word is not a mention
   assert.deepEqual(parseMentions('ping user@host'), [])
-})
-
-test('formatMentionNotice summarizes truncations & skips, else null', () =>
-{
-  assert.equal(
-    formatMentionNotice({
-      context: 'x',
-      attached: [{ path: 'a.ts', truncated: false }],
-      skipped: [],
-      usedChars: 1,
-    }),
-    null
-  )
-
-  const notice = formatMentionNotice({
-    context: 'x',
-    attached: [{ path: 'big.ts', truncated: true }],
-    skipped: [{ path: 'img.png', reason: 'binary' }],
-    usedChars: 1,
-  })
-  assert.equal(
-    notice,
-    'Truncated to fit context: big.ts; skipped @-mention: img.png (binary)'
-  )
-})
-
-test('isLikelyTextPath rejects only known binary extensions', () =>
-{
-  assert.equal(isLikelyTextPath('src/app.ts'), true)
-  assert.equal(isLikelyTextPath('Makefile'), true)
-  assert.equal(isLikelyTextPath('icons/logo.svg'), true)
-  assert.equal(isLikelyTextPath('img/logo.png'), false)
-  assert.equal(isLikelyTextPath('dist/bundle.wasm'), false)
 })

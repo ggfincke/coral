@@ -1,5 +1,5 @@
 // src/ollama/errors.ts
-// typed Ollama API & model identity failures
+// typed errors from the Ollama API and model identities
 
 export type OllamaModelIdentityFailure =
   'missing' | 'ambiguous' | 'invalid_digest' | 'invalid_response'

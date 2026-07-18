@@ -1,5 +1,5 @@
 // src/tools/preview.ts
-// workspace-aware write_file & edit_file approval previews
+// workspace-aware write_file and edit_file approval previews
 
 import { getCwd } from '../cwd.js'
 import { computeDiff } from '../utils/diff.js'
@@ -9,7 +9,7 @@ import {
   readOptionalPreviousTextFile,
 } from '../utils/file-read.js'
 import { applyEdit } from './edit-operation.js'
-import { checkWorkspacePath } from './path-policy.js'
+import { checkWorkspacePath } from '../shared/workspace-path.js'
 
 export type ToolDiffPreview =
   { kind: 'diff'; diff: string } | { kind: 'message'; message: string }
@@ -25,8 +25,7 @@ function diffPreview(diff: string | null): ToolDiffPreview | null
   return diff ? { kind: 'diff', diff } : null
 }
 
-// best-effort pre-execution diff for the approval box. mirrors what
-// write_file/edit_file would do w/o touching disk; null means no preview
+// compute an approval diff without touching disk; null means no preview
 export async function previewToolDiff(
   toolName: string,
   args: Record<string, unknown>,

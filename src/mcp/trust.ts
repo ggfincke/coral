@@ -1,5 +1,5 @@
 // src/mcp/trust.ts
-// persist approved MCP launch fingerprints
+// persisted MCP launch fingerprints
 
 import { createHash } from 'node:crypto'
 import { lstatSync } from 'node:fs'
@@ -91,13 +91,12 @@ function hasTrustSidecar(path: string): boolean
 {
   try
   {
-    // inspect the directory entry itself so dangling symlinks still shadow
-    // legacy trust instead of silently reviving an older approval
+    // inspect the entry itself so dangling symlinks still shadow legacy trust
     return lstatSync(path, { throwIfNoEntry: false }) !== undefined
   }
   catch
   {
-    // an inaccessible sidecar still shadows legacy trust & fails closed
+    // an inaccessible sidecar still shadows legacy trust and fails closed
     return true
   }
 }

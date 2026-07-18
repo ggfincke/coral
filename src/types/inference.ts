@@ -1,5 +1,5 @@
 // src/types/inference.ts
-// shared inference message, tool, & model metadata types
+// shared inference message, tool, and model metadata types
 
 import type { AttachmentReport } from './attachments.js'
 
@@ -41,7 +41,7 @@ interface JsonSchemaParamEntry
   required: boolean
 }
 
-// zip schema properties w/ the required set for validators & prompt rendering
+// pair schema properties with the required set for validators and prompt rendering
 export function paramEntries(schema: JsonSchema): JsonSchemaParamEntry[]
 {
   const requiredSet = new Set(schema.required ?? [])
@@ -106,11 +106,10 @@ export interface ChatRequest
   tools?: OllamaTool[]
   think?: boolean | 'low' | 'medium' | 'high'
   keep_alive?: string | number
-  // pinned context window — sent as options.num_ctx; held constant per session
-  // so Ollama doesn't reload the runner & wipe the KV cache between turns
+  // pin the context window sent as options.num_ctx so Ollama does not reload the
+  // runner and wipe the KV cache between turns
   num_ctx?: number
-  // hard ceiling on generated tokens (incl. thinking) — sent as options.num_predict
-  // so a runaway reasoner can't decode for tens of minutes in a single call
+  // cap generated tokens, including thinking, through options.num_predict
   num_predict?: number
 }
 
@@ -146,23 +145,22 @@ export interface ModelInfo
   architecture?: string
   // transformer block count
   blockCount?: number
-  // KV head count (GQA) — absent for some archs (e.g. gemma) in Ollama metadata
+  // KV head count (GQA), absent for some architectures in Ollama metadata
   kvHeadCount?: number
-  // per-head key & value dims
+  // per-head key and value dimensions
   keyLength?: number
   valueLength?: number
 }
 
-// reliability-layer counters — how often the agent had to compensate for model
-// tool-call issues; surfaced in /status, /telemetry, & eval reports
+// reliability counters for model tool-call recovery, surfaced in /status,
+// /telemetry, and evaluation reports
 export interface ReliabilityStats
 {
   repairedToolCalls: number
   nameRepairs: number
   stallNudges: number
   validationFailures: number
-  // edits that landed via the whitespace-tolerant fallback after old_string
-  // didn't match the file verbatim
+  // edits that landed via the whitespace-tolerant fallback
   editRepairs: number
   // times the agent paused on a detected doom loop
   doomLoopTrips: number

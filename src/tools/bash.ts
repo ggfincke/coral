@@ -1,5 +1,5 @@
 // src/tools/bash.ts
-// execute shell commands & return output
+// execute shell commands and return output
 
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'

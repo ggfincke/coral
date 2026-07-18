@@ -11,7 +11,7 @@ const PADDING = 10
 // full cycle duration in seconds
 const CYCLE_SECONDS = 1.8
 
-// render a string w/ a cosine-falloff shimmer sweep at the given time
+// render a string with a cosine-falloff shimmer sweep at the given time
 // elapsed is in milliseconds
 export function shimmerText(text: string, elapsed: number): string
 {
@@ -47,7 +47,7 @@ export function shimmerText(text: string, elapsed: number): string
       t = 0
     }
 
-    // clamp & scale down slightly so base color is always visible
+    // clamp and scale down slightly so the base color remains visible
     const intensity = Math.min(t, 1.0) * 0.9
 
     const { r, g, b } = lerpRgb(base, highlight, intensity)

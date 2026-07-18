@@ -18,16 +18,15 @@ export interface GitCommandOptions
   timeout?: number
   maxBuffer?: number
   signal?: AbortSignal
-  // treat a non-zero exit w/ stdout as success (git diff exits 1 w/ valid output
-  // in some configs) — off by default so genuine failures aren't masked
+  // treat a non-zero exit with stdout as success because git diff can exit 1 with
+  // valid output; keep this off by default so genuine failures are not masked
   allowStdoutOnError?: boolean
 }
 
 const DEFAULT_GIT_TIMEOUT = 10_000
 
-// returns trimmed raw output (empty string when git produced none) — the
-// display placeholder for empties belongs to the calling tool/display layer.
-// async so batched read tools overlap & never block the event loop on a slow repo
+// return trimmed raw output; display placeholders belong to the calling layer
+// so batched read tools can overlap without blocking on a slow repository
 export async function runGitCommand(
   args: string[],
   cwd: string,

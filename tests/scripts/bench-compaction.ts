@@ -1,11 +1,10 @@
 // tests/scripts/bench-compaction.ts
-// measures Ollama KV-cache reuse to validate cache-friendly compaction
-// usage: npm run bench:compaction -- <model> [host]
+// measure Ollama KV-cache reuse during compaction
 
 import { OllamaClient } from '../../src/ollama/client.js'
 import type { OllamaMessage } from '../../src/types/inference.js'
 
-// pinned context window for the run — held constant so the runner isn't reloaded
+// pin the context window so each request uses the same model slot
 const BENCH_NUM_CTX = 8192
 
 // build a synthetic conversation large enough that prefill is clearly measurable
@@ -30,10 +29,7 @@ function buildHistory(turns: number): OllamaMessage[]
   return messages
 }
 
-// send one request & return the prefill cost. note: prompt_eval_count reports
-// the TOTAL prompt tokens regardless of caching — the cache hit shows up in
-// prompt_eval_duration (the time actually spent prefilling), so that is the
-// signal we measure
+// measure prefill time because prompt token counts ignore cache reuse
 async function measurePrefill(
   client: OllamaClient,
   model: string,
@@ -77,12 +73,10 @@ async function main(): Promise<void>
   console.log(`host:  ${host}`)
   console.log(`num_ctx pinned at ${BENCH_NUM_CTX}\n`)
 
-  // cold — first call warms the slot, full prefill
+  // establish a cold baseline before any prefix can be reused
   const cold = await measurePrefill(client, model, base)
 
-  // append-only growth — what cache-friendly compaction does to the live tail.
-  // the shared prefix is cached from the cold call, so only the appended turn
-  // should actually prefill (small duration) if the model reuses its cache
+  // extend only the live tail so the shared prefix can be reused
   const grown: OllamaMessage[] = [
     ...base,
     { role: 'assistant', content: 'Acknowledged.' },
@@ -93,9 +87,7 @@ async function main(): Promise<void>
   ]
   const warm = await measurePrefill(client, model, grown)
 
-  // middle change — what OLD compaction did: insert a summary-sized block right
-  // after the system prompt, shifting the whole conversation. the prefix
-  // diverges at index 1, so everything after re-prefills (duration back near cold)
+  // insert a summary after the system prompt to invalidate the cached prefix
   const summaryBlock: OllamaMessage = {
     role: 'user',
     content: `[Conversation handoff]\n${'summary of earlier work and decisions. '.repeat(40)}`,
@@ -112,7 +104,7 @@ async function main(): Promise<void>
   ]
   const busted = await measurePrefill(client, model, mutated)
 
-  // reuse is measured on prefill TIME, not token count (count ignores the cache)
+  // compare prefill time because token counts ignore cache reuse
   const reuse = cold.ms > 0 ? 1 - warm.ms / cold.ms : 0
 
   console.log(

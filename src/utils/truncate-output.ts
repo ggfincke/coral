@@ -1,5 +1,5 @@
 // src/utils/truncate-output.ts
-// shared output truncation: item-count caps & char-budget line-boundary cuts
+// shared output truncation: item-count caps and char-budget line-boundary cuts
 
 export interface TruncateOutputOptions
 {

@@ -15,20 +15,22 @@ We focus on testing critical pure-function logic that, if broken, would cause si
 - **Path Resolution**: CWD-relative path handling across tools
 - **TUI Logic**: Critical prompt editing, keypress parsing, transcript rendering, and session restoration helpers
 - **Persistence**: Session, prompt-history, undo/redo, and local telemetry storage, including isolated test homes
-- **MCP boundaries**: Exactly three major scenarios cover user-owned launch
+- **MCP boundaries**: Three major integration scenarios cover user-owned launch
   config, fingerprint trust, and the exact `always_deny` pre-launch block; the
   Agent-mediated strict stdio bridge (a real SDK subprocess driven through a
   fake model, asserting context-budgeted advertised tools, strict validation,
   bounded/redacted large results, disable, and trusted re-enable at the
   model-request boundary); and ordered two-worker startup, abort, and lifecycle
-  cleanup
+  cleanup. Two narrow causal seam cases additionally pin raw-schema validation
+  versus sanitized model projection and fail-closed negative protocol-result
+  conversion.
 
 We intentionally do not test:
 
 - Every edge case or configuration combination
 - Full React Ink component rendering or layout snapshots
-- Exhaustive MCP server/config/protocol combinations beyond the three critical
-  boundary scenarios
+- Exhaustive MCP server/config/protocol combinations beyond the critical
+  integration and causal boundary scenarios
 - Cosmetic-only TUI formatting
 - Ollama model behavior or output quality
 - Utility functions with obvious behavior (single ternary, field projection)

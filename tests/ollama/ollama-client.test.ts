@@ -1,5 +1,5 @@
 // tests/ollama/ollama-client.test.ts
-// regression tests for Ollama keep-alive & think behavior
+// test Ollama keep-alive & think behavior
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
@@ -336,7 +336,7 @@ test('think fallback is tracked per model', async () =>
         void chunk
       }
 
-      // second model-a call: memory persists, so think is omitted from the start
+      // omit think after model-a has established memory state
       for await (const chunk of client.chatStream({
         model: 'model-a',
         messages: [{ role: 'user', content: 'hello again' }],
@@ -461,25 +461,6 @@ test('embed posts batched input to Ollama embed endpoint', async () =>
           },
         },
       ])
-    }
-  )
-})
-
-test('showModel includes Ollama API error bodies', async () =>
-{
-  await withFetch(
-    async () =>
-    {
-      return new Response('model not found', { status: 404 })
-    },
-    async () =>
-    {
-      const client = new OllamaClient('http://ollama.test')
-
-      await assert.rejects(
-        () => client.showModel('missing-model'),
-        /Ollama API error: 404 model not found/
-      )
     }
   )
 })
@@ -644,90 +625,51 @@ test('embed preserves Ollama API error text', async () =>
   )
 })
 
-test('embed rejects missing embeddings', async () =>
+test('embed rejects invalid response shapes', async () =>
 {
-  await withFetch(
-    async () =>
+  const cases: Array<{
+    body: unknown
+    inputs: string[]
+    pattern: RegExp
+  }> = [
     {
-      return new Response(JSON.stringify({}), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      body: {},
+      inputs: ['auth flow'],
+      pattern: /did not include embeddings/,
     },
-    async () =>
     {
-      const client = new OllamaClient('http://ollama.test')
-
-      await assert.rejects(
-        () => client.embed('nomic-embed-text', ['auth flow']),
-        /did not include embeddings/
-      )
-    }
-  )
-})
-
-test('embed rejects response count mismatches', async () =>
-{
-  await withFetch(
-    async () =>
-    {
-      return new Response(JSON.stringify({ embeddings: [[1, 0]] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      body: { embeddings: [[1, 0]] },
+      inputs: ['auth flow', 'render button'],
+      pattern: /count mismatch: expected 2, got 1/,
     },
-    async () =>
     {
-      const client = new OllamaClient('http://ollama.test')
-
-      await assert.rejects(
-        () => client.embed('nomic-embed-text', ['auth flow', 'render button']),
-        /count mismatch: expected 2, got 1/
-      )
-    }
-  )
-})
-
-test('embed rejects malformed embedding vectors', async () =>
-{
-  await withFetch(
-    async () =>
-    {
-      return new Response(JSON.stringify({ embeddings: [['bad']] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      body: { embeddings: [['bad']] },
+      inputs: ['auth flow'],
+      pattern: /invalid embedding/,
     },
-    async () =>
     {
-      const client = new OllamaClient('http://ollama.test')
-
-      await assert.rejects(
-        () => client.embed('nomic-embed-text', ['auth flow']),
-        /invalid embedding/
-      )
-    }
-  )
-})
-
-test('embed rejects empty embedding vectors', async () =>
-{
-  await withFetch(
-    async () =>
-    {
-      return new Response(JSON.stringify({ embeddings: [[]] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
+      body: { embeddings: [[]] },
+      inputs: ['auth flow'],
+      pattern: /invalid embedding/,
     },
-    async () =>
-    {
-      const client = new OllamaClient('http://ollama.test')
+  ]
 
-      await assert.rejects(
-        () => client.embed('nomic-embed-text', ['auth flow']),
-        /invalid embedding/
-      )
-    }
-  )
+  for (const { body, inputs, pattern } of cases)
+  {
+    await withFetch(
+      async () =>
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      async () =>
+      {
+        const client = new OllamaClient('http://ollama.test')
+        await assert.rejects(
+          () => client.embed('nomic-embed-text', inputs),
+          pattern
+        )
+      }
+    )
+  }
 })

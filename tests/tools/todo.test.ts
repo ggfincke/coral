@@ -1,11 +1,9 @@
 // tests/tools/todo.test.ts
-// todo parsing & validation contracts
+// parse and validate todo lists
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { sanitizeTodos, validateTodoList } from '../../src/types/todo.js'
-
-// --- sanitizeTodos (lenient restore path) ---
 
 test('sanitizeTodos returns valid items with trimmed content', () =>
 {
@@ -19,16 +17,12 @@ test('sanitizeTodos returns valid items with trimmed content', () =>
   ])
 })
 
-test('sanitizeTodos returns [] for non-array input', () =>
+test('sanitizeTodos drops invalid entries', () =>
 {
   assert.deepEqual(sanitizeTodos(null), [])
   assert.deepEqual(sanitizeTodos(undefined), [])
   assert.deepEqual(sanitizeTodos('foo'), [])
   assert.deepEqual(sanitizeTodos({}), [])
-})
-
-test('sanitizeTodos drops garbage entries', () =>
-{
   assert.deepEqual(
     sanitizeTodos([
       { content: '', status: 'pending' },
@@ -37,19 +31,13 @@ test('sanitizeTodos drops garbage entries', () =>
       'bad',
       42,
       { content: 'ok', status: 'pending' },
-    ]),
-    [{ content: 'ok', status: 'pending' }]
-  )
-})
-
-test('sanitizeTodos drops entries with invalid status', () =>
-{
-  assert.deepEqual(
-    sanitizeTodos([
       { content: 'x', status: 'done' },
       { content: 'y', status: 'pending' },
     ]),
-    [{ content: 'y', status: 'pending' }]
+    [
+      { content: 'ok', status: 'pending' },
+      { content: 'y', status: 'pending' },
+    ]
   )
 })
 
@@ -69,8 +57,6 @@ test('sanitizeTodos demotes extra in_progress entries to pending', () =>
   )
 })
 
-// --- validateTodoList (strict todo_write path) ---
-
 test('validateTodoList accepts a valid array', () =>
 {
   const result = validateTodoList([
@@ -87,58 +73,52 @@ test('validateTodoList accepts a valid array', () =>
   }
 })
 
-test('validateTodoList rejects non-array input', () =>
+test('validateTodoList rejects invalid todo lists', () =>
 {
-  const result = validateTodoList(null)
-  assert.equal(result.ok, false)
-  if (!result.ok)
+  const nonArray = validateTodoList(null)
+  assert.equal(nonArray.ok, false)
+  if (!nonArray.ok)
   {
-    assert.equal(result.error, 'todo_write requires a todos array')
+    assert.equal(nonArray.error, 'todo_write requires a todos array')
   }
-})
 
-test('validateTodoList rejects non-object entries', () =>
-{
-  const result = validateTodoList([null])
-  assert.equal(result.ok, false)
-  if (!result.ok)
+  const nonObject = validateTodoList([null])
+  assert.equal(nonObject.ok, false)
+  if (!nonObject.ok)
   {
-    assert.equal(result.error, 'each todo must be an object')
+    assert.equal(nonObject.error, 'each todo must be an object')
   }
-})
 
-test('validateTodoList rejects empty content', () =>
-{
-  const result = validateTodoList([{ content: '  ', status: 'pending' }])
-  assert.equal(result.ok, false)
-  if (!result.ok)
-  {
-    assert.equal(result.error, 'each todo needs a non-empty content string')
-  }
-})
-
-test('validateTodoList rejects invalid status', () =>
-{
-  const result = validateTodoList([{ content: 'x', status: 'done' }])
-  assert.equal(result.ok, false)
-  if (!result.ok)
+  const emptyContent = validateTodoList([{ content: '  ', status: 'pending' }])
+  assert.equal(emptyContent.ok, false)
+  if (!emptyContent.ok)
   {
     assert.equal(
-      result.error,
+      emptyContent.error,
+      'each todo needs a non-empty content string'
+    )
+  }
+
+  const badStatus = validateTodoList([{ content: 'x', status: 'done' }])
+  assert.equal(badStatus.ok, false)
+  if (!badStatus.ok)
+  {
+    assert.equal(
+      badStatus.error,
       'each todo status must be pending, in_progress, or completed'
     )
   }
-})
 
-test('validateTodoList rejects more than one in_progress', () =>
-{
-  const result = validateTodoList([
+  const multiProgress = validateTodoList([
     { content: 'a', status: 'in_progress' },
     { content: 'b', status: 'in_progress' },
   ])
-  assert.equal(result.ok, false)
-  if (!result.ok)
+  assert.equal(multiProgress.ok, false)
+  if (!multiProgress.ok)
   {
-    assert.equal(result.error, 'only one todo may be in_progress at a time')
+    assert.equal(
+      multiProgress.error,
+      'only one todo may be in_progress at a time'
+    )
   }
 })

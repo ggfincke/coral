@@ -1,5 +1,5 @@
 // src/shared/project-files.ts
-// neutral project file discovery w/ git-aware ignore handling
+// git-aware project file discovery
 
 import { lstat, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -48,7 +48,7 @@ async function statProjectFile(
   let info
   try
   {
-    // skip symlinks — only real files are indexable
+    // reject symlinks so only real files enter the index
     info = await lstat(absolutePath)
     options.signal?.throwIfAborted()
     if (info.isSymbolicLink()) return null
@@ -74,7 +74,7 @@ async function statProjectFile(
   }
 }
 
-// git's ignore-aware path list in deterministic order, or null outside a repo
+// keep git's ignore-aware path list deterministic, or fall back outside a repo
 async function listGitProjectPaths(
   cwd: string,
   signal?: AbortSignal
@@ -88,7 +88,7 @@ async function listGitProjectPaths(
 
   if (result.error) return null
 
-  // deterministic code-unit order; localeCompare varies w/ the host locale
+  // sort by code units so ordering does not depend on the host locale
   return result.output
     .split('\0')
     .filter(Boolean)
@@ -157,7 +157,7 @@ async function* iterateFallbackProjectFiles(
       options.signal?.throwIfAborted()
       if (options.maxFiles !== undefined && yielded >= options.maxFiles) return
       if (!shouldIncludeProjectTreeEntry(entry.name, ignored)) continue
-      // skip symlinks — only real files are indexable
+      // reject symlinks so only real files enter the index
       if (entry.isSymbolicLink()) continue
 
       const absolutePath = join(dir, entry.name)
@@ -185,15 +185,14 @@ async function* iterateFallbackProjectFiles(
   yield* walk(cwd)
 }
 
-// lazily yield project files so a consumer can stop early (e.g. after N
-// accepted files) without stat-ing or walking the rest of a huge repo
+// lazily yield project files so consumers can stop before walking the whole repo
 export async function* iterateProjectFiles(
   cwd: string,
   options: ProjectFileWalkerOptions = {}
 ): AsyncGenerator<ProjectFile>
 {
   options.signal?.throwIfAborted()
-  // prefer git's ignore-aware listing; fall back to a manual walk outside a repo
+  // prefer git's ignore-aware listing and fall back to a manual walk outside a repo
   const gitPaths = await listGitProjectPaths(cwd, options.signal)
   if (gitPaths)
   {

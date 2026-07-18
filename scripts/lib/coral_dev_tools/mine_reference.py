@@ -1,5 +1,5 @@
 # scripts/lib/coral_dev_tools/mine_reference.py
-# CLI for reference project inventory reports
+# generate reference project inventory reports
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 // scripts/check-dev-tools.mjs
-// run dev-tool syntax, tests, & runtime drift checks
+// run dev-tool syntax, tests, and runtime drift checks
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'

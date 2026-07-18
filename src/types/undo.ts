@@ -48,7 +48,7 @@ export interface UndoTurnAlignmentOptions
   frozenPrefixLength?: number
 }
 
-// shared alignment for live undo (strict) & session hydrate (relaxed)
+// shared alignment for live undo (strict) and session hydration (relaxed)
 export function isUndoTurnAligned(
   messages: OllamaMessage[],
   turn: Pick<UndoTurn, 'startIndex' | 'endIndex' | 'userMessage'>,

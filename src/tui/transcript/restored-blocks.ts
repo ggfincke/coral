@@ -6,7 +6,7 @@ import {
   truncateOutput,
   type TruncateOutputOptions,
 } from '../../utils/truncate-output.js'
-import type { OutputBlock } from './transcript.js'
+import type { OutputBlock } from './types.js'
 import { formatMentionNotice } from '../prompt/mentions.js'
 
 const TRUNCATED_TOOL_RESULT_OPTIONS: TruncateOutputOptions = {

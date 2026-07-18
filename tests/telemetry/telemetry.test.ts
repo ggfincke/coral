@@ -60,24 +60,15 @@ test('foldReliability accumulates & preserves firstSeen', () =>
   // firstSeen sticks, updatedAt advances
   assert.equal(record?.firstSeen, '2026-06-21T00:00:00.000Z')
   assert.equal(record?.updatedAt, '2026-06-22T00:00:00.000Z')
-})
 
-test('foldReliability keeps models independent', () =>
-{
-  let store = foldReliability(
-    EMPTY,
-    'gemma',
-    makeReliabilityStats({ reprompts: 1 }),
-    't1'
-  )
-  store = foldReliability(
-    store,
+  const withSecondModel = foldReliability(
+    second,
     'qwen',
     makeReliabilityStats({ reprompts: 5 }),
     't2'
   )
-  assert.equal(store.models['gemma']?.reliability.reprompts, 1)
-  assert.equal(store.models['qwen']?.reliability.reprompts, 5)
+  assert.equal(withSecondModel.models['gemma']?.reliability.editRepairs, 5)
+  assert.equal(withSecondModel.models['qwen']?.reliability.reprompts, 5)
 })
 
 test('telemetry model maps safely retain prototype-like model names', async () =>

@@ -1,11 +1,11 @@
 // src/tools/tool.ts
-// tool interface & conversion to Ollama format
+// tool interface and conversion to Ollama format
 
 import type { OllamaTool, JsonSchema } from '../types/inference.js'
 import { estimateModelRequestValue } from '../utils/limits.js'
 import type { SubagentRunner } from './subagent.js'
 import type { UndoFileChange, UndoTodoChange } from '../types/undo.js'
-import type { CodeIntelService } from '../lsp/client.js'
+import type { CodeIntelService } from '../lsp/contracts.js'
 import type { TodoState } from '../types/todo.js'
 
 // result returned after tool execution
@@ -25,21 +25,22 @@ export interface ToolResult
   repaired?: boolean
 }
 
-// TUI presentation metadata — single source of truth for the tool's header
-// label & one-line arg summary, so renderers don't keep per-tool string ladders
+// TUI presentation metadata — one source of truth for the tool header, label,
+// and argument summary
 export interface ToolDisplay
 {
   label: string
   summarize?(args: Record<string, unknown>): string
 }
 
-// immutable presentation snapshot taken at call emission — carries dynamic
-// (MCP) labels & formatting hints past later tool refreshes w/o a live manager
+// immutable presentation snapshot taken at call emission so historical blocks
+// never consult a refreshed catalog or executable registry
 export interface ToolCallPresentation
 {
-  label: string
-  // MCP calls render raw pretty-JSON args & MCP approval copy
-  mcp: boolean
+  readonly label: string
+  readonly summary?: string
+  // MCP calls render raw pretty-JSON args and MCP approval copy
+  readonly mcp: boolean
 }
 
 export type ToolArgumentValidation =
@@ -57,7 +58,7 @@ export interface ToolExecutionContext
   signal?: AbortSignal
 }
 
-// tool definition w/ schema & execute handler
+// tool definition with schema and execute handler
 export interface Tool
 {
   name: string
@@ -65,11 +66,11 @@ export interface Tool
   parameters: JsonSchema
   // safe for read-only subagents; may update Coral-local caches
   subagentSafe?: boolean
-  // safe to batch concurrently w/ other approval-free calls
+  // safe to batch concurrently with other approval-free calls
   parallelSafe?: boolean
-  // omitted label falls back to the tool name; omitted summarize to compact JSON
+  // omitted label falls back to the tool name; omitted summarize uses compact JSON
   display?: ToolDisplay
-  // override built-in coercion for tools w/ richer input schemas
+  // override built-in coercion for tools with richer input schemas
   validateArgs?(args: Record<string, unknown>): ToolArgumentValidation
   execute(
     args: Record<string, unknown>,

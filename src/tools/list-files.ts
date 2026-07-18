@@ -6,7 +6,7 @@ import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
-import { checkWorkspacePath } from './path-policy.js'
+import { checkWorkspacePath } from '../shared/workspace-path.js'
 import { clamp } from '../utils/clamp.js'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
 import {

@@ -429,6 +429,7 @@ npm test
 npm run build
 npm run typecheck:scripts
 npm run check:dev-tools
+npm run check:architecture
 npm run check:changelog
 npm audit --audit-level=high
 ```
@@ -436,6 +437,10 @@ npm audit --audit-level=high
 See [scripts/README.md](scripts/README.md) for maintenance/research tooling and
 [tests/scripts/eval/README.md](tests/scripts/eval/README.md) for the live-model
 evaluation harness.
+
+The supported npm package surface is the `coral` executable. Coral does not
+expose a JavaScript API or supported deep-import paths from its emitted `dist/`
+tree.
 
 ## Known limitations
 

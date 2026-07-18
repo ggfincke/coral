@@ -1,5 +1,5 @@
 // src/shared/ignored-entries.ts
-// canonical noisy project entries shared across context & file discovery
+// shared noisy project entries
 
 const COMMON_IGNORED_PROJECT_ENTRIES = new Set([
   '.git',
@@ -21,7 +21,7 @@ const COMMON_IGNORED_PROJECT_ENTRIES = new Set([
   '.parcel-cache',
 ])
 
-// clone the shared set so call sites can extend safely
+// return a copy so callers can extend the defaults safely
 export function createIgnoredEntrySet(
   extra: Iterable<string> = []
 ): Set<string>

@@ -1,5 +1,5 @@
 // src/retrieval/vector.ts
-// vector serialization & similarity helpers
+// vector serialization and similarity helpers
 
 export function vectorToBlob(vector: number[]): Buffer
 {

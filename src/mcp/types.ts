@@ -1,5 +1,5 @@
 // src/mcp/types.ts
-// SDK-free MCP status & approval contracts + config-derived status
+// status and approval contracts for MCP
 
 import type {
   McpConfigIssue,
@@ -41,8 +41,7 @@ export interface McpLaunchApprovalRequest extends McpLaunchDescriptor
   fingerprint: string
 }
 
-// pre-launch status for one configured server — shared w/ the manager so the
-// config-only view cannot drift from a live manager's initial state
+// pre-launch status shared by config-only views and the live manager
 export function configuredServerStatus(
   server: McpServerConfig
 ): McpServerStatus

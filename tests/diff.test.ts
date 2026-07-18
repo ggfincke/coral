@@ -23,17 +23,14 @@ after(async () =>
 
 test('generates unified diffs for the major shapes', () =>
 {
-  // simple edit: hunk header + change w/ 3 lines of context
   const before = 'a\nb\nc\nd\ne\nf\ng\nh\n'
   const edited = computeDiff(before, before.replace('d', 'D'))
   assert.ok(edited)
   assert.match(edited, /^@@ -1,7 \+1,7 @@/)
   assert.match(edited, /\n-d\n\+D\n/)
-  // 3 context lines on each side of the change
   assert.match(edited, /\n a\n b\n c\n-d/)
   assert.match(edited, /\+D\n e\n f\n g$/)
 
-  // new file: all additions
   const created = computeDiff('', 'hello\nworld\n')
   assert.ok(created)
   const signs = created
@@ -42,11 +39,10 @@ test('generates unified diffs for the major shapes', () =>
     .map((line) => line[0])
   assert.ok(signs.every((sign) => sign === '+'))
 
-  // nothing displayable -> null
   assert.equal(computeDiff('same\n', 'same\n'), null)
   assert.equal(computeDiff('a\0b', 'a\0c'), null)
 
-  // oversized changes collapse into a summary marker
+  // keep oversized previews bounded while retaining their summary marker
   const big = Array.from({ length: 500 }, (_, i) => `line ${i}`).join('\n')
   const truncated = computeDiff('', big)
   assert.ok(truncated)
@@ -54,39 +50,33 @@ test('generates unified diffs for the major shapes', () =>
   assert.match(truncated, /… \+\d+ more changed lines$/)
 })
 
-// shared by editTool.execute & the approval preview — a regression here either
-// corrupts a file or desyncs the preview from execution
+// keep editTool.execute & the approval preview on the same transformation path
 test('applyEdit covers the substitution outcomes', () =>
 {
-  // empty old_string -> rejected before any scan
   assert.deepEqual(applyEdit('abc', '', 'x', false), {
     ok: false,
     reason: 'empty',
     count: 0,
   })
 
-  // old === new -> rejected as identical
   assert.deepEqual(applyEdit('abc', 'a', 'a', false), {
     ok: false,
     reason: 'identical',
     count: 0,
   })
 
-  // old_string absent -> not_found
   assert.deepEqual(applyEdit('abc', 'z', 'y', false), {
     ok: false,
     reason: 'not_found',
     count: 0,
   })
 
-  // multiple matches w/o replaceAll -> rejected, count surfaced for the error
   assert.deepEqual(applyEdit('a.a.a', 'a', 'b', false), {
     ok: false,
     reason: 'multiple',
     count: 3,
   })
 
-  // single match -> replaced once
   assert.deepEqual(applyEdit('foo bar', 'bar', 'baz', false), {
     ok: true,
     after: 'foo baz',
@@ -94,7 +84,6 @@ test('applyEdit covers the substitution outcomes', () =>
     matchType: 'exact',
   })
 
-  // multiple matches w/ replaceAll -> every occurrence replaced, count reported
   assert.deepEqual(applyEdit('a.a.a', 'a', 'b', true), {
     ok: true,
     after: 'b.b.b',
@@ -102,7 +91,6 @@ test('applyEdit covers the substitution outcomes', () =>
     matchType: 'exact',
   })
 
-  // single match w/ replaceAll -> count stays 1
   assert.deepEqual(applyEdit('foo bar', 'bar', 'baz', true), {
     ok: true,
     after: 'foo baz',
@@ -111,13 +99,10 @@ test('applyEdit covers the substitution outcomes', () =>
   })
 })
 
-// the whitespace-tolerant fallback is what buys back weak-model edit failures;
-// a regression here either silently misses real edits or hits the wrong block
+// exercise the whitespace fallback used when weak-model edits drift
 test('applyEdit fuzzy-matches whitespace drift & re-indents the replacement', () =>
 {
-  // model over-indented (4 spaces) vs the file (2) — exact misses (the 4-space
-  // string isn't present), fuzzy lands it, & the replacement is re-based to the
-  // file's 2-space indent
+  // rebase a fuzzy replacement to the file's indentation
   const file = 'function f()\n{\n  return x\n}\n'
   const drift = applyEdit(file, '    return x', '    return y', false)
   assert.deepEqual(drift, {
@@ -127,7 +112,6 @@ test('applyEdit fuzzy-matches whitespace drift & re-indents the replacement', ()
     matchType: 'fuzzy',
   })
 
-  // trailing-whitespace & CRLF drift on a multi-line block
   const crlf = 'const a = 1\r\nconst b = 2\r\n'
   const trailing = applyEdit(
     crlf,
@@ -142,13 +126,10 @@ test('applyEdit fuzzy-matches whitespace drift & re-indents the replacement', ()
     assert.match(trailing.after, /const a = 9/)
   }
 
-  // ambiguous fuzzy match w/o replace_all -> refuse rather than guess. old_string
-  // 'a1 ' has a trailing space so it never matches verbatim, forcing the fuzzy
-  // path, where two normalized matches & no replace_all stays a miss
+  // refuse an ambiguous fuzzy match rather than guessing
   const ambiguous = applyEdit('a1\n  a1\n', 'a1 ', 'b', false)
   assert.deepEqual(ambiguous, { ok: false, reason: 'not_found', count: 0 })
 
-  // replace_all fuzzy -> every normalized match replaced
   const all = applyEdit('a1\n  a1\n', 'a1 ', 'b', true)
   assert.equal(all.ok, true)
   if (all.ok)
@@ -157,7 +138,6 @@ test('applyEdit fuzzy-matches whitespace drift & re-indents the replacement', ()
     assert.equal(all.matchType, 'fuzzy')
   }
 
-  // a genuine miss still fails after the fuzzy pass
   assert.deepEqual(applyEdit('alpha\nbeta\n', 'gamma', 'delta', false), {
     ok: false,
     reason: 'not_found',
@@ -165,11 +145,9 @@ test('applyEdit fuzzy-matches whitespace drift & re-indents the replacement', ()
   })
 })
 
-// the fuzzy path rebuilds the file by hand, so it must not corrupt structure:
-// these guard the failure modes an adversarial review surfaced
+// preserve file structure while rebuilding fuzzy matches
 test('applyEdit fuzzy path preserves file structure', () =>
 {
-  // empty new_string is a deletion — drop the block, no stray blank line
   const del = applyEdit('a\n  b\n  c\nd\n', '    b\n    c\n', '', false)
   assert.deepEqual(del, {
     ok: true,
@@ -178,8 +156,6 @@ test('applyEdit fuzzy path preserves file structure', () =>
     matchType: 'fuzzy',
   })
 
-  // unchanged neighbor lines keep their real (deeper) indentation, not the
-  // flat indent the model sent — only the genuinely new line is best-effort
   const nested = applyEdit(
     '  a()\n    b()\n',
     'a()\nb()',
@@ -193,21 +169,18 @@ test('applyEdit fuzzy path preserves file structure', () =>
     matchType: 'fuzzy',
   })
 
-  // CRLF survives across the whole matched block, including untouched lines
   const crlf = applyEdit('x\r\ny\r\nz\r\n', 'y', 'Y', false)
   assert.equal(crlf.ok, true)
   if (crlf.ok) assert.equal(crlf.after, 'x\r\nY\r\nz\r\n')
 
-  // an all-whitespace old_string has no anchor — refuse rather than inject
-  // content into a blank-line run
+  // refuse whitespace-only matches that have no structural anchor
   assert.deepEqual(applyEdit('top\n\n\nbottom\n', '   \n   ', 'x = 1', false), {
     ok: false,
     reason: 'not_found',
     count: 0,
   })
 
-  // self-overlapping multi-line block w/ replace_all stays non-overlapping, so
-  // splices can't clobber each other
+  // keep overlapping replace_all matches non-overlapping
   const overlap = applyEdit('a \na \na \n', 'a\na', 'X\nY', true)
   assert.deepEqual(overlap, {
     ok: true,
@@ -219,7 +192,6 @@ test('applyEdit fuzzy path preserves file structure', () =>
 
 test('describeEditMiss points at a partial match or its absence', () =>
 {
-  // first line present but the block diverges -> name the line
   const partial = describeEditMiss(
     'let x = 1\nlet y = 2\n',
     'let x = 1\nlet z = 9'
@@ -227,12 +199,9 @@ test('describeEditMiss points at a partial match or its absence', () =>
   assert.match(partial, /file line 1/)
   assert.match(partial, /later lines differ/)
 
-  // nothing resembling old_string -> say so
   const absent = describeEditMiss('let x = 1\n', 'totally unrelated')
   assert.match(absent, /No file line matches/)
 
-  // single-line old_string that fuzzy-matched a no-op -> honest message, not a
-  // phantom "later lines differ"
   const single = describeEditMiss('  let x = 1\n', '\tlet x = 1')
   assert.match(single, /changes nothing/)
 })

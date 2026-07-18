@@ -1,10 +1,10 @@
 // src/tui/shell/copy.ts
-// extract the last assistant reply & its last code block for /copy
+// extract the last assistant reply and its last code block for /copy
 
 import { lexer, type Token } from 'marked'
 import type { OllamaMessage } from '../../types/inference.js'
 
-// last assistant message w/ non-empty text — skips tool-call-only turns
+// find the last assistant message with non-empty text
 export function lastAssistantText(messages: OllamaMessage[]): string | null
 {
   for (let i = messages.length - 1; i >= 0; i--)

@@ -4,7 +4,7 @@
 import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
-import { checkWorkspacePath } from './path-policy.js'
+import { checkWorkspacePath } from '../shared/workspace-path.js'
 import { getCwd } from '../cwd.js'
 import { formatBytes } from '../utils/bytes.js'
 import { computeDiff } from '../utils/diff.js'
@@ -40,8 +40,7 @@ export const writeTool: Tool = {
       if (!allowed.ok) return { output: '', error: allowed.error }
 
       path = allowed.path
-      // approved outside-workspace writes are allowed but never undo-captured
-      // (replay refuses outside-workspace paths)
+      // allow approved outside-workspace writes without undo capture
       if (allowOutside)
       {
         await mkdir(dirname(path), { recursive: true })
@@ -53,7 +52,7 @@ export const writeTool: Tool = {
         }
       }
 
-      // fail closed: refuse when undo cannot snapshot before/after
+      // refuse writes that cannot capture before and after snapshots for undo
       if (contentBytes > TEXT_FILE_READ_LIMIT_BYTES)
       {
         return {

@@ -1,10 +1,9 @@
 // src/tools/code-intel.ts
-// typescript & javascript code intelligence tool
+// provide TypeScript and JavaScript code intelligence
 
-import type { CodeIntelOperation } from '../lsp/client.js'
-import { isCodeIntelPath } from '../lsp/client.js'
+import { isCodeIntelPath, type CodeIntelOperation } from '../lsp/contracts.js'
 import { toErrorMessage } from '../utils/errors.js'
-import { checkWorkspacePath } from './path-policy.js'
+import { checkWorkspacePath } from '../shared/workspace-path.js'
 import type { Tool } from './tool.js'
 
 const OPERATIONS: CodeIntelOperation[] = [

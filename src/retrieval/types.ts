@@ -1,5 +1,5 @@
 // src/retrieval/types.ts
-// shared retrieval types & constants
+// shared retrieval types and constants
 
 export const DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text'
 export const CHUNKER_VERSION = 1
@@ -61,7 +61,7 @@ export interface SearchHit
   text: string
 }
 
-// per-file build progress reported while (re)indexing
+// progress reported for each indexed file
 export interface IndexProgress
 {
   processed: number
@@ -69,7 +69,7 @@ export interface IndexProgress
   path: string
 }
 
-// summary of an index build
+// summary returned by an index build
 export interface IndexStats
 {
   totalFiles: number
@@ -77,7 +77,7 @@ export interface IndexStats
   chunks: number
 }
 
-// indexed state per file; embeddingsCurrent = chunks complete for model + chunker version
+// cached file state, including whether embeddings match the active chunker
 export interface IndexedFileStatus
 {
   size: number

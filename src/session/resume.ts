@@ -1,12 +1,8 @@
 // src/session/resume.ts
 // session resume target resolution
 
-import {
-  listSessions,
-  loadSession,
-  type SessionData,
-  type SessionMeta,
-} from './store.js'
+import { listSessions, loadSession } from './store.js'
+import type { SessionData, SessionMeta } from './types.js'
 import { existsSync } from 'node:fs'
 
 export type ResumeSessionResolution =

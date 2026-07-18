@@ -1,26 +1,19 @@
 // eslint-rules/file-header.js
-// validate repo-relative file headers
+// validate exact two-line repo-relative file headers
 
-import { readFileSync } from 'node:fs'
-import { relative, sep } from 'node:path'
+import { isAbsolute, relative } from 'node:path'
 
-const HEADER_ROOTS = ['src/', 'tests/', 'scripts/', 'eslint-rules/']
-const HEADER_FILES = new Set(['eslint.config.js'])
+import { getCwd, getFilename, getSourceCode } from './ruleContext.js'
 
-function repoRelativePath(filename)
-{
-  if (filename.startsWith('<')) return null
+const normalizePath = (value) => value.replace(/\\/g, '/')
 
-  const repoPath = relative(process.cwd(), filename).split(sep).join('/')
-  if (!repoPath || repoPath === '..' || repoPath.startsWith('../'))
-  {
-    return null
-  }
+const resolveRelativePath = (filename, cwd) =>
+  normalizePath(isAbsolute(filename) ? relative(cwd, filename) : filename)
 
-  if (HEADER_FILES.has(repoPath)) return repoPath
-  if (HEADER_ROOTS.some((root) => repoPath.startsWith(root))) return repoPath
-  return null
-}
+const descriptionText = (comment) => comment.value.trim()
+
+const isTaggedDescription = (description) =>
+  /^(?:[*!?](?:\s|$)|todo(?:\([^)]*\))?:?\s)/i.test(description)
 
 const rule = {
   meta: {
@@ -36,84 +29,127 @@ const rule = {
       invalidPath:
         'File header path does not match actual file path. Expected: {{ expected }}',
       missingDescription: 'File header is missing a description on line 2',
+      descriptionNotLowercase:
+        'File header description must begin with a lowercase letter or number',
+      descriptionPeriod: 'File header description must not end with a period',
+      taggedDescription:
+        'File header descriptions must be plain purpose phrases, not tagged annotations',
+      thirdHeaderLine:
+        'File headers must contain exactly two consecutive comment lines',
     },
   },
 
   create(context)
   {
-    const sourceCode = context.sourceCode ?? context.getSourceCode()
-    const filename = context.filename ?? context.getFilename()
-    let rawSource = ''
-
-    try
-    {
-      rawSource = readFileSync(filename, 'utf-8')
-    }
-    catch
-    {
-      rawSource = ''
-    }
+    const sourceCode = getSourceCode(context)
+    const filename = getFilename(context)
+    const cwd = getCwd(context)
 
     return {
       Program(node)
       {
-        if (rawSource.startsWith('#!'))
-        {
-          return
-        }
-
         const comments = sourceCode.getAllComments()
         const firstComment = comments[0]
+        const hasShebang = firstComment?.type === 'Shebang'
+        const headerIndex = hasShebang ? 1 : 0
+        const headerLine = hasShebang ? 2 : 1
+        const descriptionLine = headerLine + 1
+        const headerComment = comments[headerIndex]
 
-        const relativePath = repoRelativePath(filename)
-        if (!relativePath) return
+        const relativePath = resolveRelativePath(filename, cwd)
 
-        // check line-1 path header
-        if (!firstComment || ![1, 2].includes(firstComment.loc.start.line))
+        // require the path comment to be the first source line
+        if (
+          !headerComment ||
+          headerComment.loc.start.line !== headerLine ||
+          headerComment.type !== 'Line'
+        )
         {
-          context.report({
-            node,
-            messageId: 'missingHeader',
-          })
+          context.report({ node, messageId: 'missingHeader' })
           return
         }
 
-        // validate path text
-        if (firstComment.type !== 'Line')
-        {
-          context.report({
-            node: firstComment,
-            messageId: 'missingHeader',
-          })
-          return
-        }
-
-        const headerPath = firstComment.value.trim()
+        // keep the header path tied to the cwd-relative filename
+        const headerPath = headerComment.value.trim()
         if (headerPath !== relativePath)
         {
           context.report({
-            node: firstComment,
+            node: headerComment,
             messageId: 'invalidPath',
             data: { expected: relativePath },
             fix(fixer)
             {
-              return fixer.replaceText(firstComment, `// ${relativePath}`)
+              return fixer.replaceText(headerComment, `// ${relativePath}`)
             },
           })
         }
 
-        // check line-2 description
-        const secondComment = comments[1]
+        const secondComment = comments[headerIndex + 1]
         if (
           !secondComment ||
-          secondComment.loc.start.line !== firstComment.loc.start.line + 1 ||
+          secondComment.loc.start.line !== descriptionLine ||
           secondComment.type !== 'Line' ||
           secondComment.value.trim() === ''
         )
         {
           context.report({
-            loc: { line: 2, column: 0 },
+            loc: { line: descriptionLine, column: 0 },
             messageId: 'missingDescription',
+          })
+          return
+        }
+
+        const description = descriptionText(secondComment)
+        if (!/^[a-z0-9]/.test(description))
+        {
+          const fix = /^[A-Z]/.test(description)
+            ? (fixer) =>
+                fixer.replaceText(
+                  secondComment,
+                  `// ${description[0].toLowerCase()}${description.slice(1)}`
+                )
+            : undefined
+          context.report({
+            node: secondComment,
+            messageId: 'descriptionNotLowercase',
+            fix,
+          })
+        }
+        if (description.endsWith('.'))
+        {
+          context.report({
+            node: secondComment,
+            messageId: 'descriptionPeriod',
+            fix(fixer)
+            {
+              return fixer.replaceText(
+                secondComment,
+                `// ${description.slice(0, -1)}`
+              )
+            },
+          })
+        }
+        if (isTaggedDescription(description))
+        {
+          context.report({
+            node: secondComment,
+            messageId: 'taggedDescription',
+          })
+        }
+
+        const thirdComment = comments[headerIndex + 2]
+        if (
+          thirdComment?.type === 'Line' &&
+          thirdComment.loc.start.line === descriptionLine + 1
+        )
+        {
+          context.report({
+            node: thirdComment,
+            messageId: 'thirdHeaderLine',
+            fix(fixer)
+            {
+              return fixer.insertTextBefore(thirdComment, '\n')
+            },
           })
         }
       },

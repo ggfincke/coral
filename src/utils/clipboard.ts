@@ -17,7 +17,7 @@ interface ClipboardCommand
   args: string[]
 }
 
-// ordered candidate commands per platform — first that exists & exits 0 wins
+// ordered candidate commands per platform; use the first available command
 function clipboardCommands(): ClipboardCommand[]
 {
   switch (platform())

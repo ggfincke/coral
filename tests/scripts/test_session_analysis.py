@@ -1,5 +1,5 @@
 # tests/scripts/test_session_analysis.py
-# focused regressions for Coral session analysis tooling
+# test Coral session analysis output contracts
 
 from __future__ import annotations
 
@@ -65,17 +65,15 @@ class SessionAnalysisJsonTest(unittest.TestCase):
             + hashlib.sha256(b"repeat this private prompt").hexdigest(),
         )
 
-    def test_json_can_include_repeated_prompts_when_requested(self) -> None:
-        output = render_report(
+        shown = render_report(
             make_report(),
             output_format="json",
             top=8,
             show_prompts=True,
         )
-        item = json.loads(output)["history"]["repeatedPrompts"][0]
-
+        shown_item = json.loads(shown)["history"]["repeatedPrompts"][0]
         self.assertEqual(
-            item,
+            shown_item,
             {"text": "repeat this private prompt", "count": 2},
         )
 
@@ -95,15 +93,13 @@ class SessionAnalysisTextTest(unittest.TestCase):
         self.assertIn(f"prompt:{digest}", output)
         self.assertIn("pass --show-prompts", output)
 
-    def test_text_can_include_repeated_prompts_when_requested(self) -> None:
-        output = render_report(
+        shown = render_report(
             make_report(),
             output_format="text",
             top=8,
             show_prompts=True,
         )
-
-        self.assertIn("repeat this private prompt", output)
+        self.assertIn("repeat this private prompt", shown)
 
 
 class SessionAnalysisToolPolicyTest(unittest.TestCase):

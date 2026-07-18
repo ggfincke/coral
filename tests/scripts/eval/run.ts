@@ -1,6 +1,5 @@
 // tests/scripts/eval/run.ts
-// CLI entry for the model eval harness — drives live Ollama models
-// usage: tsx tests/scripts/eval/run.ts <model...> [flags]
+// drive live Ollama model evals through the CLI
 
 import { runEval } from './harness.js'
 import { TASKS, taskById } from './tasks.js'

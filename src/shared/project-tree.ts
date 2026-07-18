@@ -1,5 +1,5 @@
 // src/shared/project-tree.ts
-// project tree filtering, sorting, & entry formatting
+// project tree filtering, sorting, and entry formatting
 
 import { isAbsolute, relative, sep } from 'node:path'
 

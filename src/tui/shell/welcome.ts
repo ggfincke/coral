@@ -39,10 +39,10 @@ const PIXEL_W = 2
 
 // logo needs this many columns (grid width * 2) plus a little margin
 const LOGO_COLS = CORAL_FULL[0]!.length * PIXEL_W
-// chat-area rows required to fit each tier w/o crowding the prompt
+// chat-area rows required to fit each tier without crowding the prompt
 const FULL_MIN_ROWS = 15
 const COMPACT_MIN_ROWS = 13
-// gap between the coral & the text column in the horizontal lockup
+// gap between the coral and text columns in the horizontal lockup
 const GAP = 4
 
 export interface WelcomeOptions

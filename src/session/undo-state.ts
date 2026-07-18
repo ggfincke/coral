@@ -1,5 +1,5 @@
 // src/session/undo-state.ts
-// persisted undo/redo stack shaping
+// persisted undo and redo stack shaping
 
 import type { OllamaMessage } from '../types/inference.js'
 import {
@@ -12,7 +12,7 @@ import {
 } from '../types/undo.js'
 import { cloneTodoItems } from '../types/todo.js'
 
-// two-layer undo bounds: count caps live memory; byte cap caps disk snapshots
+// bound the live stack by count and persisted snapshots by bytes
 export { MAX_UNDO_TURNS } from '../types/undo.js'
 export const DEFAULT_PERSISTED_UNDO_BYTE_CAP = 8 * 1024 * 1024
 

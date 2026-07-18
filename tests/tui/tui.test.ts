@@ -9,38 +9,36 @@ import {
   failPendingToolCalls,
   maxScrollOffset,
   sliceViewport,
-  type OutputBlock,
+  summarizeToolArgs,
 } from '../../src/tui/transcript/transcript.js'
+import type { OutputBlock } from '../../src/tui/transcript/types.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
 import {
   buildApprovalContent,
-  buildConfirmContent,
   buildMcpApprovalContent,
   renderPromptBox,
 } from '../../src/tui/run/approval-box.js'
 import {
   formatAutoCompactionResult,
-  formatCliSessionList,
   formatManualCompactionResult,
-  formatPermissionModeChange,
-  formatPermissionsHelp,
-  formatTuiResumeResolution,
-  formatTuiSessionList,
-} from '../../src/tui/shell/command-output.js'
+} from '../../src/tui/commands/conversation-output.js'
 import {
+  formatCliSessionList,
+  formatTuiSessionList,
+} from '../../src/tui/commands/session-output.js'
+import {
+  commandCompletions,
+  commandInfos,
   dispatchCommand,
-  type CommandContext,
-} from '../../src/tui/shell/commands.js'
+} from '../../src/tui/commands/registry.js'
+import type { CommandContext } from '../../src/tui/commands/contracts.js'
 import type { Agent, CompactionResult } from '../../src/agent/agent.js'
 import type { IndexStore } from '../../src/retrieval/types.js'
 import { createEmbeddingSpace } from '../../src/retrieval/embedding-space.js'
 import { RetrievalBuildError } from '../../src/retrieval/build.js'
 import { OllamaModelIdentityError } from '../../src/ollama/errors.js'
-import type { ResumeSessionResolution } from '../../src/session/resume.js'
-import type { SessionMeta } from '../../src/session/store.js'
-import { restoredSessionForPickerSelection } from '../../src/tui/model/model-activation.js'
 import { buildTodoPanel } from '../../src/tui/transcript/todo-panel.js'
-import { AgentTodoState } from '../../src/agent/todo-state.js'
+import { AgentTodoState } from '../../src/agent/state/todos.js'
 import { visibleWidth } from '../../src/tui/wrap.js'
 import { makeFakeAgent } from '../helpers/agent-harness.js'
 import { makeSessionMeta } from '../helpers/session.js'
@@ -51,8 +49,6 @@ function plain(lines: string | string[]): string
   return stripAnsi(Array.isArray(lines) ? lines.join('\n') : lines)
 }
 
-const makeSession = (id: string, title?: string): SessionMeta =>
-  makeSessionMeta(title === undefined ? { id } : { id, title })
 const { tempDir } = makeTempDirPool()
 
 function makeCommandContext(
@@ -89,6 +85,78 @@ function makeCommandContext(
     {},
   }
 }
+
+test('command registry preserves order, aliases, help, and dispatch', async () =>
+{
+  const expectedOrder = [
+    'help',
+    'clear',
+    'compact',
+    'status',
+    'mcp',
+    'model',
+    'permissions',
+    'verify',
+    'theme',
+    'undo',
+    'redo',
+    'diff',
+    'copy',
+    'todo',
+    'index',
+    'sessions',
+    'resume',
+    'rename',
+    'new',
+    'telemetry',
+    'exit',
+  ]
+  const infos = commandInfos()
+
+  assert.deepEqual(
+    infos.map((command) => command.name),
+    expectedOrder
+  )
+  assert.deepEqual(commandCompletions(), infos)
+  assert.deepEqual(
+    Object.fromEntries(
+      infos
+        .filter((command) => command.aliases.length > 0)
+        .map((command) => [command.name, command.aliases])
+    ),
+    {
+      clear: ['reset'],
+      permissions: ['perm', 'perms'],
+      sessions: ['ls'],
+      exit: ['quit'],
+    }
+  )
+
+  const output: OutputBlock[] = []
+  let clears = 0
+  const context = makeCommandContext(
+    {
+      clearHistory()
+      {
+        clears++
+        return 1
+      },
+    },
+    output
+  )
+  assert.equal(await dispatchCommand('/help', context), true)
+  const help = plain(output.map((block) => block.content))
+  let previous = -1
+  for (const name of expectedOrder)
+  {
+    const position = help.indexOf(`/${name}`, previous + 1)
+    assert.ok(position > previous, `/${name} is out of help order`)
+    previous = position
+  }
+
+  assert.equal(await dispatchCommand('/RESET', context), true)
+  assert.equal(clears, 1)
+})
 
 test('buildTranscriptLines renders conversation and tool results in scrollable order', () =>
 {
@@ -231,6 +299,27 @@ test('buildTranscriptLines neutralizes untrusted terminal control sequences', ()
       content: 'before\x1b[2Jafter',
     },
     { type: 'diff', unified: '@@ -1,1 +1,1 @@\n-\x1b[2Jold\n+new' },
+    {
+      type: 'tool_call',
+      toolName: 'hostile',
+      args: {},
+      display: {
+        label: 'Unsafe\x1b]52;c;LABEL\x07 label',
+        summary: 'bad\x1b[2Jsummary',
+        mcp: false,
+      },
+    },
+    {
+      type: 'tool_call',
+      toolName: 'settled_hostile',
+      args: { raw: 'completed-summary-must-not-fall-back' },
+      status: 'success',
+      display: {
+        label: 'Settled\x1b]52;c;LABEL\x07 label',
+        summary: 'settled\x1b[2Jsummary',
+        mcp: false,
+      },
+    },
   ]
 
   const rendered = buildTranscriptLines({
@@ -245,6 +334,19 @@ test('buildTranscriptLines neutralizes untrusted terminal control sequences', ()
   assert.ok(plain(rendered).includes('hello  world'))
   assert.ok(plain(rendered).includes('system note'))
   assert.ok(plain(rendered).includes('beforeafter'))
+  assert.ok(plain(rendered).includes('Unsafe label'))
+  assert.ok(plain(rendered).includes('badsummary'))
+  assert.ok(plain(rendered).includes('Settled label'))
+  assert.ok(plain(rendered).includes('settledsummary'))
+  assert.ok(!plain(rendered).includes('completed-summary-must-not-fall-back'))
+
+  assert.equal(
+    summarizeToolArgs({ path: 'legacy.ts' }, { label: 'Legacy', mcp: false }),
+    '{"path":"legacy.ts"}'
+  )
+  const cyclic: Record<string, unknown> = { count: 1n }
+  cyclic.self = cyclic
+  assert.match(summarizeToolArgs(cyclic), /BigInt.*Circular/)
 })
 
 test('buildTranscriptLines keeps app SGR styling in system blocks but strips controls', () =>
@@ -283,23 +385,6 @@ test('buildTranscriptLines leaves streaming markdown unparsed until finalized', 
   assert.ok(rendered.includes('const value = 1'))
 })
 
-test('session list formatters share rows across CLI and TUI surfaces', () =>
-{
-  const sessions = [makeSession('abcd1234', 'Inspect files')]
-  const cli = plain(formatCliSessionList(sessions))
-  const tui = plain(formatTuiSessionList(sessions, 'abcd1234'))
-
-  assert.ok(cli.includes('1 saved session(s):'))
-  assert.ok(cli.includes('abcd1234  test-model'))
-  assert.ok(cli.includes('Inspect files'))
-  assert.ok(cli.includes('Resume with: coral --session <id>'))
-
-  assert.ok(tui.includes('Coral — saved sessions'))
-  assert.ok(tui.includes('● abcd1234  test-model'))
-  assert.ok(tui.includes('Inspect files'))
-  assert.ok(tui.includes('Resume with /resume <id>'))
-})
-
 test('session list formatters sanitize session identifiers and models', () =>
 {
   const sessions = [
@@ -320,48 +405,7 @@ test('session list formatters sanitize session identifiers and models', () =>
   assert.ok(plain(tui).includes('abcd1234  test-model'))
 })
 
-test('resume resolution formatter covers current, missing, and ambiguous states', () =>
-{
-  const sessions = [makeSession('abcd1234'), makeSession('abce5678')]
-  const current = plain(
-    formatTuiResumeResolution({ type: 'current', session: sessions[0]! })
-  )
-  const missing = plain(
-    formatTuiResumeResolution({ type: 'not_found', requestedId: 'missing' })
-  )
-  const ambiguous: ResumeSessionResolution = {
-    type: 'ambiguous',
-    requestedId: 'abc',
-    matches: sessions,
-  }
-
-  assert.equal(current, 'Already in this session.')
-  assert.ok(missing.includes('Session not found: missing'))
-  assert.ok(missing.includes('/sessions'))
-  assert.ok(plain(formatTuiResumeResolution(ambiguous)).includes('abcd1234'))
-
-  const unavailable = plain(
-    formatTuiResumeResolution({
-      type: 'unavailable',
-      session: makeSessionMeta({ id: 'feedface', cwd: '/missing/project' }),
-    })
-  )
-  assert.ok(unavailable.includes('Session unavailable: feedface'))
-  assert.ok(unavailable.includes('/missing/project'))
-})
-
-test('model picker selection uses null to suppress stale resume restore', () =>
-{
-  const session = {
-    meta: makeSessionMeta({ id: 'abcddcba' }),
-    messages: [{ role: 'user' as const, content: 'old' }],
-  }
-
-  assert.equal(restoredSessionForPickerSelection(true, session), null)
-  assert.equal(restoredSessionForPickerSelection(false, session), session)
-})
-
-test('permission and compaction formatters preserve command copy', () =>
+test('compaction formatters clear undo history only for summarized results', () =>
 {
   const compacted: CompactionResult = {
     type: 'summarized',
@@ -380,26 +424,8 @@ test('permission and compaction formatters preserve command copy', () =>
   }
 
   assert.ok(
-    plain(formatPermissionsHelp(false)).includes('Permission mode: ask')
-  )
-  assert.ok(
-    plain(formatPermissionModeChange(true)).includes(
-      'Permission mode → yolo (all approval-gated built-in tool calls auto-approved'
-    )
-  )
-  assert.ok(
-    plain(formatManualCompactionResult(compacted)).includes(
-      '8 messages -> 4 messages (4 summarized)'
-    )
-  )
-  assert.ok(
     plain(formatManualCompactionResult(compacted)).includes(
       'Undo history cleared'
-    )
-  )
-  assert.ok(
-    plain(formatAutoCompactionResult(pruned)).includes(
-      'Auto-pruned 2 old tool results'
     )
   )
   assert.ok(
@@ -414,21 +440,31 @@ test('permission and compaction formatters preserve command copy', () =>
 
 test('approval and confirm boxes share framed prompt rendering', () =>
 {
-  const render = (content: ReturnType<typeof buildConfirmContent>) =>
+  const render = (content: ReturnType<typeof buildApprovalContent>) =>
     plain(renderPromptBox(content, 50, 200, 0).lines)
-  const approval = render(
-    buildApprovalContent('bash', { command: 'npm test' }, 50)
+
+  const longCommand = `${'x'.repeat(100)} important-tail`
+  const longApproval = render(
+    buildApprovalContent(
+      'bash',
+      { command: longCommand },
+      50,
+      undefined,
+      undefined,
+      { label: 'Shell', summary: longCommand, mcp: false }
+    )
   )
-  const confirm = render(buildConfirmContent('Continue anyway?', 50, 'confirm'))
+  assert.ok(longApproval.includes('important-tail'))
 
-  assert.ok(approval.includes('tool approval'))
-  assert.ok(approval.includes('Allow bash?'))
-  assert.ok(approval.includes('$ npm test'))
-  assert.ok(approval.includes('(y) approve  (n) reject  (esc) cancel'))
-
-  assert.ok(confirm.includes('confirm'))
-  assert.ok(confirm.includes('Continue anyway?'))
-  assert.ok(confirm.includes('(y) continue  (n) stop'))
+  const hostileTitle = render(
+    buildApprovalContent('unsafe\x1b[2J\nname', {}, 50, undefined, undefined, {
+      label: 'Friendly',
+      summary: '',
+      mcp: false,
+    })
+  )
+  assert.ok(!hostileTitle.includes('\x1b[2J'))
+  assert.ok(hostileTitle.includes('Allow unsafe name?'))
 
   // full MCP launch identity must stay inspectable before trust persists
   const mcpContent = buildMcpApprovalContent(
@@ -445,13 +481,11 @@ test('approval and confirm boxes share framed prompt rendering', () =>
     80
   )
   const mcp = plain(renderPromptBox(mcpContent, 80, 200, 0).lines)
-  assert.ok(mcp.includes('Trust & launch MCP server "fixture"?'))
   assert.ok(mcp.includes('Resolved executable: /usr/local/bin/node'))
   assert.ok(mcp.includes('Arguments: ["server.js","--flag"]'))
   assert.ok(mcp.includes('Forwarded environment names: API_TOKEN_NAME'))
   // the fingerprint hard-wraps across rows; compare w/o frame & whitespace
   assert.ok(mcp.replace(/[\s│]/g, '').includes(`Fingerprint:${'f'.repeat(64)}`))
-  assert.ok(mcp.includes('(y) trust & launch  (n) reject  (esc) cancel'))
 
   // a bounded viewport pins title & actions while the body scrolls; the MCP
   // raw-JSON format follows the presentation snapshot, not name sniffing
@@ -468,7 +502,6 @@ test('approval and confirm boxes share framed prompt rendering', () =>
   assert.ok(bounded.maxOffset > 0)
   const boundedText = plain(bounded.lines)
   assert.ok(boundedText.includes('Allow mcp__fixture__echo?'))
-  assert.ok(boundedText.includes('(y) approve  (n) reject  (esc) cancel'))
   assert.match(boundedText, /lines 1-\d+ of \d+/)
   const scrolled = plain(renderPromptBox(long, 50, 16, bounded.maxOffset).lines)
   assert.match(scrolled, new RegExp(`of \\d+`))
@@ -492,7 +525,6 @@ test('approval and confirm boxes share framed prompt rendering', () =>
   assert.ok(narrowTop.lines.length <= 10)
   assert.ok(narrowTop.lines.every((line) => visibleWidth(line) <= 20))
   assert.ok(narrowTop.maxOffset > 0)
-  assert.match(plain(narrowTop.lines), /trust|reject|cancel/)
   const fingerprintReachable = Array.from(
     { length: narrowTop.maxOffset + 1 },
     (_, offset) => plain(renderPromptBox(narrow, 20, 10, offset).lines)

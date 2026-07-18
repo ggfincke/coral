@@ -1,9 +1,9 @@
 // src/ollama/host.ts
-// default Ollama host config
+// host configuration and canonicalization for Ollama
 
 export const DEFAULT_OLLAMA_HOST = 'http://localhost:11434'
 
-// canonicalize host identity & reject URL parts Coral cannot safely preserve
+// canonicalize host identity and reject URL parts Coral cannot safely preserve
 export function normalizeOllamaHost(host: string): string
 {
   let parsed: URL

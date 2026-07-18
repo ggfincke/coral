@@ -25,7 +25,7 @@ import {
 } from '../../src/tools/git.js'
 import { taskTool } from '../../src/tools/task.js'
 import { setSubagentRunner } from '../../src/tools/subagent.js'
-import { subagentTools } from '../../src/tools/index.js'
+import { subagentTools } from '../../src/tools/registry.js'
 import { searchCodeTool } from '../../src/tools/search-code.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../../src/utils/file-read.js'
 import { execFileCommand, formatProcessError } from '../../src/utils/process.js'

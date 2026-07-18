@@ -1,9 +1,9 @@
 // src/tools/ripgrep-utils.ts
-// shared ripgrep execution & error handling
+// shared ripgrep execution and error handling
 
 import type { ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
-import { checkWorkspacePath } from './path-policy.js'
+import { checkWorkspacePath } from '../shared/workspace-path.js'
 import {
   formatProjectPath,
   isPathInsideProject,
@@ -45,7 +45,7 @@ export async function resolveRgSearchTarget(
 const RG_TIMEOUT = 15_000
 const RG_MAX_BUFFER = 5 * 1024 * 1024
 
-// no-match sentinels — callers pass these in & compare output against them
+// no-match sentinels for caller comparisons
 export const NO_MATCHES_MESSAGE = 'No matches found.'
 export const NO_MATCHING_FILES_MESSAGE = 'No matching files found.'
 
@@ -56,7 +56,7 @@ interface RipgrepOptions
   signal?: AbortSignal
 }
 
-// execute ripgrep w/ shared error handling
+// execute ripgrep with shared error handling
 export async function execRipgrep(
   args: string[],
   noMatchMessage: string,

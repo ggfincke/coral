@@ -5,7 +5,7 @@ import { writeFile } from 'node:fs/promises'
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { applyEdit, describeEditMiss } from './edit-operation.js'
 import { readFileGuarded } from './file-utils.js'
-import { checkWorkspacePath } from './path-policy.js'
+import { checkWorkspacePath } from '../shared/workspace-path.js'
 import { getCwd } from '../cwd.js'
 import { formatBytes } from '../utils/bytes.js'
 import { computeDiff } from '../utils/diff.js'
@@ -109,8 +109,8 @@ export const editTool: Tool = {
     }
 
     const replaced = replaceAll ? result.count : 1
-    // fuzzy match = old_string didn't match verbatim; tell the model so it copies
-    // exact text next time, & flag the recovery for ReliabilityStats
+    // record whitespace-tolerant recovery so the model can copy exact text next
+    // time and ReliabilityStats can count the repair
     const fuzzy = result.matchType === 'fuzzy'
     const note = fuzzy
       ? ' (old_string matched on normalized whitespace, not verbatim — copy exact text next time)'

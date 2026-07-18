@@ -1,5 +1,5 @@
 // src/tui/transcript/diff.ts
-// render unified diff text into colored terminal lines w/ a line-number gutter
+// render unified diff text into colored terminal lines with a line-number gutter
 
 import chalk from 'chalk'
 import { style } from '../theme.js'
@@ -7,7 +7,7 @@ import { sanitizeUntrustedText } from './sanitize.js'
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
 
-// file-level lines from git output — styled w/o gutter & never counted
+// style file-level git output lines without a gutter or line count
 function isFileHeader(line: string): boolean
 {
   return (
@@ -37,7 +37,7 @@ function gutterWidth(lines: string[]): number
   return Math.max(String(max).length, 2)
 }
 
-// truncate raw text to fit, marking the cut w/ an ellipsis
+// truncate raw text to fit and mark the cut with an ellipsis
 function fitContent(
   raw: string,
   maxWidth: number
@@ -100,7 +100,7 @@ export function renderUnifiedDiff(unified: string, width: number): string[]
     }
     else
     {
-      // "\ No newline at end of file", truncation markers, & friends
+      // preserve no-newline markers, truncation markers, and other non-content lines
       result.push(chalk.dim(raw))
       continue
     }

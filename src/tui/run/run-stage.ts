@@ -1,5 +1,5 @@
 // src/tui/run/run-stage.ts
-// shared run-stage types & animation visibility checks
+// shared run-stage types and animation visibility checks
 
 export type RunStage =
   | 'idle'

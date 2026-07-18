@@ -1,5 +1,5 @@
 // src/agent/inference-client.ts
-// narrow inference transport contract owned by the Agent runtime
+// inference transport contract owned by Agent
 
 import type {
   ChatRequest,

@@ -11,7 +11,7 @@ import {
   type ToolPermissions,
 } from '../../src/config/permissions.js'
 import { loadProjectConfig } from '../../src/config/project-config.js'
-import { resolveRetrievalConfig } from '../../src/config/retrieval.js'
+import { resolveRetrievalConfig } from '../../src/retrieval/config.js'
 import { resolveVerifyConfig } from '../../src/config/verify.js'
 import { loadPrefs, savePrefs } from '../../src/config/prefs.js'
 import { DEFAULT_EMBEDDING_MODEL } from '../../src/retrieval/types.js'
@@ -301,22 +301,15 @@ test('retrieval and verify resolvers validate raw values and preserve precedence
   }
 })
 
-test('loadProjectConfig ignores non-object JSON config files', async () =>
+test('loadProjectConfig and loadPrefs ignore non-object JSON shapes', async () =>
 {
-  const dir = await tempDir('coral-config-')
+  const projectDir = await tempDir('coral-config-')
+  await writeFile(join(projectDir, '.coral.json'), '[]', 'utf-8')
+  assert.deepEqual(loadProjectConfig(projectDir), {})
 
-  await writeFile(join(dir, '.coral.json'), '[]', 'utf-8')
-
-  assert.deepEqual(loadProjectConfig(dir), {})
-})
-
-test('loadPrefs ignores array-shaped prefs files', async () =>
-{
-  const dir = await tempDir('coral-prefs-')
-  process.env.CORAL_HOME = dir
-
-  await writeFile(join(dir, 'prefs.json'), '[]', 'utf-8')
-
+  const prefsDir = await tempDir('coral-prefs-')
+  process.env.CORAL_HOME = prefsDir
+  await writeFile(join(prefsDir, 'prefs.json'), '[]', 'utf-8')
   assert.deepEqual(loadPrefs(), {})
 })
 

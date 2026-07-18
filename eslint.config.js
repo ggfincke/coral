@@ -1,5 +1,5 @@
 // eslint.config.js
-// ESLint flat config for TS/JS & comment rules
+// configure ESLint for TypeScript, JavaScript, and comment rules
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'
@@ -9,15 +9,22 @@ import prettierConfig from 'eslint-config-prettier'
 import localRules from './eslint-rules/index.js'
 
 const languageOptions = {
-  ecmaVersion: 2020,
+  ecmaVersion: 'latest',
   globals: globals.node,
 }
 
 const commentRules = {
-  'ggfincke/no-jsdoc-blocks': 'error',
   'ggfincke/file-header': 'error',
-  'ggfincke/comment-style-guide': 'warn',
-  'no-inline-comments': 'error',
+  'ggfincke/comment-tags': 'error',
+  'ggfincke/plain-comment-case': 'error',
+  'ggfincke/block-doc-comments': 'error',
+  'ggfincke/no-unicode-arrow': 'error',
+  'no-inline-comments': [
+    'error',
+    {
+      ignorePattern: '^\\s*(?:eslint(?:-disable)?|@ts-|istanbul|c8\\b|v8\\b)',
+    },
+  ],
 }
 
 const plugins = {
@@ -37,12 +44,15 @@ export default defineConfig([
     ],
     languageOptions,
     plugins,
-    rules: commentRules,
   },
   {
-    files: ['eslint.config.js', 'eslint-rules/*.js', 'scripts/**/*.mjs'],
+    files: ['**/*.{js,mjs,cjs}'],
     extends: [js.configs.recommended, prettierConfig],
     languageOptions,
+    plugins,
+  },
+  {
+    files: ['**/*.{ts,tsx,js,mjs,cjs}'],
     plugins,
     rules: commentRules,
   },
