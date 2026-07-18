@@ -27,9 +27,15 @@ describe('project-context', () =>
   test('gatherProjectContext loads project instructions and key metadata', async () =>
   {
     const dir = await tempProject()
-    await writeFile(join(dir, '.coral.md'), '# Project Instructions\nDo this.\n')
+    await writeFile(
+      join(dir, '.coral.md'),
+      '# Project Instructions\nDo this.\n'
+    )
     await writeFile(join(dir, 'README.md'), '# My App\n')
-    await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'my-app' }))
+    await writeFile(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'my-app' })
+    )
     await mkdir(join(dir, 'src'))
     await writeFile(join(dir, 'src', 'index.ts'), '// entry\n')
 

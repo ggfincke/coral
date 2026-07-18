@@ -219,7 +219,10 @@ describe('ReplayCoordinator', () =>
     assert.equal(await readFile(fixture.edited, 'utf-8'), 'after\n')
     assert.equal(await readFile(fixture.created, 'utf-8'), 'created\n')
     assert.deepEqual(fixture.todos.snapshot(), afterTodos)
-    assert.equal(fixture.state.getMessages().at(-1)?.content, 'concurrent drift')
+    assert.equal(
+      fixture.state.getMessages().at(-1)?.content,
+      'concurrent drift'
+    )
     assert.equal(fixture.state.getUndoStack().length, 1)
     assert.equal(fixture.state.getRedoStack().length, 0)
     assert.equal(controller.signal.aborted, true)
@@ -251,7 +254,10 @@ describe('ReplayCoordinator', () =>
     assert.equal(await readFile(fixture.edited, 'utf-8'), 'before\n')
     assert.equal(existsSync(fixture.created), false)
     assert.deepEqual(fixture.todos.snapshot(), beforeTodos)
-    assert.equal(fixture.state.getMessages().at(-1)?.content, 'concurrent drift')
+    assert.equal(
+      fixture.state.getMessages().at(-1)?.content,
+      'concurrent drift'
+    )
     assert.equal(fixture.state.getUndoStack().length, 0)
     assert.equal(fixture.state.getRedoStack().length, 1)
     assert.equal(controller.signal.aborted, true)

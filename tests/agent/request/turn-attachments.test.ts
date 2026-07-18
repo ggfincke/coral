@@ -90,7 +90,15 @@ describe('attachments', () =>
     }
 
     const capture = await captureAttachments(
-      ['a.ts', 'big.ts', 'gone.ts', 'bin.dat', 'broken.ts', outsideFile, 'a.ts'],
+      [
+        'a.ts',
+        'big.ts',
+        'gone.ts',
+        'bin.dat',
+        'broken.ts',
+        outsideFile,
+        'a.ts',
+      ],
       { cwd, read }
     )
     const rendered = materializeAttachments(capture, 10_000)
@@ -114,7 +122,10 @@ describe('attachments', () =>
       readPaths.some((path) => path === outsideFile),
       false
     )
-    assert.equal(readPaths.filter((path) => basename(path) === 'a.ts').length, 1)
+    assert.equal(
+      readPaths.filter((path) => basename(path) === 'a.ts').length,
+      1
+    )
     assert.match(rendered.context ?? '', /===== a\.ts =====/)
     assert.match(rendered.context ?? '', /export const a = 1/)
     assert.doesNotMatch(rendered.context ?? '', /secret/)
@@ -157,7 +168,9 @@ describe('attachments', () =>
           )
         if (options?.signal?.aborted) rejectAbort()
         else
-          options?.signal?.addEventListener('abort', rejectAbort, { once: true })
+          options?.signal?.addEventListener('abort', rejectAbort, {
+            once: true,
+          })
       })
     }
 
@@ -373,7 +386,9 @@ describe('attachments', () =>
     const beforeBoundary = tokenDelta(
       materializeAttachments(capture, 393).context
     )
-    const afterBoundary = tokenDelta(materializeAttachments(capture, 394).context)
+    const afterBoundary = tokenDelta(
+      materializeAttachments(capture, 394).context
+    )
     assert.ok(afterBoundary < beforeBoundary)
 
     const tokenLimit = afterBoundary
@@ -866,7 +881,10 @@ describe('turn-context', () =>
 
     assert.equal(categoryTotal, budget.promptTokens)
     assert.equal(actualPromptTokens, budget.promptTokens)
-    assert.equal(actualPromptTokens + budget.responseReserve, budget.totalTokens)
+    assert.equal(
+      actualPromptTokens + budget.responseReserve,
+      budget.totalTokens
+    )
     assert.equal(budget.responseReserve, 1_024)
     assert.equal(request.num_ctx, 8_192)
     assert.equal(request.num_predict, budget.responseReserve)

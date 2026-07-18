@@ -81,7 +81,10 @@ describe('ConversationState', () =>
     )
     assertExactEstimate(state)
 
-    const anchor = state.acceptUserMessage('inspect files', 'inspect @large.txt')
+    const anchor = state.acceptUserMessage(
+      'inspect files',
+      'inspect @large.txt'
+    )
     const report: AttachmentReport = {
       attached: [{ path: 'large.txt', truncated: true }],
       skipped: [{ path: 'binary.dat', reason: 'binary' }],
@@ -141,8 +144,9 @@ describe('ConversationState', () =>
         nested: boolean
       }
     ).nested = false
-    ;(leakedSnapshot[2]!.attachmentReport!.attached[0] as { path: string }).path =
-      'mutated snapshot path'
+    ;(
+      leakedSnapshot[2]!.attachmentReport!.attached[0] as { path: string }
+    ).path = 'mutated snapshot path'
     assert.equal(state.getMessages()[1]!.content, 'planning')
     assert.deepEqual(
       state.getMessages()[1]!.tool_calls![0]!.function.arguments.path,
@@ -493,10 +497,15 @@ describe('ConversationState', () =>
       kind: 'undo',
       removedMessages: 2,
     })
-    assert.deepEqual(state.getMessages(), [{ role: 'system', content: 'system' }])
+    assert.deepEqual(state.getMessages(), [
+      { role: 'system', content: 'system' },
+    ])
     assert.equal(state.getRedoStack()[0]!.userMessage, 'change files')
     assert.equal(state.getRedoStack()[0]!.changes[0]!.after, 'new')
-    assert.equal(state.getRedoStack()[0]!.todoChange!.after[0]!.content, 'change')
+    assert.equal(
+      state.getRedoStack()[0]!.todoChange!.after[0]!.content,
+      'change'
+    )
 
     const failedFileReplay = requireReadyReplay(state.prepareRedo())
     const beforeFailedReplay = {
@@ -655,7 +664,10 @@ describe('compaction helpers', () =>
         content: "I'll read it.",
         tool_calls: [
           {
-            function: { name: 'read_file', arguments: { path: 'package.json' } },
+            function: {
+              name: 'read_file',
+              arguments: { path: 'package.json' },
+            },
           },
         ],
       },

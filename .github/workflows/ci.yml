@@ -28,7 +28,7 @@ jobs:
         with:
           enable-cache: true
           # keep in sync w/ .python-version (latest stable; 3.15 is still beta)
-          python-version: "3.14"
+          python-version: '3.14'
 
       - name: Set up Python
         run: uv python install

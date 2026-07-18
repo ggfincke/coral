@@ -113,7 +113,10 @@ describe('CompactionCoordinator', () =>
         onStart: () =>
         {
           order.push('start:2')
-          state.appendMessage({ role: 'user', content: 'concurrent state drift' })
+          state.appendMessage({
+            role: 'user',
+            content: 'concurrent state drift',
+          })
         },
         onResult: () => order.push('result:2'),
       },
