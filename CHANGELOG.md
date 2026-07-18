@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by `ctrl+y` and `/permissions`; toggling while a turn or command runs now
   prints a lock notice instead of silently ignoring the keypress, and `/status`
   states MCP availability per mode.
+- **Context-aware MCP discovery:** include model-visible tool definitions in
+  token estimates and admit dynamic MCP tools only within a context-relative
+  budget. Trust prompts remain sequential, while up to two approved servers
+  start concurrently and their tools are installed in deterministic config
+  order.
+- **Bounded MCP transport and results:** replace cumulative stdio frame copies
+  with one bounded line buffer, reject protocol messages above 16 MiB or 8,192
+  retained fragments, and sanitize, redact, and truncate large text results
+  incrementally before they enter model context.
 
 ### Security
 

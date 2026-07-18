@@ -144,7 +144,8 @@ Coral exposes a small structured toolset to the model:
 - A persistent `todo_write` plan rendered in the TUI
 - Trusted, explicitly allowlisted MCP tools from local stdio server processes;
   MCP tools are namespaced as `mcp__<server>__<tool>`, executed serially, and
-  never exposed to read-only subagents
+  admitted within the active model's context budget, and never exposed to
+  read-only subagents
 
 `code_intel` starts its bundled TypeScript language server only on first use,
 shares it with read-only subagents, and shuts it down when Coral disposes the
@@ -306,8 +307,10 @@ Configuration is limited to four servers and twelve enabled tools total. Alias
 names must start with a lowercase letter or digit and contain only lowercase
 letters, digits, `_`, or `-`. If any environment variable named in `passEnv` is
 unset, Coral disables that server for the session rather than launching it with
-an incomplete environment. Changes to server configuration or discovered tools
-require a new Coral session.
+an incomplete environment. Coral also skips discovered definitions that would
+push the complete tool payload beyond the active model's context-relative
+budget; `/mcp` reports the skipped tool. Changes to server configuration,
+context size, model, or discovered tools require a fresh manager or session.
 
 On first use, Coral resolves the executable to its real path and asks you to
 approve the alias, configured command, resolved executable, complete ordered
@@ -317,6 +320,17 @@ enabled tools, and SHA-256 launch fingerprint. Approval is stored in
 change requires approval again. The fingerprint does not hash executable
 contents or resolve a mutable container tag, so an update at the same path or
 tag does not trigger reapproval.
+
+Launch approval is requested sequentially in configuration order. After all
+required approvals finish, Coral starts at most two approved servers at once,
+then installs their tools in configuration order so collisions, budgets, and
+model-visible ordering remain deterministic.
+
+MCP stdio messages are newline-delimited and limited to 16 MiB or 8,192 retained
+fragments per unfinished message. Supported tool result content is sanitized and
+redacted incrementally; Coral retains at most a 100,000-character result body
+before appending an explicit omitted-character marker. A server that exceeds a
+protocol-message limit is stopped and shown as failed in `/mcp`.
 
 Use `/mcp` at any time to inspect configuration errors and each server's state,
 resolved executable, working directory, forwarded environment names, enabled or
@@ -394,9 +408,9 @@ evaluation harness.
   OAuth, standalone resource discovery/reads, prompts, sampling, elicitation,
   hot config/tool-list updates, MCP use from subagents, and parallel MCP calls
   are deferred. Text resources embedded directly in a tool result are supported.
-- MCP processes are not sandboxed. The stable v1 TypeScript SDK also buffers an
-  unterminated stdio protocol frame until a newline arrives, so a malicious or
-  broken trusted server can consume unbounded memory; use only servers you trust.
+- MCP processes are not sandboxed. Coral bounds each newline-delimited stdio
+  protocol message, but a trusted server can still consume host resources in
+  its own process; use only servers you trust.
 - Semantic search uses an in-process vector scan and is intended for ordinary
   project sizes, not giant monorepos.
 - The project does not currently declare a software license.

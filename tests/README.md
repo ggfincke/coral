@@ -18,8 +18,9 @@ We focus on testing critical pure-function logic that, if broken, would cause si
 - **MCP boundaries**: Exactly three major scenarios cover user-owned launch
   config, fingerprint trust, and the exact `always_deny` pre-launch block; the
   Agent-mediated strict stdio bridge (a real SDK subprocess driven through a
-  fake model, asserting advertised tools, strict validation, results, disable,
-  and trusted re-enable at the model-request boundary); and abort/lifecycle
+  fake model, asserting context-budgeted advertised tools, strict validation,
+  bounded/redacted large results, disable, and trusted re-enable at the
+  model-request boundary); and ordered two-worker startup, abort, and lifecycle
   cleanup
 
 We intentionally do not test:
