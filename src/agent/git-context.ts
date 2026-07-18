@@ -21,9 +21,13 @@ interface StatusGroups
   untracked: string[]
 }
 
-async function gitOutput(cwd: string, args: string[]): Promise<string | null>
+async function gitOutput(
+  cwd: string,
+  args: string[],
+  signal?: AbortSignal
+): Promise<string | null>
 {
-  const result = await runGitCommand(args, cwd)
+  const result = await runGitCommand(args, cwd, { signal })
   if (result.error) return null
   return result.output
 }
@@ -91,29 +95,33 @@ function summarizeGitError(error: string | undefined): string
   return excerpt(error ?? '', 180) || 'git command failed'
 }
 
-async function upstreamSummary(cwd: string): Promise<string>
+async function upstreamSummary(
+  cwd: string,
+  signal?: AbortSignal
+): Promise<string>
 {
-  const upstream = await gitOutput(cwd, [
-    'rev-parse',
-    '--abbrev-ref',
-    '--symbolic-full-name',
-    '@{u}',
-  ])
+  const upstream = await gitOutput(
+    cwd,
+    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'],
+    signal
+  )
 
   if (!upstream?.trim()) return 'none'
 
-  const counts = await gitOutput(cwd, [
-    'rev-list',
-    '--left-right',
-    '--count',
-    'HEAD...@{u}',
-  ])
+  const counts = await gitOutput(
+    cwd,
+    ['rev-list', '--left-right', '--count', 'HEAD...@{u}'],
+    signal
+  )
   const [ahead = '0', behind = '0'] = counts?.trim().split(/\s+/) ?? []
 
   return `${upstream.trim()} (${ahead} ahead, ${behind} behind)`
 }
 
-async function operationState(cwd: string): Promise<string>
+async function operationState(
+  cwd: string,
+  signal?: AbortSignal
+): Promise<string>
 {
   const checks: Array<[string, string]> = [
     ['MERGE_HEAD', 'merge'],
@@ -129,7 +137,11 @@ async function operationState(cwd: string): Promise<string>
   const found = await Promise.all(
     checks.map(async ([gitPath, label]) =>
     {
-      const path = await gitOutput(cwd, ['rev-parse', '--git-path', gitPath])
+      const path = await gitOutput(
+        cwd,
+        ['rev-parse', '--git-path', gitPath],
+        signal
+      )
       return path && existsSync(resolve(cwd, path)) ? label : null
     })
   )
@@ -150,10 +162,12 @@ function truncateContext(content: string): string
 }
 
 export async function buildGitContextMessage(
-  cwd: string
+  cwd: string,
+  signal?: AbortSignal
 ): Promise<OllamaMessage | null>
 {
-  const root = await gitOutput(cwd, ['rev-parse', '--show-toplevel'])
+  signal?.throwIfAborted()
+  const root = await gitOutput(cwd, ['rev-parse', '--show-toplevel'], signal)
   if (!root?.trim()) return null
 
   // independent reads — fan out so the snapshot costs one wave of git spawns
@@ -167,14 +181,19 @@ export async function buildGitContextMessage(
     unstagedStat,
     recentCommits,
   ] = await Promise.all([
-    runGitCommand(['status', '--porcelain=v1', '-uall'], cwd),
-    currentBranchLabel(cwd),
-    upstreamSummary(cwd),
-    operationState(cwd),
-    gitOutput(cwd, ['diff', '--staged', '--stat']),
-    gitOutput(cwd, ['diff', '--stat']),
-    gitOutput(cwd, ['log', '-n', String(MAX_RECENT_COMMITS), '--oneline']),
+    runGitCommand(['status', '--porcelain=v1', '-uall'], cwd, { signal }),
+    currentBranchLabel(cwd, signal),
+    upstreamSummary(cwd, signal),
+    operationState(cwd, signal),
+    gitOutput(cwd, ['diff', '--staged', '--stat'], signal),
+    gitOutput(cwd, ['diff', '--stat'], signal),
+    gitOutput(
+      cwd,
+      ['log', '-n', String(MAX_RECENT_COMMITS), '--oneline'],
+      signal
+    ),
   ])
+  signal?.throwIfAborted()
 
   const groups = status.error ? null : parseStatus(status.output)
   const dirtyCount = groups

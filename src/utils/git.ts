@@ -17,6 +17,7 @@ export interface GitCommandOptions
 {
   timeout?: number
   maxBuffer?: number
+  signal?: AbortSignal
   // treat a non-zero exit w/ stdout as success (git diff exits 1 w/ valid output
   // in some configs) — off by default so genuine failures aren't masked
   allowStdoutOnError?: boolean
@@ -36,14 +37,18 @@ export async function runGitCommand(
   const {
     timeout = DEFAULT_GIT_TIMEOUT,
     maxBuffer = DEFAULT_CHILD_PROCESS_MAX_BUFFER,
+    signal,
     allowStdoutOnError = false,
   } = options
 
+  signal?.throwIfAborted()
   const result = await execFileCommand('git', args, {
     cwd,
     timeout,
     maxBuffer,
+    signal,
   })
+  signal?.throwIfAborted()
   if (result.ok)
   {
     return { output: result.stdout.trimEnd() }
@@ -64,12 +69,19 @@ export async function runGitCommand(
 }
 
 // branch name, or detached@<sha> / unknown when HEAD is detached or unborn
-export async function currentBranchLabel(cwd: string): Promise<string>
+export async function currentBranchLabel(
+  cwd: string,
+  signal?: AbortSignal
+): Promise<string>
 {
-  const branch = await runGitCommand(['branch', '--show-current'], cwd)
+  const branch = await runGitCommand(['branch', '--show-current'], cwd, {
+    signal,
+  })
   if (!branch.error && branch.output.trim()) return branch.output.trim()
 
-  const sha = await runGitCommand(['rev-parse', '--short', 'HEAD'], cwd)
+  const sha = await runGitCommand(['rev-parse', '--short', 'HEAD'], cwd, {
+    signal,
+  })
   return !sha.error && sha.output.trim()
     ? `detached@${sha.output.trim()}`
     : 'unknown'

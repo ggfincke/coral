@@ -168,38 +168,18 @@ export function gatherProjectContext(
 ): string
 {
   const loaded: ContextFile[] = []
-  let totalChars = 0
   const maxTotalChars = Math.max(
     0,
     Math.floor(options.maxTotalChars ?? DEFAULT_TOTAL_CHARS)
   )
+  if (maxTotalChars === 0) return ''
 
-  // load context files in priority order
+  // read candidates in priority order; the rendered block is budgeted below
   for (const { name, label } of CONTEXT_FILES)
   {
     const content = readContextFile(join(cwd, name))
     if (!content) continue
-
-    // check budget before adding
-    if (totalChars + content.length > maxTotalChars)
-    {
-      // still try to fit w/ truncation if file is large
-      const remaining = maxTotalChars - totalChars
-      if (remaining > 256)
-      {
-        loaded.push({
-          label,
-          name,
-          content:
-            content.slice(0, remaining) + '\n… (truncated to fit budget)',
-        })
-        totalChars = maxTotalChars
-      }
-      break
-    }
-
     loaded.push({ label, name, content })
-    totalChars += content.length
   }
 
   if (loaded.length === 0)
@@ -208,25 +188,58 @@ export function gatherProjectContext(
   }
 
   const sections: string[] = []
+  const appendIfFits = (section: string): boolean =>
+  {
+    const separator = sections.length > 0 ? '\n\n' : ''
+    if (
+      sections.join('\n\n').length + separator.length + section.length >
+      maxTotalChars
+    )
+    {
+      return false
+    }
+    sections.push(section)
+    return true
+  }
 
   // project type detection
   const projectType = detectProjectType(loaded)
   if (projectType)
   {
-    sections.push(`Detected project type: ${projectType}`)
+    appendIfFits(`Detected project type: ${projectType}`)
   }
 
   // directory tree
   const tree = buildDirectoryTree(cwd)
   if (tree)
   {
-    sections.push(`Directory structure:\n${tree}`)
+    appendIfFits(`Directory structure:\n${tree}`)
   }
 
-  // file contents
+  // charge headings, fences, separators, & truncation markers to the same cap
   for (const file of loaded)
   {
-    sections.push(`### ${file.label}\n\n\`\`\`\n${file.content.trim()}\n\`\`\``)
+    const body = file.content.trim()
+    const prefix = `### ${file.label}\n\n\`\`\`\n`
+    const suffix = '\n```'
+    const full = `${prefix}${body}${suffix}`
+    if (appendIfFits(full)) continue
+
+    const separator = sections.length > 0 ? '\n\n' : ''
+    const marker = '\n… (truncated to fit budget)'
+    const used = sections.join('\n\n').length
+    const bodyBudget =
+      maxTotalChars -
+      used -
+      separator.length -
+      prefix.length -
+      suffix.length -
+      marker.length
+    if (bodyBudget > 0)
+    {
+      sections.push(`${prefix}${body.slice(0, bodyBudget)}${marker}${suffix}`)
+    }
+    break
   }
 
   return sections.join('\n\n')

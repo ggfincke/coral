@@ -1,6 +1,8 @@
 // src/types/inference.ts
 // shared inference message, tool, & model metadata types
 
+import type { AttachmentReport } from './attachments.js'
+
 export type JsonSchemaType =
   'array' | 'boolean' | 'integer' | 'null' | 'number' | 'object' | 'string'
 
@@ -60,14 +62,21 @@ export function jsonSchemaTypeLabel(schema: JsonSchemaNode): string
   return 'unknown'
 }
 
-export interface OllamaMessage
+// exact semantic message shape allowed in a model request
+export interface ModelRequestMessage
 {
   role: 'system' | 'user' | 'assistant' | 'tool'
   content: string
-  displayContent?: string
   thinking?: string
   tool_name?: string
   tool_calls?: OllamaToolCall[]
+}
+
+// stored conversation message; display metadata belongs to persistence/ui only
+export interface OllamaMessage extends ModelRequestMessage
+{
+  displayContent?: string
+  attachmentReport?: AttachmentReport
 }
 
 export interface OllamaToolCall
@@ -93,7 +102,7 @@ export interface OllamaTool
 export interface ChatRequest
 {
   model: string
-  messages: OllamaMessage[]
+  messages: ModelRequestMessage[]
   tools?: OllamaTool[]
   think?: boolean | 'low' | 'medium' | 'high'
   keep_alive?: string | number
@@ -123,8 +132,10 @@ export interface EmbedResponse
 export interface Model
 {
   name: string
+  model?: string
   size: number
   modified_at: string
+  digest?: string
 }
 
 export interface ModelInfo

@@ -2,6 +2,8 @@
 // memory-aware num_ctx budget sizing
 
 import { strict as assert } from 'node:assert'
+import { writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   estimateKvBytesPerToken,
@@ -159,6 +161,32 @@ test('resolveContextConfig honors the env override', async () =>
   await withNumCtx('65536', () =>
   {
     assert.equal(resolveContextConfig(process.cwd()).maxNumCtx, 65_536)
+  })
+})
+
+test('resolveContextConfig validates project shape before applying precedence', async () =>
+{
+  const malformedCwd = await tempProject()
+  const validCwd = await tempProject()
+  await writeFile(
+    join(malformedCwd, '.coral.json'),
+    JSON.stringify({ context: { maxNumCtx: '32768' } }),
+    'utf8'
+  )
+  await writeFile(
+    join(validCwd, '.coral.json'),
+    JSON.stringify({ context: { maxNumCtx: 32_768 } }),
+    'utf8'
+  )
+
+  await withNumCtx(undefined, () =>
+  {
+    assert.deepEqual(resolveContextConfig(malformedCwd), {})
+    assert.deepEqual(resolveContextConfig(validCwd), { maxNumCtx: 32_768 })
+  })
+  await withNumCtx('65536', () =>
+  {
+    assert.deepEqual(resolveContextConfig(validCwd), { maxNumCtx: 65_536 })
   })
 })
 

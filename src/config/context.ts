@@ -4,6 +4,7 @@
 
 import { loadProjectConfig } from './project-config.js'
 import type { Model, ModelInfo } from '../types/inference.js'
+import { isPlainObject } from '../utils/guards.js'
 
 // fraction of unified memory the GPU may wire by default on Apple Silicon
 // (~75% above 32GiB); the remainder is left for the OS & other apps
@@ -60,7 +61,8 @@ export function resolveContextConfig(cwd: string): ContextConfig
   const env = Number.parseInt(process.env.CORAL_NUM_CTX ?? '', 10)
   if (Number.isFinite(env) && env > 0) return { maxNumCtx: env }
 
-  const configured = loadProjectConfig(cwd).context?.maxNumCtx
+  const raw = loadProjectConfig(cwd).context
+  const configured = isPlainObject(raw) ? raw.maxNumCtx : undefined
   if (typeof configured === 'number' && configured > 0)
   {
     return { maxNumCtx: Math.floor(configured) }
