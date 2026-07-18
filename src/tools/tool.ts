@@ -2,6 +2,7 @@
 // tool interface & conversion to Ollama format
 
 import type { OllamaTool, JsonSchema } from '../types/inference.js'
+import { CHARS_PER_TOKEN } from '../utils/limits.js'
 import type { SubagentRunner } from './subagent.js'
 import type { UndoFileChange, UndoTodoChange } from '../types/undo.js'
 import type { CodeIntelService } from '../lsp/client.js'
@@ -85,4 +86,15 @@ export function toolToOllamaFormat(tool: Tool): OllamaTool
       parameters: tool.parameters,
     },
   }
+}
+
+// estimate the separate model-tool payload that Ollama adds to the prompt
+export function estimateOllamaToolTokens(tools: readonly OllamaTool[]): number
+{
+  return Math.ceil(JSON.stringify(tools).length / CHARS_PER_TOKEN)
+}
+
+export function estimateToolDefinitionTokens(tools: readonly Tool[]): number
+{
+  return estimateOllamaToolTokens(tools.map(toolToOllamaFormat))
 }

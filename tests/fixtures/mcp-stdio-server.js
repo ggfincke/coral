@@ -1,6 +1,7 @@
 // tests/fixtures/mcp-stdio-server.js
 // deterministic stdio MCP server for bridge & lifecycle tests
 
+import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
@@ -8,6 +9,16 @@ import { z } from 'zod'
 
 const pidPath = process.argv[2]
 if (pidPath) await writeFile(pidPath, String(process.pid), 'utf8')
+const startupGatePath = process.argv[3] === '-' ? undefined : process.argv[3]
+while (startupGatePath && !existsSync(startupGatePath))
+{
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+const startupDelayMs = Number(process.argv[4] ?? 0)
+if (Number.isFinite(startupDelayMs) && startupDelayMs > 0)
+{
+  await new Promise((resolve) => setTimeout(resolve, startupDelayMs))
+}
 
 const stderrToken = process.env.CORAL_MCP_TEST_TOKEN ?? ''
 const stderrSplit = stderrToken.indexOf('31m')
@@ -93,6 +104,61 @@ server.registerTool(
     inputSchema: {},
   },
   async () => ({ content: [{ type: 'text', text: 'hidden' }] })
+)
+
+server.registerTool(
+  'wide',
+  {
+    description: 'Exceed a small session tool-definition budget.',
+    inputSchema: Object.fromEntries(
+      Array.from({ length: 160 }, (_, index) => [
+        `field_${String(index).padStart(3, '0')}_${'w'.repeat(40)}`,
+        z.string(),
+      ])
+    ),
+  },
+  async () => ({ content: [{ type: 'text', text: 'wide' }] })
+)
+
+server.registerTool(
+  'large',
+  {
+    description: 'Return a large text result.',
+    inputSchema: {
+      size: z
+        .number()
+        .int()
+        .positive()
+        .max(20 * 1024 * 1024)
+        .optional(),
+    },
+  },
+  async ({ size = 220_000 }) =>
+  {
+    const token = process.env.CORAL_MCP_TEST_TOKEN ?? ''
+    const prefixLength = Math.max(16_384 - Math.floor(token.length / 2), 0)
+    const prefix = 'x'.repeat(Math.min(prefixLength, size))
+    const remaining = Math.max(size - prefix.length - token.length, 0)
+    return {
+      content: [
+        { type: 'text', text: `${prefix}${token}${'y'.repeat(remaining)}` },
+      ],
+    }
+  }
+)
+
+server.registerTool(
+  'disconnect',
+  {
+    description: 'Exit before returning a tool result.',
+    inputSchema: {},
+  },
+  () =>
+  {
+    setImmediate(() => process.exit(1))
+    return new Promise(() =>
+    {})
+  }
 )
 
 await server.connect(new StdioServerTransport())

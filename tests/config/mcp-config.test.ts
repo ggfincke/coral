@@ -130,6 +130,7 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
       mcp__denied__list: 'always_deny',
     },
     baseTools: allTools,
+    maxDynamicToolTokens: 8_192,
   })
   let approvalRequested = false
   const deniedTools = await deniedManager.initialize({

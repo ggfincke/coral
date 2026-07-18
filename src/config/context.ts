@@ -18,7 +18,7 @@ const MEMORY_RESERVE_BYTES = 6 * 1024 ** 3
 const KV_ELEMENT_BYTES = 2
 
 // floor for the pinned window so a tight budget never yields an unusable ctx
-const MIN_NUM_CTX = 8_192
+export const MIN_NUM_CTX = 8_192
 
 // round the pinned window down to this granularity for tidy KV allocation
 const NUM_CTX_GRANULARITY = 1_024

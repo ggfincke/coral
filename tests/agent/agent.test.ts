@@ -7,10 +7,14 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Agent } from '../../src/agent/agent.js'
-import type { Tool, ToolExecutionContext } from '../../src/tools/index.js'
+import {
+  estimateOllamaToolTokens,
+  type Tool,
+  type ToolExecutionContext,
+} from '../../src/tools/index.js'
 import type { SubagentResult } from '../../src/tools/subagent.js'
 import { getTodos, setTodos } from '../../src/tools/todo-store.js'
-import type { OllamaMessage } from '../../src/types/inference.js'
+import type { ChatRequest, OllamaMessage } from '../../src/types/inference.js'
 import { GIT_CONTEXT_HEADING } from '../../src/agent/git-context.js'
 import {
   estimateTotalTokens,
@@ -853,13 +857,14 @@ test(
     assert.equal(run('add', '-A').status, 0)
     assert.equal(run('commit', '-m', 'init').status, 0)
 
-    const requests: OllamaMessage[][] = []
+    const requests: ChatRequest[] = []
     const contextTokens: number[] = []
 
     // request-inspecting form: capture the messages sent each turn
     const { agent } = makeFakeAgent(dir, async function* (request)
     {
-      requests.push(request?.messages ?? [])
+      assert.ok(request)
+      requests.push(request)
       yield {
         message: { role: 'assistant', content: 'ok' },
         done: true,
@@ -886,9 +891,17 @@ test(
     )
 
     assert.equal(requests.length, 2)
-    assert.deepEqual(contextTokens, requests.map(estimateTotalTokens))
-    for (const messages of requests)
+    assert.deepEqual(
+      contextTokens,
+      requests.map(
+        (request) =>
+          estimateTotalTokens(request.messages) +
+          estimateOllamaToolTokens(request.tools ?? [])
+      )
+    )
+    for (const request of requests)
     {
+      const messages = request.messages
       assert.equal(
         messages.filter((message) =>
           message.content.startsWith(GIT_CONTEXT_HEADING)

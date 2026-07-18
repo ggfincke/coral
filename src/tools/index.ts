@@ -58,4 +58,8 @@ export type {
   ToolExecutionContext,
   ToolResult,
 } from './tool.js'
-export { toolToOllamaFormat } from './tool.js'
+export {
+  estimateOllamaToolTokens,
+  estimateToolDefinitionTokens,
+  toolToOllamaFormat,
+} from './tool.js'

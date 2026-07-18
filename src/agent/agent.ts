@@ -11,6 +11,8 @@ import {
 } from '../types/inference.js'
 import {
   allTools,
+  estimateOllamaToolTokens,
+  estimateToolDefinitionTokens,
   subagentTools,
   toolToOllamaFormat,
   type Tool,
@@ -46,7 +48,7 @@ import {
   type CompactionResult,
   DEFAULT_COMPACTION_CONFIG,
 } from './compaction.js'
-import { resolvePinnedContextWindow } from '../config/context.js'
+import { MIN_NUM_CTX, resolvePinnedContextWindow } from '../config/context.js'
 import { totalmem } from 'node:os'
 
 export type { CompactionResult } from './compaction.js'
@@ -121,6 +123,9 @@ const MAX_SUMMARY_TOKENS = 8_192
 // live context must stay near this bound or per-turn prefill balloons. raise for
 // more retained context at the cost of slower turns
 const MAX_WORKING_SET_TOKENS = 32_768
+
+// keep model-tool definitions within half the working set on small contexts
+const MAX_TOOL_DEFINITION_CONTEXT_FRACTION = 0.5
 
 const COMPACTION_SYSTEM_PROMPT =
   'You are a helpful assistant. Produce a concise structured summary of the conversation.'
@@ -349,6 +354,7 @@ export class Agent
   private toolNames!: string[]
   private maxIterations?: number
   private estimatedTokenCount = 0
+  private toolDefinitionTokens = 0
   // number of leading messages that stay byte-stable across compaction — the
   // system prompt plus accumulated frozen summary blocks. only the live tail
   // after this boundary is ever summarized, pruned, or trimmed
@@ -386,6 +392,8 @@ export class Agent
   private mcpEnabled = false
   private mcpManager?: McpManager
   private installedMcpManager?: McpManager
+  private readonly lifecycleAbort = new AbortController()
+  private mcpBootstrapPromise?: Promise<void>
   private disposePromise?: Promise<void>
 
   constructor(
@@ -517,7 +525,13 @@ export class Agent
   // every caller joins the same in-flight cleanup promise
   dispose(): Promise<void>
   {
-    this.disposePromise ??= this.disposeInternal()
+    if (!this.disposePromise)
+    {
+      // abort every pending bootstrap before joining cleanup
+      this.lifecycleAbort.abort()
+      this.mcpEnabled = false
+      this.disposePromise = this.disposeInternal()
+    }
     return this.disposePromise
   }
 
@@ -525,6 +539,7 @@ export class Agent
   {
     try
     {
+      await this.mcpBootstrapPromise?.catch(() => undefined)
       await this.mcpManager?.dispose()
     }
     finally
@@ -555,7 +570,23 @@ export class Agent
       config: this.mcpConfig,
       permissions: this.permissions,
       baseTools: this.baseTools,
+      maxDynamicToolTokens: this.dynamicToolTokenBudget(),
     })
+  }
+
+  private dynamicToolTokenBudget(): number
+  {
+    const contextWindow = Math.min(
+      this.contextWindowSize || MIN_NUM_CTX,
+      MAX_WORKING_SET_TOKENS
+    )
+    const totalToolBudget = Math.floor(
+      contextWindow * MAX_TOOL_DEFINITION_CONTEXT_FRACTION
+    )
+    return Math.max(
+      totalToolBudget - estimateToolDefinitionTokens(this.baseTools),
+      0
+    )
   }
 
   async setMcpEnabled(enabled: boolean): Promise<void>
@@ -772,6 +803,14 @@ export class Agent
     this.foldCurrentReliability(previousModel)
     this.reliabilityStats = makeReliabilityStats()
 
+    // re-admit dynamic tools against the next model's pinned context
+    const manager = this.mcpManager
+    this.mcpManager = undefined
+    this.installedMcpManager = undefined
+    this.mcpTools = []
+    this.wireTools()
+    await manager?.dispose()
+
     // unload the old model
     await this.client.unloadModel(previousModel)
 
@@ -813,7 +852,7 @@ export class Agent
   // returns null if compaction was skipped (too few messages or summary failed)
   async forceCompact(signal?: AbortSignal): Promise<CompactionResult | null>
   {
-    const beforeTokens = this.estimatedTokenCount
+    const beforeTokens = this.contextTokenEstimate()
     const beforeMessages = this.messages.length
 
     // need at least a system prompt + a few messages to compact
@@ -854,7 +893,7 @@ export class Agent
   // get the estimated token count for the current conversation
   getEstimatedTokens(): number
   {
-    return this.estimatedTokenCount
+    return this.contextTokenEstimate()
   }
 
   // get the message count (excluding system prompt)
@@ -1061,6 +1100,7 @@ export class Agent
   {
     this.tools = [...this.baseTools, ...this.mcpTools]
     this.ollamaTools = this.tools.map(toolToOllamaFormat)
+    this.toolDefinitionTokens = estimateOllamaToolTokens(this.ollamaTools)
     this.toolsByName = new Map(this.tools.map((tool) => [tool.name, tool]))
     this.toolNames = this.tools.map((tool) => tool.name)
   }
@@ -1081,21 +1121,53 @@ export class Agent
     return { label: tool.display?.label ?? name, mcp: true }
   }
 
-  private async initializeMcp(
+  private initializeMcp(
     events: AgentEvents,
     signal?: AbortSignal
   ): Promise<void>
   {
-    if (!this.mcpEnabled) return
-    this.mcpManager ??= await this.createMcpManager()
-    // MCP may have been disabled while the module graph loaded
-    if (!this.mcpEnabled)
+    const bootstrapSignal = signal
+      ? AbortSignal.any([signal, this.lifecycleAbort.signal])
+      : this.lifecycleAbort.signal
+    if (!this.mcpEnabled || bootstrapSignal.aborted) return Promise.resolve()
+    if (this.mcpBootstrapPromise)
     {
-      this.mcpManager = undefined
+      return raceAbort(this.mcpBootstrapPromise, bootstrapSignal)
+    }
+
+    const bootstrap = this.initializeMcpInternal(events, bootstrapSignal)
+    this.mcpBootstrapPromise = bootstrap
+    const clear = () =>
+    {
+      if (this.mcpBootstrapPromise === bootstrap)
+      {
+        this.mcpBootstrapPromise = undefined
+      }
+    }
+    bootstrap.then(clear, clear)
+    return bootstrap
+  }
+
+  private async initializeMcpInternal(
+    events: AgentEvents,
+    signal?: AbortSignal
+  ): Promise<void>
+  {
+    const existing = this.mcpManager
+    const manager = existing ?? (await this.createMcpManager())
+    // dispose a manager created after an aborted dynamic import
+    if (!this.mcpEnabled || signal?.aborted)
+    {
+      if (!existing) await manager.dispose()
       return
     }
 
-    const manager = this.mcpManager
+    this.mcpManager ??= manager
+    if (this.mcpManager !== manager)
+    {
+      if (!existing) await manager.dispose()
+      return
+    }
     if (this.installedMcpManager === manager) return
 
     const tools = await manager.initialize({
@@ -1149,10 +1221,14 @@ export class Agent
   // include request-only context in budget checks & usage display
   private estimateRequestTokens(gitContext: OllamaMessage | null): number
   {
-    return (
-      this.estimatedTokenCount +
-      (gitContext ? estimateMessageTokens(gitContext) : 0)
+    return this.contextTokenEstimate(
+      gitContext ? estimateMessageTokens(gitContext) : 0
     )
+  }
+
+  private contextTokenEstimate(volatileTokens = 0): number
+  {
+    return this.estimatedTokenCount + this.toolDefinitionTokens + volatileTokens
   }
 
   // clean run() exit: drop compaction callbacks & signal completion
@@ -1248,7 +1324,7 @@ export class Agent
     const result: CompactionResult = {
       type: 'summarized',
       beforeTokens,
-      afterTokens: this.estimatedTokenCount,
+      afterTokens: this.contextTokenEstimate(),
       beforeMessages,
       afterMessages: this.messages.length,
     }
@@ -1310,7 +1386,7 @@ export class Agent
     this.onCompactionCallback?.({
       type: 'trimmed',
       beforeTokens,
-      afterTokens: this.estimatedTokenCount,
+      afterTokens: this.contextTokenEstimate(),
       beforeMessages,
       afterMessages: this.messages.length,
     })
@@ -1510,12 +1586,12 @@ export class Agent
     signal?: AbortSignal
   ): Promise<void>
   {
-    const totalTokens = this.estimatedTokenCount + volatileTokens
+    const totalTokens = this.contextTokenEstimate(volatileTokens)
 
     // phase 1: prune old tool results (no model call, instant)
     if (shouldPrune(this.messages.length, totalTokens, this.compactionConfig))
     {
-      const beforeTokens = this.estimatedTokenCount
+      const beforeTokens = this.contextTokenEstimate()
       const beforeMessages = this.messages.length
       // protect the frozen prefix — only prune tool results in the live tail
       const { prunedMessages, prunedCount } = pruneToolResults(
@@ -1534,7 +1610,7 @@ export class Agent
         this.onCompactionCallback?.({
           type: 'pruned',
           beforeTokens,
-          afterTokens: this.estimatedTokenCount,
+          afterTokens: this.contextTokenEstimate(),
           beforeMessages,
           afterMessages: this.messages.length,
           prunedResults: prunedCount,
@@ -1542,7 +1618,7 @@ export class Agent
       }
     }
 
-    const totalAfterPrune = this.estimatedTokenCount + volatileTokens
+    const totalAfterPrune = this.contextTokenEstimate(volatileTokens)
 
     // phase 2: full summarization if still over threshold
     if (
@@ -1569,7 +1645,7 @@ export class Agent
     if (toSummarize.length === 0) return
 
     const frozenPrefix = this.messages.slice(0, splitFrom)
-    const beforeTokens = this.estimatedTokenCount
+    const beforeTokens = this.contextTokenEstimate()
     const beforeMessages = this.messages.length
 
     const summary = await this.buildCompactionSummary(toSummarize, signal)
@@ -1602,7 +1678,7 @@ export class Agent
     options: AgentRunOptions = {}
   ): Promise<void>
   {
-    if (signal?.aborted)
+    if (signal?.aborted || this.lifecycleAbort.signal.aborted)
     {
       this.finishRun(events)
       return
@@ -1622,38 +1698,15 @@ export class Agent
     this.pushMessage(runStartMessage)
     this.activeRunStartMessage = runStartMessage
 
-    try
-    {
-      await this.initializeMcp(events, signal)
-    }
-    catch (err)
-    {
-      if (signal?.aborted)
-      {
-        this.finishRun(events)
-        return
-      }
-      events.onError(toError(err))
-      return
-    }
-
-    if (signal?.aborted)
-    {
-      this.finishRun(events)
-      return
-    }
-
-    // resolve the num_ctx pin before the first request so every turn (incl. the
-    // first) hits the runner w/ the same num_ctx — otherwise turn 1 loads at
-    // the Modelfile default & turn 2 reloads, wiping the KV cache. no-op once
-    // resolved & instant for subagents (they inherit a pinned window)
+    // resolve the num_ctx pin before admitting dynamic tool definitions so
+    // their separate Ollama payload fits this session's working set
     try
     {
       await this.fetchContextWindow(signal)
     }
     catch (err)
     {
-      if (signal?.aborted)
+      if (signal?.aborted || this.lifecycleAbort.signal.aborted)
       {
         this.finishRun(events)
         return
@@ -1662,7 +1715,28 @@ export class Agent
       return
     }
 
-    if (signal?.aborted)
+    if (signal?.aborted || this.lifecycleAbort.signal.aborted)
+    {
+      this.finishRun(events)
+      return
+    }
+
+    try
+    {
+      await this.initializeMcp(events, signal)
+    }
+    catch (err)
+    {
+      if (signal?.aborted || this.lifecycleAbort.signal.aborted)
+      {
+        this.finishRun(events)
+        return
+      }
+      events.onError(toError(err))
+      return
+    }
+
+    if (signal?.aborted || this.lifecycleAbort.signal.aborted)
     {
       this.finishRun(events)
       return

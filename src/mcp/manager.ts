@@ -8,10 +8,7 @@ import { delimiter, extname, isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { StringDecoder } from 'node:string_decoder'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import {
-  getDefaultEnvironment,
-  StdioClientTransport,
-} from '@modelcontextprotocol/sdk/client/stdio.js'
+import { getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js'
 import {
   ErrorCode,
   McpError,
@@ -29,11 +26,20 @@ import stripAnsi from 'strip-ansi'
 import type { McpConfigResolution, McpServerConfig } from '../config/mcp.js'
 import { getToolPolicy, type ToolPermissions } from '../config/permissions.js'
 import type { JsonSchema } from '../types/inference.js'
-import type { Tool, ToolArgumentValidation, ToolResult } from '../tools/tool.js'
-import { capToolOutput } from '../tools/tool-output.js'
+import {
+  estimateToolDefinitionTokens,
+  type Tool,
+  type ToolArgumentValidation,
+  type ToolResult,
+} from '../tools/tool.js'
 import { raceAbort } from '../utils/abort.js'
-import { ellipsize, trimLeadingLowSurrogate } from '../utils/ellipsize.js'
+import {
+  ellipsize,
+  trimLeadingLowSurrogate,
+  trimTrailingHighSurrogate,
+} from '../utils/ellipsize.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { MAX_TOOL_OUTPUT_CHARS } from '../utils/limits.js'
 import { normalizeToolName } from '../utils/tool-name.js'
 import {
   fingerprintMcpLaunch,
@@ -47,6 +53,7 @@ import {
   type McpServerStatus,
   type McpStatus,
 } from './types.js'
+import { CoralStdioClientTransport } from './stdio-transport.js'
 
 const require = createRequire(import.meta.url)
 const { version: coralVersion } = require('../../package.json') as {
@@ -63,6 +70,8 @@ const MAX_STDERR_CHARS = 4_000
 const MAX_STRUCTURED_CONTENT_CHARS = 80_000
 const MAX_STRUCTURED_CONTENT_DEPTH = 20
 const MAX_STRUCTURED_COLLECTION_ITEMS = 200
+const MAX_CONCURRENT_STARTUPS = 2
+const MCP_OUTPUT_SCAN_CHARS = 16_384
 
 interface McpStderrBuffer
 {
@@ -82,6 +91,7 @@ interface McpManagerOptions
   config: McpConfigResolution
   permissions: ToolPermissions
   baseTools: readonly Tool[]
+  maxDynamicToolTokens: number
 }
 
 interface McpSession
@@ -95,8 +105,25 @@ interface McpSession
 interface ConnectedServer
 {
   client: Client
-  transport: StdioClientTransport
+  transport: CoralStdioClientTransport
   tools: McpSdkTool[]
+}
+
+interface LaunchCandidate
+{
+  server: McpServerConfig
+  status: McpServerStatus
+  executable: string
+  environment: Record<string, string>
+  allowedTools: string[]
+  secretValues: string[]
+}
+
+interface StartupResult
+{
+  candidate: LaunchCandidate
+  connected?: ConnectedServer
+  error?: unknown
 }
 
 const stderrBuffers = new WeakMap<McpServerStatus, McpStderrBuffer>()
@@ -186,17 +213,26 @@ async function executablePath(
 
 function sanitizeDiagnostic(text: string): string
 {
-  return [...stripAnsi(text)]
-    .map((character) =>
-    {
-      const code = character.codePointAt(0) ?? 0
-      return code <= 8 || code === 11 || code === 12 || code === 127
+  const clean = stripAnsi(text)
+  const parts: string[] = []
+  let chunk = ''
+  for (const character of clean)
+  {
+    const code = character.codePointAt(0) ?? 0
+    chunk +=
+      code <= 8 || code === 11 || code === 12 || code === 127
         ? '�'
         : code >= 14 && code <= 31
           ? '�'
           : character
-    })
-    .join('')
+    if (chunk.length >= 4_096)
+    {
+      parts.push(chunk)
+      chunk = ''
+    }
+  }
+  if (chunk) parts.push(chunk)
+  return parts.join('')
 }
 
 function serializedSecret(value: string): string
@@ -273,6 +309,233 @@ function redactShortValue(text: string, value: string): string
     cursor = index + value.length
   }
   return result
+}
+
+type AnsiScanState = 'text' | 'escape' | 'csi' | 'string' | 'string_escape'
+
+// bound model output while scanning once for ANSI controls & forwarded secrets
+class McpOutputAccumulator
+{
+  private readonly secrets: string[]
+  private readonly redactionLookbehind: number
+  private ansiState: AnsiScanState = 'text'
+  private redactionTail = ''
+  private previousSourceCharacter: string | undefined
+  private outputParts: string[] = []
+  private outputHeadLength = 0
+  private totalOutputLength = 0
+  private lastNewline = -1
+  private started = false
+
+  constructor(secretValues: readonly string[])
+  {
+    this.secrets = normalizedSecrets(secretValues)
+    this.redactionLookbehind = Math.max(
+      ...this.secrets.map((value) => value.length + 1),
+      1
+    )
+  }
+
+  addPart(...segments: string[]): void
+  {
+    if (segments.every((segment) => segment.length === 0)) return
+    if (this.started) this.writeRaw('\n\n')
+    this.started = true
+    for (const segment of segments)
+    {
+      this.writeRaw(segment)
+    }
+  }
+
+  finish(): string
+  {
+    this.redactSanitized('', true)
+    if (this.totalOutputLength === 0)
+    {
+      this.appendOutput('(MCP tool returned no supported content)')
+    }
+
+    const retained = this.outputParts.join('')
+    if (this.totalOutputLength <= MAX_TOOL_OUTPUT_CHARS) return retained
+
+    const boundary = this.lastNewline > 0 ? this.lastNewline : retained.length
+    const head = trimTrailingHighSurrogate(retained.slice(0, boundary))
+    const omitted = this.totalOutputLength - head.length
+    return (
+      `${head}\n\n[output truncated: ${omitted} of ${this.totalOutputLength} chars omitted` +
+      ` — narrow the scope (e.g. diff a specific path) to see the rest]`
+    )
+  }
+
+  private writeRaw(text: string): void
+  {
+    for (
+      let offset = 0;
+      offset < text.length;
+      offset += MCP_OUTPUT_SCAN_CHARS
+    )
+    {
+      const sanitized = this.sanitizeRawChunk(
+        text.slice(offset, offset + MCP_OUTPUT_SCAN_CHARS)
+      )
+      if (sanitized) this.redactSanitized(sanitized, false)
+    }
+  }
+
+  private sanitizeRawChunk(text: string): string
+  {
+    const parts: string[] = []
+    let plainStart = this.ansiState === 'text' ? 0 : -1
+
+    for (let index = 0; index < text.length; index++)
+    {
+      const character = text[index]!
+      const code = text.charCodeAt(index)
+      if (this.ansiState !== 'text')
+      {
+        if (this.ansiState === 'escape')
+        {
+          if (character === '[') this.ansiState = 'csi'
+          else if (character === ']' || 'PX^_'.includes(character))
+          {
+            this.ansiState = 'string'
+          }
+          else this.ansiState = 'text'
+        }
+        else if (this.ansiState === 'csi')
+        {
+          if (code >= 0x40 && code <= 0x7e) this.ansiState = 'text'
+          else if (code === 0x1b) this.ansiState = 'escape'
+        }
+        else if (this.ansiState === 'string')
+        {
+          if (code === 0x07 || code === 0x9c) this.ansiState = 'text'
+          else if (code === 0x1b) this.ansiState = 'string_escape'
+        }
+        else if (character === '\\') this.ansiState = 'text'
+        else if (code !== 0x1b) this.ansiState = 'string'
+
+        if (this.ansiState === 'text') plainStart = index + 1
+        continue
+      }
+
+      const replacesControl =
+        code !== 0x1b &&
+        (code <= 8 ||
+          code === 11 ||
+          code === 12 ||
+          code === 127 ||
+          (code >= 14 && code <= 31))
+      const beginsAnsi =
+        code === 0x1b ||
+        code === 0x9b ||
+        [0x90, 0x98, 0x9d, 0x9e, 0x9f].includes(code)
+      if (!replacesControl && !beginsAnsi) continue
+
+      if (plainStart >= 0 && plainStart < index)
+      {
+        parts.push(text.slice(plainStart, index))
+      }
+      if (replacesControl)
+      {
+        parts.push('�')
+        plainStart = index + 1
+        continue
+      }
+      if (code === 0x1b)
+      {
+        this.ansiState = 'escape'
+      }
+      else if (code === 0x9b)
+      {
+        this.ansiState = 'csi'
+      }
+      else
+      {
+        this.ansiState = 'string'
+      }
+      plainStart = -1
+    }
+
+    if (
+      this.ansiState === 'text' &&
+      plainStart >= 0 &&
+      plainStart < text.length
+    )
+    {
+      parts.push(text.slice(plainStart))
+    }
+    return parts.join('')
+  }
+
+  private redactSanitized(text: string, final: boolean): void
+  {
+    const combined = this.redactionTail + text
+    const processBefore = final
+      ? combined.length
+      : Math.max(combined.length - this.redactionLookbehind, 0)
+    let cursor = 0
+
+    while (cursor < processBefore)
+    {
+      const match = this.nextSecretMatch(combined, cursor, processBefore)
+      if (!match) break
+      this.appendOutput(combined.slice(cursor, match.index))
+      this.appendOutput('[redacted]')
+      cursor = match.index + match.secret.length
+    }
+
+    const processed = Math.max(cursor, processBefore)
+    this.appendOutput(combined.slice(cursor, processed))
+    if (processed > 0)
+    {
+      this.previousSourceCharacter = combined[processed - 1]
+    }
+    this.redactionTail = combined.slice(processed)
+  }
+
+  private nextSecretMatch(
+    text: string,
+    start: number,
+    processBefore: number
+  ): { index: number; secret: string } | undefined
+  {
+    let best: { index: number; secret: string } | undefined
+    for (const secret of this.secrets)
+    {
+      let index = text.indexOf(secret, start)
+      while (index >= 0 && index < processBefore)
+      {
+        const before =
+          index > 0 ? text[index - 1] : this.previousSourceCharacter
+        const after = text[index + secret.length]
+        if (
+          secret.length >= 4 ||
+          (!isTokenCharacter(before) && !isTokenCharacter(after))
+        )
+        {
+          if (!best || index < best.index) best = { index, secret }
+          break
+        }
+        index = text.indexOf(secret, index + 1)
+      }
+    }
+    return best
+  }
+
+  private appendOutput(text: string): void
+  {
+    if (!text) return
+    this.totalOutputLength += text.length
+    const remaining = MAX_TOOL_OUTPUT_CHARS - this.outputHeadLength
+    if (remaining <= 0) return
+
+    const retained = text.slice(0, remaining)
+    const newline = retained.lastIndexOf('\n')
+    if (newline >= 0) this.lastNewline = this.outputHeadLength + newline
+    this.outputParts.push(retained)
+    this.outputHeadLength += retained.length
+  }
 }
 
 function forwardedValues(
@@ -432,25 +695,25 @@ function boundedJsonValue(
   }
   if (typeof value === 'object')
   {
+    const object = value as Record<string, unknown>
     budget.remaining -= 2 * depth + 4
     const result: Record<string, unknown> = Object.create(null)
-    const entries = Object.entries(value).slice(
-      0,
-      MAX_STRUCTURED_COLLECTION_ITEMS
-    )
-    for (const [key, item] of entries)
+    let items = 0
+    for (const key in object)
     {
-      if (budget.remaining <= 0) break
+      if (!Object.hasOwn(object, key)) continue
+      if (items >= MAX_STRUCTURED_COLLECTION_ITEMS || budget.remaining <= 0)
+      {
+        budget.truncated = true
+        break
+      }
       const keyLength = Math.min(key.length, budget.remaining)
       const boundedKey = ellipsize(key, keyLength)
       // key quotes & ': ' separator ride on the item overhead
       budget.remaining -= keyLength + serializedItemOverhead(depth) + 3
       if (keyLength < key.length) budget.truncated = true
-      result[boundedKey] = boundedJsonValue(item, budget, depth + 1)
-    }
-    if (entries.length < Object.keys(value).length || budget.remaining <= 0)
-    {
-      budget.truncated = true
+      result[boundedKey] = boundedJsonValue(object[key], budget, depth + 1)
+      items += 1
     }
     return result
   }
@@ -483,16 +746,33 @@ function formatUnsupportedContent(
     case 'audio':
       return `[unsupported MCP audio content: ${content.mimeType}]`
     case 'resource':
-      if ('text' in content.resource)
-      {
-        return `[MCP embedded resource: ${content.resource.uri}]\n${content.resource.text}`
-      }
       return `[unsupported MCP binary resource: ${content.resource.uri}]`
     case 'resource_link':
       return `[unsupported MCP resource link: ${content.uri}]`
     default:
       return '[unsupported MCP content]'
   }
+}
+
+function addMcpContent(
+  output: McpOutputAccumulator,
+  content: CallToolResult['content'][number]
+): void
+{
+  if (content.type === 'text')
+  {
+    output.addPart(content.text)
+    return
+  }
+  if (content.type === 'resource' && 'text' in content.resource)
+  {
+    output.addPart(
+      `[MCP embedded resource: ${content.resource.uri}]\n`,
+      content.resource.text
+    )
+    return
+  }
+  output.addPart(formatUnsupportedContent(content))
 }
 
 type McpOutputValidator = JsonSchemaValidator<Record<string, unknown>>
@@ -537,22 +817,18 @@ function formatToolResult(
     }
   }
 
-  const parts = callResult.content.map((content) =>
-    content.type === 'text' ? content.text : formatUnsupportedContent(content)
-  )
+  const accumulator = new McpOutputAccumulator(secretValues)
+  for (const content of callResult.content)
+  {
+    addMcpContent(accumulator, content)
+  }
 
   if (callResult.structuredContent)
   {
-    parts.push(formatStructuredContent(callResult.structuredContent))
+    accumulator.addPart(formatStructuredContent(callResult.structuredContent))
   }
 
-  const output = capToolOutput(
-    redactDiagnostic(
-      parts.filter((part) => part.length > 0).join('\n\n') ||
-        '(MCP tool returned no supported content)',
-      secretValues
-    )
-  )
+  const output = accumulator.finish()
   return callResult.isError
     ? {
         output,
@@ -631,6 +907,7 @@ export class McpManager
   private readonly config: McpConfigResolution
   private readonly permissions: ToolPermissions
   private readonly baseTools: readonly Tool[]
+  private readonly maxDynamicToolTokens: number
   private readonly statuses: McpServerStatus[]
   private sessions: McpSession[] = []
   private tools: Tool[] = []
@@ -646,6 +923,7 @@ export class McpManager
     this.config = options.config
     this.permissions = options.permissions
     this.baseTools = options.baseTools
+    this.maxDynamicToolTokens = options.maxDynamicToolTokens
     this.statuses = this.config.servers.map(configuredServerStatus)
   }
 
@@ -670,20 +948,92 @@ export class McpManager
     options: McpInitializeOptions
   ): Promise<Tool[]>
   {
-    // normalized collisions are a superset of exact-name collisions
+    const preflight = await this.preflightServers(options)
+    if (preflight.aborted || options.signal?.aborted)
+    {
+      await this.rollbackInitialization(preflight.candidates)
+      return []
+    }
+
+    const results = await this.connectAuthorizedServers(
+      preflight.candidates,
+      options.signal
+    )
+    if (options.signal?.aborted)
+    {
+      await this.rollbackInitialization(preflight.candidates, results)
+      return []
+    }
+
+    // install in config order so collisions, budgets, & model tool order stay
+    // deterministic even when discovery completes out of order
     const occupiedNormalizedNames = new Set(
       this.baseTools.map((tool) => normalizeToolName(tool.name))
     )
-    let totalSchemaChars = 0
+    const schemaBudget = { chars: 0 }
     let aborted = false
+    for (const result of results)
+    {
+      const { candidate, connected, error } = result
+      if (error || !connected)
+      {
+        if (isAbortError(error) || options.signal?.aborted)
+        {
+          candidate.status.state = 'stopped'
+          candidate.status.message = 'startup interrupted'
+          aborted = true
+          break
+        }
+        candidate.status.state = 'failed'
+        candidate.status.message = statusMessage(error, candidate.secretValues)
+        continue
+      }
 
+      try
+      {
+        await this.installConnectedServer(
+          candidate,
+          connected,
+          occupiedNormalizedNames,
+          schemaBudget
+        )
+      }
+      catch (installError)
+      {
+        await connected.client.close().catch(() => undefined)
+        if (isAbortError(installError) || options.signal?.aborted)
+        {
+          candidate.status.state = 'stopped'
+          candidate.status.message = 'startup interrupted'
+          aborted = true
+          break
+        }
+        candidate.status.state = 'failed'
+        candidate.status.message = statusMessage(
+          installError,
+          candidate.secretValues
+        )
+      }
+    }
+
+    if (aborted || options.signal?.aborted)
+    {
+      await this.rollbackInitialization(preflight.candidates, results)
+      return []
+    }
+
+    return [...this.tools]
+  }
+
+  private async preflightServers(options: McpInitializeOptions): Promise<{
+    candidates: LaunchCandidate[]
+    aborted: boolean
+  }>
+  {
+    const candidates: LaunchCandidate[] = []
     for (const [index, server] of this.config.servers.entries())
     {
-      if (options.signal?.aborted)
-      {
-        aborted = true
-        break
-      }
+      if (options.signal?.aborted) return { candidates, aborted: true }
       const status = this.statuses[index]!
       const allowedTools = server.enabledTools.filter(
         (name) =>
@@ -704,7 +1054,6 @@ export class McpManager
       if (!environment) continue
       const secretValues = forwardedValues(server, environment)
 
-      let connected: ConnectedServer | undefined
       try
       {
         const executable = await executablePath(
@@ -730,7 +1079,6 @@ export class McpManager
             status.message = 'launch approval required'
             continue
           }
-
           // an abort during executable resolution must not open the prompt
           if (options.signal?.aborted)
           {
@@ -753,160 +1101,226 @@ export class McpManager
           trustMcpLaunch(descriptor)
         }
 
-        connected = await this.connectServer(
+        candidates.push({
           server,
+          status,
           executable,
           environment,
-          status,
           allowedTools,
           secretValues,
-          options.signal
-        )
-        const discovered = new Map(
-          connected.tools.map((tool) => [tool.name, tool])
-        )
-        const serverTools: Tool[] = []
-        const session: McpSession = {
-          client: connected.client,
-          status,
-          active: true,
-          secretValues,
-        }
-
-        for (const rawName of allowedTools)
-        {
-          const definition = discovered.get(rawName)
-          if (!definition)
-          {
-            status.message = `configured tool not exposed by server: ${rawName}`
-            continue
-          }
-          if (definition.execution?.taskSupport === 'required')
-          {
-            status.message = `task-based MCP tools are unsupported: ${rawName}`
-            continue
-          }
-
-          const name = canonicalToolName(server.alias, rawName)
-          const normalized = normalizeToolName(name)
-          if (occupiedNormalizedNames.has(normalized))
-          {
-            status.message = `tool name collides after normalization: ${name}`
-            continue
-          }
-
-          const schema = definition.inputSchema as JsonSchema
-          const outputSchema = definition.outputSchema as JsonSchema | undefined
-          const chars =
-            schemaSize(schema) + (outputSchema ? schemaSize(outputSchema) : 0)
-          if (
-            chars > MAX_SCHEMA_CHARS ||
-            totalSchemaChars + chars > MAX_TOTAL_SCHEMA_CHARS
-          )
-          {
-            status.message = `tool schema exceeds the MCP schema budget: ${rawName}`
-            continue
-          }
-
-          let validateArgs: Tool['validateArgs']
-          let validateOutput: McpOutputValidator | undefined
-          try
-          {
-            validateArgs = inputValidator(name, schema, secretValues)
-            if (outputSchema)
-            {
-              validateOutput =
-                schemaValidator<Record<string, unknown>>(outputSchema)
-            }
-          }
-          catch (error)
-          {
-            status.message = `invalid schema for ${rawName}: ${ellipsize(redactDiagnostic(toErrorMessage(error), secretValues), MAX_STATUS_MESSAGE_CHARS)}`
-            continue
-          }
-
-          const tool: Tool = {
-            name,
-            description: sanitizeDescription(
-              definition.description,
-              secretValues
-            ),
-            parameters: schemaForModel(schema, secretValues) as JsonSchema,
-            display: {
-              label: `MCP · ${server.alias} · ${rawName}`,
-            },
-            validateArgs,
-            execute: (args, context) =>
-              this.callTool(
-                session,
-                rawName,
-                args,
-                server.toolTimeoutMs,
-                validateOutput,
-                context?.signal
-              ),
-          }
-
-          occupiedNormalizedNames.add(normalized)
-          totalSchemaChars += chars
-          serverTools.push(tool)
-        }
-
-        if (serverTools.length === 0)
-        {
-          await connected.client.close()
-          status.state = 'failed'
-          status.message ??= 'server exposed no usable allowlisted tools'
-          continue
-        }
-        if (connected.transport.pid === null)
-        {
-          await connected.client.close().catch(() => undefined)
-          status.state = 'failed'
-          status.message = 'MCP server exited during startup'
-          continue
-        }
-
-        this.sessions.push(session)
-        this.tools.push(...serverTools)
-        status.state = 'ready'
-        status.availableTools = serverTools.map((tool) => tool.name)
+        })
       }
       catch (error)
       {
-        if (connected) await connected.client.close().catch(() => undefined)
         if (isAbortError(error) || options.signal?.aborted)
         {
           status.state = 'stopped'
           status.message = 'startup interrupted'
-          aborted = true
-          break
+          return { candidates, aborted: true }
         }
         status.state = 'failed'
         status.message = statusMessage(error, secretValues)
       }
     }
 
-    if (aborted || options.signal?.aborted)
-    {
-      await this.rollbackInitialization()
-      return []
-    }
-
-    return [...this.tools]
+    return { candidates, aborted: false }
   }
 
-  private async rollbackInitialization(): Promise<void>
+  private async connectAuthorizedServers(
+    candidates: readonly LaunchCandidate[],
+    signal?: AbortSignal
+  ): Promise<StartupResult[]>
   {
+    const results = new Array<StartupResult>(candidates.length)
+    let next = 0
+    const worker = async () =>
+    {
+      while (true)
+      {
+        const resultIndex = next++
+        if (resultIndex >= candidates.length) return
+        const candidate = candidates[resultIndex]!
+        if (signal?.aborted)
+        {
+          results[resultIndex] = {
+            candidate,
+            error: new DOMException('Aborted', 'AbortError'),
+          }
+          continue
+        }
+
+        try
+        {
+          const connected = await this.connectServer(
+            candidate.server,
+            candidate.executable,
+            candidate.environment,
+            candidate.status,
+            candidate.allowedTools,
+            candidate.secretValues,
+            signal
+          )
+          results[resultIndex] = { candidate, connected }
+        }
+        catch (error)
+        {
+          results[resultIndex] = { candidate, error }
+        }
+      }
+    }
+
+    const workers = Array.from(
+      { length: Math.min(MAX_CONCURRENT_STARTUPS, candidates.length) },
+      worker
+    )
+    await Promise.all(workers)
+    return results
+  }
+
+  private async installConnectedServer(
+    candidate: LaunchCandidate,
+    connected: ConnectedServer,
+    occupiedNormalizedNames: Set<string>,
+    schemaBudget: { chars: number }
+  ): Promise<void>
+  {
+    const { server, status, allowedTools, secretValues } = candidate
+    const discovered = new Map(connected.tools.map((tool) => [tool.name, tool]))
+    const serverTools: Tool[] = []
+    const session: McpSession = {
+      client: connected.client,
+      status,
+      active: true,
+      secretValues,
+    }
+
+    for (const rawName of allowedTools)
+    {
+      const definition = discovered.get(rawName)
+      if (!definition)
+      {
+        status.message = `configured tool not exposed by server: ${rawName}`
+        continue
+      }
+      if (definition.execution?.taskSupport === 'required')
+      {
+        status.message = `task-based MCP tools are unsupported: ${rawName}`
+        continue
+      }
+
+      const name = canonicalToolName(server.alias, rawName)
+      const normalized = normalizeToolName(name)
+      if (occupiedNormalizedNames.has(normalized))
+      {
+        status.message = `tool name collides after normalization: ${name}`
+        continue
+      }
+
+      const schema = definition.inputSchema as JsonSchema
+      const outputSchema = definition.outputSchema as JsonSchema | undefined
+      const chars =
+        schemaSize(schema) + (outputSchema ? schemaSize(outputSchema) : 0)
+      if (
+        chars > MAX_SCHEMA_CHARS ||
+        schemaBudget.chars + chars > MAX_TOTAL_SCHEMA_CHARS
+      )
+      {
+        status.message = `tool schema exceeds the MCP schema budget: ${rawName}`
+        continue
+      }
+
+      let validateArgs: Tool['validateArgs']
+      let validateOutput: McpOutputValidator | undefined
+      try
+      {
+        validateArgs = inputValidator(name, schema, secretValues)
+        if (outputSchema)
+        {
+          validateOutput =
+            schemaValidator<Record<string, unknown>>(outputSchema)
+        }
+      }
+      catch (error)
+      {
+        status.message = `invalid schema for ${rawName}: ${ellipsize(redactDiagnostic(toErrorMessage(error), secretValues), MAX_STATUS_MESSAGE_CHARS)}`
+        continue
+      }
+
+      const tool: Tool = {
+        name,
+        description: sanitizeDescription(definition.description, secretValues),
+        parameters: schemaForModel(schema, secretValues) as JsonSchema,
+        display: {
+          label: `MCP · ${server.alias} · ${rawName}`,
+        },
+        validateArgs,
+        execute: (args, context) =>
+          this.callTool(
+            session,
+            rawName,
+            args,
+            server.toolTimeoutMs,
+            validateOutput,
+            context?.signal
+          ),
+      }
+
+      const nextDynamicTools = [...this.tools, ...serverTools, tool]
+      if (
+        estimateToolDefinitionTokens(nextDynamicTools) >
+        this.maxDynamicToolTokens
+      )
+      {
+        status.message = `tool definition exceeds this session's context budget: ${rawName}`
+        continue
+      }
+
+      occupiedNormalizedNames.add(normalized)
+      schemaBudget.chars += chars
+      serverTools.push(tool)
+    }
+
+    if (serverTools.length === 0)
+    {
+      await connected.client.close()
+      status.state = 'failed'
+      status.message ??= 'server exposed no usable allowlisted tools'
+      return
+    }
+    if (connected.transport.pid === null)
+    {
+      await connected.client.close().catch(() => undefined)
+      status.state = 'failed'
+      status.message = 'MCP server exited during startup'
+      return
+    }
+
+    this.sessions.push(session)
+    this.tools.push(...serverTools)
+    status.state = 'ready'
+    status.availableTools = serverTools.map((tool) => tool.name)
+  }
+
+  private async rollbackInitialization(
+    candidates: readonly LaunchCandidate[] = [],
+    results: readonly StartupResult[] = []
+  ): Promise<void>
+  {
+    const clients = new Set(this.sessions.map((session) => session.client))
+    for (const result of results)
+    {
+      if (result.connected) clients.add(result.connected.client)
+    }
+    for (const candidate of candidates)
+    {
+      candidate.status.state = 'stopped'
+      candidate.status.message = 'startup interrupted; restart Coral to retry'
+    }
     for (const session of this.sessions)
     {
       session.active = false
-      session.status.state = 'stopped'
-      session.status.message = 'startup interrupted; restart Coral to retry'
     }
-    await Promise.allSettled(
-      this.sessions.map((session) => session.client.close())
-    )
+    await Promise.allSettled([...clients].map((client) => client.close()))
     this.sessions = []
     this.tools = []
   }
@@ -946,12 +1360,11 @@ export class McpManager
     signal?: AbortSignal
   ): Promise<ConnectedServer>
   {
-    const transport = new StdioClientTransport({
+    const transport = new CoralStdioClientTransport({
       command: executable,
       args: server.args,
       env: environment,
       cwd: server.launchCwd,
-      stderr: 'pipe',
     })
     transport.stderr?.on('data', (chunk) =>
       appendStderr(status, chunk, secretValues)
@@ -1082,6 +1495,7 @@ export class McpManager
         throw new DOMException('Aborted', 'AbortError')
       }
 
+      const statusBeforeCall = session.status.message
       try
       {
         const result = await session.client.callTool(
@@ -1110,9 +1524,13 @@ export class McpManager
           await this.stopSession(session, message)
           throw error
         }
+        const callStatus =
+          session.status.message !== statusBeforeCall
+            ? session.status.message
+            : undefined
         return {
           output: '',
-          error: `MCP tool call failed: ${ellipsize(redactDiagnostic(toErrorMessage(error), session.secretValues), MAX_STATUS_MESSAGE_CHARS)}`,
+          error: `MCP tool call failed: ${ellipsize(redactDiagnostic(callStatus ?? toErrorMessage(error), session.secretValues), MAX_STATUS_MESSAGE_CHARS)}`,
         }
       }
     })
