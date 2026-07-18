@@ -1,5 +1,5 @@
 // src/config/project-config.ts
-// project-level Coral config loading
+// raw user & project Coral config loading
 
 import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -8,7 +8,7 @@ import { readJsonObjectFile } from '../utils/json.js'
 
 interface SharedCoralConfig
 {
-  permissions?: Record<string, unknown>
+  permissions?: unknown
 }
 
 export interface UserCoralConfig extends SharedCoralConfig
@@ -18,17 +18,9 @@ export interface UserCoralConfig extends SharedCoralConfig
 
 export interface ProjectCoralConfig extends SharedCoralConfig
 {
-  retrieval?: {
-    embeddingModel?: string
-  }
-  context?: {
-    // optional num_ctx ceiling (tokens); env may override it
-    maxNumCtx?: number
-  }
-  verify?: {
-    // run a read-only self-check subagent after edit-producing turns
-    enabled?: boolean
-  }
+  retrieval?: unknown
+  context?: unknown
+  verify?: unknown
 }
 
 interface CachedConfig
@@ -39,7 +31,7 @@ interface CachedConfig
 
 const configCache = new Map<string, CachedConfig>()
 
-// load & parse a single config file
+// load one JSON object w/o interpreting its section values
 function loadCoralConfigFile(path: string): Record<string, unknown>
 {
   let mtimeMs: number
@@ -65,10 +57,7 @@ export function loadUserConfig(): UserCoralConfig
 {
   const config = loadCoralConfigFile(join(homedir(), '.coral.json'))
   const result: UserCoralConfig = {}
-  if (config.permissions !== undefined)
-  {
-    result.permissions = config.permissions as Record<string, unknown>
-  }
+  if (config.permissions !== undefined) result.permissions = config.permissions
   if (config.mcp !== undefined) result.mcp = config.mcp
   return result
 }
@@ -78,21 +67,9 @@ export function loadProjectConfig(cwd: string): ProjectCoralConfig
 {
   const config = loadCoralConfigFile(resolve(cwd, '.coral.json'))
   const result: ProjectCoralConfig = {}
-  if (config.permissions !== undefined)
-  {
-    result.permissions = config.permissions as Record<string, unknown>
-  }
-  if (config.retrieval !== undefined)
-  {
-    result.retrieval = config.retrieval as ProjectCoralConfig['retrieval']
-  }
-  if (config.context !== undefined)
-  {
-    result.context = config.context as ProjectCoralConfig['context']
-  }
-  if (config.verify !== undefined)
-  {
-    result.verify = config.verify as ProjectCoralConfig['verify']
-  }
+  if (config.permissions !== undefined) result.permissions = config.permissions
+  if (config.retrieval !== undefined) result.retrieval = config.retrieval
+  if (config.context !== undefined) result.context = config.context
+  if (config.verify !== undefined) result.verify = config.verify
   return result
 }

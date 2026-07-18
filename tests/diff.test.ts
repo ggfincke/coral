@@ -1,17 +1,14 @@
 // tests/diff.test.ts
-// unit test for unified diff generation
+// tests for edit transformations, diffs, & approval previews
 
 import { strict as assert } from 'node:assert'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { setCwd } from '../src/cwd.js'
-import {
-  applyEdit,
-  computeDiff,
-  describeEditMiss,
-  previewToolDiff,
-} from '../src/utils/diff.js'
+import { applyEdit, describeEditMiss } from '../src/tools/edit-operation.js'
+import { previewToolDiff } from '../src/tools/preview.js'
+import { computeDiff } from '../src/utils/diff.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../src/utils/file-read.js'
 import { makeTempDirPool } from './helpers/temp.js'
 

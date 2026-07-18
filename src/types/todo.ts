@@ -1,5 +1,5 @@
-// src/tools/todo-store.ts
-// in-memory task list shared between the todo tool & the TUI
+// src/types/todo.ts
+// neutral todo contracts, parsing, & cloning
 
 const TODO_STATUSES = ['pending', 'in_progress', 'completed'] as const
 export type TodoStatus = (typeof TODO_STATUSES)[number]
@@ -10,11 +10,26 @@ export interface TodoItem
   status: TodoStatus
 }
 
+export type TodoListener = (todos: TodoItem[]) => void
+
+export interface TodoState
+{
+  snapshot(): TodoItem[]
+  replace(todos: readonly TodoItem[]): void
+  clear(): void
+  subscribe(listener: TodoListener): () => void
+}
+
 const VALID_STATUS = new Set<TodoStatus>(TODO_STATUSES)
 
 export function isTodoStatus(value: string): value is TodoStatus
 {
   return VALID_STATUS.has(value as TodoStatus)
+}
+
+export function cloneTodoItems(todos: readonly TodoItem[]): TodoItem[]
+{
+  return todos.map((todo) => ({ ...todo }))
 }
 
 // parse one todo entry; returns undefined for invalid shapes
@@ -34,7 +49,7 @@ function parseTodoEntry(entry: unknown): TodoItem | undefined
   return { content: content.trim(), status }
 }
 
-// lenient — for session restore; drops invalid entries, demotes extra in_progress
+// lenient for session restore; drops invalid entries & demotes extra active work
 export function sanitizeTodos(raw: unknown): TodoItem[]
 {
   if (!Array.isArray(raw)) return []
@@ -55,7 +70,7 @@ export function sanitizeTodos(raw: unknown): TodoItem[]
   })
 }
 
-// strict — for todo_write; preserves existing error strings byte-for-byte
+// strict for todo_write; preserve model-facing validation errors byte-for-byte
 export function validateTodoList(
   raw: unknown
 ): { ok: true; todos: TodoItem[] } | { ok: false; error: string }
@@ -94,51 +109,13 @@ export function validateTodoList(
     todos.push({ content: content.trim(), status })
   }
 
-  const inProgress = todos.filter((t) => t.status === 'in_progress').length
+  const inProgress = todos.filter(
+    (todo) => todo.status === 'in_progress'
+  ).length
   if (inProgress > 1)
   {
     return { ok: false, error: 'only one todo may be in_progress at a time' }
   }
 
   return { ok: true, todos }
-}
-
-// model-facing confirmation glyphs (ASCII)
-export const STATUS_MARK: Record<TodoStatus, string> = {
-  pending: '[ ]',
-  in_progress: '[~]',
-  completed: '[x]',
-}
-
-// TUI panel & /todo command glyphs (unicode)
-export const TODO_MARK: Record<TodoStatus, string> = {
-  pending: '○',
-  in_progress: '◐',
-  completed: '●',
-}
-
-let todos: TodoItem[] = []
-let listener: ((todos: TodoItem[]) => void) | null = null
-
-export function getTodos(): TodoItem[]
-{
-  return todos
-}
-
-// replace the whole list & notify the TUI listener
-export function setTodos(next: TodoItem[]): void
-{
-  todos = next
-  listener?.([...todos])
-}
-
-export function clearTodos(): void
-{
-  setTodos([])
-}
-
-// register a single listener (the TUI) for live updates; pass null to detach
-export function onTodosChanged(fn: ((todos: TodoItem[]) => void) | null): void
-{
-  listener = fn
 }

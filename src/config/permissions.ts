@@ -2,41 +2,57 @@
 // per-tool permission policies loaded from .coral.json
 
 import { isPlainObject } from '../utils/guards.js'
+import {
+  builtInToolRegistrations,
+  UNKNOWN_TOOL_DEFAULT_POLICY,
+  type DefaultToolPolicy,
+} from '../tools/catalog.js'
 import { loadProjectConfig, loadUserConfig } from './project-config.js'
 
 // permission level for a given tool
-export type PermissionPolicy =
-  'always_allow' | 'require_approval' | 'always_deny'
+export type PermissionPolicy = DefaultToolPolicy
 
 // per-tool permission overrides — keys are tool names
 export type ToolPermissions = Record<string, PermissionPolicy>
 
+function permissionRecord(
+  entries: Iterable<readonly [string, PermissionPolicy]> = []
+): ToolPermissions
+{
+  const result = Object.create(null) as ToolPermissions
+  for (const [name, policy] of entries) result[name] = policy
+  return result
+}
+
 // default policies when no config is present
-const DEFAULT_TOOL_POLICIES: ToolPermissions = {
-  read_file: 'always_allow',
-  grep: 'always_allow',
-  glob: 'always_allow',
-  list_files: 'always_allow',
-  git_status: 'always_allow',
-  git_diff: 'always_allow',
-  git_log: 'always_allow',
-  search_code: 'always_allow',
-  code_intel: 'always_allow',
-  git_add: 'require_approval',
-  git_commit: 'require_approval',
-  git_switch: 'require_approval',
-  git_push: 'require_approval',
-  task: 'always_allow',
-  todo_write: 'always_allow',
-  write_file: 'require_approval',
-  edit_file: 'require_approval',
-  bash: 'require_approval',
+const DEFAULT_TOOL_POLICIES: ToolPermissions = Object.freeze(
+  permissionRecord(
+    builtInToolRegistrations.map((registration) => [
+      registration.name,
+      registration.defaultPolicy,
+    ])
+  )
+)
+
+function mergePermissions(
+  ...sources: readonly ToolPermissions[]
+): ToolPermissions
+{
+  const result = permissionRecord()
+  for (const source of sources)
+  {
+    for (const [name, policy] of Object.entries(source))
+    {
+      result[name] = policy
+    }
+  }
+  return result
 }
 
 // return a fresh copy so callers can use defaults w/o local config overrides
 export function defaultToolPermissions(): ToolPermissions
 {
-  return { ...DEFAULT_TOOL_POLICIES }
+  return mergePermissions(DEFAULT_TOOL_POLICIES)
 }
 
 // validate that a permission value is one of the allowed policies
@@ -54,10 +70,10 @@ function sanitizePermissions(raw: unknown): ToolPermissions
 {
   if (!isPlainObject(raw))
   {
-    return {}
+    return permissionRecord()
   }
 
-  const result: ToolPermissions = {}
+  const result = permissionRecord()
 
   for (const [key, value] of Object.entries(raw))
   {
@@ -89,12 +105,12 @@ function applyProjectPermissions(
   project: ToolPermissions
 ): ToolPermissions
 {
-  const result = { ...base }
+  const result = mergePermissions(base)
 
   for (const [toolName, policy] of Object.entries(project))
   {
     result[toolName] = stricterPolicy(
-      result[toolName] ?? 'require_approval',
+      result[toolName] ?? UNKNOWN_TOOL_DEFAULT_POLICY,
       policy
     )
   }
@@ -115,7 +131,7 @@ export function resolvePermissions(cwd: string): ToolPermissions
   const projectPerms = sanitizePermissions(projectConfig.permissions)
 
   return applyProjectPermissions(
-    { ...defaultToolPermissions(), ...userPerms },
+    mergePermissions(defaultToolPermissions(), userPerms),
     projectPerms
   )
 }
@@ -126,5 +142,10 @@ export function getToolPolicy(
   toolName: string
 ): PermissionPolicy
 {
-  return permissions[toolName] ?? 'require_approval'
+  if (!Object.hasOwn(permissions, toolName))
+  {
+    return UNKNOWN_TOOL_DEFAULT_POLICY
+  }
+  const policy = permissions[toolName]
+  return isValidPolicy(policy) ? policy : UNKNOWN_TOOL_DEFAULT_POLICY
 }

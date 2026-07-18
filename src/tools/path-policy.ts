@@ -5,16 +5,7 @@ import { realpath } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { resolvePath } from '../cwd.js'
 import { isPathInsideProject } from '../shared/project-tree.js'
-
-const WORKSPACE_PATH_TOOLS = new Set([
-  'read_file',
-  'write_file',
-  'edit_file',
-  'grep',
-  'glob',
-  'list_files',
-  'code_intel',
-])
+import { getBuiltInToolRegistration } from './catalog.js'
 
 interface ResolvedToolPath
 {
@@ -34,11 +25,14 @@ function toolPathArg(
   args: Record<string, unknown>
 ): string | undefined
 {
-  if (!WORKSPACE_PATH_TOOLS.has(toolName)) return undefined
+  const rule = getBuiltInToolRegistration(toolName)?.workspacePath
+  if (!rule) return undefined
 
-  const path = typeof args.path === 'string' ? args.path : undefined
-  if (toolName === 'read_file' || toolName === 'code_intel') return path
-  return path ?? '.'
+  const path =
+    typeof args[rule.argument] === 'string'
+      ? (args[rule.argument] as string)
+      : undefined
+  return path ?? rule.defaultPath
 }
 
 async function realpathIfExists(path: string): Promise<string | null>

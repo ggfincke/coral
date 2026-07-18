@@ -2,10 +2,11 @@
 // tool interface & conversion to Ollama format
 
 import type { OllamaTool, JsonSchema } from '../types/inference.js'
-import { CHARS_PER_TOKEN } from '../utils/limits.js'
+import { estimateModelRequestValue } from '../utils/limits.js'
 import type { SubagentRunner } from './subagent.js'
 import type { UndoFileChange, UndoTodoChange } from '../types/undo.js'
 import type { CodeIntelService } from '../lsp/client.js'
+import type { TodoState } from '../types/todo.js'
 
 // result returned after tool execution
 export interface ToolResult
@@ -52,6 +53,7 @@ export interface ToolExecutionContext
   allowOutsideWorkspace?: boolean
   subagentRunner?: SubagentRunner
   codeIntel?: CodeIntelService
+  todoState?: TodoState
   signal?: AbortSignal
 }
 
@@ -91,7 +93,7 @@ export function toolToOllamaFormat(tool: Tool): OllamaTool
 // estimate the separate model-tool payload that Ollama adds to the prompt
 export function estimateOllamaToolTokens(tools: readonly OllamaTool[]): number
 {
-  return Math.ceil(JSON.stringify(tools).length / CHARS_PER_TOKEN)
+  return estimateModelRequestValue(tools).tokens
 }
 
 export function estimateToolDefinitionTokens(tools: readonly Tool[]): number
