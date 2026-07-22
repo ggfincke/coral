@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.13.0] - 2026-07-24
+### Added
+
+- **Explicit MCP tools for yolo:** add an optional exact `yoloTools` subset to
+  each user-owned MCP server definition. Ask mode keeps the full permitted
+  `enabledTools` allowlist, while yolo advertises and invokes only the selected
+  non-denied subset.
+
+### Changed
+
+- **Mode-owned MCP capability lifetime:** replace boolean MCP enablement with an
+  explicit `off` / `ask` / `yolo` runtime mode. Ask/yolo transitions detach the
+  old catalog and matching system prompt synchronously, join manager/process
+  retirement, and lazily admit a fresh mode-specific catalog on the next turn.
+  `/mcp`, permission output, and CLI help now report the active mode, configured
+  ask tools, yolo tools, available namespaced tools, and actionable trust state.
+
+### Security
+
+- **Pre-trust-only yolo launch:** yolo never opens or persists launch trust.
+  Servers need a current fingerprint commissioned in ask mode, exact
+  `always_deny` policy remains a prelaunch veto, and one stale server no longer
+  suppresses unrelated trusted yolo servers. Every nonempty `yoloTools` subset
+  is disclosed and fingerprinted, while empty lists preserve existing v0.13
+  ask-only trust identities.
+
+## [0.13.0] - 2026-07-18
 
 ### Added
 
@@ -617,7 +642,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
-[0.13.0]: https://github.com/ggfincke/coral/compare/v0.12.0...b7864b23
+[Unreleased]: https://github.com/ggfincke/coral/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/ggfincke/coral/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/ggfincke/coral/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/ggfincke/coral/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/ggfincke/coral/compare/be8b243...1e4817e
