@@ -12,20 +12,20 @@ import { coralHeader } from './output.js'
 export function describePermissionMode(yolo: boolean): string
 {
   return yolo
-    ? 'yolo (auto-approve gated; denies stay blocked; MCP disabled)'
-    : 'ask (prompt before writes; MCP available)'
+    ? 'yolo (auto-approve gated; denies stay blocked; exact pre-trusted MCP subset)'
+    : 'ask (prompt before gated calls; full permitted MCP allowlists)'
 }
 
 export function formatPermissionsHelp(yolo: boolean): string
 {
   const current = yolo ? 'yolo' : 'ask'
   const description = yolo
-    ? 'auto-approve gated calls; always_deny stays blocked; MCP disabled'
+    ? 'auto-approve gated calls; always_deny stays blocked; exact pre-trusted MCP yoloTools only'
     : 'prompt before writes, shell commands, & MCP tools'
   return (
     `Permission mode: ${chalk.bold(current)} (${description})\n\n` +
-    `  ${style('user')('/permissions ask')}   — prompt before gated calls; MCP available\n` +
-    `  ${style('user')('/permissions yolo')}  — auto-approve gated calls; MCP unavailable\n` +
+    `  ${style('user')('/permissions ask')}   — prompt before gated calls; full permitted MCP allowlists\n` +
+    `  ${style('user')('/permissions yolo')}  — auto-approve gated calls; exact pre-trusted MCP yoloTools only\n` +
     `  ${chalk.dim('ctrl+y')}             — quick toggle`
   )
 }
@@ -33,14 +33,14 @@ export function formatPermissionsHelp(yolo: boolean): string
 export function formatPermissionModeChange(yolo: boolean): string
 {
   return yolo
-    ? `Permission mode → ${style('warning').bold('yolo')} (all approval-gated built-in tool calls auto-approved; configured always_deny tools stay blocked; MCP disabled)`
-    : `Permission mode → ${chalk.bold('ask')} (prompt before gated calls; MCP starts on the next chat turn)`
+    ? `Permission mode → ${style('warning').bold('yolo')} (approval-gated calls auto-approved; always_deny stays blocked; exact pre-trusted MCP yoloTools start on the next chat turn)`
+    : `Permission mode → ${chalk.bold('ask')} (prompt before gated calls; full permitted MCP allowlists start on the next chat turn)`
 }
 
 export function formatPermissionModeUnchanged(yolo: boolean): string
 {
   return yolo
-    ? `Permission mode is already ${style('warning').bold('yolo')} (MCP disabled)`
+    ? `Permission mode is already ${style('warning').bold('yolo')} (exact pre-trusted MCP yoloTools only)`
     : `Permission mode is already ${chalk.bold('ask')}`
 }
 
@@ -61,6 +61,7 @@ function formatMcpServer(status: McpServerStatus): string[]
 {
   const clean = sanitizeUntrustedText
   const configured = status.configuredTools.map(clean).join(', ') || '(none)'
+  const yolo = status.yoloTools.map(clean).join(', ') || '(none)'
   const available = status.availableTools.map(clean).join(', ') || '(none)'
   const envNames = status.passEnv.map(clean).join(', ') || '(none)'
   const state =
@@ -74,7 +75,9 @@ function formatMcpServer(status: McpServerStatus): string[]
     `    Executable: ${status.executable ? clean(status.executable) : '(not resolved)'}`,
     `    Working dir: ${clean(status.launchCwd)}`,
     `    Env names:   ${envNames}`,
-    `    Tools:       ${status.state === 'ready' ? available : configured}`,
+    `    Ask tools:   ${configured}`,
+    `    Yolo tools:  ${yolo}`,
+    `    Available:   ${available}`,
   ]
 
   const pushField = (label: string, value: string) =>
@@ -92,15 +95,21 @@ function formatMcpServer(status: McpServerStatus): string[]
   return lines
 }
 
-export function formatMcpStatus(status: McpStatus, yolo: boolean): string
+export function formatMcpStatus(status: McpStatus): string
 {
-  const lines = [coralHeader('MCP status'), '']
-  if (yolo)
+  const lines = [
+    coralHeader('MCP status'),
+    '',
+    `  Mode: ${status.mode === 'yolo' ? style('warning')('yolo') : chalk.bold(status.mode)}`,
+  ]
+  if (status.mode === 'yolo')
   {
     lines.push(
-      style('warning')('  MCP is disabled in yolo mode.'),
+      style('warning')(
+        '  Only exact yoloTools with current persisted launch trust can start.'
+      ),
       chalk.dim(
-        '  Switch to ask; configured servers start on the next chat turn.'
+        '  Missing or stale trust is skipped without prompting; switch to ask and send a turn to review it.'
       )
     )
   }
@@ -125,7 +134,7 @@ export function formatMcpStatus(status: McpStatus, yolo: boolean): string
     return lines.join('\n')
   }
 
-  if (yolo) lines.push('')
+  lines.push('')
   for (const [index, server] of status.servers.entries())
   {
     if (index > 0) lines.push('')

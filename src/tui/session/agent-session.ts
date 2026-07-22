@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { Agent } from '../../agent/agent.js'
 import { AgentTodoState } from '../../agent/state/todos.js'
 import type { McpConfigResolution } from '../../config/mcp.js'
+import type { McpMode } from '../../mcp/types.js'
 import { createSession, loadSession, saveSession } from '../../session/store.js'
 import {
   isValidSessionId,
@@ -23,7 +24,7 @@ export interface PrimaryAgentOptions
   host: string
   cwd?: string
   think: boolean
-  mcp: boolean
+  mcpMode: McpMode
   mcpConfig: McpConfigResolution
   restored?: SessionData | null
 }
@@ -46,7 +47,7 @@ export function buildPrimaryAgent(options: PrimaryAgentOptions): Agent
 {
   const agent = new Agent(options.model, options.host, options.cwd, {
     think: options.think,
-    mcp: options.mcp,
+    mcpMode: options.mcpMode,
     mcpConfig: options.mcpConfig,
     todoState: new AgentTodoState(options.restored?.todos),
   })

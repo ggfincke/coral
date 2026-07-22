@@ -160,12 +160,20 @@ export function buildMcpApprovalContent(
   box.push(`Working directory: ${cleanLaunchValue(request.launchCwd)}`)
   box.push(`Forwarded environment names: ${formatLaunchList(request.passEnv)}`)
   box.push(`Enabled tools: ${formatLaunchList(request.enabledTools)}`)
+  box.push(`Yolo-eligible tools: ${formatLaunchList(request.yoloTools)}`)
   box.push(`Fingerprint: ${cleanLaunchValue(request.fingerprint)}`)
   box.blank()
   box.push(
     'This process is not sandboxed & may access the host, filesystem, or network.',
     box.warn
   )
+  if (request.yoloTools.length > 0)
+  {
+    box.push(
+      'Non-denied yolo tools may run without per-call approval in yolo mode.',
+      box.warn
+    )
+  }
 
   return box.finish(box.warn('(y) trust & launch  (n) reject  (esc) cancel'))
 }

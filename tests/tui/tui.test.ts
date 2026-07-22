@@ -476,6 +476,7 @@ test('approval and confirm boxes share framed prompt rendering', () =>
       launchCwd: '/home/user',
       passEnv: ['API_TOKEN_NAME'],
       enabledTools: ['echo'],
+      yoloTools: ['echo'],
       fingerprint: 'f'.repeat(64),
     },
     80
@@ -484,6 +485,7 @@ test('approval and confirm boxes share framed prompt rendering', () =>
   assert.ok(mcp.includes('Resolved executable: /usr/local/bin/node'))
   assert.ok(mcp.includes('Arguments: ["server.js","--flag"]'))
   assert.ok(mcp.includes('Forwarded environment names: API_TOKEN_NAME'))
+  assert.ok(mcp.includes('Yolo-eligible tools: echo'))
   // the fingerprint hard-wraps across rows; compare w/o frame & whitespace
   assert.ok(mcp.replace(/[\s│]/g, '').includes(`Fingerprint:${'f'.repeat(64)}`))
 
@@ -517,6 +519,7 @@ test('approval and confirm boxes share framed prompt rendering', () =>
       launchCwd: '/home/user',
       passEnv: [],
       enabledTools: ['t'.repeat(128)],
+      yoloTools: [],
       fingerprint: 'f'.repeat(64),
     },
     20
