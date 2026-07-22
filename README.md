@@ -62,18 +62,18 @@ ollama pull nomic-embed-text
 
 ## CLI options
 
-| Option                  | Behavior                                                                  |
-| ----------------------- | ------------------------------------------------------------------------- |
-| `-V`, `--version`       | Print the Coral version                                                   |
-| `-m`, `--model <model>` | Use an installed Ollama model without opening the picker                  |
-| `--host <url>`          | Set the Ollama host; defaults to `http://localhost:11434`                 |
-| `--no-think`            | Disable streamed reasoning requests                                       |
-| `--yolo`                | Auto-approve gated calls; `always_deny` stays blocked; MCP is unavailable |
-| `--resume`              | Resume the most recent usable session                                     |
-| `--session <id>`        | Resume one exact session ID                                               |
-| `--sessions`            | List saved sessions and exit                                              |
-| `--theme <name>`        | Select a color theme; `/theme` lists available names                      |
-| `-h`, `--help`          | Show CLI help                                                             |
+| Option                  | Behavior                                                                             |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| `-V`, `--version`       | Print the Coral version                                                              |
+| `-m`, `--model <model>` | Use an installed Ollama model without opening the picker                             |
+| `--host <url>`          | Set the Ollama host; defaults to `http://localhost:11434`                            |
+| `--no-think`            | Disable streamed reasoning requests                                                  |
+| `--yolo`                | Auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP `yoloTools` |
+| `--resume`              | Resume the most recent usable session                                                |
+| `--session <id>`        | Resume one exact session ID                                                          |
+| `--sessions`            | List saved sessions and exit                                                         |
+| `--theme <name>`        | Select a color theme; `/theme` lists available names                                 |
+| `-h`, `--help`          | Show CLI help                                                                        |
 
 ## Interactive use
 
@@ -85,8 +85,10 @@ ollama pull nomic-embed-text
   same whole-request limit as history, tools, Git context, and the response.
 - Press `Ctrl+P` to search commands and keybindings in the command palette.
 - Approval boxes show pending write/edit diffs when a preview is available.
-- The first launch of each MCP server shows its full launch identity in a
-  separate trust prompt before Coral starts the process.
+- In ask mode, the first or changed launch of each MCP server shows its full
+  launch identity in a separate trust prompt before Coral starts the process.
+  Yolo never opens or persists launch trust; commission the identity in ask
+  first.
 - Press `Ctrl+C` or `Esc` during a run to interrupt it. The same keys exit when
   Coral is idle.
 - Use `PageUp`/`PageDown` to move through the transcript and Up/Down to recall
@@ -146,8 +148,8 @@ Coral exposes a small structured toolset to the model:
 - A persistent `todo_write` plan rendered in the TUI
 - Trusted, explicitly allowlisted MCP tools from local stdio server processes;
   MCP tools are namespaced as `mcp__<server>__<tool>`, executed serially, and
-  admitted within the active model's context budget, and never exposed to
-  read-only subagents
+  admitted by the current ask/yolo mode within the active model's context
+  budget, and never exposed to read-only subagents
 
 `code_intel` starts its bundled TypeScript language server only on first use,
 shares it with read-only subagents, and shuts it down when Coral disposes the
@@ -165,16 +167,24 @@ MCP tool. Project and user configuration can set any tool to:
 - `require_approval`
 - `always_deny`
 
-`yolo` skips prompts for approval-gated built-in calls; it does not override
-`always_deny`. MCP is unavailable in yolo mode in v0.13. Switching back to ask
-mode creates a fresh MCP manager, and configured servers start on the next chat
-turn.
+`yolo` skips prompts for approval-gated calls but does not override
+`always_deny`. MCP adds three explicit gates: the user-owned `enabledTools`
+allowlist defines ask-mode capabilities, its optional `yoloTools` subset defines
+the only capabilities advertised in yolo, and launch trust authorizes one exact
+process identity before spawn. Yolo starts only servers whose current
+fingerprint was already approved in ask mode; it never prompts for or persists
+new launch trust.
 
-MCP launch trust and MCP tool approval are different gates. Launch trust
-authorizes one exact process identity before spawn; normal tool policy then
-decides whether each namespaced tool call is allowed, prompted, or denied. A
-user may set a tool such as `mcp__github__get_me` to `always_allow` in
-`~/.coral.json`, while project configuration may only tighten that decision.
+Normal namespaced tool policy applies after mode-specific admission. In ask,
+`require_approval` prompts and `always_allow` suppresses that prompt. In yolo,
+`require_approval` calls are auto-approved just like gated built-ins, while
+`always_deny` remains blocked. `always_allow` is not required for a tool already
+listed in `yoloTools`. Project configuration may tighten namespaced permissions
+but cannot define an MCP server, add an enabled tool, or grant yolo eligibility.
+
+Both ask -> yolo and yolo -> ask synchronously remove the old dynamic catalog
+and matching prompt capabilities, retire the old server processes, and create a
+fresh mode-specific manager on the next chat turn.
 
 Approval prompts that exceed the terminal height scroll inside a bounded
 viewport: `↑`/`↓` move one line, `PgUp`/`PgDn` move one page, and a position
@@ -187,7 +197,9 @@ ambient authority by launching without a shell, using the home directory as a
 neutral working directory, forwarding only a minimal process environment plus
 named variables, exposing only exact allowlisted tools, and refusing launch
 when every configured tool is denied. These controls do not make an untrusted
-server safe.
+server safe. `yoloTools` limits which calls the model can make without a prompt;
+it does not restrict what a launched server process can do with its own host,
+filesystem, network, or forwarded-secret access.
 
 File, search, and code-intelligence tools request separate approval for explicit
 paths outside the active workspace even when their normal policy is
@@ -257,9 +269,10 @@ accepts a model name, not a digest-pinned artifact reference.
 
 ### Local MCP servers
 
-Coral's v0.13 MCP client supports local stdio servers that expose tools. Server
-definitions are accepted only from the user-owned `~/.coral.json`; a cloned
-project cannot add a process launch through `<workspace>/.coral.json`.
+Coral's MCP client supports local stdio servers that expose tools in ask mode
+and exact pre-trusted subsets in yolo. Server definitions are accepted only
+from the user-owned `~/.coral.json`; a cloned project cannot add a process
+launch through `<workspace>/.coral.json`.
 
 ```json
 {
@@ -280,6 +293,7 @@ project cannot add a process launch through `<workspace>/.coral.json`.
           "ghcr.io/github/github-mcp-server"
         ],
         "enabledTools": ["get_me", "get_file_contents", "pull_request_read"],
+        "yoloTools": ["get_me", "get_file_contents"],
         "passEnv": [
           "GITHUB_PERSONAL_ACCESS_TOKEN",
           "GITHUB_READ_ONLY",
@@ -309,9 +323,11 @@ npm run dev
 This example uses the official
 [GitHub MCP Server](https://github.com/github/github-mcp-server), restricts the
 server itself to read-only mode and three tools, then applies Coral's own exact
-three-tool allowlist. `always_allow` above is optional; without it, each MCP
-tool call requires approval. Pin the container image by digest when immutable
-server code is important to your threat model.
+three-tool ask allowlist and two-tool yolo subset. `pull_request_read` therefore
+remains ask-only. `always_allow` above is optional and only suppresses the
+ask-mode prompt for `get_me`; `yoloTools` is the independent yolo opt-in. Pin the
+container image by digest when immutable server code is important to your
+threat model.
 
 Server fields:
 
@@ -320,33 +336,40 @@ Server fields:
 | `command`          | Required executable name resolved through `PATH`, or an absolute path; never passed through a shell; Windows accepts native `.exe`/`.com` only |
 | `args`             | Ordered argument array; defaults to `[]`; maximum 64 items                                                                                     |
 | `enabledTools`     | Required exact names using 1–128 letters, digits, `_`, or `-`; wildcards are rejected                                                          |
+| `yoloTools`        | Optional exact unique subset of `enabledTools`; defaults to `[]`, which prevents that server from starting in yolo                             |
 | `passEnv`          | Environment-variable names to forward; values are read at launch and never shown by `/mcp`                                                     |
 | `startupTimeoutMs` | Total server startup/discovery timeout; default 10,000; allowed range 1,000–60,000                                                             |
 | `toolTimeoutMs`    | Per-call timeout; default 60,000; allowed range 1,000–600,000                                                                                  |
 
-Configuration is limited to four servers and twelve enabled tools total. Alias
-names must start with a lowercase letter or digit and contain only lowercase
-letters, digits, `_`, or `-`. If any environment variable named in `passEnv` is
-unset, Coral disables that server for the session rather than launching it with
-an incomplete environment. Coral also skips discovered definitions that would
-push the complete tool payload beyond the active model's context-relative
-budget; `/mcp` reports the skipped tool. Changes to server configuration,
-context size, model, or discovered tools require a fresh manager or session.
+Configuration is limited to four servers and twelve enabled tools total;
+`yoloTools` does not add to that limit because it can only narrow
+`enabledTools`. Alias names must start with a lowercase letter or digit and
+contain only lowercase letters, digits, `_`, or `-`. If any environment
+variable named in `passEnv` is unset, Coral disables that server for the session
+rather than launching it with an incomplete environment. Coral also skips
+discovered definitions that would push the complete tool payload beyond the
+active model's context-relative budget; `/mcp` reports the skipped tool. Changes
+to server configuration, context size, model, or discovered tools require a
+fresh manager or session.
 
 On first use, Coral resolves the executable to its real path and asks you to
 approve the alias, configured command, resolved executable, complete ordered
 arguments, neutral home-directory working directory, environment names,
-enabled tools, and SHA-256 launch fingerprint. Legacy approval is read from
-`CORAL_HOME/mcp-trust.json`; new approvals are stored as per-alias records under
-`CORAL_HOME/mcp-trust.d/`. Any fingerprinted configuration or executable-path
-change requires approval again. The fingerprint does not hash executable
-contents or resolve a mutable container tag, so an update at the same path or
-tag does not trigger reapproval.
+enabled tools, yolo-eligible tools, and SHA-256 launch fingerprint. Legacy
+approval is read from `CORAL_HOME/mcp-trust.json`; new approvals are stored as
+per-alias records under `CORAL_HOME/mcp-trust.d/`. A nonempty `yoloTools` list is
+fingerprinted, so adding, widening, narrowing, or removing yolo authority
+requires ask-mode approval again. Missing or empty `yoloTools` is omitted from
+the hash so unchanged v0.13 ask-only trust records stay valid. The fingerprint
+does not hash executable contents or resolve a mutable container tag, so an
+update at the same path or tag does not trigger reapproval.
 
-Launch approval is requested sequentially in configuration order. After all
-required approvals finish, Coral starts at most two approved servers at once,
-then installs their tools in configuration order so collisions, budgets, and
-model-visible ordering remain deterministic.
+In ask mode, launch approval is requested sequentially in configuration order.
+In yolo, Coral never prompts: servers with missing or stale trust remain
+`needs_trust`, while unrelated current-trust servers may still start. Coral
+starts at most two authorized servers at once, then installs their tools in
+configuration order so collisions, budgets, and model-visible ordering remain
+deterministic.
 
 MCP stdio messages are newline-delimited and limited to 16 MiB or 8,192 retained
 fragments per unfinished message. Supported tool result content is sanitized and
@@ -355,22 +378,24 @@ before appending an explicit omitted-character marker. A server that exceeds a
 protocol-message limit is stopped and shown as failed in `/mcp`.
 
 Use `/mcp` at any time to inspect configuration errors and each server's state,
-resolved executable, working directory, forwarded environment names, enabled or
-available tools, and bounded diagnostic text. The command is observational and
-never launches a server. Common states:
+resolved executable, working directory, forwarded environment names, ask tools,
+yolo tools, currently available namespaced tools, and bounded diagnostic text.
+The command is observational and never launches a server. Common states:
 
-- `configured`: valid config has not started yet; send a chat turn in ask mode
-- `needs_trust`: the launch needs interactive trust; restart in the TUI if the
-  current caller could not prompt
-- `blocked`: effective permissions deny every configured tool, so Coral did not
-  start the process
+- `configured`: valid config has not started yet; send a chat turn in the active
+  mode
+- `needs_trust`: ask can show the launch prompt on a turn; yolo skips the server
+  and directs you to switch to ask
+- `blocked`: the active mode has no opted-in tools, or hard permission denies
+  removed every active-mode candidate before launch
 - `failed`: inspect the bounded detail/stderr for a missing executable, missing
   environment variable, Docker daemon failure, timeout, protocol error, or
   allowlisted tool the server did not expose
-- `rejected`: launch trust was declined for this session
+- `rejected`: ask-mode launch trust was declined for this session
 - `stopped`: an interrupted/timed-out call retired the server; restart Coral to
   use it again
-- `ready`: discovery succeeded and the listed namespaced tools are available
+- `ready`: discovery succeeded and only the listed active-mode namespaced tools
+  are available
 
 ### Environment variables
 
@@ -447,10 +472,11 @@ tree.
 - Coral is pre-1.0 and currently optimized for large, capable local models.
 - TypeScript/JavaScript are the only languages with LSP-backed code intelligence.
 - `bash` is not sandboxed; use `ask` mode with models you do not fully trust.
-- MCP v0.13 supports local stdio tool servers in ask mode only. Remote transports,
-  OAuth, standalone resource discovery/reads, prompts, sampling, elicitation,
-  hot config/tool-list updates, MCP use from subagents, and parallel MCP calls
-  are deferred. Text resources embedded directly in a tool result are supported.
+- MCP supports local stdio tool servers in ask mode plus exact pre-trusted
+  `yoloTools` subsets. Remote transports, OAuth, standalone resource
+  discovery/reads, prompts, sampling, elicitation, hot config/tool-list updates,
+  MCP use from subagents, and parallel MCP calls are deferred. Text resources
+  embedded directly in a tool result are supported.
 - MCP processes are not sandboxed. Coral bounds each newline-delimited stdio
   protocol message, but a trusted server can still consume host resources in
   its own process; use only servers you trust.

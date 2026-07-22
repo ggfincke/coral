@@ -2,6 +2,7 @@
 // test MCP launch config & trust boundaries
 
 import { strict as assert } from 'node:assert'
+import { createHash } from 'node:crypto'
 import { stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -71,6 +72,7 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
           'github-mcp-server',
         ],
         enabledTools: ['get_me', 'get_file_contents', 'pull_request_read'],
+        yoloTools: ['get_me', 'get_file_contents'],
         passEnv: [
           'GITHUB_PERSONAL_ACCESS_TOKEN',
           'GITHUB_READ_ONLY',
@@ -82,6 +84,10 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
   assert.deepEqual(resolved.issues, [])
   assert.equal(resolved.servers.length, 1)
   assert.equal(resolved.servers[0]?.launchCwd, homedir())
+  assert.deepEqual(resolved.servers[0]?.yoloTools, [
+    'get_me',
+    'get_file_contents',
+  ])
 
   const unsafeToolName = parseMcpConfig({
     servers: {
@@ -93,6 +99,35 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
   })
   assert.match(unsafeToolName.issues[0]?.message ?? '', /invalid value/)
 
+  const askOnly = parseMcpConfig({
+    servers: {
+      ask_only: { command: 'node', enabledTools: ['get_me'] },
+    },
+  })
+  assert.deepEqual(askOnly.servers[0]?.yoloTools, [])
+
+  const unsafeYoloTools = parseMcpConfig({
+    servers: {
+      duplicate: {
+        command: 'node',
+        enabledTools: ['get_me'],
+        yoloTools: ['get_me', 'get_me'],
+      },
+      widened: {
+        command: 'node',
+        enabledTools: ['get_me'],
+        yoloTools: ['delete_repository'],
+      },
+    },
+  })
+  assert.deepEqual(
+    unsafeYoloTools.issues.map((issue) => issue.message),
+    [
+      'yoloTools contains duplicate values',
+      'yoloTools must be a subset of enabledTools',
+    ]
+  )
+
   const server = resolved.servers[0]!
   const descriptor: McpLaunchDescriptor = {
     alias: server.alias,
@@ -102,13 +137,35 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
     launchCwd: server.launchCwd,
     passEnv: server.passEnv,
     enabledTools: server.enabledTools,
+    yoloTools: server.yoloTools,
   }
+
+  // an empty yolo subset preserves the exact v0.13 fingerprint payload
+  const askOnlyDescriptor = { ...descriptor, yoloTools: [] }
+  const legacyPayload = {
+    version: 1,
+    alias: descriptor.alias,
+    command: descriptor.command,
+    executable: descriptor.executable,
+    args: descriptor.args,
+    launchCwd: descriptor.launchCwd,
+    passEnv: [...descriptor.passEnv].sort(),
+    enabledTools: [...descriptor.enabledTools].sort(),
+  }
+  const legacyFingerprint = createHash('sha256')
+    .update(JSON.stringify(legacyPayload))
+    .digest('hex')
+  assert.equal(fingerprintMcpLaunch(askOnlyDescriptor), legacyFingerprint)
 
   assert.equal(isMcpLaunchTrusted(descriptor), false)
   trustMcpLaunch(descriptor)
   assert.equal(isMcpLaunchTrusted(descriptor), true)
   assert.equal(
     isMcpLaunchTrusted({ ...descriptor, args: [...descriptor.args, '--pull'] }),
+    false
+  )
+  assert.equal(
+    isMcpLaunchTrusted({ ...descriptor, yoloTools: ['get_me'] }),
     false
   )
 
@@ -124,12 +181,17 @@ test('MCP launch config stays user-owned and fingerprint-gated', async () =>
   // executable resolution, or any process spawn
   const deniedConfig = parseMcpConfig({
     servers: {
-      denied: { command: 'node', enabledTools: ['list'] },
+      denied: {
+        command: 'node',
+        enabledTools: ['list'],
+        yoloTools: ['list'],
+      },
     },
   })
   assert.deepEqual(deniedConfig.issues, [])
   const deniedManager = new McpManager({
     config: deniedConfig,
+    mode: 'yolo',
     permissions: {
       ...defaultToolPermissions(),
       mcp__denied__list: 'always_deny',
@@ -177,6 +239,7 @@ test('MCP trust sidecars preserve legacy aliases and fail closed when invalid', 
     launchCwd: homedir(),
     passEnv: [],
     enabledTools: ['echo'],
+    yoloTools: [],
   }
   const current: McpLaunchDescriptor = {
     ...legacy,

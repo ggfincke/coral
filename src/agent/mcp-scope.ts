@@ -5,7 +5,9 @@ import type { ToolPermissions } from '../config/permissions.js'
 import { resolveMcpConfig, type McpConfigResolution } from '../config/mcp.js'
 import {
   configuredMcpStatus,
+  type ActiveMcpMode,
   type McpLaunchApprovalRequest,
+  type McpMode,
   type McpStatus,
 } from '../mcp/types.js'
 import type { Tool } from '../tools/tool.js'
@@ -23,7 +25,7 @@ export interface McpToolAdmission
 
 export interface McpToolScopeOptions
 {
-  enabled: boolean
+  mode: McpMode
   config?: McpConfigResolution
   permissions: ToolPermissions
   baseTools: readonly Tool[]
@@ -34,7 +36,7 @@ export interface McpToolScopeOptions
 // * Own one Agent's lazy MCP manager identity and cleanup
 export class McpToolScope
 {
-  private enabled: boolean
+  private mode: McpMode
   private config?: McpConfigResolution
   private readonly permissions: ToolPermissions
   private readonly baseTools: readonly Tool[]
@@ -54,7 +56,7 @@ export class McpToolScope
 
   constructor(options: McpToolScopeOptions)
   {
-    this.enabled = options.enabled
+    this.mode = options.mode
     this.config = options.config
     this.permissions = options.permissions
     this.baseTools = options.baseTools
@@ -62,10 +64,15 @@ export class McpToolScope
     this.parentLifecycleSignal = options.lifecycleSignal
   }
 
-  isEnabled(): boolean
+  getMode(): McpMode
+  {
+    return this.mode
+  }
+
+  private isEnabled(): boolean
   {
     return (
-      this.enabled &&
+      this.mode !== 'off' &&
       !this.parentLifecycleSignal.aborted &&
       !this.lifecycleAbort.signal.aborted
     )
@@ -75,15 +82,21 @@ export class McpToolScope
   {
     if (this.currentManager) return this.currentManager.getStatus()
     this.config ??= resolveMcpConfig()
-    return configuredMcpStatus(this.config)
+    return configuredMcpStatus(this.config, this.mode)
   }
 
-  setEnabled(enabled: boolean, signal?: AbortSignal): void
+  transitionMode(
+    mode: McpMode,
+    afterDetach: () => void,
+    signal?: AbortSignal
+  ): Promise<void>
   {
     signal?.throwIfAborted()
     this.parentLifecycleSignal.throwIfAborted()
     this.lifecycleAbort.signal.throwIfAborted()
-    this.enabled = enabled
+    if (this.mode === mode) return Promise.resolve()
+    this.mode = mode
+    return this.retireCurrent(afterDetach)
   }
 
   bootstrap(options: McpToolAdmission): Promise<void>
@@ -96,6 +109,11 @@ export class McpToolScope
       ].filter((signal): signal is AbortSignal => signal !== undefined)
     )
     if (!this.isEnabled() || bootstrapSignal.aborted)
+    {
+      return Promise.resolve()
+    }
+    this.config ??= resolveMcpConfig()
+    if (!this.hasModeCandidates())
     {
       return Promise.resolve()
     }
@@ -160,7 +178,7 @@ export class McpToolScope
   {
     if (!this.disposePromise)
     {
-      this.enabled = false
+      this.mode = 'off'
       this.lifecycleAbort.abort()
       this.disposePromise = this.disposeInternal()
     }
@@ -168,14 +186,16 @@ export class McpToolScope
   }
 
   private async createManager(
-    maxDynamicToolTokens: number
+    maxDynamicToolTokens: number,
+    mode: ActiveMcpMode
   ): Promise<AgentMcpManager>
   {
-    if (this.managerFactory) return this.managerFactory()
+    if (this.managerFactory) return this.managerFactory(mode)
     this.config ??= resolveMcpConfig()
     const { McpManager } = await import('../mcp/manager.js')
     return new McpManager({
       config: this.config,
+      mode,
       permissions: this.permissions,
       baseTools: this.baseTools,
       maxDynamicToolTokens,
@@ -188,9 +208,11 @@ export class McpToolScope
     epoch: number
   ): Promise<void>
   {
+    const mode = this.mode
+    if (mode === 'off') return
     const existing = this.currentManager
     const manager =
-      existing ?? (await this.createManager(options.maxDynamicToolTokens))
+      existing ?? (await this.createManager(options.maxDynamicToolTokens, mode))
 
     // close managers created for a retired bootstrap generation
     if (epoch !== this.bootstrapEpoch)
@@ -200,7 +222,7 @@ export class McpToolScope
     }
 
     // leave an existing installed manager for Agent disposal to retire
-    if (!this.isEnabled() || signal.aborted)
+    if (!this.isEnabled() || this.mode !== mode || signal.aborted)
     {
       if (!existing) await this.retireManager(manager)
       return
@@ -219,7 +241,7 @@ export class McpToolScope
     {
       tools = await manager.initialize({
         signal,
-        onLaunchApproval: options.onLaunchApproval,
+        onLaunchApproval: mode === 'ask' ? options.onLaunchApproval : undefined,
       })
     }
     catch (error)
@@ -238,7 +260,7 @@ export class McpToolScope
       await this.retireManager(manager)
       return
     }
-    if (!this.isEnabled() || signal.aborted)
+    if (!this.isEnabled() || this.mode !== mode || signal.aborted)
     {
       await this.retireUninstalledManager(manager)
       return
@@ -246,6 +268,7 @@ export class McpToolScope
 
     // require every configured launch to settle before exposing any tools
     if (
+      mode === 'ask' &&
       manager
         .getStatus()
         .servers.some((server) => server.state === 'needs_trust')
@@ -258,6 +281,16 @@ export class McpToolScope
     const proposedTools = Object.freeze([...tools])
     options.admit(proposedTools)
     this.installedManager = manager
+  }
+
+  private hasModeCandidates(): boolean
+  {
+    if (this.mode === 'off' || !this.config) return false
+    return this.config.servers.some((server) =>
+      this.mode === 'ask'
+        ? server.enabledTools.length > 0
+        : server.yoloTools.length > 0
+    )
   }
 
   private retireUninstalledManager(manager: AgentMcpManager): Promise<void>

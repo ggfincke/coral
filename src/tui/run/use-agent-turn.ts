@@ -327,6 +327,8 @@ export function useAgentTurn(
             onMcpLaunchApproval(request)
             {
               if (!acceptsEvent(operation)) return Promise.resolve(false)
+              // yolo may use only launch identities commissioned in ask mode
+              if (isYolo()) return Promise.resolve(false)
               stopWaiting()
               return requestPrompt(operation, { kind: 'mcp', request })
             },

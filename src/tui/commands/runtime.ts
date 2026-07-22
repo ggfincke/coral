@@ -174,9 +174,7 @@ const mcpCommand: Command = {
   description: 'Show configured MCP server & tool status',
   execute(_args, ctx)
   {
-    ctx.pushOutput(
-      systemBlock(formatMcpStatus(ctx.agent.getMcpStatus(), ctx.yolo))
-    )
+    ctx.pushOutput(systemBlock(formatMcpStatus(ctx.agent.getMcpStatus())))
   },
 }
 

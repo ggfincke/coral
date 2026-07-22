@@ -69,6 +69,7 @@ function descriptor(alias: string, marker: string): McpLaunchDescriptor
     launchCwd: '/tmp',
     passEnv: [],
     enabledTools: ['echo'],
+    yoloTools: [],
   }
 }
 

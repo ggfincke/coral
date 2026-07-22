@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../agent/agent.js'
 import { resolveMcpConfig } from '../../config/mcp.js'
+import type { ActiveMcpMode } from '../../mcp/types.js'
 import { loadSession, renameSession } from '../../session/store.js'
 import type { SessionData, SessionMeta } from '../../session/types.js'
 import { recordReliability } from '../../telemetry/store.js'
@@ -110,6 +111,11 @@ export interface InteractiveSession
   shutdown: () => Promise<void>
 }
 
+function activeMcpMode(yolo: boolean): ActiveMcpMode
+{
+  return yolo ? 'yolo' : 'ask'
+}
+
 export function useInteractiveSession(
   options: UseInteractiveSessionOptions
 ): InteractiveSession
@@ -123,7 +129,7 @@ export function useInteractiveSession(
       host: options.host,
       cwd: options.initialSession?.meta.cwd,
       think: options.think,
-      mcp: !options.initialYolo,
+      mcpMode: activeMcpMode(options.initialYolo),
       mcpConfig,
       restored: options.initialSession,
     })
@@ -318,7 +324,7 @@ export function useInteractiveSession(
             host: options.host,
             cwd: restored?.meta.cwd,
             think: options.think,
-            mcp: !yoloRef.current,
+            mcpMode: activeMcpMode(yoloRef.current),
             mcpConfig,
             restored,
           }),
@@ -392,7 +398,7 @@ export function useInteractiveSession(
             host: options.host,
             cwd: target.meta.cwd,
             think: options.think,
-            mcp: !yoloRef.current,
+            mcpMode: activeMcpMode(yoloRef.current),
             mcpConfig,
             restored: target,
           }),
@@ -441,8 +447,9 @@ export function useInteractiveSession(
           // publish the mode commit synchronously before returning its joined
           // cleanup promise; publish that commit immediately so cancellation
           // during retirement cannot split the runtime and visible mode
-          const cleanup = target.setMcpEnabled(!nextYolo, transition.signal)
-          committed = target.isMcpEnabled() === !nextYolo
+          const nextMcpMode = activeMcpMode(nextYolo)
+          const cleanup = target.setMcpMode(nextMcpMode, transition.signal)
+          committed = target.getMcpMode() === nextMcpMode
           if (committed)
           {
             runtime.markTransitionCommitted(transition)

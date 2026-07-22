@@ -143,6 +143,7 @@ test('blocking prompts settle once across answer, abort, & replacement', async (
       launchCwd: '/tmp',
       passEnv: [],
       enabledTools: ['echo'],
+      yoloTools: ['echo'],
       fingerprint: 'f'.repeat(64),
     },
   })
