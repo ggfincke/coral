@@ -4,7 +4,12 @@
 import type { ToolPermissions } from '../config/permissions.js'
 import type { McpConfigResolution } from '../config/mcp.js'
 import type { CodeIntelService } from '../lsp/contracts.js'
-import type { McpLaunchApprovalRequest, McpStatus } from '../mcp/types.js'
+import type {
+  ActiveMcpMode,
+  McpLaunchApprovalRequest,
+  McpMode,
+  McpStatus,
+} from '../mcp/types.js'
 import type { SubagentRunner } from '../tools/subagent.js'
 import type { Tool, ToolCallPresentation } from '../tools/tool.js'
 import type { TodoState } from '../types/todo.js'
@@ -85,7 +90,9 @@ export interface AgentMcpManager
   dispose(): Promise<void>
 }
 
-export type AgentMcpManagerFactory = () => Promise<AgentMcpManager>
+export type AgentMcpManagerFactory = (
+  mode: ActiveMcpMode
+) => Promise<AgentMcpManager>
 
 export interface AgentOptions
 {
@@ -102,8 +109,8 @@ export interface AgentOptions
   permissions?: ToolPermissions
   // share the interactive Agent's lazy LSP client with read-only subagents
   codeIntel?: CodeIntelService
-  // enable user-configured MCP servers only for the primary Agent
-  mcp?: boolean
+  // select user-configured MCP capability policy for this Agent
+  mcpMode?: McpMode
   // reuse one MCP config snapshot across primary Agent replacements and mode changes
   mcpConfig?: McpConfigResolution
   // inject restored session state before the Agent becomes observable

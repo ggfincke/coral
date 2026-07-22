@@ -21,6 +21,7 @@ export interface McpLaunchDescriptor
   launchCwd: string
   passEnv: string[]
   enabledTools: string[]
+  yoloTools: string[]
 }
 
 interface McpTrustEntry
@@ -138,6 +139,9 @@ export function fingerprintMcpLaunch(descriptor: McpLaunchDescriptor): string
     launchCwd: descriptor.launchCwd,
     passEnv: [...descriptor.passEnv].sort(),
     enabledTools: [...descriptor.enabledTools].sort(),
+    ...(descriptor.yoloTools.length > 0
+      ? { yoloTools: [...descriptor.yoloTools].sort() }
+      : {}),
   }
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex')
 }

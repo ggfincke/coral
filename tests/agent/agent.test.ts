@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Agent, type AgentMcpManager } from '../../src/agent/agent.js'
+import { parseMcpConfig } from '../../src/config/mcp.js'
 import {
   estimateOllamaToolTokens,
   type Tool,
@@ -36,6 +37,16 @@ import {
 } from '../helpers/agent-harness.js'
 
 const { tempDir } = makeTempDirPool()
+
+const agentMcpConfig = parseMcpConfig({
+  servers: {
+    demo: {
+      command: process.execPath,
+      enabledTools: ['ping'],
+      yoloTools: ['ping'],
+    },
+  },
+})
 
 type LifecycleAgent = Agent & {
   codeIntel: CodeIntelService & {
@@ -1675,7 +1686,9 @@ test('MCP bootstrap retries aborted and unresolved trust snapshots without parti
   let createdManagers = 0
   const disposedManagers: number[] = []
   let launchApprovals = 0
-  const mcpManagerFactory = async (): Promise<AgentMcpManager> =>
+  const mcpManagerFactory = async (
+    mode: 'ask' | 'yolo'
+  ): Promise<AgentMcpManager> =>
   {
     const index = createdManagers++
     if (index === 0)
@@ -1695,12 +1708,14 @@ test('MCP bootstrap retries aborted and unresolved trust snapshots without parti
           })
         },
         getStatus: () => ({
+          mode,
           configIssues: [],
           servers: [
             {
               alias: 'demo',
               state: 'stopped',
               configuredTools: ['ping'],
+              yoloTools: ['ping'],
               availableTools: [],
               launchCwd: dir,
               passEnv: [],
@@ -1722,12 +1737,14 @@ test('MCP bootstrap retries aborted and unresolved trust snapshots without parti
           return [dynamicTool]
         },
         getStatus: () => ({
+          mode,
           configIssues: [],
           servers: [
             {
               alias: 'ready',
               state: 'ready',
               configuredTools: ['ping'],
+              yoloTools: ['ping'],
               availableTools: ['ping'],
               launchCwd: dir,
               passEnv: [],
@@ -1736,6 +1753,7 @@ test('MCP bootstrap retries aborted and unresolved trust snapshots without parti
               alias: 'pending',
               state: 'needs_trust',
               configuredTools: ['inspect'],
+              yoloTools: ['inspect'],
               availableTools: [],
               launchCwd: dir,
               passEnv: [],
@@ -1761,18 +1779,21 @@ test('MCP bootstrap retries aborted and unresolved trust snapshots without parti
           launchCwd: dir,
           passEnv: [],
           enabledTools: ['ping'],
+          yoloTools: ['ping'],
           fingerprint: 'demo-fingerprint',
         })
         assert.equal(approved, true)
         return [dynamicTool]
       },
       getStatus: () => ({
+        mode,
         configIssues: [],
         servers: [
           {
             alias: 'demo',
             state: 'ready',
             configuredTools: ['ping'],
+            yoloTools: ['ping'],
             availableTools: ['ping'],
             launchCwd: dir,
             passEnv: [],
@@ -1795,7 +1816,12 @@ test('MCP bootstrap retries aborted and unresolved trust snapshots without parti
       )
       yield { message: { role: 'assistant', content: 'done' }, done: true }
     },
-    { mcp: true, numCtx: 8_192, mcpManagerFactory }
+    {
+      mcpMode: 'ask',
+      mcpConfig: agentMcpConfig,
+      numCtx: 8_192,
+      mcpManagerFactory,
+    }
   )
 
   const controller = new AbortController()
@@ -1891,14 +1917,15 @@ test('a failed MCP retirement keeps the old model prompt and catalog aligned', a
     dir,
     [[{ message: { role: 'assistant', content: 'done' }, done: true }]],
     {
-      mcp: true,
+      mcpMode: 'ask',
+      mcpConfig: agentMcpConfig,
       numCtx: 8_192,
       mcpManagerFactory: async () => ({
         async initialize()
         {
           return [dynamicTool]
         },
-        getStatus: () => ({ configIssues: [], servers: [] }),
+        getStatus: () => ({ mode: 'ask', configIssues: [], servers: [] }),
         async dispose()
         {
           throw new Error('retirement failed')
@@ -1933,7 +1960,9 @@ test('an aborted model switch leaves the old model and counters authoritative', 
   })
   let replacementBootstraps = 0
   let createdManagers = 0
-  const mcpManagerFactory = async (): Promise<AgentMcpManager> =>
+  const mcpManagerFactory = async (
+    mode: 'ask' | 'yolo'
+  ): Promise<AgentMcpManager> =>
   {
     const index = createdManagers++
     return {
@@ -1942,7 +1971,7 @@ test('an aborted model switch leaves the old model and counters authoritative', 
         if (index > 0) replacementBootstraps += 1
         return []
       },
-      getStatus: () => ({ configIssues: [], servers: [] }),
+      getStatus: () => ({ mode, configIssues: [], servers: [] }),
       dispose()
       {
         if (index === 0)
@@ -1978,7 +2007,12 @@ test('an aborted model switch leaves the old model and counters authoritative', 
       [{ message: { role: 'assistant', content: 'done' }, done: true }],
       [{ message: { role: 'assistant', content: 'still done' }, done: true }],
     ],
-    { mcp: true, numCtx: 8_192, mcpManagerFactory }
+    {
+      mcpMode: 'ask',
+      mcpConfig: agentMcpConfig,
+      numCtx: 8_192,
+      mcpManagerFactory,
+    }
   )
   await agent.run('install the initial manager', makeAgentEvents())
   assert.equal(agent.getReliabilityStats().nameRepairs, 1)
@@ -2085,21 +2119,22 @@ test('Agent disposal joins an in-flight MCP permission retirement', async () =>
     dir,
     [[{ message: { role: 'assistant', content: 'done' }, done: true }]],
     {
-      mcp: true,
+      mcpMode: 'ask',
+      mcpConfig: agentMcpConfig,
       numCtx: 8_192,
       mcpManagerFactory: async () => ({
         async initialize()
         {
           return []
         },
-        getStatus: () => ({ configIssues: [], servers: [] }),
+        getStatus: () => ({ mode: 'ask', configIssues: [], servers: [] }),
         dispose: () => retirement,
       }),
     }
   )
   await agent.run('install the manager', makeAgentEvents())
 
-  const permission = agent.setMcpEnabled(false)
+  const permission = agent.setMcpMode('yolo')
   let disposalSettled = false
   const disposal = agent.dispose().then(() =>
   {

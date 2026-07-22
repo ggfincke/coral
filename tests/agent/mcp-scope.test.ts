@@ -9,7 +9,7 @@ import {
   McpToolScope,
   type McpToolAdmission,
 } from '../../src/agent/mcp-scope.js'
-import type { McpServerState } from '../../src/mcp/types.js'
+import type { ActiveMcpMode, McpServerState } from '../../src/mcp/types.js'
 import type { Tool } from '../../src/tools/tool.js'
 
 const dynamicTool: Tool = {
@@ -22,15 +22,34 @@ const dynamicTool: Tool = {
   },
 }
 
-function managerStatus(state: McpServerState)
+const scopeConfig = {
+  servers: [
+    {
+      alias: 'fixture',
+      command: '/fixture/server',
+      args: [],
+      enabledTools: ['echo'],
+      yoloTools: ['echo'],
+      passEnv: [],
+      startupTimeoutMs: 10_000,
+      toolTimeoutMs: 60_000,
+      launchCwd: '/fixture',
+    },
+  ],
+  issues: [],
+}
+
+function managerStatus(state: McpServerState, mode: ActiveMcpMode = 'ask')
 {
   return {
+    mode,
     configIssues: [],
     servers: [
       {
         alias: 'fixture',
         state,
         configuredTools: ['echo'],
+        yoloTools: ['echo'],
         availableTools: state === 'ready' ? ['mcp__fixture__echo'] : [],
         launchCwd: '/fixture',
         passEnv: [],
@@ -87,9 +106,9 @@ test('McpToolScope keeps bootstrap lazy, deduplicated, and retryable until admis
     },
   }
   const scope = new McpToolScope({
-    enabled: false,
+    mode: 'off',
     config: {
-      servers: [],
+      servers: scopeConfig.servers,
       issues: [{ message: 'config-only status' }],
     },
     permissions: defaultToolPermissions(),
@@ -103,13 +122,48 @@ test('McpToolScope keeps bootstrap lazy, deduplicated, and retryable until admis
   })
 
   assert.deepEqual(scope.getStatus(), {
+    mode: 'off',
     configIssues: [{ message: 'config-only status' }],
-    servers: [],
+    servers: [
+      {
+        alias: 'fixture',
+        state: 'blocked',
+        configuredTools: ['echo'],
+        yoloTools: ['echo'],
+        availableTools: [],
+        launchCwd: '/fixture',
+        passEnv: [],
+        message: 'MCP is disabled for this Agent',
+      },
+    ],
   })
   await scope.bootstrap(admission(() => assert.fail('disabled admission')))
   assert.equal(factoryCalls, 0)
 
-  scope.setEnabled(true)
+  let emptyYoloFactoryCalls = 0
+  const emptyYoloScope = new McpToolScope({
+    mode: 'yolo',
+    config: {
+      servers: [{ ...scopeConfig.servers[0]!, yoloTools: [] }],
+      issues: [],
+    },
+    permissions: defaultToolPermissions(),
+    baseTools: [],
+    lifecycleSignal: new AbortController().signal,
+    managerFactory: async () =>
+    {
+      emptyYoloFactoryCalls += 1
+      return manager
+    },
+  })
+  await emptyYoloScope.bootstrap(
+    admission(() => assert.fail('empty yolo admission'))
+  )
+  assert.equal(emptyYoloFactoryCalls, 0)
+  assert.equal(emptyYoloScope.getStatus().servers[0]?.state, 'blocked')
+  await emptyYoloScope.dispose()
+
+  await scope.transitionMode('ask', () => undefined)
   let firstAdmissionCalls = 0
   const first = scope.bootstrap(
     admission(() =>
@@ -169,7 +223,7 @@ test('McpToolScope keeps bootstrap lazy, deduplicated, and retryable until admis
   await Promise.all([retiring, disposing])
   assert.equal(disposalSettled, true)
   assert.equal(disposeCalls, 1)
-  assert.equal(scope.isEnabled(), false)
+  assert.equal(scope.getMode(), 'off')
 })
 
 test('McpToolScope retires aborted and unresolved bootstrap snapshots', async () =>
@@ -183,6 +237,7 @@ test('McpToolScope retires aborted and unresolved bootstrap snapshots', async ()
   })
   const disposed: string[] = []
   let factoryCalls = 0
+  const factoryModes: ActiveMcpMode[] = []
   const managers: AgentMcpManager[] = [
     {
       async initialize()
@@ -211,21 +266,22 @@ test('McpToolScope retires aborted and unresolved bootstrap snapshots', async ()
       {
         return [dynamicTool]
       },
-      getStatus: () => managerStatus('ready'),
+      getStatus: () => managerStatus('needs_trust', 'yolo'),
       async dispose()
       {
-        disposed.push('installed')
+        disposed.push('yolo_skipped')
       },
     },
   ]
   const scope = new McpToolScope({
-    enabled: true,
-    config: { servers: [], issues: [] },
+    mode: 'ask',
+    config: scopeConfig,
     permissions: defaultToolPermissions(),
     baseTools: [],
     lifecycleSignal: lifecycle.signal,
-    managerFactory: async () =>
+    managerFactory: async (mode) =>
     {
+      factoryModes.push(mode)
       const index = factoryCalls++
       if (index === 0) return pendingFactory
       return managers[index]!
@@ -255,6 +311,7 @@ test('McpToolScope retires aborted and unresolved bootstrap snapshots', async ()
   assert.deepEqual(disposed, ['aborted', 'needs_trust'])
   assert.equal(admissions, 0)
 
+  await scope.transitionMode('yolo', () => undefined)
   await scope.bootstrap(
     admission(() =>
     {
@@ -263,9 +320,10 @@ test('McpToolScope retires aborted and unresolved bootstrap snapshots', async ()
   )
   assert.equal(factoryCalls, 3)
   assert.equal(admissions, 1)
+  assert.deepEqual(factoryModes, ['ask', 'ask', 'yolo'])
 
   await scope.dispose()
-  assert.deepEqual(disposed, ['aborted', 'needs_trust', 'installed'])
+  assert.deepEqual(disposed, ['aborted', 'needs_trust', 'yolo_skipped'])
 })
 
 test('McpToolScope invalidates pending generations and joins their cleanup', async () =>
@@ -294,21 +352,23 @@ test('McpToolScope invalidates pending generations and joins their cleanup', asy
     {
       return [dynamicTool]
     },
-    getStatus: () => managerStatus('ready'),
+    getStatus: () => managerStatus('ready', 'yolo'),
     async dispose()
     {
       disposed.push('current')
     },
   }
   let factoryCalls = 0
+  const factoryModes: ActiveMcpMode[] = []
   const scope = new McpToolScope({
-    enabled: true,
-    config: { servers: [], issues: [] },
+    mode: 'ask',
+    config: scopeConfig,
     permissions: defaultToolPermissions(),
     baseTools: [],
     lifecycleSignal: lifecycle.signal,
-    managerFactory: async () =>
+    managerFactory: async (mode) =>
     {
+      factoryModes.push(mode)
       factoryCalls++
       return factoryCalls === 1 ? pendingFirst : nextManager
     },
@@ -321,7 +381,7 @@ test('McpToolScope invalidates pending generations and joins their cleanup', asy
       staleAdmissions++
     })
   )
-  const retirement = scope.retireCurrent(() => undefined)
+  const retirement = scope.transitionMode('yolo', () => undefined)
 
   let currentAdmissions = 0
   await scope.bootstrap(
@@ -336,6 +396,7 @@ test('McpToolScope invalidates pending generations and joins their cleanup', asy
   assert.equal(factoryCalls, 2)
   assert.equal(staleAdmissions, 0)
   assert.equal(currentAdmissions, 1)
+  assert.deepEqual(factoryModes, ['ask', 'yolo'])
   assert.deepEqual(disposed, ['stale'])
 
   await scope.dispose()
@@ -347,8 +408,8 @@ test('McpToolScope retires managers when detach or disposal throws', async () =>
   const lifecycle = new AbortController()
   let disposeCalls = 0
   const scope = new McpToolScope({
-    enabled: true,
-    config: { servers: [], issues: [] },
+    mode: 'ask',
+    config: scopeConfig,
     permissions: defaultToolPermissions(),
     baseTools: [],
     lifecycleSignal: lifecycle.signal,
@@ -377,36 +438,83 @@ test('McpToolScope retires managers when detach or disposal throws', async () =>
   await scope.dispose()
   assert.equal(disposeCalls, 1)
 
+  const throwingFactoryModes: ActiveMcpMode[] = []
+  let throwingFactoryCalls = 0
+  let askAdmissions = 0
+  let yoloAdmissions = 0
+  let yoloDisposals = 0
   const throwingScope = new McpToolScope({
-    enabled: true,
-    config: { servers: [], issues: [] },
+    mode: 'ask',
+    config: scopeConfig,
     permissions: defaultToolPermissions(),
     baseTools: [],
     lifecycleSignal: new AbortController().signal,
-    managerFactory: async () => ({
-      async initialize()
+    managerFactory: async (mode) =>
+    {
+      throwingFactoryModes.push(mode)
+      throwingFactoryCalls++
+      if (throwingFactoryCalls === 1)
       {
-        return [dynamicTool]
-      },
-      getStatus: () => managerStatus('ready'),
-      dispose()
-      {
-        throw new Error('dispose failed')
-      },
-    }),
+        return {
+          async initialize()
+          {
+            return [dynamicTool]
+          },
+          getStatus: () => managerStatus('ready'),
+          dispose()
+          {
+            throw new Error('dispose failed')
+          },
+        }
+      }
+      return {
+        async initialize()
+        {
+          return [dynamicTool]
+        },
+        getStatus: () => managerStatus('ready', 'yolo'),
+        async dispose()
+        {
+          yoloDisposals++
+        },
+      }
+    },
   })
-  await throwingScope.bootstrap(admission(() => undefined))
+  await throwingScope.bootstrap(
+    admission(() =>
+    {
+      askAdmissions++
+    })
+  )
   let threwSynchronously = false
   let failedRetirement: Promise<void> | undefined
   try
   {
-    failedRetirement = throwingScope.retireCurrent(() => undefined)
+    failedRetirement = throwingScope.transitionMode('yolo', () => undefined)
   }
   catch
   {
     threwSynchronously = true
   }
   assert.equal(threwSynchronously, false)
+  assert.equal(throwingScope.getMode(), 'yolo')
   assert.ok(failedRetirement)
   await assert.rejects(failedRetirement, /dispose failed/)
+
+  await throwingScope.bootstrap(
+    admission(() =>
+    {
+      yoloAdmissions++
+    })
+  )
+  await throwingScope.bootstrap(
+    admission(() => assert.fail('fresh yolo manager admitted twice'))
+  )
+  assert.deepEqual(throwingFactoryModes, ['ask', 'yolo'])
+  assert.equal(askAdmissions, 1)
+  assert.equal(yoloAdmissions, 1)
+  assert.deepEqual(throwingScope.getStatus(), managerStatus('ready', 'yolo'))
+
+  await throwingScope.dispose()
+  assert.equal(yoloDisposals, 1)
 })

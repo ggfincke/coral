@@ -11,6 +11,7 @@ import { after, test } from 'node:test'
 import { parseMcpConfig } from '../../src/config/mcp.js'
 import { defaultToolPermissions } from '../../src/config/permissions.js'
 import { McpManager } from '../../src/mcp/manager.js'
+import { trustMcpLaunch } from '../../src/mcp/trust.js'
 import { allTools } from '../../src/tools/registry.js'
 import type { ChatRequest, OllamaMessage } from '../../src/types/inference.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
@@ -102,6 +103,7 @@ function managerFor(
   assert.deepEqual(config.issues, [])
   return new McpManager({
     config,
+    mode: 'ask',
     permissions: defaultToolPermissions(),
     baseTools: allTools,
     maxDynamicToolTokens: 8_192,
@@ -122,6 +124,7 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
         command: process.execPath,
         args: [fixture, pidPath],
         enabledTools: ['echo', 'wide', 'large', 'disconnect'],
+        yoloTools: ['echo'],
         passEnv: ['CORAL_MCP_TEST_TOKEN'],
         startupTimeoutMs: 5_000,
         toolTimeoutMs: 5_000,
@@ -265,12 +268,12 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
       }
       if (turn === 4)
       {
-        // disabled: no dynamic tools advertised
-        assert.deepEqual(mcpToolNames(request), [])
+        // yolo advertises only the exact pre-trusted subset
+        assert.deepEqual(mcpToolNames(request), ['mcp__fixture__echo'])
         yield doneChunk
         return
       }
-      // re-enabled tools return on the next chat turn
+      // ask restores the full permitted catalog on the next chat turn
       assert.deepEqual(mcpToolNames(request), [
         'mcp__fixture__echo',
         'mcp__fixture__large',
@@ -278,7 +281,7 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
       ])
       yield doneChunk
     },
-    { mcp: true, mcpConfig, numCtx: 8_192 }
+    { mcpMode: 'ask', mcpConfig, numCtx: 8_192 }
   )
   let launchApprovals = 0
   let approvalCheckedBeforeSpawn = false
@@ -292,6 +295,7 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
       assert.equal(request.alias, 'fixture')
       assert.equal(request.launchCwd, homedir())
       assert.deepEqual(request.passEnv, ['CORAL_MCP_TEST_TOKEN'])
+      assert.deepEqual(request.yoloTools, ['echo'])
       assert.equal(request.fingerprint.length, 64)
       return true
     },
@@ -326,20 +330,24 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
   assert.match(stderr, /\[redacted\]/)
   assert.doesNotMatch(stderr, /bridge|31m|value/)
 
-  // disable exits the child & removes the dynamic tools from requests
+  // ask -> yolo exits the child & installs only the trusted yolo subset
   const pid = await fixturePid(pidPath)
-  await agent.setMcpEnabled(false)
+  await agent.setMcpMode('yolo')
   await waitForProcessExit(pid)
   await agent.run('and now?', events, undefined)
   assert.equal(turn, 4)
+  const yoloPid = await fixturePid(pidPath)
+  assert.notEqual(yoloPid, pid)
+  assert.equal(agent.getMcpStatus().mode, 'yolo')
+  assert.equal(launchApprovals, 1)
 
-  // re-enable reinstalls on the next turn from persisted trust: fresh process,
-  // no second launch prompt
-  await agent.setMcpEnabled(true)
+  // yolo -> ask restores all permitted tools through another fresh process
+  await agent.setMcpMode('ask')
+  await waitForProcessExit(yoloPid)
   await agent.run('back again', events, undefined)
   assert.equal(turn, 5)
   const newPid = await fixturePid(pidPath)
-  assert.notEqual(newPid, pid)
+  assert.notEqual(newPid, yoloPid)
   assert.equal(launchApprovals, 1)
 
   await agent.dispose()
@@ -376,6 +384,7 @@ test('MCP preflight and abort failures preserve status and retire processes', as
   assert.deepEqual(missingEnvironmentConfig.issues, [])
   const missingEnvironmentManager = new McpManager({
     config: missingEnvironmentConfig,
+    mode: 'ask',
     permissions: defaultToolPermissions(),
     baseTools: allTools,
     maxDynamicToolTokens: 8_192,
@@ -418,6 +427,7 @@ test('MCP preflight and abort failures preserve status and retire processes', as
   })
   const startupManager = new McpManager({
     config: startupConfig,
+    mode: 'ask',
     permissions: defaultToolPermissions(),
     baseTools: allTools,
     maxDynamicToolTokens: 8_192,
@@ -459,6 +469,7 @@ test('MCP preflight and abort failures preserve status and retire processes', as
   })
   const concurrentManager = new McpManager({
     config: concurrentConfig,
+    mode: 'ask',
     permissions: defaultToolPermissions(),
     baseTools: allTools,
     maxDynamicToolTokens: 8_192,
@@ -497,6 +508,66 @@ test('MCP preflight and abort failures preserve status and retire processes', as
     )
   )
 
+  // yolo starts current-trust servers while skipping stale identities without prompting
+  const partialTrustedPidPath = join(coralHome, 'partial-trusted.pid')
+  const partialStalePidPath = join(coralHome, 'partial-stale.pid')
+  const partialConfig = parseMcpConfig({
+    servers: {
+      partial_trusted: {
+        command: process.execPath,
+        args: [fixture, partialTrustedPidPath],
+        enabledTools: ['echo'],
+        yoloTools: ['echo'],
+        passEnv: ['CORAL_MCP_TEST_TOKEN'],
+      },
+      partial_stale: {
+        command: process.execPath,
+        args: [fixture, partialStalePidPath],
+        enabledTools: ['echo'],
+        yoloTools: ['echo'],
+        passEnv: ['CORAL_MCP_TEST_TOKEN'],
+      },
+    },
+  })
+  assert.deepEqual(partialConfig.issues, [])
+  const trustedServer = partialConfig.servers[0]!
+  trustMcpLaunch({
+    alias: trustedServer.alias,
+    command: trustedServer.command,
+    executable: process.execPath,
+    args: trustedServer.args,
+    launchCwd: trustedServer.launchCwd,
+    passEnv: trustedServer.passEnv,
+    enabledTools: trustedServer.enabledTools,
+    yoloTools: trustedServer.yoloTools,
+  })
+  const partialManager = new McpManager({
+    config: partialConfig,
+    mode: 'yolo',
+    permissions: defaultToolPermissions(),
+    baseTools: allTools,
+    maxDynamicToolTokens: 8_192,
+  })
+  let yoloLaunchApprovals = 0
+  const partialTools = await partialManager.initialize({
+    onLaunchApproval: async () =>
+    {
+      yoloLaunchApprovals += 1
+      return true
+    },
+  })
+  assert.deepEqual(
+    partialTools.map((tool) => tool.name),
+    ['mcp__partial_trusted__echo']
+  )
+  assert.equal(yoloLaunchApprovals, 0)
+  assert.equal(partialManager.getStatus().servers[0]?.state, 'ready')
+  assert.equal(partialManager.getStatus().servers[1]?.state, 'needs_trust')
+  assert.equal(existsSync(partialStalePidPath), false)
+  const partialTrustedPid = await fixturePid(partialTrustedPidPath)
+  await partialManager.dispose()
+  await waitForProcessExit(partialTrustedPid)
+
   // abort joins & closes connected clients that have not been installed yet
   const abortGatePath = join(coralHome, 'abort.gate')
   const abortPidPaths = ['a', 'b'].map((alias) =>
@@ -517,6 +588,7 @@ test('MCP preflight and abort failures preserve status and retire processes', as
   })
   const concurrentAbortManager = new McpManager({
     config: concurrentAbortConfig,
+    mode: 'ask',
     permissions: defaultToolPermissions(),
     baseTools: allTools,
     maxDynamicToolTokens: 8_192,
@@ -553,7 +625,7 @@ test('MCP preflight and abort failures preserve status and retire processes', as
   const { agent: lazyAgent, streams: lazyStreams } = makeFakeAgent(
     await tempDir('coral-mcp-lazy-dispose-ws-'),
     [[{ message: { role: 'assistant', content: 'done' }, done: true }]],
-    { mcp: true, mcpConfig: lazyConfig, numCtx: 8_192 }
+    { mcpMode: 'ask', mcpConfig: lazyConfig, numCtx: 8_192 }
   )
   const lazyRun = lazyAgent.run(
     'start MCP',

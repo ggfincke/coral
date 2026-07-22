@@ -30,7 +30,7 @@ const program = new Command()
   .option('--no-think', 'disable streamed reasoning requests')
   .option(
     '--yolo',
-    'auto-approve gated calls; always_deny stays blocked; MCP is disabled'
+    'auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP yoloTools'
   )
   .option('--resume', 'resume the most recent session')
   .option('--session <id>', 'resume a specific session by ID')

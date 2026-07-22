@@ -109,7 +109,7 @@ import {
 import { TypeScriptCodeIntel } from '../lsp/client.js'
 import type { CodeIntelService } from '../lsp/contracts.js'
 import { AgentTodoState } from './state/todos.js'
-import type { McpStatus } from '../mcp/types.js'
+import type { McpMode, McpStatus } from '../mcp/types.js'
 import {
   assertRequestBudget,
   requestBudgetCapacity,
@@ -284,7 +284,7 @@ export class Agent
     this.permissions = options.permissions ?? resolvePermissions(this.cwd)
     // defer manager construction so no-MCP sessions do not load the SDK graph
     this.mcpScope = new McpToolScope({
-      enabled: Boolean(options.mcp),
+      mode: options.mcpMode ?? 'off',
       config: options.mcpConfig,
       permissions: this.permissions,
       baseTools: this.baseTools,
@@ -336,7 +336,7 @@ export class Agent
       numCtx: this.numCtx,
       verifyEdits: false,
       codeIntel: this.codeIntel,
-      mcp: false,
+      mcpMode: 'off',
     })
   }
 
@@ -450,17 +450,15 @@ export class Agent
     )
   }
 
-  isMcpEnabled(): boolean
+  getMcpMode(): McpMode
   {
-    return this.mcpScope.isEnabled()
+    return this.mcpScope.getMode()
   }
 
-  async setMcpEnabled(enabled: boolean, signal?: AbortSignal): Promise<void>
+  setMcpMode(mode: McpMode, signal?: AbortSignal): Promise<void>
   {
-    this.mcpScope.setEnabled(enabled, signal)
-    // create a fresh manager lazily at the next run bootstrap
-    if (enabled) return
-    await this.mcpScope.retireCurrent(() => this.refreshTools())
+    // create a fresh mode-specific manager lazily at the next run bootstrap
+    return this.mcpScope.transitionMode(mode, () => this.refreshTools(), signal)
   }
 
   // restore previous messages while keeping the system prompt at index 0
@@ -847,7 +845,10 @@ export class Agent
     return this.mcpScope.bootstrap({
       maxDynamicToolTokens: this.dynamicToolTokenBudget(),
       signal,
-      onLaunchApproval: events.onMcpLaunchApproval,
+      onLaunchApproval:
+        this.mcpScope.getMode() === 'ask'
+          ? events.onMcpLaunchApproval
+          : undefined,
       admit: (tools) => this.admitMcpTools(tools),
     })
   }

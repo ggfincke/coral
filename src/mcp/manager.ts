@@ -34,6 +34,7 @@ import {
 } from './trust.js'
 import {
   configuredServerStatus,
+  type ActiveMcpMode,
   type McpLaunchApprovalRequest,
   type McpServerStatus,
   type McpStatus,
@@ -73,6 +74,7 @@ interface McpManagerOptions
 {
   // pin one config-derived snapshot per session
   config: McpConfigResolution
+  mode: ActiveMcpMode
   permissions: ToolPermissions
   baseTools: readonly Tool[]
   maxDynamicToolTokens: number
@@ -117,6 +119,7 @@ function cloneStatus(status: McpServerStatus): McpServerStatus
   return {
     ...status,
     configuredTools: [...status.configuredTools],
+    yoloTools: [...status.yoloTools],
     availableTools: [...status.availableTools],
     passEnv: [...status.passEnv],
   }
@@ -170,6 +173,7 @@ function schemaSize(schema: JsonSchema): number
 export class McpManager
 {
   private readonly config: McpConfigResolution
+  private readonly mode: ActiveMcpMode
   private readonly permissions: ToolPermissions
   private readonly baseTools: readonly Tool[]
   private readonly maxDynamicToolTokens: number
@@ -186,15 +190,19 @@ export class McpManager
   constructor(options: McpManagerOptions)
   {
     this.config = options.config
+    this.mode = options.mode
     this.permissions = options.permissions
     this.baseTools = options.baseTools
     this.maxDynamicToolTokens = options.maxDynamicToolTokens
-    this.statuses = this.config.servers.map(configuredServerStatus)
+    this.statuses = this.config.servers.map((server) =>
+      configuredServerStatus(server, this.mode)
+    )
   }
 
   getStatus(): McpStatus
   {
     return {
+      mode: this.mode,
       configIssues: this.config.issues.map((issue) => ({ ...issue })),
       servers: this.statuses.map(cloneStatus),
     }
@@ -302,7 +310,20 @@ export class McpManager
     {
       if (options.signal?.aborted) return { candidates, aborted: true }
       const status = this.statuses[index]!
-      const allowedTools = server.enabledTools.filter(
+      const yoloTools = new Set(server.yoloTools)
+      const modeTools =
+        this.mode === 'ask'
+          ? server.enabledTools
+          : server.enabledTools.filter((name) => yoloTools.has(name))
+
+      if (modeTools.length === 0)
+      {
+        status.state = 'blocked'
+        status.message = 'no tools are enabled for yolo mode'
+        continue
+      }
+
+      const allowedTools = modeTools.filter(
         (name) =>
           getToolPolicy(
             this.permissions,
@@ -313,7 +334,10 @@ export class McpManager
       if (allowedTools.length === 0)
       {
         status.state = 'blocked'
-        status.message = 'all configured tools are denied by permission policy'
+        status.message =
+          this.mode === 'ask'
+            ? 'all configured tools are denied by permission policy'
+            : 'all yolo-enabled tools are denied by permission policy'
         continue
       }
 
@@ -342,14 +366,20 @@ export class McpManager
           launchCwd: server.launchCwd,
           passEnv: server.passEnv,
           enabledTools: server.enabledTools,
+          yoloTools: server.yoloTools,
         }
 
         if (!isMcpLaunchTrusted(descriptor))
         {
-          if (!options.onLaunchApproval)
+          const onLaunchApproval =
+            this.mode === 'ask' ? options.onLaunchApproval : undefined
+          if (!onLaunchApproval)
           {
             status.state = 'needs_trust'
-            status.message = 'launch approval required'
+            status.message =
+              this.mode === 'ask'
+                ? 'launch approval required'
+                : 'launch approval required; switch to ask and start a turn to review this launch'
             continue
           }
           // do not open an approval prompt after an abort
@@ -359,7 +389,7 @@ export class McpManager
           }
 
           const approved = await raceAbort(
-            options.onLaunchApproval({
+            onLaunchApproval({
               ...descriptor,
               fingerprint: fingerprintMcpLaunch(descriptor),
             }),

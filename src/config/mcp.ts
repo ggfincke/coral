@@ -29,6 +29,7 @@ export interface McpServerConfig
   command: string
   args: string[]
   enabledTools: string[]
+  yoloTools: string[]
   passEnv: string[]
   startupTimeoutMs: number
   toolTimeoutMs: number
@@ -68,7 +69,9 @@ function parseStringArray(
   if (value === undefined && !options.required) return { value: [] }
   if (!Array.isArray(value) || (options.required && value.length === 0))
   {
-    return { error: `${options.field} must be a nonempty string array` }
+    return {
+      error: `${options.field} must be a ${options.required ? 'nonempty ' : ''}string array`,
+    }
   }
   if (value.length > options.maxItems)
   {
@@ -169,6 +172,20 @@ function parseServer(
   })
   if (enabledTools.error) return { error: enabledTools.error }
 
+  const yoloTools = parseStringArray(value.yoloTools, {
+    field: 'yoloTools',
+    required: false,
+    maxItems: MAX_TOOLS,
+    maxChars: MAX_TOOL_NAME_CHARS,
+    pattern: MCP_TOOL_NAME_PATTERN,
+  })
+  if (yoloTools.error) return { error: yoloTools.error }
+  const enabledToolNames = new Set(enabledTools.value!)
+  if (yoloTools.value!.some((name) => !enabledToolNames.has(name)))
+  {
+    return { error: 'yoloTools must be a subset of enabledTools' }
+  }
+
   const passEnv = parseStringArray(value.passEnv, {
     field: 'passEnv',
     required: false,
@@ -200,6 +217,7 @@ function parseServer(
       command,
       args: args.value!,
       enabledTools: enabledTools.value!,
+      yoloTools: yoloTools.value!,
       passEnv: passEnv.value!,
       startupTimeoutMs: startupTimeout.value!,
       toolTimeoutMs: toolTimeout.value!,
