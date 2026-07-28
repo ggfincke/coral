@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Noninteractive `coral exec`:** add an ephemeral headless Agent command with
+  read-only and constrained workspace-write tool profiles, deterministic
+  approval rejection, opt-in pre-trusted MCP capabilities, JSON/JSONL output,
+  atomic structured result files, signal-aware cancellation, and joined
+  resource disposal for local worker orchestration.
 - **Explicit MCP tools for yolo:** add an optional exact `yoloTools` subset to
   each user-owned MCP server definition. Ask mode keeps the full permitted
   `enabledTools` allowlist, while yolo advertises and invokes only the selected
