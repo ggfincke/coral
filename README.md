@@ -75,6 +75,42 @@ ollama pull nomic-embed-text
 | `--theme <name>`        | Select a color theme; `/theme` lists available names                                 |
 | `-h`, `--help`          | Show CLI help                                                                        |
 
+## Headless execution
+
+`coral exec` runs one noninteractive Agent turn without creating a saved Coral
+session. A model is required, and the prompt may be passed as one quoted
+argument or through `--prompt-file`:
+
+```bash
+coral exec \
+  --model gemma4:31b-mlx \
+  --cwd /path/to/worktree \
+  --permission-profile read-only \
+  --output-format stream-json \
+  --result-file /path/to/result.json \
+  --prompt-file /path/to/prompt.md \
+  --ephemeral \
+  --no-mcp
+```
+
+The default `read-only` profile exposes file/search/code-intelligence tools plus
+Git status, diff, and log. `workspace-write` additionally exposes in-workspace
+write/edit tools and `bash`; it excludes Coral's task subagent and Git mutation
+tools. Every unexpected tool or MCP launch approval is rejected instead of
+opening an interactive prompt. MCP is off by default; `--mcp` admits only
+pre-trusted servers and exact dynamic tools configured as `always_allow`.
+`--no-mcp` remains available when an orchestrator wants to state that isolation
+requirement explicitly.
+
+`stream-json` emits token, thinking, tool, usage, completion, and error events
+as JSONL. `json` emits one final object, while `text` prints the final assistant
+response. `--result-file` atomically writes the same structured final evidence
+with a run ID, status, model, response, token usage, and any terminal error.
+
+Headless profiles are deterministic tool catalogs, not a hostile-process
+sandbox. In particular, `bash` runs directly on the host. External callers must
+still isolate workspaces and validate final filesystem or Git scope.
+
 ## Interactive use
 
 - Type a normal prompt to start an agent turn.
