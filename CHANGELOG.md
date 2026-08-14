@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-14
+
 ### Added
 
 - **Noninteractive `coral exec`:** add an ephemeral headless Agent command with
@@ -27,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   retirement, and lazily admit a fresh mode-specific catalog on the next turn.
   `/mcp`, permission output, and CLI help now report the active mode, configured
   ask tools, yolo tools, available namespaced tools, and actionable trust state.
+
+### Fixed
+
+- **Leading system message for Ollama:** collapse every system turn into one
+  leading `system` message before `/api/chat`, so Ollama's first-message
+  contract is met without dropping system authority.
 
 ### Security
 
@@ -647,7 +655,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
-[Unreleased]: https://github.com/ggfincke/coral/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/ggfincke/coral/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/ggfincke/coral/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/ggfincke/coral/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/ggfincke/coral/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/ggfincke/coral/compare/v0.10.0...v0.11.0
