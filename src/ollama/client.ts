@@ -80,6 +80,22 @@ function wireMessage(message: ChatMessage): ModelRequestMessage
   return projected
 }
 
+// preserve system authority while satisfying Ollama's leading-message contract
+function wireMessages(messages: ChatMessage[]): ModelRequestMessage[]
+{
+  const wired = messages.map(wireMessage)
+  const systemMessages = wired.filter((message) => message.role === 'system')
+  if (systemMessages.length === 0) return wired
+
+  const systemContent = systemMessages
+    .map((message) => message.content)
+    .join('\n\n')
+  return [
+    { role: 'system', content: systemContent },
+    ...wired.filter((message) => message.role !== 'system'),
+  ]
+}
+
 function wireTool(tool: OllamaTool): OllamaTool
 {
   return {
@@ -170,7 +186,7 @@ export class OllamaClient
     // place num_ctx under options because the top-level field is only a convenience
     const body: Record<string, unknown> = {
       model: request.model,
-      messages: request.messages.map(wireMessage),
+      messages: wireMessages(request.messages),
       keep_alive: request.keep_alive ?? DEFAULT_KEEP_ALIVE,
       stream: true,
     }
