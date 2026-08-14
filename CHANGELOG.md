@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tag-triggered GitHub Release:** pushing an annotated `v*` tag that is
+  already on `main` (typically `git push --follow-tags`) runs the release
+  workflow. It repeats the CI gates, requires the tag to match `package.json`,
+  and publishes a GitHub Release from that version's changelog section.
+
 ## [0.14.0] - 2026-08-14
 
 ### Added

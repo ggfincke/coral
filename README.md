@@ -14,6 +14,9 @@ behavior.
 > Coral is pre-1.0 and built for capable local models. Interfaces, session data,
 > and configuration may still change between minor releases.
 
+User guides live in [`docs/`](docs/README.md). How the layers and turn loop
+fit together is in [`docs/architecture.md`](docs/architecture.md).
+
 ## Requirements
 
 - Node.js 24 or newer
