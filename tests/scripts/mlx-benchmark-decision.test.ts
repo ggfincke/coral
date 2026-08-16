@@ -10,6 +10,7 @@ import {
   PERFORMANCE_WORKLOADS,
   metricHigherIsBetter,
 } from './mlx-benchmark/manifest.js'
+import { PinnedOllamaClient } from './mlx-benchmark/ollama.js'
 import { stockChunk } from './mlx-benchmark/providers.js'
 import type {
   BenchmarkResult,
@@ -24,6 +25,8 @@ const BASELINE_ID = 'ollama-qwen'
 const STOCK_ID = 'stock-mlx-qwen'
 const FORENSIC_ID = 'pr64-forensic'
 const MODEL_PAIR_ID = 'qwen38-27b-nvfp4'
+const OLLAMA_MODEL = 'qwen3.8:27b-mlx'
+const OLLAMA_DIGEST = 'a'.repeat(64)
 
 // provide clean, case-specific evidence for every tool-sensitive hard gate
 function toolEvidence(caseId: string): ToolEvidence
@@ -102,6 +105,7 @@ function residencyMemory(
             mlxModelIdentity: '/models/mlx',
           }
         : {}),
+      ...(stage === 'after-ollama-unload' ? { ollamaRunningModels: [] } : {}),
     }
   })
 }
@@ -302,8 +306,8 @@ function completeResult(): BenchmarkResult
         description: 'Qwen3.8 27B shippable configurations',
         localEvidence: ['synthetic local artifact evidence'],
         ollama: {
-          model: 'qwen3.8:27b-mlx',
-          revision: 'sha256:ollama',
+          model: OLLAMA_MODEL,
+          revision: OLLAMA_DIGEST,
           tokenizerRevision: 'sha256:tokenizer',
           chatTemplateSha256: 'sha256:template',
           quantization: 'NVFP4',
@@ -335,7 +339,7 @@ function completeResult(): BenchmarkResult
         loadMs: 3656.58,
         totalMs: 4021.15,
         finishReason: 'stop',
-        artifactRevision: 'sha256:ollama',
+        artifactRevision: OLLAMA_DIGEST,
       },
     ],
     hardGates: hardGates(topologies),
@@ -362,7 +366,7 @@ function completeResult(): BenchmarkResult
 
 describe('MLX benchmark decision policy', () =>
 {
-  it('adapts the pinned MLX-LM complete tool-call frame without repair', () =>
+  it('adapts pinned provider wire contracts without repair', async () =>
   {
     const chunk = stockChunk({
       choices: [
@@ -394,6 +398,113 @@ describe('MLX benchmark decision policy', () =>
         },
       },
     ])
+
+    const originalFetch = globalThis.fetch
+    const requests: string[] = []
+    let residencyCalls = 0
+    try
+    {
+      globalThis.fetch = async (input, init) =>
+      {
+        const url = String(input)
+        requests.push(url)
+        if (url.endsWith('/api/chat'))
+        {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+          assert.equal(body.model, OLLAMA_MODEL)
+          assert.equal(body.keep_alive, 0)
+          return new Response(
+            JSON.stringify({
+              model: OLLAMA_MODEL,
+              done: true,
+              done_reason: 'unload',
+            }),
+            { status: 200 }
+          )
+        }
+        if (url.endsWith('/api/ps'))
+        {
+          residencyCalls++
+          const model = `${OLLAMA_MODEL}-different`
+          return new Response(
+            JSON.stringify({
+              models: [
+                residencyCalls === 1
+                  ? {
+                      name: `${OLLAMA_MODEL}-alias`,
+                      model: `${OLLAMA_MODEL}-alias`,
+                      digest: `sha256:${OLLAMA_DIGEST}`,
+                    }
+                  : {
+                      name: model,
+                      model,
+                      digest: `sha256:${'b'.repeat(64)}`,
+                    },
+              ],
+            }),
+            { status: 200 }
+          )
+        }
+        throw new Error(`unexpected benchmark request: ${url}`)
+      }
+      const ollama = new PinnedOllamaClient('http://127.0.0.1:11434', {
+        temperature: 0,
+        topP: 1,
+      })
+      const remaining = await ollama.evictModel(
+        OLLAMA_MODEL,
+        OLLAMA_DIGEST,
+        1_000
+      )
+      assert.deepEqual(remaining, [
+        {
+          name: `${OLLAMA_MODEL}-different`,
+          model: `${OLLAMA_MODEL}-different`,
+          digest: 'b'.repeat(64),
+        },
+      ])
+      assert.equal(residencyCalls, 2)
+      assert.deepEqual(requests, [
+        'http://127.0.0.1:11434/api/ps',
+        'http://127.0.0.1:11434/api/chat',
+        'http://127.0.0.1:11434/api/ps',
+      ])
+
+      globalThis.fetch = async (input) =>
+      {
+        const url = String(input)
+        if (url.endsWith('/api/ps'))
+        {
+          return new Response(
+            JSON.stringify({
+              models: [
+                {
+                  name: OLLAMA_MODEL,
+                  model: OLLAMA_MODEL,
+                  digest: OLLAMA_DIGEST,
+                },
+              ],
+            }),
+            { status: 200 }
+          )
+        }
+        return new Response('', { status: 500 })
+      }
+      await assert.rejects(
+        ollama.evictModel(OLLAMA_MODEL, OLLAMA_DIGEST, 1_000),
+        /Ollama eviction returned HTTP 500/
+      )
+
+      globalThis.fetch = async () => new Response('', { status: 503 })
+      await assert.rejects(
+        ollama.evictModel(OLLAMA_MODEL, OLLAMA_DIGEST, 1_000),
+        /Ollama residency probe returned HTTP 503/
+      )
+    }
+    finally
+    {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('records an artifact preflight failure as a no-go without performance evidence', () =>
@@ -482,7 +593,13 @@ describe('MLX benchmark decision policy', () =>
       (snapshot) => snapshot.stage === 'after-ollama-unload'
     )
     assert.ok(afterOllamaUnload)
-    afterOllamaUnload.processTreeRssBytes = 200
+    afterOllamaUnload.ollamaRunningModels = [
+      {
+        name: `${OLLAMA_MODEL}-alias`,
+        model: `${OLLAMA_MODEL}-alias`,
+        digest: OLLAMA_DIGEST,
+      },
+    ]
     malformed.baselineSmokes[0]!.artifactRevision = 'drifted-revision'
     const expectedCell = malformed.performanceCells[0]
     assert.ok(expectedCell)

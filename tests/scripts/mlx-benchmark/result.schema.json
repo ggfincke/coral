@@ -424,6 +424,19 @@
       "properties": {
         "stage": { "type": "string", "minLength": 1 },
         "processTreeRssBytes": { "type": "number", "minimum": 0 },
+        "ollamaRunningModels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "model", "digest"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "model": { "type": "string", "minLength": 1 },
+              "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        },
         "mlxAllocatorActiveBytes": { "type": "number", "minimum": 0 },
         "mlxAllocatorCacheBytes": { "type": "number", "minimum": 0 },
         "mlxAllocatorPeakBytes": { "type": "number", "minimum": 0 },

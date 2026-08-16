@@ -23,12 +23,13 @@ import type {
   HardGateObservation,
   MetricVector,
   ModelPair,
+  OllamaRunningModelIdentity,
   ResidencyMemorySnapshot,
   ToolEvidence,
 } from './types.js'
 
 const SENTINEL = 'CORAL-BENCHMARK-8137'
-const LIFECYCLE_PROBE_TIMEOUT_MS = 30_000
+const LIFECYCLE_RECOVERY_TIMEOUT_MS = 5_000
 
 export interface BenchmarkExecutionLimits
 {
@@ -659,12 +660,12 @@ async function cancelRequest(
   if (outcome !== 'aborted') return false
   const settled = await settlesWithin(
     consumption,
-    Math.min(limits.requestTimeoutMs, 5_000)
+    Math.min(limits.requestTimeoutMs, LIFECYCLE_RECOVERY_TIMEOUT_MS)
   )
   if (!settled)
   {
     await runtime.resetModel(pair)
-    await settlesWithin(consumption, 5_000)
+    await settlesWithin(consumption, LIFECYCLE_RECOVERY_TIMEOUT_MS)
   }
   return settled && (phase === 'prefill' || deltaSeen)
 }
@@ -712,12 +713,12 @@ async function timeoutRequest(
   if (outcome !== 'aborted') return false
   const settled = await settlesWithin(
     consumption,
-    Math.min(limits.requestTimeoutMs, 5_000)
+    Math.min(limits.requestTimeoutMs, LIFECYCLE_RECOVERY_TIMEOUT_MS)
   )
   if (!settled)
   {
     await runtime.resetModel(pair)
-    await settlesWithin(consumption, 5_000)
+    await settlesWithin(consumption, LIFECYCLE_RECOVERY_TIMEOUT_MS)
   }
   return settled && signal.reason?.name === 'TimeoutError'
 }
@@ -784,7 +785,7 @@ export async function runLifecycleGates(
     ...limits,
     requestTimeoutMs: Math.min(
       limits.requestTimeoutMs,
-      LIFECYCLE_PROBE_TIMEOUT_MS
+      LIFECYCLE_RECOVERY_TIMEOUT_MS
     ),
   }
   for (let repetition = 1; repetition <= 3; repetition++)
@@ -918,7 +919,7 @@ export async function runLifecycleGates(
     const streamSettled = await Promise.race([
       active.settled.then(() => true),
       new Promise<boolean>((resolve) =>
-        setTimeout(() => resolve(false), 5_000).unref()
+        setTimeout(() => resolve(false), LIFECYCLE_RECOVERY_TIMEOUT_MS).unref()
       ),
     ])
     const cleanQuit = deltaBeforeQuit && shutdown.allExited && streamSettled
@@ -1034,14 +1035,25 @@ export async function runCrossRuntimeResidencyGate(
       limits
     )
     const afterOllama = await memorySnapshot(baseline, 'after-ollama')
-    await baseline.resetModel(pair)
+    const resetEvidence = await baseline.resetModel(pair)
     const afterOllamaUnload = await memorySnapshot(
       baseline,
       'after-ollama-unload',
-      false
+      false,
+      resetEvidence.ollamaRunningModels
     )
+    const ollamaDigest = pair.ollama.revision
+      .replace(/^sha256:/i, '')
+      .toLowerCase()
     const ollamaUnloaded =
-      afterOllamaUnload.processTreeRssBytes < afterOllama.processTreeRssBytes
+      afterOllamaUnload.ollamaRunningModels !== undefined &&
+      !afterOllamaUnload.ollamaRunningModels.some(
+        (model) =>
+          model.name === pair.ollama.model ||
+          model.model === pair.ollama.model ||
+          model.digest.replace(/^sha256:/i, '').toLowerCase() === ollamaDigest
+      ) &&
+      afterOllamaUnload.processTreeRssBytes > 0
     await candidate.start(pair)
     const directSecond = await rawEcho(
       candidate,
@@ -1080,7 +1092,7 @@ export async function runCrossRuntimeResidencyGate(
       repetition,
       passed,
       detail: passed
-        ? 'direct MLX and Ollama unloaded before direct MLX restarted cleanly'
+        ? `direct MLX unloaded and /api/ps proved ${pair.ollama.model} absent before direct MLX restarted`
         : 'cross-runtime switch or unload failed',
       sequence: sequenceStart + repetition - 1,
       memorySnapshots: [
@@ -1179,7 +1191,8 @@ function longContextTarget(
 async function memorySnapshot(
   runtime: BenchmarkRuntime,
   stage: string,
-  includeAllocator = true
+  includeAllocator = true,
+  ollamaRunningModels?: OllamaRunningModelIdentity[]
 ): Promise<ResidencyMemorySnapshot>
 {
   const rss = await processTreeRss([process.pid, ...runtime.processRoots()])
@@ -1189,6 +1202,7 @@ async function memorySnapshot(
   return {
     stage,
     processTreeRssBytes: rss.rssBytes,
+    ...(ollamaRunningModels ? { ollamaRunningModels } : {}),
     ...(allocator
       ? {
           mlxAllocatorActiveBytes: allocator.activeBytes,

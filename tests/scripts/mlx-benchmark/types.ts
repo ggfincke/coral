@@ -118,10 +118,18 @@ export interface ResidencyMemorySnapshot
 {
   stage: string
   processTreeRssBytes: number
+  ollamaRunningModels?: OllamaRunningModelIdentity[]
   mlxAllocatorActiveBytes?: number
   mlxAllocatorCacheBytes?: number
   mlxAllocatorPeakBytes?: number
   mlxModelIdentity?: string
+}
+
+export interface OllamaRunningModelIdentity
+{
+  name: string
+  model: string
+  digest: string
 }
 
 export interface MetricVector

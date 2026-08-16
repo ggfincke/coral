@@ -164,7 +164,9 @@ function toolEvidencePassed(observation: HardGateObservation): boolean
 function residencyEvidencePassed(
   observation: HardGateObservation,
   topology: TopologyIdentity,
-  expectedModelIdentity: string
+  expectedModelIdentity: string,
+  expectedOllamaIdentity: string,
+  expectedOllamaRevision: string
 ): boolean
 {
   const snapshots = observation.memorySnapshots ?? []
@@ -196,11 +198,22 @@ function residencyEvidencePassed(
     const byStage = new Map(
       snapshots.map((snapshot) => [snapshot.stage, snapshot])
     )
+    const afterOllamaUnload = byStage.get('after-ollama-unload')!
+    const expectedDigest = expectedOllamaRevision
+      .replace(/^sha256:/i, '')
+      .toLowerCase()
+    const exactModelRemained = afterOllamaUnload.ollamaRunningModels?.some(
+      (model) =>
+        model.name === expectedOllamaIdentity ||
+        model.model === expectedOllamaIdentity ||
+        model.digest.replace(/^sha256:/i, '').toLowerCase() === expectedDigest
+    )
     if (
       byStage.get('after-direct-unload')!.processTreeRssBytes >=
         byStage.get('after-direct-first')!.processTreeRssBytes ||
-      byStage.get('after-ollama-unload')!.processTreeRssBytes >=
-        byStage.get('after-ollama')!.processTreeRssBytes
+      afterOllamaUnload.processTreeRssBytes <= 0 ||
+      afterOllamaUnload.ollamaRunningModels === undefined ||
+      exactModelRemained !== false
     )
     {
       return false
@@ -323,7 +336,9 @@ function hardGateFailures(
           !residencyEvidencePassed(
             observation,
             topology,
-            modelPair.mlx.localPath
+            modelPair.mlx.localPath,
+            modelPair.ollama.model,
+            modelPair.ollama.revision
           )
         )
         {

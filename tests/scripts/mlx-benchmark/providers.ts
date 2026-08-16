@@ -29,12 +29,19 @@ import type {
   CustomMlxTopologyConfig,
   MlxAllocatorMetrics,
   ModelPair,
+  OllamaRunningModelIdentity,
   StockMlxTopologyConfig,
   TopologyIdentity,
 } from './types.js'
 
 const execFileAsync = promisify(execFile)
 const MAX_ERROR_BYTES = 64 * 1024
+const OLLAMA_EVICTION_TIMEOUT_MS = 5_000
+
+export interface ModelResetEvidence
+{
+  ollamaRunningModels?: OllamaRunningModelIdentity[]
+}
 
 export interface BenchmarkRuntime
 {
@@ -43,7 +50,7 @@ export interface BenchmarkRuntime
   client(pair: ModelPair): Promise<AgentInferenceClient>
   model(pair: ModelPair): string
   processRoots(): number[]
-  resetModel(pair: ModelPair): Promise<void>
+  resetModel(pair: ModelPair): Promise<ModelResetEvidence>
   crashAndRestart(pair: ModelPair): Promise<void>
   allocatorMemory(reset?: boolean): Promise<MlxAllocatorMetrics | undefined>
   stop(): Promise<{ descendants: number[]; allExited: boolean }>
@@ -479,10 +486,11 @@ class StockMlxRuntime implements BenchmarkRuntime
     return this.child?.pid ? [this.child.pid] : []
   }
 
-  async resetModel(pair: ModelPair): Promise<void>
+  async resetModel(pair: ModelPair): Promise<ModelResetEvidence>
   {
     await this.stop()
     await this.start(pair)
+    return {}
   }
 
   async crashAndRestart(pair: ModelPair): Promise<void>
@@ -572,9 +580,15 @@ class OllamaRuntime implements BenchmarkRuntime
     return this.roots
   }
 
-  async resetModel(pair: ModelPair): Promise<void>
+  async resetModel(pair: ModelPair): Promise<ModelResetEvidence>
   {
-    await this.ollama.evictModel(pair.ollama.model)
+    return {
+      ollamaRunningModels: await this.ollama.evictModel(
+        pair.ollama.model,
+        pair.ollama.revision,
+        OLLAMA_EVICTION_TIMEOUT_MS
+      ),
+    }
   }
 
   async crashAndRestart(): Promise<void>
@@ -699,10 +713,11 @@ class CustomMlxRuntime implements BenchmarkRuntime
     return pid ? [pid] : []
   }
 
-  async resetModel(pair: ModelPair): Promise<void>
+  async resetModel(pair: ModelPair): Promise<ModelResetEvidence>
   {
     await this.stop()
     await this.start(pair)
+    return {}
   }
 
   async crashAndRestart(pair: ModelPair): Promise<void>
