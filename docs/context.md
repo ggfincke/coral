@@ -100,7 +100,7 @@ Outside-workspace writes are not in the undo log.
 
 ## Request repairs that use context
 
-- Empty model turn: up to **2** nudges — *Your last turn was empty…*
+- Empty model turn: up to **2** nudges — _Your last turn was empty…_
 - Tool-shaped invalid text: **1** reprompt
 - Doom loop: **3** identical calls or errors in a window of **12** → TUI continue/stop; exec stops
 - `/verify on`: after edits, a read-only subagent must emit `VERDICT: PASS` or `VERDICT: FAIL`; one model retry on FAIL

@@ -19,18 +19,18 @@ npm run dev -- [options]
 npm start -- [options]
 ```
 
-| Flag | Help text in commander | Behavior |
-|---|---|---|
-| `-V`, `--version` | output the version number | Print version and exit |
-| `-m`, `--model <model>` | Ollama model to use | Skip the picker; construct the Agent with this tag. Combined with `--resume` / `--session`, the **CLI model** is used with restored messages |
-| `--host <url>` | Ollama host URL | Default `http://localhost:11434`. Must be `http` or `https`, no userinfo, query, or fragment |
-| `--no-think` | disable streamed reasoning requests | Agent `think: false`. Default is think **on** |
-| `--yolo` | auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP yoloTools | Start in yolo permission mode |
-| `--resume` | resume the most recent session | Newest session by `updatedAt`. If that session's `cwd` no longer exists, Coral **exits 1** — it does not walk to the next session |
-| `--session <id>` | resume a specific session by ID | **Exact** 8-hex id (no prefix). Same cwd check. Wins over `--resume` |
-| `--sessions` | list saved sessions & exit | Prints every discovered session, newest first |
-| `--theme <name>` | color theme (see /theme for the list) | Theme **id** or **label**, case-insensitive. Unknown name → exit 1 with the id list. Precedence: this flag > `prefs.json` > `coral-reef` |
-| `-h`, `--help` | display help for command | Interactive help only |
+| Flag                    | Help text in commander                                                             | Behavior                                                                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-V`, `--version`       | output the version number                                                          | Print version and exit                                                                                                                       |
+| `-m`, `--model <model>` | Ollama model to use                                                                | Skip the picker; construct the Agent with this tag. Combined with `--resume` / `--session`, the **CLI model** is used with restored messages |
+| `--host <url>`          | Ollama host URL                                                                    | Default `http://localhost:11434`. Must be `http` or `https`, no userinfo, query, or fragment                                                 |
+| `--no-think`            | disable streamed reasoning requests                                                | Agent `think: false`. Default is think **on**                                                                                                |
+| `--yolo`                | auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP yoloTools | Start in yolo permission mode                                                                                                                |
+| `--resume`              | resume the most recent session                                                     | Newest session by `updatedAt`. If that session's `cwd` no longer exists, Coral **exits 1** — it does not walk to the next session            |
+| `--session <id>`        | resume a specific session by ID                                                    | **Exact** 8-hex id (no prefix). Same cwd check. Wins over `--resume`                                                                         |
+| `--sessions`            | list saved sessions & exit                                                         | Prints every discovered session, newest first                                                                                                |
+| `--theme <name>`        | color theme (see /theme for the list)                                              | Theme **id** or **label**, case-insensitive. Unknown name → exit 1 with the id list. Precedence: this flag > `prefs.json` > `coral-reef`     |
+| `-h`, `--help`          | display help for command                                                           | Interactive help only                                                                                                                        |
 
 Program name/description: `coral` / `A local-first CLI/TUI coding agent for Ollama`.
 
@@ -60,33 +60,33 @@ coral exec \
   --no-mcp
 ```
 
-| Flag / argument | Help text | Default | Notes |
-|---|---|---|---|
-| `[prompt]` | prompt text; quote multiword prompts | — | Mutually exclusive with `--prompt-file` |
-| `-m, --model <model>` | Ollama model to use | **required** | Empty after trim → `model must be nonempty` |
-| `--prompt-file <path>` | read the prompt from a UTF-8 file | — | Max **1,048,576** bytes |
-| `--cwd <path>` | workspace directory | `process.cwd()` at parse time | Must be a directory |
-| `--host <url>` | Ollama host URL | `http://localhost:11434` | Same canonicalize rules |
-| `--permission-profile <profile>` | headless tool profile | `read-only` | Choices: `read-only`, `workspace-write` |
-| `--output-format <format>` | stdout format | `text` | Choices: `text`, `json`, `stream-json` |
-| `--result-file <path>` | atomically write the structured result | — | Same JSON as the final result object |
-| `--ephemeral` | do not persist a Coral conversation | — | **Accepted and unused.** Exec never persists sessions either way |
-| `--mcp` | enable pre-trusted, always-allowed MCP tools | `false` | `mcpMode: 'ask'` but every approval is rejected |
-| `--no-mcp` | explicitly disable configured MCP servers | — | Sets MCP off |
-| `-h, --help` | display help for command | — | |
+| Flag / argument                  | Help text                                    | Default                       | Notes                                                            |
+| -------------------------------- | -------------------------------------------- | ----------------------------- | ---------------------------------------------------------------- |
+| `[prompt]`                       | prompt text; quote multiword prompts         | —                             | Mutually exclusive with `--prompt-file`                          |
+| `-m, --model <model>`            | Ollama model to use                          | **required**                  | Empty after trim → `model must be nonempty`                      |
+| `--prompt-file <path>`           | read the prompt from a UTF-8 file            | —                             | Max **1,048,576** bytes                                          |
+| `--cwd <path>`                   | workspace directory                          | `process.cwd()` at parse time | Must be a directory                                              |
+| `--host <url>`                   | Ollama host URL                              | `http://localhost:11434`      | Same canonicalize rules                                          |
+| `--permission-profile <profile>` | headless tool profile                        | `read-only`                   | Choices: `read-only`, `workspace-write`                          |
+| `--output-format <format>`       | stdout format                                | `text`                        | Choices: `text`, `json`, `stream-json`                           |
+| `--result-file <path>`           | atomically write the structured result       | —                             | Same JSON as the final result object                             |
+| `--ephemeral`                    | do not persist a Coral conversation          | —                             | **Accepted and unused.** Exec never persists sessions either way |
+| `--mcp`                          | enable pre-trusted, always-allowed MCP tools | `false`                       | `mcpMode: 'ask'` but every approval is rejected                  |
+| `--no-mcp`                       | explicitly disable configured MCP servers    | —                             | Sets MCP off                                                     |
+| `-h, --help`                     | display help for command                     | —                             |                                                                  |
 
 Prompt errors: `provide either a prompt argument or --prompt-file, not both`; `a nonempty prompt is required`; `prompt file exceeds 1048576 bytes`; `not a directory: …`.
 
 ### Exit codes
 
-| Status | Code |
-|---|---|
-| completed | 0 |
-| failed (Agent error or result-file write failure) | 1 |
-| cancelled SIGINT | 130 |
-| cancelled SIGTERM | 143 |
-| Commander parse/help/version-style errors | commander's `exitCode` |
-| other thrown errors | 2 |
+| Status                                            | Code                   |
+| ------------------------------------------------- | ---------------------- |
+| completed                                         | 0                      |
+| failed (Agent error or result-file write failure) | 1                      |
+| cancelled SIGINT                                  | 130                    |
+| cancelled SIGTERM                                 | 143                    |
+| Commander parse/help/version-style errors         | commander's `exitCode` |
+| other thrown errors                               | 2                      |
 
 ### Permission profiles
 

@@ -10,26 +10,26 @@ TUI labels (Read, Write, Shell, …) are display only.
 
 ## Catalog at a glance
 
-| Name | Default policy | Path gate | Subagent | Parallel | Approval notes |
-|---|---|---|---|---|---|
-| `read_file` | always_allow | `path` | yes | yes | Outside workspace still prompts |
-| `write_file` | require_approval | `path` (default `.`) | no | no | Outside workspace: not undoable |
-| `edit_file` | require_approval | `path` (default `.`) | no | no | Exact match; optional `replace_all` |
-| `grep` | always_allow | `path` (default `.`) | yes | yes | Needs `rg` |
-| `glob` | always_allow | `path` (default `.`) | yes | yes | Needs `rg` |
-| `list_files` | always_allow | `path` (default `.`) | yes | yes | Tree, depth cap 5 |
-| `search_code` | always_allow | no | yes | no | Local embedding index |
-| `code_intel` | always_allow | `path` | yes | no | TS/JS LSP |
-| `bash` | require_approval | no | no | no | Not sandboxed |
-| `git_status` | always_allow | no | yes | yes | |
-| `git_diff` | always_allow | no | yes | yes | |
-| `git_log` | always_allow | no | yes | yes | |
-| `git_add` | require_approval | no | no | no | |
-| `git_commit` | require_approval | no | no | no | Staged only |
-| `git_switch` | require_approval | no | no | no | |
-| `git_push` | require_approval | no | no | no | 60s timeout |
-| `task` | always_allow | no | no | no | Spawns read-only child |
-| `todo_write` | always_allow | no | no | no | Primary session only |
+| Name          | Default policy   | Path gate            | Subagent | Parallel | Approval notes                      |
+| ------------- | ---------------- | -------------------- | -------- | -------- | ----------------------------------- |
+| `read_file`   | always_allow     | `path`               | yes      | yes      | Outside workspace still prompts     |
+| `write_file`  | require_approval | `path` (default `.`) | no       | no       | Outside workspace: not undoable     |
+| `edit_file`   | require_approval | `path` (default `.`) | no       | no       | Exact match; optional `replace_all` |
+| `grep`        | always_allow     | `path` (default `.`) | yes      | yes      | Needs `rg`                          |
+| `glob`        | always_allow     | `path` (default `.`) | yes      | yes      | Needs `rg`                          |
+| `list_files`  | always_allow     | `path` (default `.`) | yes      | yes      | Tree, depth cap 5                   |
+| `search_code` | always_allow     | no                   | yes      | no       | Local embedding index               |
+| `code_intel`  | always_allow     | `path`               | yes      | no       | TS/JS LSP                           |
+| `bash`        | require_approval | no                   | no       | no       | Not sandboxed                       |
+| `git_status`  | always_allow     | no                   | yes      | yes      |                                     |
+| `git_diff`    | always_allow     | no                   | yes      | yes      |                                     |
+| `git_log`     | always_allow     | no                   | yes      | yes      |                                     |
+| `git_add`     | require_approval | no                   | no       | no       |                                     |
+| `git_commit`  | require_approval | no                   | no       | no       | Staged only                         |
+| `git_switch`  | require_approval | no                   | no       | no       |                                     |
+| `git_push`    | require_approval | no                   | no       | no       | 60s timeout                         |
+| `task`        | always_allow     | no                   | no       | no       | Spawns read-only child              |
+| `todo_write`  | always_allow     | no                   | no       | no       | Primary session only                |
 
 Subagent set: the nine `yes` rows under Subagent. `coral exec --permission-profile read-only` uses that same set. `workspace-write` adds `write_file`, `edit_file`, `bash` only.
 
