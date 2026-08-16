@@ -29,7 +29,7 @@ Failures:
 
 ### qwen38-27b-nvfp4
 
-- Observed locally: the Ollama manifest totals 18,174,721,596 bytes across 1,209 layers; its 1,199 one-tensor ModelOpt safetensors blobs total 18,155,017,220 bytes.
+- Observed locally: all 1,209 Ollama manifest layers total 18,174,721,596 bytes; the 1,199 tensor layers, stored as one-tensor ModelOpt safetensors blobs, total 18,155,017,220 bytes.
 - Measured preflight: the local view has 2,017 keys including 409 .scale and 409 .global_scale keys; mlx-lm 0.31.3 with mlx 0.32.0 rejects 802 of them as unexpected.
 - Observed in the pinned official index: 1,682 keys including 498 plural .scales keys and no .global_scale keys.
 - Decision inference: the layouts have no stock/no-copy ingress, and conversion is outside this benchmark and forbidden by the local-only constraint.

@@ -472,6 +472,17 @@ describe('MLX benchmark decision policy', () =>
     assert.ok(failedGate)
     failedGate.passed = false
     failedGate.detail = 'deterministic coding task failed'
+    const residencyGate = malformed.hardGates.find(
+      (row) =>
+        row.topologyId === STOCK_ID &&
+        row.caseId === 'direct-mlx-ollama-direct-mlx'
+    )
+    assert.ok(residencyGate)
+    const afterOllamaUnload = residencyGate.memorySnapshots?.find(
+      (snapshot) => snapshot.stage === 'after-ollama-unload'
+    )
+    assert.ok(afterOllamaUnload)
+    afterOllamaUnload.processTreeRssBytes = 200
     malformed.baselineSmokes[0]!.artifactRevision = 'drifted-revision'
     const expectedCell = malformed.performanceCells[0]
     assert.ok(expectedCell)
@@ -498,6 +509,10 @@ describe('MLX benchmark decision policy', () =>
     assert.match(
       malformedDecision.candidates[0]?.failures.join('\n') ?? '',
       /hard gate failed/
+    )
+    assert.match(
+      malformedDecision.candidates[0]?.failures.join('\n') ?? '',
+      /hard gate lacked residency memory evidence/
     )
     assert.match(
       malformedDecision.failures.join('\n'),

@@ -28,7 +28,7 @@ import type {
 } from './types.js'
 
 const SENTINEL = 'CORAL-BENCHMARK-8137'
-const RECOVERY_TIMEOUT_MS = 30_000
+const LIFECYCLE_PROBE_TIMEOUT_MS = 30_000
 
 export interface BenchmarkExecutionLimits
 {
@@ -782,7 +782,10 @@ export async function runLifecycleGates(
   let sequence = sequenceStart
   const recoveryLimits = {
     ...limits,
-    requestTimeoutMs: Math.min(limits.requestTimeoutMs, RECOVERY_TIMEOUT_MS),
+    requestTimeoutMs: Math.min(
+      limits.requestTimeoutMs,
+      LIFECYCLE_PROBE_TIMEOUT_MS
+    ),
   }
   for (let repetition = 1; repetition <= 3; repetition++)
   {
@@ -790,7 +793,7 @@ export async function runLifecycleGates(
       runtime,
       pair,
       'prefill',
-      limits
+      recoveryLimits
     )
     rows.push(
       lifecycleObservation(
@@ -803,7 +806,12 @@ export async function runLifecycleGates(
         prefillCancelled ? 'prefill cancelled' : 'prefill did not cancel'
       )
     )
-    const decodeCancelled = await cancelRequest(runtime, pair, 'decode', limits)
+    const decodeCancelled = await cancelRequest(
+      runtime,
+      pair,
+      'decode',
+      recoveryLimits
+    )
     rows.push(
       lifecycleObservation(
         runtime,
@@ -873,7 +881,7 @@ export async function runLifecycleGates(
       )
     )
 
-    const timedOut = await timeoutRequest(runtime, pair, limits)
+    const timedOut = await timeoutRequest(runtime, pair, recoveryLimits)
     const afterTimeout = await rawEcho(
       runtime,
       pair,
@@ -1032,6 +1040,8 @@ export async function runCrossRuntimeResidencyGate(
       'after-ollama-unload',
       false
     )
+    const ollamaUnloaded =
+      afterOllamaUnload.processTreeRssBytes < afterOllama.processTreeRssBytes
     await candidate.start(pair)
     const directSecond = await rawEcho(
       candidate,
@@ -1056,6 +1066,7 @@ export async function runCrossRuntimeResidencyGate(
       directFirst.passed &&
       unloaded.allExited &&
       ollama.passed &&
+      ollamaUnloaded &&
       directSecond.passed &&
       directResidency &&
       directFirst.finalText.includes(SENTINEL) &&
@@ -1069,7 +1080,7 @@ export async function runCrossRuntimeResidencyGate(
       repetition,
       passed,
       detail: passed
-        ? 'direct MLX unloaded before Ollama and restarted cleanly'
+        ? 'direct MLX and Ollama unloaded before direct MLX restarted cleanly'
         : 'cross-runtime switch or unload failed',
       sequence: sequenceStart + repetition - 1,
       memorySnapshots: [
