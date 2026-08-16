@@ -75,6 +75,7 @@ export interface ConversationTransition
   beforeMessages: number
   afterMessages: number
   prunedResults?: number
+  prunedThinking?: number
 }
 
 export type PrepareConversationSummaryOptions =
@@ -631,12 +632,19 @@ export class ConversationState
   {
     const beforeStoredTokens = this.estimatedTokenCount
     const beforeMessages = this.messages.length
-    const { prunedMessages, prunedCount } = buildPrunedMessages(
+    const activeMessage = this.activeAnchor
+      ? this.resolveAnchor(this.activeAnchor)
+      : undefined
+    const activeIndex = activeMessage
+      ? this.messages.indexOf(activeMessage)
+      : this.messages.length
+    const { prunedMessages, prunedCount, prunedThinking } = buildPrunedMessages(
       this.messages,
       protectCount,
-      this.frozenPrefixLength
+      this.frozenPrefixLength,
+      activeIndex
     )
-    if (prunedCount === 0) return null
+    if (prunedCount === 0 && prunedThinking === 0) return null
 
     this.messages = prunedMessages
     this.rebuildTokenEstimate()
@@ -645,6 +653,7 @@ export class ConversationState
     return {
       ...this.makeTransition('pruned', beforeStoredTokens, beforeMessages),
       prunedResults: prunedCount,
+      prunedThinking,
     }
   }
 

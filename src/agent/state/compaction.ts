@@ -16,6 +16,8 @@ const SUMMARIZE_THRESHOLD = 0.9
 
 // keep this many recent tool results during pruning
 const PRUNE_PROTECT_COUNT = 6
+const PRUNE_MARKER_PREFIX = '[tool result pruned'
+const PRUNE_PROTECT_THINKING_COUNT = 1
 
 // stop retrying summarization after this many consecutive failures
 export const MAX_COMPACT_FAILURES = 2
@@ -63,6 +65,8 @@ export interface CompactionResult
   afterMessages: number
   // number of tool results replaced with markers
   prunedResults?: number
+  // number of completed assistant reasoning fields removed
+  prunedThinking?: number
 }
 
 // estimate the token count for one message
@@ -116,32 +120,78 @@ function buildPruneMarker(msg: OllamaMessage): string
 export function pruneToolResults(
   messages: OllamaMessage[],
   protectCount: number = PRUNE_PROTECT_COUNT,
-  startIndex = 0
+  startIndex = 0,
+  protectActiveSkillResultsFrom = messages.length
 ): {
   prunedMessages: OllamaMessage[]
   prunedCount: number
+  prunedThinking: number
 }
 {
   // find tool results outside the frozen prefix
   const toolIndices: number[] = []
   for (let i = startIndex; i < messages.length; i++)
   {
-    if (messages[i]!.role === 'tool') toolIndices.push(i)
+    const message = messages[i]!
+    if (
+      message.role === 'tool' &&
+      !message.content.startsWith(PRUNE_MARKER_PREFIX)
+    )
+    {
+      toolIndices.push(i)
+    }
   }
 
   // protect the newest results by position
   const protectedSet = new Set(
     protectCount > 0 ? toolIndices.slice(-protectCount) : []
   )
+  const thinkingIndices: number[] = []
+  for (let i = startIndex; i < messages.length; i++)
+  {
+    if (messages[i]!.role === 'assistant' && messages[i]!.thinking)
+    {
+      thinkingIndices.push(i)
+    }
+  }
+  const protectedThinking = new Set(
+    thinkingIndices.slice(-PRUNE_PROTECT_THINKING_COUNT)
+  )
+  let mostRecentSkillIndex = -1
+  for (let index = toolIndices.length - 1; index >= 0; index--)
+  {
+    const messageIndex = toolIndices[index]!
+    if (messages[messageIndex]!.tool_name === 'skill')
+    {
+      mostRecentSkillIndex = messageIndex
+      break
+    }
+  }
 
   let prunedCount = 0
+  let prunedThinking = 0
   const prunedMessages: OllamaMessage[] = []
 
   for (let i = 0; i < messages.length; i++)
   {
     const msg = messages[i]!
 
-    if (msg.role === 'tool' && i >= startIndex && !protectedSet.has(i))
+    const activeSkillResult =
+      msg.role === 'tool' &&
+      msg.tool_name === 'skill' &&
+      i >= protectActiveSkillResultsFrom
+    const mostRecentSkillResult = i === mostRecentSkillIndex
+    const alreadyPruned =
+      msg.role === 'tool' && msg.content.startsWith(PRUNE_MARKER_PREFIX)
+
+    if (
+      msg.role === 'tool' &&
+      i >= startIndex &&
+      !protectedSet.has(i) &&
+      !activeSkillResult &&
+      !mostRecentSkillResult &&
+      !alreadyPruned
+    )
     {
       const marker = buildPruneMarker(msg)
       const prunedMsg: OllamaMessage = {
@@ -155,11 +205,30 @@ export function pruneToolResults(
     }
     else
     {
-      prunedMessages.push(msg)
+      if (
+        msg.role === 'assistant' &&
+        msg.thinking &&
+        i >= startIndex &&
+        !protectedThinking.has(i)
+      )
+      {
+        const pruned = { ...msg }
+        delete pruned.thinking
+        if (!pruned.content && !pruned.tool_calls?.length)
+        {
+          pruned.content = '[reasoning pruned]'
+        }
+        prunedMessages.push(pruned)
+        prunedThinking++
+      }
+      else
+      {
+        prunedMessages.push(msg)
+      }
     }
   }
 
-  return { prunedMessages, prunedCount }
+  return { prunedMessages, prunedCount, prunedThinking }
 }
 
 // remove thinking blocks before sending messages to the summarizer

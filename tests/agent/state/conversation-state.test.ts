@@ -826,6 +826,73 @@ describe('compaction helpers', () =>
     assert.equal(prunedMessages[3]!.content, 'recent output')
   })
 
+  test('active skill instructions survive pruning without growing across turns', () =>
+  {
+    const state = new ConversationState('System.')
+    const anchor = state.acceptUserMessage('/architecture-review')
+    const skillHeader = '# Architecture review\n'
+    const instructions = `${skillHeader}${'x'.repeat(10_793 - skillHeader.length)}`
+    state.appendMessage({
+      role: 'tool',
+      tool_name: 'skill',
+      content: instructions,
+    })
+    for (let index = 0; index < 8; index++)
+    {
+      state.appendMessages([
+        {
+          role: 'assistant',
+          content: '',
+          thinking: `reasoning ${index} ${'x'.repeat(2_000)}`,
+        },
+        {
+          role: 'tool',
+          tool_name: 'read_file',
+          content: `result ${index} ${'y'.repeat(2_000)}`,
+        },
+      ])
+    }
+
+    const first = state.pruneToolResults('2026-08-15T00:00:00.000Z')
+    const activeMessages = state.getMessages()
+    assert.equal(first?.prunedResults, 2)
+    assert.equal(first?.prunedThinking, 7)
+    assert.equal(
+      activeMessages.find((message) => message.tool_name === 'skill')?.content,
+      instructions
+    )
+    assert.equal(activeMessages.filter((message) => message.thinking).length, 1)
+    assert.equal(
+      state.getEstimatedTokens(),
+      estimateTotalTokens(state.getMessages())
+    )
+
+    state.finalizeActiveTurn(anchor)
+    const continuation = state.acceptUserMessage('continue')
+    const second = state.pruneToolResults('2026-08-15T00:01:00.000Z', 0)
+    assert.equal(second?.prunedResults, 6)
+    assert.equal(
+      state.getMessages().find((message) => message.tool_name === 'skill')
+        ?.content,
+      instructions
+    )
+    assert.equal(state.pruneToolResults('2026-08-15T00:02:00.000Z', 0), null)
+
+    state.appendMessage({
+      role: 'tool',
+      tool_name: 'skill',
+      content: 'replacement skill instructions',
+    })
+    const third = state.pruneToolResults('2026-08-15T00:03:00.000Z', 0)
+    assert.equal(third?.prunedResults, 1)
+    const skillResults = state
+      .getMessages()
+      .filter((message) => message.tool_name === 'skill')
+    assert.match(skillResults[0]!.content, /^\[tool result pruned/)
+    assert.equal(skillResults[1]!.content, 'replacement skill instructions')
+    state.finalizeActiveTurn(continuation)
+  })
+
   test('stripThinkingForCompaction removes reasoning while preserving answers', () =>
   {
     const messages: OllamaMessage[] = [

@@ -14,6 +14,7 @@ import { buildGitContextMessage } from './git-context.js'
 export interface TurnInput
 {
   content: string
+  displayContent?: string
   attachmentPaths?: readonly string[]
 }
 

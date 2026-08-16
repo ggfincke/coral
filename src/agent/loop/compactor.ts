@@ -262,6 +262,9 @@ export class CompactionCoordinator
       ...(transition.prunedResults === undefined
         ? {}
         : { prunedResults: transition.prunedResults }),
+      ...(transition.prunedThinking === undefined
+        ? {}
+        : { prunedThinking: transition.prunedThinking }),
     }
     callbacks?.onResult?.(result)
     return result

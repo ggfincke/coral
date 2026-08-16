@@ -70,6 +70,7 @@ export interface RunAgentTurnOptions
 {
   historyRecorded: boolean
   attachmentPaths: string[]
+  displayContent?: string
 }
 
 export interface AgentTurnController
@@ -214,8 +215,12 @@ export function useAgentTurn(
       const operation = beginOperation('turn')
       if (!operation) return
       const runAgent = operation.agent
+      const presentedContent = runOptions.displayContent ?? value
       const acceptedTurn = runAgent.acceptTurn({
         content: value,
+        ...(runOptions.displayContent === undefined
+          ? {}
+          : { displayContent: runOptions.displayContent }),
         attachmentPaths: runOptions.attachmentPaths,
       })
 
@@ -247,12 +252,15 @@ export function useAgentTurn(
       {
         if (!runOptions.historyRecorded)
         {
-          addHistoryEntry(value.trim(), getSessionId())
+          addHistoryEntry(presentedContent.trim(), getSessionId())
         }
 
         clearInput()
         scrollToLatest()
-        setOutput((previous) => [...previous, { type: 'user', content: value }])
+        setOutput((previous) => [
+          ...previous,
+          { type: 'user', content: presentedContent },
+        ])
         setRunStage('waiting')
         runStartTimeRef.current = Date.now()
         startWaiting()
