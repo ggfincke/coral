@@ -341,7 +341,20 @@
           "minItems": 1,
           "items": { "type": "string", "minLength": 1 }
         },
-        "ollama": { "$ref": "#/$defs/artifact" },
+        "ollama": {
+          "allOf": [
+            { "$ref": "#/$defs/artifact" },
+            {
+              "type": "object",
+              "properties": {
+                "revision": {
+                  "type": "string",
+                  "pattern": "^(?:sha256:)?[0-9a-fA-F]{64}$"
+                }
+              }
+            }
+          ]
+        },
         "mlx": { "$ref": "#/$defs/artifact" }
       }
     },

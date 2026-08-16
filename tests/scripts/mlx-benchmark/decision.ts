@@ -23,6 +23,13 @@ import type {
   TopologyIdentity,
 } from './types.js'
 
+const OLLAMA_REVISION_PATTERN = /^(?:sha256:)?([0-9a-f]{64})$/i
+
+function normalizedOllamaRevision(value: string): string | undefined
+{
+  return OLLAMA_REVISION_PATTERN.exec(value)?.[1]?.toLowerCase()
+}
+
 function stableHash(text: string): number
 {
   let hash = 2166136261
@@ -199,9 +206,8 @@ function residencyEvidencePassed(
       snapshots.map((snapshot) => [snapshot.stage, snapshot])
     )
     const afterOllamaUnload = byStage.get('after-ollama-unload')!
-    const expectedDigest = expectedOllamaRevision
-      .replace(/^sha256:/i, '')
-      .toLowerCase()
+    const expectedDigest = normalizedOllamaRevision(expectedOllamaRevision)
+    if (!expectedDigest) return false
     const exactModelRemained = afterOllamaUnload.ollamaRunningModels?.some(
       (model) =>
         model.name === expectedOllamaIdentity ||
@@ -356,6 +362,13 @@ function observationStructureFailures(result: BenchmarkResult): string[]
   const failures: string[] = []
   for (const pair of result.modelPairs)
   {
+    const expectedRevision = normalizedOllamaRevision(pair.ollama.revision)
+    if (!expectedRevision)
+    {
+      failures.push(
+        `${pair.id} Ollama revision must be optional sha256: plus exactly 64 hexadecimal characters`
+      )
+    }
     const smokes = result.baselineSmokes.filter(
       (smoke) =>
         smoke.modelPairId === pair.id &&
@@ -374,7 +387,10 @@ function observationStructureFailures(result: BenchmarkResult): string[]
       {
         failures.push(`${pair.id} requires a passing Ollama baseline smoke`)
       }
-      if (smokes[0]!.artifactRevision !== pair.ollama.revision)
+      const smokeRevision = normalizedOllamaRevision(
+        smokes[0]!.artifactRevision
+      )
+      if (!expectedRevision || smokeRevision !== expectedRevision)
       {
         failures.push(
           `${pair.id} smoke artifact revision ${smokes[0]!.artifactRevision} ` +

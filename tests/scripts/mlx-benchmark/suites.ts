@@ -858,7 +858,7 @@ export async function runLifecycleGates(
         pair,
         `Reply with exactly ${SENTINEL}`,
         Math.min(pair.ollama.contextWindow, 32_768),
-        limits
+        recoveryLimits
       )
       crashRecovered =
         afterCrash.passed && afterCrash.finalText.includes(SENTINEL)
@@ -908,11 +908,14 @@ export async function runLifecycleGates(
       )
     )
 
-    const active = longDecode(runtime, pair, limits)
+    const active = longDecode(runtime, pair, recoveryLimits)
     const deltaBeforeQuit = await Promise.race([
       active.firstDelta,
       new Promise<boolean>((resolve) =>
-        setTimeout(() => resolve(false), limits.requestTimeoutMs).unref()
+        setTimeout(
+          () => resolve(false),
+          recoveryLimits.requestTimeoutMs
+        ).unref()
       ),
     ])
     const shutdown = await runtime.stop()

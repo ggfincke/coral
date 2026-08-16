@@ -307,7 +307,7 @@ function completeResult(): BenchmarkResult
         localEvidence: ['synthetic local artifact evidence'],
         ollama: {
           model: OLLAMA_MODEL,
-          revision: OLLAMA_DIGEST,
+          revision: `sha256:${OLLAMA_DIGEST}`,
           tokenizerRevision: 'sha256:tokenizer',
           chatTemplateSha256: 'sha256:template',
           quantization: 'NVFP4',
@@ -600,6 +600,7 @@ describe('MLX benchmark decision policy', () =>
         digest: OLLAMA_DIGEST,
       },
     ]
+    malformed.modelPairs[0]!.ollama.revision = 'invalid-revision'
     malformed.baselineSmokes[0]!.artifactRevision = 'drifted-revision'
     const expectedCell = malformed.performanceCells[0]
     assert.ok(expectedCell)
@@ -638,6 +639,10 @@ describe('MLX benchmark decision policy', () =>
     assert.match(
       malformedDecision.failures.join('\n'),
       /unexpected hard-gate observation/
+    )
+    assert.match(
+      malformedDecision.failures.join('\n'),
+      /Ollama revision must be optional sha256:/
     )
     assert.match(
       malformedDecision.failures.join('\n'),
