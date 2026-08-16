@@ -12,7 +12,9 @@ import {
 } from '../types/inference.js'
 import { allTools, subagentTools } from '../tools/registry.js'
 import { ToolCatalog } from '../tools/catalog.js'
+import { createSkillTool } from '../tools/skill.js'
 import type { Tool } from '../tools/tool.js'
+import { EMPTY_SKILL_INDEX, type SkillIndex } from '../skills/types.js'
 import { type SubagentResult, type SubagentRunner } from '../tools/subagent.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import { buildSystemPrompt } from './request/system-prompt.js'
@@ -256,6 +258,8 @@ export class Agent
   private ownsCodeIntel: boolean
   private readonly lifecycleAbort = new AbortController()
   private readonly mcpScope: McpToolScope
+  private readonly skills: SkillIndex
+  private readonly userInstructions: string
   private readonly activeRuns = new Set<Promise<void>>()
   private disposePromise?: Promise<void>
 
@@ -271,7 +275,11 @@ export class Agent
     this.cwd = resolve(cwd ?? getCwd())
     this.client = options.inferenceClient ?? new OllamaClient(baseUrl)
     this.thinkMode = options.think ?? true
-    this.baseTools = options.tools ?? allTools
+    this.skills = options.skills ?? EMPTY_SKILL_INDEX
+    this.userInstructions = options.userInstructions ?? ''
+    this.baseTools = (options.tools ?? allTools).map((tool) =>
+      tool.name === 'skill' ? createSkillTool(this.skills) : tool
+    )
     this.wireToolCatalog()
     this.maxIterations = options.maxIterations
     this.verifyEdits =
@@ -341,12 +349,19 @@ export class Agent
   {
     return new Agent(this.model, this.baseUrl, this.cwd, {
       think: this.thinkMode,
-      tools: subagentTools,
+      tools: subagentTools.map((tool) =>
+        tool.name === 'skill'
+          ? (this.baseTools.find((candidate) => candidate.name === 'skill') ??
+            tool)
+          : tool
+      ),
       maxIterations: SUBAGENT_MAX_ITERATIONS,
       numCtx: this.numCtx,
       verifyEdits: false,
       codeIntel: this.codeIntel,
       mcpMode: 'off',
+      skills: this.skills,
+      userInstructions: this.userInstructions,
     })
   }
 
@@ -447,6 +462,11 @@ export class Agent
   getMcpStatus(): McpStatus
   {
     return this.mcpScope.getStatus()
+  }
+
+  getSkills(): SkillIndex
+  {
+    return this.skills
   }
 
   private dynamicToolTokenBudget(): number
@@ -899,7 +919,7 @@ export class Agent
       const projectContextSnapshot = captureProjectContext(this.cwd)
       const plan = this.requestPlanner.fitSystemPrompt({
         contextWindow,
-        activeContent: activeMessage.displayContent ?? activeMessage.content,
+        activeContent: activeMessage.content,
         tools: catalog.ollamaTools,
         desiredProjectContextBudget:
           projectContextBudgetForWindow(contextWindow),
@@ -952,6 +972,8 @@ export class Agent
       catalog,
       projectContextBudget,
       projectContextSnapshot,
+      skills: this.skills,
+      userInstructions: this.userInstructions,
     })
   }
 
@@ -967,7 +989,7 @@ export class Agent
     const projectContextSnapshot = captureProjectContext(this.cwd)
     const plan = this.requestPlanner.fitSystemPrompt({
       contextWindow,
-      activeContent: activeMessage.displayContent ?? activeMessage.content,
+      activeContent: activeMessage.content,
       tools: this.toolCatalog.ollamaTools,
       desiredProjectContextBudget: projectContextBudgetForWindow(contextWindow),
       systemContentAt: (projectContextBudget) =>
@@ -1131,13 +1153,16 @@ export class Agent
         ? { content: input }
         : {
             content: input.content,
+            displayContent: input.displayContent,
             attachmentPaths: input.attachmentPaths
               ? Object.freeze([...input.attachmentPaths])
               : undefined,
           }
-    const displayContent = semanticInput.attachmentPaths?.length
-      ? semanticInput.content
-      : undefined
+    const displayContent =
+      semanticInput.displayContent ??
+      (semanticInput.attachmentPaths?.length
+        ? semanticInput.content
+        : undefined)
 
     const handle: AcceptedTurn = Object.freeze({
       id: Symbol('accepted-turn'),

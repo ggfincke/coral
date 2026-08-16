@@ -2,7 +2,9 @@
 
 Interactive Coral is an Ink app. Type a prompt to run a turn. Slash commands and keybindings are handled by Coral, not the model.
 
-`/help` prints the same command list (canonical order) and advertised keybindings. Footer: `Type /command to run. Commands are not sent to the model.`
+`/help` prints the same command list (canonical order), discovered skill
+winners, and advertised keybindings. Built-in commands stay local; a skill
+slash name starts a semantic Agent turn.
 
 ---
 
@@ -24,6 +26,12 @@ Parser: input must start with `/`; the name is lowercased; the first space split
 
 Aliases work for dispatch and `/` completion. The command palette runs the **canonical** name (`/permissions`, not `/perm`).
 
+Discovered skill names share this registry. Built-ins win exact collisions;
+otherwise the full name or a unique prefix invokes the skill case-insensitively.
+Ambiguous prefixes list their matches. The transcript, history, session title,
+and restored session preserve the typed slash text while the model receives a
+synthetic instruction to load the selected skill.
+
 | Command        | Aliases           | Arguments                | What it does                                                                                                                                                                                                                |
 | -------------- | ----------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/help`        |                   |                          | List commands and advertised keybindings                                                                                                                                                                                    |
@@ -31,6 +39,7 @@ Aliases work for dispatch and `/` completion. The command palette runs the **can
 | `/compact`     |                   |                          | Summarize older history. TUI needs at least 4 non-system messages. Clears undo. See [Context](context.md)                                                                                                                   |
 | `/status`      |                   |                          | Model, permission mode, session id, message count, estimated tokens, Ollama prompt/decode counts and speeds when present, compaction count, frozen-prefix coverage, repair counters, self-check flag, cwd, git branch       |
 | `/mcp`         |                   |                          | Observational MCP status. Never launches a server. See [MCP](mcp.md)                                                                                                                                                        |
+| `/skills`      |                   |                          | List skill winners plus every rejected source/root collision. Does not load a package                                                                                                                                       |
 | `/model`       |                   | none or tag              | No args: reopen picker. Else exact tag, then unique prefix among installed models                                                                                                                                           |
 | `/permissions` | `/perm`, `/perms` | none, `ask`, `yolo`      | Show or set mode. MCP catalog for the new mode starts on the **next chat turn**                                                                                                                                             |
 | `/verify`      |                   | none, `on`, `off`        | Post-edit self-check. Off by default. Not written to `.coral.json`                                                                                                                                                          |
@@ -105,7 +114,7 @@ Mouse wheel over the prompt scrolls the transcript by 3 lines.
 
 ## `@` mentions and `/` completion
 
-- `/` + a word completes slash commands (max 8 rows).
+- `/` + a word completes built-ins and discovered skill winners (max 8 rows).
 - `@` completes project files from a session-owned catalog (text-like paths, up to 5,000 files, **max 8 rows**). Refresh happens when you type an `@` query.
 - Mentions: `@path` or `@"quoted path"` after start-of-line or whitespace.
 - On submit, mentioned files are attached in order, fitted to the request budget. Skip reasons: `not found`, `too large`, `binary`, `unreadable`, `outside workspace`, `over budget`. Caps include 64 files and a 1 MiB text read limit per file.

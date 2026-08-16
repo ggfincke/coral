@@ -114,6 +114,7 @@ export interface RunAgentTurnOptions
   attachmentPaths: string[]
   // autosends leave a newer unsubmitted composer draft intact
   preserveInput?: boolean
+  displayContent?: string
 }
 
 export interface AgentTurnController
@@ -278,8 +279,10 @@ export function useAgentTurn(
       const operation = beginOperation('turn')
       if (!operation) return
       const runAgent = operation.agent
+      const presentedContent = runOptions.displayContent ?? value
       const acceptedTurn = runAgent.acceptTurn({
         content: value,
+        displayContent: runOptions.displayContent,
         attachmentPaths: runOptions.attachmentPaths,
       })
 
@@ -312,12 +315,15 @@ export function useAgentTurn(
       {
         if (!runOptions.historyRecorded)
         {
-          addHistoryEntry(value.trim(), getSessionId())
+          addHistoryEntry(presentedContent.trim(), getSessionId())
         }
 
         if (!runOptions.preserveInput) clearInput()
         scrollToLatest()
-        setOutput((previous) => [...previous, { type: 'user', content: value }])
+        setOutput((previous) => [
+          ...previous,
+          { type: 'user', content: presentedContent },
+        ])
         setRunStage('waiting')
         runStartTimeRef.current = Date.now()
         startWaiting()

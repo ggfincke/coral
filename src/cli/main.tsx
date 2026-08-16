@@ -16,6 +16,11 @@ else if (parsed.kind === 'exec')
   const { runExecCli } = await import('./exec.js')
   process.exitCode = await runExecCli(parsed.options)
 }
+else if (parsed.kind === 'skills')
+{
+  const { runSkillsCli } = await import('./skills.js')
+  process.exitCode = runSkillsCli(parsed.action, parsed.options)
+}
 else
 {
   const { runInteractiveCli } = await import('./interactive.js')

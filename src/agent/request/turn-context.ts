@@ -15,6 +15,7 @@ import { FileChangeContext } from './file-changes.js'
 export interface TurnInput
 {
   content: string
+  displayContent?: string
   attachmentPaths?: readonly string[]
 }
 

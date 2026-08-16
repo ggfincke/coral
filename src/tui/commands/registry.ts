@@ -3,6 +3,14 @@
 
 import chalk from 'chalk'
 import {
+  canonicalSkillName,
+  compareSkillText,
+  type SkillIndex,
+  type SkillRecord,
+} from '../../skills/types.js'
+import { excerpt } from '../../utils/ellipsize.js'
+import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
+import {
   keybindingInfos as sharedKeybindingInfos,
   type KeybindingSummary,
 } from '../input/keybindings.js'
@@ -20,6 +28,17 @@ import { runtimeCommands } from './runtime.js'
 import { sessionCommands } from './sessions.js'
 import { workspaceCommands } from './workspace.js'
 
+const SKILL_DETAIL_MAX = 80
+
+export type SlashSkillResolution =
+  | {
+      kind: 'skill'
+      record: SkillRecord
+      args: string
+      prompt: string
+    }
+  | { kind: 'ambiguous'; query: string; names: string[] }
+
 // parse one slash command from terminal input
 function parseCommand(input: string): ParsedCommand | null
 {
@@ -32,11 +51,11 @@ function parseCommand(input: string): ParsedCommand | null
   const spaceIndex = withoutSlash.indexOf(' ')
   if (spaceIndex === -1)
   {
-    return { name: withoutSlash.toLowerCase(), args: '' }
+    return { name: withoutSlash, args: '' }
   }
 
   return {
-    name: withoutSlash.slice(0, spaceIndex).toLowerCase(),
+    name: withoutSlash.slice(0, spaceIndex),
     args: withoutSlash.slice(spaceIndex + 1).trim(),
   }
 }
@@ -90,6 +109,18 @@ const helpCommand: Command = {
       )
     }
 
+    const skillInfos = skillCommandInfos(ctx.agent.getSkills?.()?.records ?? [])
+    if (skillInfos.length > 0)
+    {
+      lines.push('', `${style('muted')('- skills')}`, '')
+      for (const skill of skillInfos)
+      {
+        lines.push(
+          `  ${style('user')(`/${skill.name}`)}  ${chalk.dim(skill.description)}`
+        )
+      }
+    }
+
     lines.push('', `${style('muted')('— keybindings')}`, '')
     for (const binding of sharedKeybindingInfos())
     {
@@ -100,7 +131,9 @@ const helpCommand: Command = {
 
     lines.push(
       '',
-      chalk.dim('Type /command to run. Commands are not sent to the model.')
+      chalk.dim(
+        'Type /command to run. Skill names start a chat turn; other commands are not sent to the model.'
+      )
     )
     ctx.pushOutput(systemBlock(lines.join('\n')))
   },
@@ -119,6 +152,7 @@ const commands: readonly Command[] = [
   conversationCommands.compact,
   runtimeCommands.status,
   runtimeCommands.mcp,
+  runtimeCommands.skills,
   runtimeCommands.model,
   runtimeCommands.permissions,
   runtimeCommands.verify,
@@ -141,22 +175,126 @@ const commands: readonly Command[] = [
   runtimeCommands.exit,
 ]
 
-export function commandCompletions(): CommandSummary[]
+const BUILTIN_NAMES = new Set<string>()
+for (const command of commands)
 {
-  return commandInfos().map((command) => ({
+  BUILTIN_NAMES.add(command.name)
+  for (const alias of command.aliases ?? []) BUILTIN_NAMES.add(alias)
+}
+
+function isBuiltinPrefix(query: string): boolean
+{
+  if (!query) return false
+  for (const name of BUILTIN_NAMES)
+  {
+    if (name.startsWith(query)) return true
+  }
+  return false
+}
+
+function skillCommandInfos(skills: readonly SkillRecord[]): CommandInfo[]
+{
+  return skills
+    .filter((record) => !BUILTIN_NAMES.has(canonicalSkillName(record.name)))
+    .map((record) => ({
+      name: sanitizeUntrustedText(record.name),
+      aliases: [],
+      description: excerpt(
+        sanitizeUntrustedText(record.description).replace(/\s+/g, ' ').trim(),
+        SKILL_DETAIL_MAX
+      ),
+    }))
+}
+
+export function commandCompletions(skills?: SkillIndex): CommandSummary[]
+{
+  return commandInfos(skills).map((command) => ({
     name: command.name,
     description: command.description,
     aliases: command.aliases,
   }))
 }
 
-export function commandInfos(): CommandInfo[]
+export function commandInfos(skills?: SkillIndex): CommandInfo[]
 {
-  return commands.map((command) => ({
-    name: command.name,
-    aliases: command.aliases ?? [],
-    description: command.description,
-  }))
+  return [
+    ...commands.map((command) => ({
+      name: command.name,
+      aliases: command.aliases ?? [],
+      description: command.description,
+    })),
+    ...skillCommandInfos(skills?.records ?? []),
+  ]
+}
+
+export function formatSkillInvokePrompt(
+  record: SkillRecord,
+  extra = ''
+): string
+{
+  const lead = `Use the skill tool to load \`${record.name}\` and follow its instructions.`
+  const trimmed = extra.trim()
+  return trimmed ? `${lead}\n\n${trimmed}` : lead
+}
+
+export function formatAmbiguousSkill(query: string, names: string[]): string
+{
+  const cleanQuery = sanitizeUntrustedText(query)
+  const cleanNames = names.map(sanitizeUntrustedText)
+  return (
+    `Ambiguous skill /${cleanQuery} - matches: ${cleanNames.join(', ')}\n` +
+    `Type the full name, or ${style('user')('/skills')} to list.`
+  )
+}
+
+// built-ins win; otherwise an exact or unique case-folded skill name may run
+export function resolveSlashSkill(
+  input: string,
+  skills: SkillIndex
+): SlashSkillResolution | null
+{
+  const parsed = parseCommand(input)
+  if (!parsed || !parsed.name) return null
+  const query = canonicalSkillName(parsed.name)
+  if (BUILTIN_NAMES.has(query)) return null
+
+  const available = skills.records.filter(
+    (record) => !BUILTIN_NAMES.has(canonicalSkillName(record.name))
+  )
+  const exact = skills.get(query)
+  if (exact && !BUILTIN_NAMES.has(canonicalSkillName(exact.name)))
+  {
+    return {
+      kind: 'skill',
+      record: exact,
+      args: parsed.args,
+      prompt: formatSkillInvokePrompt(exact, parsed.args),
+    }
+  }
+  if (isBuiltinPrefix(query)) return null
+
+  const prefixed = available.filter((record) =>
+    canonicalSkillName(record.name).startsWith(query)
+  )
+  if (prefixed.length === 1)
+  {
+    const record = prefixed[0]!
+    return {
+      kind: 'skill',
+      record,
+      args: parsed.args,
+      prompt: formatSkillInvokePrompt(record, parsed.args),
+    }
+  }
+  if (prefixed.length > 1)
+  {
+    return {
+      kind: 'ambiguous',
+      query,
+      names: prefixed.map((record) => record.name).sort(compareSkillText),
+    }
+  }
+  return null
 }
 
 export function keybindingInfos(): KeybindingSummary[]

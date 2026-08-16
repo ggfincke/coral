@@ -4,7 +4,7 @@ This is the systems document for Coral: what it is, how a turn actually runs, wh
 
 It is written for people who run Coral and want to understand the machine. It is not a contributor onboarding dump and not an internal planner. Implementation trivia (ESM `.js` import suffixes, test doubles) appears only where it explains a boundary you can observe.
 
-Related how-tos: [Getting started](getting-started.md), [CLI](cli.md), [TUI](tui.md), [Configuration](configuration.md), [Permissions](permissions.md), [Tools](tools.md), [MCP](mcp.md), [Sessions](sessions.md), [Context](context.md), [Troubleshooting](troubleshooting.md).
+Related how-tos: [Getting started](getting-started.md), [CLI](cli.md), [TUI](tui.md), [Configuration](configuration.md), [Permissions](permissions.md), [Tools](tools.md), [Skills](skills.md), [MCP](mcp.md), [Sessions](sessions.md), [Context](context.md), [Troubleshooting](troubleshooting.md).
 
 ---
 
@@ -145,9 +145,9 @@ The Ink UI is not the Agent.
 - `useAgentTurn` projects Agent events into the transcript and run stage.
 - `useModelPicker` owns model discovery and selection presentation.
 - `App.tsx` retains terminal geometry, top-level input routing, modal composition, and rendering.
-- Slash commands are four feature bundles plus `/help`, registered in a **fixed order** in `src/tui/commands/registry.ts`.
+- Built-in slash commands are four feature bundles plus `/help`, registered in a **fixed order** in `src/tui/commands/registry.ts`. Discovered skill winners extend completion and the palette, but built-ins keep precedence.
 
-`src/cli/args.ts` owns lightweight Commander parsing for both entry paths. `main.tsx` lazily imports interactive or headless execution only after parsing; help/version exit before loading Agent or Ink. Root help lists `exec`, and `coral help exec` works.
+`src/cli/args.ts` owns lightweight Commander parsing for both entry paths. `main.tsx` lazily imports interactive or headless execution only after parsing; help/version exit before loading Agent or Ink. Root help lists `exec`, `acp`, and `skills`; `coral help <command>` works.
 
 This layer exists so Ink/React can be swapped or tested without rewriting the Agent, and so only one turn, command, or transition runs at a time.
 
@@ -173,6 +173,19 @@ Not a fifth runtime layer, but a separate disk contract:
 | `src/session/types.ts` | Hydrated public values (`SessionData`, `SessionMeta`)             |
 | `src/session/codec.ts` | Untrusted-bytes validation and serialization                      |
 | `src/session/store.ts` | Paths, discovery, atomic whole-file writes, multiwriter semantics |
+
+### Agent Skills (composition-root capability)
+
+Skills are instruction packs, not a runtime plugin layer. Interactive and exec
+composition roots discover an immutable `SkillIndex` from personal and project
+roots, load bounded `AGENTS_HOME/AGENTS.md`, bind the built-in `skill` tool, and
+inject both into `Agent`. Agent and read-only subagents consume that snapshot;
+they never scan the real home or execute skill scripts.
+
+ASCII case-folded identity and precedence are owned by `src/skills/`. Personal
+packages win, then `.coral`, then `.agents`; collision diagnostics retain every
+rejected record. Project roots and packages are realpath-confined to the
+checkout and corresponding project skill root. See [Skills](skills.md).
 
 Codec owns “is this JSON a session?”. Store owns “where does it live and how is it replaced?”.
 
@@ -225,7 +238,7 @@ sequenceDiagram
 ### 1. Input
 
 - Plain text starts a turn.
-- Lines starting with `/` are slash commands and are **not** sent to the model.
+- Built-in lines starting with `/` stay local. A resolved skill slash name starts a turn whose stored/display text is the typed command while its model content instructs the Agent to load that winner.
 - `@path` or `@"quoted path"` mentions are parsed on submit. The runtime passes `attachmentPaths` into `acceptTurn`. Coral reads those files only after the context window and tool budget are known, then fits them in mention order against the same whole-request limit as history, tools, Git context, and the reserved response.
 
 ### 2. Admission
@@ -331,7 +344,7 @@ Adding a built-in means both files. MCP tools are never added to `allTools`.
 
 ### Built-in names
 
-`read_file`, `write_file`, `edit_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `bash`, `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_switch`, `git_push`, `task`, `todo_write`.
+`read_file`, `write_file`, `edit_file`, `grep`, `glob`, `list_files`, `search_code`, `skill`, `code_intel`, `bash`, `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_switch`, `git_push`, `task`, `todo_write`.
 
 Default policies and path rules: [Tools](tools.md) and [Permissions](permissions.md).
 
@@ -542,39 +555,40 @@ Other options you can observe: `think` (CLI/TUI pass boolean; the type also allo
 
 Useful granularity for navigating behavior, not every file.
 
-| Path                            | Role                                                                                                                                 |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/cli/`                      | `main.tsx` dispatch; `args.ts` shared Commander flags; `interactive.tsx` startup; `exec.ts` headless turn; `app-launch.ts` Ink mount |
-| `src/cwd.ts`                    | Process workspace directory for tools                                                                                                |
-| `src/tui/App.tsx`               | Terminal chrome, input routing, modals                                                                                               |
-| `src/tui/session/`              | Runtime, React session hook, Agent bind/persist, `@` file catalog                                                                    |
-| `src/tui/commands/`             | Slash commands (conversation, runtime, workspace, sessions)                                                                          |
-| `src/tui/run/`                  | Turn projection, approval box, status line                                                                                           |
-| `src/tui/prompt/`               | Input, `@`/`/` completion, Emacs-style edit, history JSONL                                                                           |
-| `src/tui/model/`                | Picker; preferred default `gemma4:31b-mlx`                                                                                           |
-| `src/tui/input/`                | Keybindings, keypress                                                                                                                |
-| `src/tui/shell/`                | Shutdown coordinator, copy, welcome, metrics                                                                                         |
-| `src/tui/transcript/`           | Transcript, todo panel, markdown, sanitize                                                                                           |
-| `src/tui/palette/`              | Command palette                                                                                                                      |
-| `src/agent/agent.ts`            | Façade                                                                                                                               |
-| `src/agent/contracts.ts`        | Public events and options                                                                                                            |
-| `src/agent/inference-client.ts` | Transport seam                                                                                                                       |
-| `src/agent/mcp-scope.ts`        | Per-Agent MCP lifetime                                                                                                               |
-| `src/agent/loop/`               | Planner, tool rounds, compaction coordinator, doom loop, repair, verify                                                              |
-| `src/agent/state/`              | Conversation, compaction shaping, todos                                                                                              |
-| `src/agent/effects/`            | Undo/redo coordination and file replay                                                                                               |
-| `src/agent/request/`            | System prompt, budget, attachments, git/project context, projection                                                                  |
-| `src/ollama/`                   | Host canonicalize, REST client, API errors                                                                                           |
-| `src/tools/`                    | Built-ins, catalog, registry, path policy                                                                                            |
-| `src/mcp/`                      | Manager, launch, trust, adapter, output, stdio bounds                                                                                |
-| `src/lsp/`                      | Bundled TypeScript language-server client                                                                                            |
-| `src/retrieval/`                | Semantic index, embeddings, SQLite spaces                                                                                            |
-| `src/session/`                  | Types, codec, store, resume, undo persist shaping                                                                                    |
-| `src/config/`                   | User/project JSON, permissions, MCP parse, context, verify, prefs                                                                    |
-| `src/telemetry/`                | Local reliability deltas                                                                                                             |
-| `src/shared/`                   | Workspace paths, project files/tree, ignored names                                                                                   |
-| `src/types/`                    | Inference, todos, undo, attachments                                                                                                  |
-| `src/utils/`                    | `CORAL_HOME`, JSON IO, limits, git helpers                                                                                           |
+| Path                            | Role                                                                                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/cli/`                      | `main.tsx` dispatch; `args.ts` shared Commander flags; `interactive.tsx` startup; `exec.ts` headless turn; `skills.ts` skill inspection; `app-launch.ts` Ink mount |
+| `src/cwd.ts`                    | Process workspace directory for tools                                                                                                                              |
+| `src/tui/App.tsx`               | Terminal chrome, input routing, modals                                                                                                                             |
+| `src/tui/session/`              | Runtime, React session hook, Agent bind/persist, `@` file catalog                                                                                                  |
+| `src/tui/commands/`             | Slash commands (conversation, runtime, workspace, sessions)                                                                                                        |
+| `src/tui/run/`                  | Turn projection, approval box, status line                                                                                                                         |
+| `src/tui/prompt/`               | Input, `@`/`/` completion, Emacs-style edit, history JSONL                                                                                                         |
+| `src/tui/model/`                | Picker; preferred default `gemma4:31b-mlx`                                                                                                                         |
+| `src/tui/input/`                | Keybindings, keypress                                                                                                                                              |
+| `src/tui/shell/`                | Shutdown coordinator, copy, welcome, metrics                                                                                                                       |
+| `src/tui/transcript/`           | Transcript, todo panel, markdown, sanitize                                                                                                                         |
+| `src/tui/palette/`              | Command palette                                                                                                                                                    |
+| `src/agent/agent.ts`            | Façade                                                                                                                                                             |
+| `src/agent/contracts.ts`        | Public events and options                                                                                                                                          |
+| `src/agent/inference-client.ts` | Transport seam                                                                                                                                                     |
+| `src/agent/mcp-scope.ts`        | Per-Agent MCP lifetime                                                                                                                                             |
+| `src/agent/loop/`               | Planner, tool rounds, compaction coordinator, doom loop, repair, verify                                                                                            |
+| `src/agent/state/`              | Conversation, compaction shaping, todos                                                                                                                            |
+| `src/agent/effects/`            | Undo/redo coordination and file replay                                                                                                                             |
+| `src/agent/request/`            | System prompt, budget, attachments, git/project context, projection                                                                                                |
+| `src/ollama/`                   | Host canonicalize, REST client, API errors                                                                                                                         |
+| `src/tools/`                    | Built-ins, catalog, registry, path policy                                                                                                                          |
+| `src/mcp/`                      | Manager, launch, trust, adapter, output, stdio bounds                                                                                                              |
+| `src/lsp/`                      | Bundled TypeScript language-server client                                                                                                                          |
+| `src/retrieval/`                | Semantic index, embeddings, SQLite spaces                                                                                                                          |
+| `src/session/`                  | Types, codec, store, resume, undo persist shaping                                                                                                                  |
+| `src/skills/`                   | Discovery, realpath confinement, case-folded precedence, immutable catalog                                                                                         |
+| `src/config/`                   | User/project JSON, permissions, MCP parse, context, verify, prefs                                                                                                  |
+| `src/telemetry/`                | Local reliability deltas                                                                                                                                           |
+| `src/shared/`                   | Workspace paths, project files/tree, ignored names                                                                                                                 |
+| `src/types/`                    | Inference, todos, undo, attachments                                                                                                                                |
+| `src/utils/`                    | `CORAL_HOME`, JSON IO, limits, git helpers                                                                                                                         |
 
 ---
 

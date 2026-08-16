@@ -50,7 +50,7 @@ Git context is a **request-only** extra system payload (`## Git Context`): branc
 
 During `runInternal`, before a request:
 
-1. **Prune** old tool results if there are at least **10** messages and estimated tokens exceed **75%** of the window. Newest **6** tool results are kept. Others become markers like `[tool result pruned — toolName: preview, ~N tokens]`. Prune does **not** clear undo. TUI: `Auto-pruned N old tool results (~… tokens freed)`.
+1. **Prune** old tool results if there are at least **10** messages and estimated tokens exceed **75%** of the window. Newest **6** tool results are kept. Every `skill` result loaded in the active turn is also kept; after finalization, the newest completed skill result remains protected. Others become markers like `[tool result pruned — toolName: preview, ~N tokens]`. Prune does **not** clear undo. TUI: `Auto-pruned N old tool results (~… tokens freed)`.
 2. **Summarize** if at least **20** messages and tokens exceed **90%**. Newest **10** messages stay verbatim. The summarizer is a tool-free Ollama call with a structured handoff prompt (Goal, Decisions, Work completed, Work remaining, Relevant files). Thinking is replaced with `[reasoning was used]`. TUI first line: `Context auto-compacted`, then `Undo history cleared`.
 3. If summarization fails **2** times, Coral **trims** to the most recent **100** messages (`DEFAULT_MAX_HISTORY`). TUI: `Context trimmed to recent history (summarization unavailable)` plus `Undo history cleared`.
 4. **Every** request iteration, if stored messages exceed 100, Coral also trims to 100 (preserving the active turn). That guard is independent of whether prune/summarize ran.

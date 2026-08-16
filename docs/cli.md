@@ -1,6 +1,6 @@
 # CLI reference
 
-`coral --help` lists interactive options, `exec`, and `acp`. Use `coral help exec` or `coral exec --help` for headless help, and `coral help acp` or `coral acp --help` for protocol help. Help and version exit before loading Agent or Ink. Version comes from `package.json` and works on all entry paths.
+`coral --help` lists interactive options, `exec`, `acp`, and `skills`. Use `coral help exec` or `coral exec --help` for headless help, and `coral help acp` or `coral acp --help` for protocol help. Help and version exit before loading Agent or Ink. Version comes from `package.json` and works on all entry paths.
 
 ## Interactive: `coral [options] [prompt]`
 
@@ -106,6 +106,12 @@ Result object:
 Result-file write failures set `error` to `failed to write result file: …`, or append it after `; ` if an Agent error already exists, and force `status: failed`. Errors are also written to stderr.
 
 `stream-json` `usage` events carry Agent `TokenUsage` (**camelCase**: `promptTokens`, `completionTokens`, `promptEvalDurationNs`, `evalDurationNs`, …). The final result object's `usage` field is **snake_case** as listed above.
+
+---
+
+## Skills: `coral skills`
+
+`coral skills` (or `coral skills list`) lists winning packages for the workspace and every rejected case-folded collision; `-C` selects the workspace. `coral skills path` prints `AGENTS_HOME/skills`.
 
 ---
 

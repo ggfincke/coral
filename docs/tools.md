@@ -19,6 +19,7 @@ TUI labels (Read, Write, Shell, …) are display only.
 | `glob`        | always_allow     | `path` (default `.`) | yes      | yes      | Needs `rg`                          |
 | `list_files`  | always_allow     | `path` (default `.`) | yes      | yes      | Tree, depth cap 5                   |
 | `search_code` | always_allow     | no                   | yes      | no       | Local embedding index               |
+| `skill`       | always_allow     | no                   | yes      | yes      | Discovered instruction files only   |
 | `code_intel`  | always_allow     | `path`               | yes      | no       | TS/JS LSP                           |
 | `bash`        | require_approval | no                   | no       | no       | Not sandboxed                       |
 | `git_status`  | always_allow     | no                   | yes      | yes      |                                     |
@@ -31,7 +32,7 @@ TUI labels (Read, Write, Shell, …) are display only.
 | `task`        | always_allow     | no                   | no       | no       | Spawns read-only child              |
 | `todo_write`  | always_allow     | no                   | no       | no       | Primary session only                |
 
-Subagent set: the nine `yes` rows under Subagent. `coral exec --permission-profile read-only` uses that same set. `workspace-write` adds `write_file`, `edit_file`, `bash` only.
+Subagent set: the ten `yes` rows under Subagent. `coral exec --permission-profile read-only` uses that same set. `workspace-write` adds `write_file`, `edit_file`, `bash` only.
 
 Ripgrep timeout 15s, buffer 5 MiB. Git default timeout 10s except `git_push` (60s). Tool results fed to the model are capped at about 100,000 characters.
 
@@ -94,6 +95,22 @@ TS/JS chunks follow top-level statements, preserving fitting declarations and le
 Chunks have an 80-line / 6,000-character budget. Oversized units, unsupported files, and unusable syntax boundaries use the existing line splitter with 10-line overlap. A single indivisible line may exceed the character budget. Original line ranges are retained, CRLF is normalized, and outer whitespace is trimmed; no synthetic context is added. Search ranking and the 12-line snippet display are unchanged. Structural checks do not establish improved semantic ranking.
 
 Default embedding model: `nomic-embed-text`. `/index` and `/index rebuild` (or `force`) share this indexer. Intended for ordinary project sizes, not giant monorepos (in-process vector scan).
+
+---
+
+## Skills
+
+### `skill`
+
+Load one discovered instruction pack. **Required:** `name` from the system
+prompt's bounded Skills catalog. Optional `file` defaults to `SKILL.md` and may
+name only a file under `references/`. Lookup uses the same ASCII case-folded
+identity as slash commands.
+
+The tool is read-only, parallel-safe, and available to read-only subagents. It
+never reads `scripts/` or executes package files. Missing, escaping,
+non-regular, and files over 1 MiB fail closed. Discovery, precedence, and
+collision diagnostics are documented in [Skills](skills.md).
 
 ---
 
