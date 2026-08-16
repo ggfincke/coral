@@ -3,7 +3,7 @@
   "runId": "qwen38-local-only-2026-08-16",
   "status": "complete",
   "provenance": {
-    "generatedAt": "2026-08-16T15:50:32.569Z",
+    "generatedAt": "2026-08-16T16:06:22.860Z",
     "machine": {
       "chip": "Apple M4 Max",
       "unifiedMemoryBytes": 137438953472,
@@ -39,7 +39,7 @@
       "No benchmark command may download a model or sync a Python environment.",
       "The installed Ollama NVFP4 tensor layout is not a stock MLX-LM model directory; conversion is outside this benchmark.",
       "The immutable forensic checkout HEAD and clean status were verified before evidence creation.",
-      "Benchmark worktree contained only the uncommitted PR A construction surface above Coral baseline a60b2ef6fc931a179b94a546304bb2fb9e7e7961; rerun at the published commit.",
+      "Benchmark branch was clean and contained only benchmark changes above Coral baseline a60b2ef6fc931a179b94a546304bb2fb9e7e7961.",
       "Node, Ollama, uv, Python, MLX, MLX-LM, chip, memory, macOS, and power claims were verified locally before the run.",
       "The pinned direct snapshot was metadata-only locally; the run stopped before MLX launch."
     ]
@@ -153,8 +153,11 @@
       "findings": [
         "ordinary model-picker activation eagerly starts Python work",
         "handwritten family parsing does not use the pinned tokenizer-native Qwen contract",
-        "malformed or mismatched frames can poison generation and pending transport state",
-        "cancellation, restart, descendant cleanup, and A-B-A residency are not lifecycle-complete"
+        "malformed or mismatched frames can poison pending transport state",
+        "cancellation does not reliably retire the active generation",
+        "crash recovery does not provide one bounded clean restart",
+        "shutdown does not join every worker descendant",
+        "A-B-A switching does not prove complete unload and residency transitions"
       ]
     }
   ],
@@ -199,8 +202,8 @@
       "contextWindow": 4096,
       "promptTokens": 20,
       "completionTokens": 1,
-      "loadMs": 42.938917,
-      "totalMs": 368.041792,
+      "loadMs": 2645.236625,
+      "totalMs": 2922.441208,
       "finishReason": "stop",
       "artifactRevision": "5642e97495e1a088883805981563dcdc4a040c2f53388b7a41d1f24d3622cf7e"
     }

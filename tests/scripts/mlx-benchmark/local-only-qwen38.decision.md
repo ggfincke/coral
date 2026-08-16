@@ -4,7 +4,11 @@
 - Verdict: **NO-GO**
 - Baseline: `ollama`
 - Selected: `none`
-- Generated: 2026-08-16T15:50:32.569Z
+- Generated: 2026-08-16T16:06:22.860Z
+
+## Decision
+
+Decision: **NO-GO.** Neither evaluated direct-MLX topology qualified for production integration. The pinned stock MLX-LM artifact was not locally installed, downloads were forbidden, and the available Ollama artifact had no stock-compatible zero-copy MLX-LM ingress. Correctness and performance measurement therefore did not proceed. PR #64's custom worker was separately disqualified by confirmed activation, parser, transport, cancellation, restart, cleanup, and residency defects. Ollama remains Coral's sole production inference backend, and no direct-MLX runtime code will be merged from this effort.
 
 ## stock-mlx-lm-server
 
@@ -39,5 +43,8 @@ Failures:
 
 - ordinary model-picker activation eagerly starts Python work
 - handwritten family parsing does not use the pinned tokenizer-native Qwen contract
-- malformed or mismatched frames can poison generation and pending transport state
-- cancellation, restart, descendant cleanup, and A-B-A residency are not lifecycle-complete
+- malformed or mismatched frames can poison pending transport state
+- cancellation does not reliably retire the active generation
+- crash recovery does not provide one bounded clean restart
+- shutdown does not join every worker descendant
+- A-B-A switching does not prove complete unload and residency transitions
