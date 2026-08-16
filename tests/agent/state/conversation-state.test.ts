@@ -498,10 +498,15 @@ describe('ConversationState', () =>
       { role: 'tool', tool_name: 'read_file', content: 'old file contents' },
       {
         role: 'assistant',
-        content: '',
+        content: '   ',
         thinking: 'old reasoning without an answer',
       },
       { role: 'tool', tool_name: 'grep', content: existingMarker },
+      {
+        role: 'tool',
+        tool_name: 'grep',
+        content: `[tool result pruned but real]${'x'.repeat(1_000)}`,
+      },
       { role: 'tool', tool_name: 'bash', content: 'old command output' },
       {
         role: 'assistant',
@@ -516,7 +521,7 @@ describe('ConversationState', () =>
     const transition = state.pruneToolResults('2026-08-16T00:00:00.000Z', 1)
     const pruned = state.getMessages()
 
-    assert.equal(transition?.prunedResults, 2)
+    assert.equal(transition?.prunedResults, 3)
     assert.equal(transition?.prunedThinking, 2)
     assert.equal(transition?.beforeStoredTokens, beforeTokens)
     assert.equal(transition?.afterStoredTokens, estimateTotalTokens(pruned))
@@ -533,11 +538,13 @@ describe('ConversationState', () =>
     assert.equal(pruned[4]!.thinking, undefined)
     assert.equal(pruned[5]!.content, existingMarker)
     assert.match(pruned[6]!.content, /^\[tool result pruned/)
+    assert.ok(pruned[6]!.content.length <= 256)
+    assert.match(pruned[7]!.content, /^\[tool result pruned/)
     assert.equal(
-      pruned[7]!.thinking,
+      pruned[8]!.thinking,
       'newest reasoning retained for continuity'
     )
-    assert.equal(pruned[8]!.content, 'recent output')
+    assert.equal(pruned[9]!.content, 'recent output')
 
     const snapshot = state.getMessages()
     assert.equal(state.pruneToolResults('2026-08-16T00:01:00.000Z', 1), null)
