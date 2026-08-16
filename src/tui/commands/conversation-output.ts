@@ -25,7 +25,15 @@ export function formatAutoCompactionResult(result: CompactionResult): string
   const savedTokens = result.beforeTokens - result.afterTokens
   if (result.type === 'pruned')
   {
-    return `Auto-pruned ${result.prunedResults ?? 0} old tool results (~${formatTokenCount(savedTokens)} tokens freed)`
+    const toolResults = result.prunedResults ?? 0
+    const reasoning = result.prunedThinking ?? 0
+    const details = [
+      ...(toolResults > 0 || reasoning === 0
+        ? [pluralize(toolResults, 'old tool result')]
+        : []),
+      ...(reasoning > 0 ? [pluralize(reasoning, 'old reasoning field')] : []),
+    ]
+    return `Auto-pruned ${details.join(' and ')} (~${formatTokenCount(savedTokens)} tokens freed)`
   }
 
   const header =

@@ -473,6 +473,85 @@ describe('ConversationState', () =>
     assertExactEstimate(metricsState)
   })
 
+  test('reasoning and tool pruning preserves live meaning and is idempotent', () =>
+  {
+    const frozenSummary = `${FROZEN_SUMMARY_MARKER} ...]\n\nprior summary`
+    const existingMarker =
+      '[tool result pruned — grep: already compacted, ~10 tokens]'
+    const preservedToolCalls = [
+      {
+        function: {
+          name: 'read_file',
+          arguments: { path: 'src/agent/agent.ts' },
+        },
+      },
+    ]
+    const state = new ConversationState('System.')
+    state.restoreMessages([
+      { role: 'user', content: frozenSummary },
+      {
+        role: 'assistant',
+        content: 'I need the file before answering.',
+        thinking: 'old reasoning with an answer and a tool call',
+        tool_calls: preservedToolCalls,
+      },
+      { role: 'tool', tool_name: 'read_file', content: 'old file contents' },
+      {
+        role: 'assistant',
+        content: '   ',
+        thinking: 'old reasoning without an answer',
+      },
+      { role: 'tool', tool_name: 'grep', content: existingMarker },
+      {
+        role: 'tool',
+        tool_name: 'grep',
+        content: `[tool result pruned but real]${'x'.repeat(1_000)}`,
+      },
+      { role: 'tool', tool_name: 'bash', content: 'old command output' },
+      {
+        role: 'assistant',
+        content: 'Most recent answer.',
+        thinking: 'newest reasoning retained for continuity',
+      },
+      { role: 'tool', tool_name: 'git_status', content: 'recent output' },
+    ])
+    const beforeTokens = state.getEstimatedTokens()
+    const beforeMessages = state.getMessageCount()
+
+    const transition = state.pruneToolResults('2026-08-16T00:00:00.000Z', 1)
+    const pruned = state.getMessages()
+
+    assert.equal(transition?.prunedResults, 3)
+    assert.equal(transition?.prunedThinking, 2)
+    assert.equal(transition?.beforeStoredTokens, beforeTokens)
+    assert.equal(transition?.afterStoredTokens, estimateTotalTokens(pruned))
+    assert.equal(transition?.beforeMessages, beforeMessages)
+    assert.equal(transition?.afterMessages, beforeMessages)
+    assert.equal(state.getEstimatedTokens(), estimateTotalTokens(pruned))
+    assert.equal(state.getFrozenPrefixLength(), 2)
+    assert.equal(pruned[1]!.content, frozenSummary)
+    assert.equal(pruned[2]!.content, 'I need the file before answering.')
+    assert.equal(pruned[2]!.thinking, undefined)
+    assert.deepEqual(pruned[2]!.tool_calls, preservedToolCalls)
+    assert.match(pruned[3]!.content, /^\[tool result pruned/)
+    assert.equal(pruned[4]!.content, '[reasoning pruned]')
+    assert.equal(pruned[4]!.thinking, undefined)
+    assert.equal(pruned[5]!.content, existingMarker)
+    assert.match(pruned[6]!.content, /^\[tool result pruned/)
+    assert.ok(pruned[6]!.content.length <= 256)
+    assert.match(pruned[7]!.content, /^\[tool result pruned/)
+    assert.equal(
+      pruned[8]!.thinking,
+      'newest reasoning retained for continuity'
+    )
+    assert.equal(pruned[9]!.content, 'recent output')
+
+    const snapshot = state.getMessages()
+    assert.equal(state.pruneToolResults('2026-08-16T00:01:00.000Z', 1), null)
+    assert.deepEqual(state.getMessages(), snapshot)
+    assert.equal(state.getEstimatedTokens(), estimateTotalTokens(snapshot))
+  })
+
   test('ConversationState replay plans reject drift, clear misalignment, & never leak mutable state', () =>
   {
     const state = new ConversationState('system')

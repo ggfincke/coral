@@ -421,6 +421,7 @@ test('compaction formatters clear undo history only for summarized results', () 
     beforeTokens: 1200,
     afterTokens: 800,
     prunedResults: 2,
+    prunedThinking: 3,
   }
 
   assert.ok(
@@ -430,6 +431,11 @@ test('compaction formatters clear undo history only for summarized results', () 
   )
   assert.ok(
     !plain(formatAutoCompactionResult(pruned)).includes('Undo history cleared')
+  )
+  assert.ok(
+    plain(formatAutoCompactionResult(pruned)).includes(
+      '2 old tool results and 3 old reasoning fields'
+    )
   )
   assert.ok(
     plain(formatAutoCompactionResult(compacted)).includes(

@@ -17,6 +17,15 @@ const SUMMARIZE_THRESHOLD = 0.9
 // keep this many recent tool results during pruning
 const PRUNE_PROTECT_COUNT = 6
 
+// recognize only the complete bounded marker shape we generate
+const PRUNE_MARKER_PREFIX = '[tool result pruned — '
+const PRUNE_MARKER_SUFFIX = /, ~\d+ tokens\]$/
+const PRUNE_MARKER_FIELD_MAX_CHARS = 60
+const PRUNE_MARKER_MAX_CHARS = 256
+
+// keep the newest reasoning field for continuity
+const PRUNE_PROTECT_THINKING_COUNT = 1
+
 // stop retrying summarization after this many consecutive failures
 export const MAX_COMPACT_FAILURES = 2
 
@@ -63,6 +72,8 @@ export interface CompactionResult
   afterMessages: number
   // number of tool results replaced with markers
   prunedResults?: number
+  // number of completed assistant reasoning fields removed
+  prunedThinking?: number
 }
 
 // estimate the token count for one message
@@ -102,13 +113,26 @@ export function shouldCompactByTotal(
 // build a marker for a pruned tool result
 function buildPruneMarker(msg: OllamaMessage): string
 {
-  const toolName = msg.tool_name ?? 'tool'
+  const toolName = ellipsize(
+    msg.tool_name ?? 'tool',
+    PRUNE_MARKER_FIELD_MAX_CHARS
+  )
   const tokens = estimateMessageTokens(msg)
 
   // keep a short preview for the replacement marker
-  const preview = ellipsize(msg.content, 60)
+  const preview = ellipsize(msg.content, PRUNE_MARKER_FIELD_MAX_CHARS)
 
   return `[tool result pruned — ${toolName}: ${preview}, ~${tokens} tokens]`
+}
+
+function isPruneMarker(content: string): boolean
+{
+  return (
+    content.length <= PRUNE_MARKER_MAX_CHARS &&
+    content.startsWith(PRUNE_MARKER_PREFIX) &&
+    content.slice(PRUNE_MARKER_PREFIX.length).includes(': ') &&
+    PRUNE_MARKER_SUFFIX.test(content)
+  )
 }
 
 // replace old tool results with compact markers while preserving the frozen prefix
@@ -120,13 +144,18 @@ export function pruneToolResults(
 ): {
   prunedMessages: OllamaMessage[]
   prunedCount: number
+  prunedThinking: number
 }
 {
   // find tool results outside the frozen prefix
   const toolIndices: number[] = []
   for (let i = startIndex; i < messages.length; i++)
   {
-    if (messages[i]!.role === 'tool') toolIndices.push(i)
+    const message = messages[i]!
+    if (message.role === 'tool' && !isPruneMarker(message.content))
+    {
+      toolIndices.push(i)
+    }
   }
 
   // protect the newest results by position
@@ -134,14 +163,33 @@ export function pruneToolResults(
     protectCount > 0 ? toolIndices.slice(-protectCount) : []
   )
 
+  const thinkingIndices: number[] = []
+  for (let i = startIndex; i < messages.length; i++)
+  {
+    const message = messages[i]!
+    if (message.role === 'assistant' && message.thinking)
+    {
+      thinkingIndices.push(i)
+    }
+  }
+  const protectedThinking = new Set(
+    thinkingIndices.slice(-PRUNE_PROTECT_THINKING_COUNT)
+  )
+
   let prunedCount = 0
+  let prunedThinking = 0
   const prunedMessages: OllamaMessage[] = []
 
   for (let i = 0; i < messages.length; i++)
   {
     const msg = messages[i]!
 
-    if (msg.role === 'tool' && i >= startIndex && !protectedSet.has(i))
+    if (
+      msg.role === 'tool' &&
+      i >= startIndex &&
+      !protectedSet.has(i) &&
+      !isPruneMarker(msg.content)
+    )
     {
       const marker = buildPruneMarker(msg)
       const prunedMsg: OllamaMessage = {
@@ -155,11 +203,30 @@ export function pruneToolResults(
     }
     else
     {
-      prunedMessages.push(msg)
+      if (
+        msg.role === 'assistant' &&
+        msg.thinking &&
+        i >= startIndex &&
+        !protectedThinking.has(i)
+      )
+      {
+        const pruned = { ...msg }
+        delete pruned.thinking
+        if (!pruned.content.trim() && !pruned.tool_calls?.length)
+        {
+          pruned.content = '[reasoning pruned]'
+        }
+        prunedMessages.push(pruned)
+        prunedThinking++
+      }
+      else
+      {
+        prunedMessages.push(msg)
+      }
     }
   }
 
-  return { prunedMessages, prunedCount }
+  return { prunedMessages, prunedCount, prunedThinking }
 }
 
 // remove thinking blocks before sending messages to the summarizer
