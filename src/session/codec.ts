@@ -250,13 +250,29 @@ function isSessionFileData(value: unknown): value is SessionFileData
   return true
 }
 
+// mirror canonicalizePersistedModelRef in src/inference/model-ref.ts at this
+// pure persistence boundary so pre-backend ids hydrate as Ollama
+function hydratePersistedSessionModel(model: string): string
+{
+  const trimmed = model.trim()
+  if (!trimmed) return trimmed
+  if (trimmed.startsWith('ollama:') || trimmed.startsWith('mlx:'))
+  {
+    return trimmed
+  }
+  return `ollama:${trimmed}`
+}
+
 export function decodeSessionData(value: unknown): SessionData | undefined
 {
   if (!isSessionFileData(value)) return undefined
 
   const undoState = hydrateUndoState(value.messages, value.undo, value.redo)
   return {
-    meta: value.meta,
+    meta: {
+      ...value.meta,
+      model: hydratePersistedSessionModel(value.meta.model),
+    },
     messages: value.messages,
     todos: value.todos,
     undo: value.undo === undefined ? undefined : undoState.undo,

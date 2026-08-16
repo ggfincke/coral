@@ -1,5 +1,5 @@
 // src/tools/search-code.ts
-// semantic code search backed by local Ollama embeddings
+// semantic code search backed by local embeddings
 
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'

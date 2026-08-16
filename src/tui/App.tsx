@@ -23,9 +23,12 @@ import {
   commandCompletions,
   commandInfos,
   dispatchCommand,
+  formatAmbiguousSkill,
   keybindingInfos,
+  resolveSlashSkill,
 } from './commands/registry.js'
 import type { CommandContext } from './commands/contracts.js'
+import { systemBlock } from './commands/output.js'
 import type { KeybindingAction } from './input/keybindings.js'
 import { parseMentions } from './prompt/mentions.js'
 import {
@@ -175,6 +178,8 @@ export default function App({
     getSessionId,
     isYolo,
     isAcceptingTransitions,
+    listAvailableModels,
+    buildIndexer: buildSessionIndexer,
     shutdown: shutdownInteractive,
   } = interactive
   const {
@@ -218,6 +223,7 @@ export default function App({
     visible: pickerVisible,
     errorTitle: pickerErrorTitle,
     error: pickerError,
+    warning: pickerWarning,
     models,
     selectedIndex: selectedModelIndex,
     reopen: reopenModelPicker,
@@ -232,6 +238,7 @@ export default function App({
     initialSession: resumeSession,
     agent,
     activateModel,
+    listAvailableModels,
     isAcceptingTransitions,
     shutdown: shutdownInteractive,
     onPersistenceError: reportModelPersistenceError,
@@ -360,10 +367,11 @@ export default function App({
           models,
           selectedModelIndex,
           transcriptWidth,
-          pickerViewportHeight
+          pickerViewportHeight,
+          pickerWarning
         )
       : pickerState === 'loading'
-        ? ['Loading Ollama models…', `Host: ${host}`]
+        ? ['Loading models…', `Host: ${host}`]
         : [pickerErrorTitle, `Host: ${host}`, '', pickerError]
   const visiblePicker = padLinesTop(
     pickerLines.slice(-pickerViewportHeight),
@@ -580,10 +588,15 @@ export default function App({
   )
 
   // slash-command list and project-file lookup for prompt autocomplete
-  const completionCommands = useMemo(() => commandCompletions(), [])
+  const discoveredSkills = agent?.getSkills()
+  const completionCommands = useMemo(
+    () => commandCompletions(discoveredSkills),
+    [discoveredSkills]
+  )
   const paletteEntries = useMemo(
-    () => buildPaletteEntries(commandInfos(), keybindingInfos()),
-    []
+    () =>
+      buildPaletteEntries(commandInfos(discoveredSkills), keybindingInfos()),
+    [discoveredSkills]
   )
   const refreshFiles = useCallback(
     () => refreshProjectFiles(currentCwd),
@@ -695,6 +708,8 @@ export default function App({
           if (acceptsCommand()) reopenModelPicker()
         },
         switchModel: (nextModel) => switchModel(nextModel, commandOperation),
+        listAvailableModels,
+        buildIndexer: buildSessionIndexer,
         setYolo: (nextYolo) => setPermissionMode(nextYolo, commandOperation),
         exitApp: () =>
         {
@@ -730,11 +745,13 @@ export default function App({
       acceptsCommandTerminal,
       addHistoryEntry,
       beginOperation,
+      buildSessionIndexer,
       clearSession,
       finishCommand,
       getSessionId,
       host,
       isYolo,
+      listAvailableModels,
       rebuildTranscript,
       renameCurrentSession,
       reopenModelPicker,
@@ -765,9 +782,31 @@ export default function App({
 
       // intercept slash commands before sending to the agent
       let historyRecorded = false
-      if (value.trim().startsWith('/'))
+      const trimmed = value.trim()
+      if (trimmed.startsWith('/'))
       {
-        const result = await runSlashCommand(value.trim())
+        const skill = resolveSlashSkill(trimmed, agent?.getSkills() ?? [])
+        if (skill?.kind === 'skill')
+        {
+          await runAgentTurn(skill.prompt, {
+            historyRecorded: false,
+            attachmentPaths: parseMentions(trimmed),
+            displayContent: trimmed,
+          })
+          return
+        }
+        if (skill?.kind === 'ambiguous')
+        {
+          addHistoryEntry(trimmed, getSessionId())
+          setInput('')
+          setScrollOffset(0)
+          setOutput((previous) => [
+            ...previous,
+            systemBlock(formatAmbiguousSkill(skill.query, skill.names)),
+          ])
+          return
+        }
+        const result = await runSlashCommand(trimmed)
         if (!result.admitted || result.handled) return
         historyRecorded = true
       }
@@ -777,11 +816,15 @@ export default function App({
       })
     },
     [
+      addHistoryEntry,
+      agent,
       commandRunning,
+      getSessionId,
       promptActive,
       runAgentTurn,
-      runStage,
       runSlashCommand,
+      runStage,
+      setOutput,
       transitioningSession,
     ]
   )
@@ -819,7 +862,7 @@ export default function App({
   {
     statusLine =
       pickerState === 'loading'
-        ? 'loading models from Ollama…'
+        ? 'loading models…'
         : pickerState === 'error'
           ? `press r to retry · ${pickerEscHint}`
           : `${models.length} models available · enter selects · ${pickerEscHint}`
@@ -1030,7 +1073,7 @@ export default function App({
       setPaletteOpen(false)
       if (entry.command)
       {
-        void runSlashCommand(entry.command)
+        void handleSubmit(entry.command)
         return
       }
       if (entry.action)
@@ -1038,7 +1081,7 @@ export default function App({
         runKeybindingAction(entry.action)
       }
     },
-    [runKeybindingAction, runSlashCommand]
+    [handleSubmit, runKeybindingAction]
   )
 
   const onHistoryUp = useCallback(() =>

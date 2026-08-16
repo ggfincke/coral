@@ -8,7 +8,10 @@ import { isPlainObject } from '../utils/guards.js'
 // reserve a fixed fraction of unified memory for the GPU on Apple Silicon
 const USABLE_MEMORY_FRACTION = 0.75
 
-// reserve memory for weights, KV cache, compute buffers, Ollama, and the OS
+// reserve memory for KV cache, compute buffers, OS, and dual-residency
+// runtime (separate embedding artifacts can stay loaded beside chat weights).
+// chat weight bytes are counted separately; do not subtract Ollama chat
+// weights when the session's chat backend is mlx.
 const MEMORY_RESERVE_BYTES = 6 * 1024 ** 3
 
 // estimate KV elements at f16 width so the memory bound stays conservative
@@ -37,6 +40,8 @@ export interface ContextWindowResolverDependencies
   totalMemBytes: number
   showModel: (model: string, signal?: AbortSignal) => Promise<ModelInfo>
   listModels: (signal?: AbortSignal) => Promise<Model[]>
+  // extra resident weights (e.g. Ollama embeddings while chat is mlx)
+  extraWeightBytes?: number
 }
 
 export interface ResolvedContextWindow
@@ -135,11 +140,12 @@ export async function resolvePinnedContextWindow(
 
   const nativeContext = info.contextLength
   const maxNumCtx = resolveContextConfig(deps.cwd).maxNumCtx
-  const weightBytes = await resolveModelWeightBytes(
+  const chatWeight = await resolveModelWeightBytes(
     deps.model,
     deps.listModels,
     signal
   )
+  const weightBytes = chatWeight + (deps.extraWeightBytes ?? 0)
   const memoryCap = computeMemoryCappedContext({
     totalMemBytes: deps.totalMemBytes,
     weightBytes,
@@ -177,7 +183,11 @@ async function resolveModelWeightBytes(
   try
   {
     const models = await listModels(signal)
-    return models.find((candidate) => candidate.name === model)?.size ?? 0
+    return (
+      models.find(
+        (candidate) => candidate.name === model || candidate.model === model
+      )?.size ?? 0
+    )
   }
   catch (err)
   {

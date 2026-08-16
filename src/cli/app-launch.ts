@@ -1,6 +1,7 @@
 // src/cli/app-launch.ts
 // validate CLI runtime inputs before composing the Ink application
 
+import { parseModelRef } from '../inference/model-ref.js'
 import { normalizeOllamaHost } from '../ollama/host.js'
 import type { AppProps } from '../tui/App.js'
 import { toErrorMessage } from '../utils/errors.js'
@@ -15,9 +16,11 @@ export function launchCliApp(
 ): number
 {
   let host: string
+  let model = props.model
   try
   {
     host = normalizeOllamaHost(props.host)
+    if (model) model = parseModelRef(model).canonical
   }
   catch (error)
   {
@@ -25,6 +28,6 @@ export function launchCliApp(
     return 1
   }
 
-  renderApp({ ...props, host })
+  renderApp({ ...props, host, model })
   return 0
 }

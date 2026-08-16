@@ -5,10 +5,19 @@ import { existsSync } from 'node:fs'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../agent/agent.js'
 import { resolveMcpConfig } from '../../config/mcp.js'
+import { parseModelRef, tryParseModelRef } from '../../inference/model-ref.js'
+import {
+  listAvailableModels,
+  type AvailableModelList,
+} from '../../inference/resolve-client.js'
+import { WorkerSupervisor } from '../../inference/worker-supervisor.js'
 import type { ActiveMcpMode } from '../../mcp/types.js'
+import { OllamaClient } from '../../ollama/client.js'
+import { buildIndexer, type BuiltIndexer } from '../../retrieval/build.js'
 import { loadSession, renameSession } from '../../session/store.js'
 import type { SessionData, SessionMeta } from '../../session/types.js'
 import { recordReliability } from '../../telemetry/store.js'
+import { createRetrievalDeps } from '../../tools/search-code-deps.js'
 import type { TodoItem } from '../../types/todo.js'
 import {
   createShutdownCoordinator,
@@ -108,6 +117,12 @@ export interface InteractiveSession
   getSessionId: () => string | null
   isYolo: () => boolean
   isAcceptingTransitions: () => boolean
+  listAvailableModels: (signal?: AbortSignal) => Promise<AvailableModelList>
+  buildIndexer: (
+    cwd: string,
+    ollamaHost: string,
+    signal?: AbortSignal
+  ) => Promise<BuiltIndexer>
   shutdown: () => Promise<void>
 }
 
@@ -121,6 +136,7 @@ export function useInteractiveSession(
 ): InteractiveSession
 {
   const [mcpConfig] = useState(resolveMcpConfig)
+  const [worker] = useState(() => new WorkerSupervisor())
   const [initialAgent] = useState(() =>
   {
     if (!options.model) return null
@@ -132,12 +148,16 @@ export function useInteractiveSession(
       mcpMode: activeMcpMode(options.initialYolo),
       mcpConfig,
       restored: options.initialSession,
+      worker,
     })
   })
   const [agent, setAgent] = useState<Agent | null>(initialAgent)
-  const [activeModel, setActiveModel] = useState(
-    options.model ?? options.initialSession?.meta.model ?? ''
-  )
+  const [activeModel, setActiveModel] = useState(() =>
+  {
+    const raw = options.model ?? options.initialSession?.meta.model ?? ''
+    if (!raw) return ''
+    return tryParseModelRef(raw)?.canonical ?? raw
+  })
   const [yolo, setYolo] = useState(options.initialYolo)
   const [contextWindow, setContextWindow] = useState(0)
   const [transition, setTransition] =
@@ -263,7 +283,9 @@ export function useInteractiveSession(
       const target = runtime.getAgent()
       if (!target || closingRef.current || runtime.isClosing())
         return Promise.resolve({ status: 'stale' })
-      if (target.getModel() === nextModel)
+      const nextRef = parseModelRef(nextModel)
+      const currentRef = parseModelRef(target.getModel())
+      if (currentRef.canonical === nextRef.canonical)
         return Promise.resolve({ status: 'unchanged' })
 
       const transition = runtime.beginTransition('model', owner)
@@ -280,7 +302,52 @@ export function useInteractiveSession(
         if (transition.signal.aborted) return { status: 'aborted' }
         try
         {
-          await target.switchModel(nextModel, transition.signal)
+          if (currentRef.backend === nextRef.backend)
+          {
+            await target.switchModel(nextRef.canonical, transition.signal)
+          }
+          else
+          {
+            const sessionMeta = runtime.getSessionMeta()
+            const { undo, redo } = target.exportUndoStateForPersistence()
+            const live: SessionData = {
+              meta: sessionMeta ?? {
+                id: '00000000',
+                model: nextRef.canonical,
+                cwd: target.getCwd(),
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                title: '',
+                messageCount: 0,
+              },
+              messages: target.getMessages(),
+              todos: target.getTodos(),
+              undo,
+              redo,
+            }
+            const nextAgent = buildPrimaryAgent({
+              model: nextRef.canonical,
+              host: options.host,
+              cwd: target.getCwd(),
+              think: options.think,
+              mcpMode: activeMcpMode(yoloRef.current),
+              mcpConfig,
+              worker,
+              restored: live,
+            })
+            const cleanup = runtime.replaceAgent(nextAgent, sessionMeta, {
+              preserveCommand: Boolean(owner),
+            })
+            setTodos(nextAgent.getTodos())
+            setAgent(nextAgent)
+            setActiveModel(nextRef.canonical)
+            setContextWindow(0)
+            runtime.markTransitionCommitted(transition)
+            const persistence = persistCurrent()
+            fetchContextWindow(nextAgent)
+            await cleanup.catch(() => undefined)
+            return { status: 'changed', persistence }
+          }
         }
         catch (error)
         {
@@ -291,7 +358,7 @@ export function useInteractiveSession(
         {
           return { status: 'stale' }
         }
-        setActiveModel(nextModel)
+        setActiveModel(nextRef.canonical)
         setContextWindow(0)
         runtime.markTransitionCommitted(transition)
         const persistence = persistCurrent()
@@ -300,7 +367,15 @@ export function useInteractiveSession(
       })()
       return runtime.trackTransition(transition, task)
     },
-    [fetchContextWindow, persistCurrent, runtime]
+    [
+      fetchContextWindow,
+      mcpConfig,
+      options.host,
+      options.think,
+      persistCurrent,
+      runtime,
+      worker,
+    ]
   )
 
   const activateModel = useCallback(
@@ -326,6 +401,7 @@ export function useInteractiveSession(
             think: options.think,
             mcpMode: activeMcpMode(yoloRef.current),
             mcpConfig,
+            worker,
             restored,
           }),
         restored
@@ -336,7 +412,15 @@ export function useInteractiveSession(
           : { status: 'busy' }
       )
     },
-    [adoptAgent, mcpConfig, options.host, options.think, runtime, switchModel]
+    [
+      adoptAgent,
+      mcpConfig,
+      options.host,
+      options.think,
+      runtime,
+      switchModel,
+      worker,
+    ]
   )
 
   const renameCurrentSession = useCallback(
@@ -400,6 +484,7 @@ export function useInteractiveSession(
             think: options.think,
             mcpMode: activeMcpMode(yoloRef.current),
             mcpConfig,
+            worker,
             restored: target,
           }),
         target,
@@ -407,7 +492,7 @@ export function useInteractiveSession(
         owner
       )
     },
-    [adoptAgent, mcpConfig, options.host, options.think, runtime]
+    [adoptAgent, mcpConfig, options.host, options.think, runtime, worker]
   )
 
   const setPermissionMode = useCallback(
@@ -488,13 +573,14 @@ export function useInteractiveSession(
     closeRuntimeRef.current ??= Promise.allSettled([
       runtime.shutdown(),
       projectFileCatalog.dispose(),
+      worker.dispose(),
     ]).then((results) =>
     {
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason
     })
     return closeRuntimeRef.current
-  }, [projectFileCatalog, runtime])
+  }, [projectFileCatalog, runtime, worker])
 
   const shutdownCoordinatorRef = useRef<(() => Promise<void>) | null>(null)
   const shutdown = useCallback(() =>
@@ -599,6 +685,22 @@ export function useInteractiveSession(
       !runtime.hasActiveTransition(),
     [runtime]
   )
+  const listAvailableModelsForSession = useCallback(
+    (signal?: AbortSignal) =>
+      listAvailableModels(
+        {
+          ollama: new OllamaClient(options.host),
+          worker,
+        },
+        signal
+      ),
+    [options.host, worker]
+  )
+  const buildSessionIndexer = useCallback(
+    (cwd: string, ollamaHost: string, signal?: AbortSignal) =>
+      buildIndexer(cwd, ollamaHost, signal, createRetrievalDeps({ worker })),
+    [worker]
+  )
   const listProjectFiles = useCallback(
     (cwd: string) => projectFileCatalog.list(cwd),
     [projectFileCatalog]
@@ -647,6 +749,8 @@ export function useInteractiveSession(
     getSessionId,
     isYolo,
     isAcceptingTransitions,
+    listAvailableModels: listAvailableModelsForSession,
+    buildIndexer: buildSessionIndexer,
     shutdown,
   }
 }

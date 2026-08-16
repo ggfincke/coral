@@ -31,7 +31,7 @@ test('foldReliability seeds a new model record', () =>
     makeReliabilityStats({ editRepairs: 2, reprompts: 1 }),
     '2026-06-21T00:00:00.000Z'
   )
-  const record = next.models['gemma']
+  const record = next.models['ollama:gemma']
   assert.equal(record?.sessions, 1)
   assert.equal(record?.reliability.editRepairs, 2)
   assert.equal(record?.reliability.reprompts, 1)
@@ -53,7 +53,7 @@ test('foldReliability accumulates & preserves firstSeen', () =>
     makeReliabilityStats({ editRepairs: 3, nameRepairs: 1 }),
     '2026-06-22T00:00:00.000Z'
   )
-  const record = second.models['gemma']
+  const record = second.models['ollama:gemma']
   assert.equal(record?.sessions, 2)
   assert.equal(record?.reliability.editRepairs, 5)
   assert.equal(record?.reliability.nameRepairs, 1)
@@ -67,8 +67,11 @@ test('foldReliability accumulates & preserves firstSeen', () =>
     makeReliabilityStats({ reprompts: 5 }),
     't2'
   )
-  assert.equal(withSecondModel.models['gemma']?.reliability.editRepairs, 5)
-  assert.equal(withSecondModel.models['qwen']?.reliability.reprompts, 5)
+  assert.equal(
+    withSecondModel.models['ollama:gemma']?.reliability.editRepairs,
+    5
+  )
+  assert.equal(withSecondModel.models['ollama:qwen']?.reliability.reprompts, 5)
 })
 
 test('telemetry model maps safely retain prototype-like model names', async () =>
@@ -83,7 +86,7 @@ test('telemetry model maps safely retain prototype-like model names', async () =
   )
 
   assert.equal(Object.getPrototypeOf(folded.models), null)
-  assert.equal(folded.models['__proto__']?.reliability.reprompts, 1)
+  assert.equal(folded.models['ollama:__proto__']?.reliability.reprompts, 1)
 
   const loaded = recordReliability(
     '__proto__',
@@ -92,7 +95,7 @@ test('telemetry model maps safely retain prototype-like model names', async () =
     path
   )
   assert.equal(Object.getPrototypeOf(loaded.models), null)
-  assert.equal(loaded.models['__proto__']?.reliability.editRepairs, 2)
+  assert.equal(loaded.models['ollama:__proto__']?.reliability.editRepairs, 2)
 })
 
 test('v1 telemetry events default missing counters and bind UUID to filename', async () =>
@@ -144,7 +147,7 @@ test('v1 telemetry events default missing counters and bind UUID to filename', a
     'utf-8'
   )
 
-  const record = loadTelemetry(path).models['partial-v1']
+  const record = loadTelemetry(path).models['ollama:partial-v1']
   assert.equal(record?.sessions, 1)
   assert.equal(record?.reliability.reprompts, 2)
   assert.equal(record?.reliability.editRepairs, 0)
@@ -200,7 +203,7 @@ test('recordReliability preserves one legacy baseline and adds immutable events'
     'utf-8'
   )
   const loaded = loadTelemetry(path)
-  const record = loaded.models['gemma']
+  const record = loaded.models['ollama:gemma']
 
   assert.equal(await readFile(path, 'utf-8'), legacyBytes)
   assert.equal(eventFiles.length, 2)
@@ -234,4 +237,38 @@ test('recordReliability preserves one legacy baseline and adds immutable events'
       0o600
     )
   }
+})
+
+test('loadTelemetry merges bare keys into the ollama: canonical series', async () =>
+{
+  const dir = await tempDir('coral-telemetry-merge-')
+  const path = join(dir, 'telemetry.json')
+  await writeFile(
+    path,
+    JSON.stringify({
+      models: {
+        'mistral:latest': {
+          reliability: makeReliabilityStats({ editRepairs: 2 }),
+          sessions: 1,
+          firstSeen: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+        },
+        'ollama:mistral:latest': {
+          reliability: makeReliabilityStats({ editRepairs: 3 }),
+          sessions: 2,
+          firstSeen: '2026-01-02T00:00:00.000Z',
+          updatedAt: '2026-01-03T00:00:00.000Z',
+        },
+      },
+    }),
+    'utf-8'
+  )
+
+  const loaded = loadTelemetry(path)
+  assert.equal(loaded.models['mistral:latest'], undefined)
+  const record = loaded.models['ollama:mistral:latest']
+  assert.equal(record?.sessions, 3)
+  assert.equal(record?.reliability.editRepairs, 5)
+  assert.equal(record?.firstSeen, '2026-01-01T00:00:00.000Z')
+  assert.equal(record?.updatedAt, '2026-01-03T00:00:00.000Z')
 })

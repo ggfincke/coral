@@ -14,6 +14,7 @@ import type {
 import { DEFAULT_OLLAMA_HOST, normalizeOllamaHost } from './host.js'
 import { OllamaApiError, OllamaModelIdentityError } from './errors.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { ollamaModelLookupKey } from '../utils/ollama-model.js'
 
 const DEFAULT_KEEP_ALIVE = '10m'
 const JSON_HEADERS = { 'Content-Type': 'application/json' } as const
@@ -106,21 +107,6 @@ function wireTool(tool: OllamaTool): OllamaTool
       parameters: tool.function.parameters,
     },
   }
-}
-
-// match the shortest names returned by /api/tags while preserving custom hosts
-function modelLookupKey(model: string): string
-{
-  let key = model.trim().replace(/^https?:\/\//i, '')
-  key = key.replace(/^registry\.ollama\.ai\/library\//i, '')
-  key = key.replace(/^library\//i, '')
-
-  if (key.lastIndexOf(':') <= key.lastIndexOf('/'))
-  {
-    key += ':latest'
-  }
-
-  return key.toLowerCase()
 }
 
 function normalizedArtifactDigest(digest: unknown): string | null
@@ -440,14 +426,14 @@ export class OllamaClient
     signal?: AbortSignal
   ): Promise<OllamaModelArtifact>
   {
-    const requestedKey = modelLookupKey(model)
+    const requestedKey = ollamaModelLookupKey(model)
     const matches = (await this.listModels(signal)).filter((candidate) =>
     {
       if (!candidate || typeof candidate !== 'object') return false
       const names = [candidate.name, candidate.model].filter(
         (name): name is string => typeof name === 'string' && name.length > 0
       )
-      return names.some((name) => modelLookupKey(name) === requestedKey)
+      return names.some((name) => ollamaModelLookupKey(name) === requestedKey)
     })
 
     if (matches.length === 0)

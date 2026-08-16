@@ -266,3 +266,56 @@ test('resolvePinnedContextWindow returns undefined without model metadata', asyn
 
   assert.equal(resolved, undefined)
 })
+
+test('extraWeightBytes counts dual-residency addend without Ollama chat weights', async () =>
+{
+  const cwd = await tempProject()
+  await withNumCtx(undefined, async () =>
+  {
+    const mlxOnly = await resolvePinnedContextWindow({
+      model: 'mlx:qwen3-coder',
+      cwd,
+      totalMemBytes: 64 * GiB,
+      extraWeightBytes: 0,
+      showModel: async () => MISTRAL,
+      listModels: async (): Promise<Model[]> => [
+        {
+          name: 'mlx:qwen3-coder',
+          size: 8 * GiB,
+          modified_at: '2026-08-14T00:00:00.000Z',
+        },
+        {
+          name: 'ollama:gemma4:31b-mlx',
+          size: 20 * GiB,
+          modified_at: '2026-08-14T00:00:00.000Z',
+        },
+      ],
+    })
+    const withEmbed = await resolvePinnedContextWindow({
+      model: 'mlx:qwen3-coder',
+      cwd,
+      totalMemBytes: 64 * GiB,
+      extraWeightBytes: 1 * GiB,
+      showModel: async () => MISTRAL,
+      listModels: async (): Promise<Model[]> => [
+        {
+          name: 'mlx:qwen3-coder',
+          size: 8 * GiB,
+          modified_at: '2026-08-14T00:00:00.000Z',
+        },
+        {
+          name: 'ollama:gemma4:31b-mlx',
+          size: 20 * GiB,
+          modified_at: '2026-08-14T00:00:00.000Z',
+        },
+      ],
+    })
+
+    assert.equal(mlxOnly?.weightBytes, 8 * GiB)
+    assert.equal(withEmbed?.weightBytes, 9 * GiB)
+    assert.ok(
+      (withEmbed?.memoryCap ?? 0) < (mlxOnly?.memoryCap ?? 0),
+      'embedding addend must shrink the KV budget'
+    )
+  })
+})

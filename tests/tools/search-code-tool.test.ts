@@ -185,7 +185,7 @@ test('search_code appends ollama pull hint for missing embedding models', async 
         assert.match(result.error ?? '', /search_code failed/)
         assert.match(
           result.error ?? '',
-          /while using embedding model custom-embed/
+          /while using embedding model ollama:custom-embed/
         )
         assert.match(
           result.error ?? '',

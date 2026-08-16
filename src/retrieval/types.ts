@@ -4,12 +4,16 @@
 export const DEFAULT_EMBEDDING_MODEL = 'nomic-embed-text'
 export const CHUNKER_VERSION = 1
 
+export type EmbeddingProvider = 'ollama' | 'mlx'
+
 export interface EmbeddingSpace
 {
   id: string
-  normalizedHost: string
+  provider: EmbeddingProvider
+  endpointIdentity?: string
   artifactDigest: string
   displayModel: string
+  dimensions?: number
 }
 
 export interface Embedder

@@ -8,6 +8,10 @@ import {
   makeReliabilityStats,
   type ReliabilityStats,
 } from '../types/inference.js'
+import {
+  canonicalizePersistedModelRef,
+  parseModelRef,
+} from '../inference/model-ref.js'
 import { coralHomePath } from '../utils/coral-home.js'
 import { isPlainObject } from '../utils/guards.js'
 import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
@@ -65,6 +69,46 @@ function telemetryPath(): string
 export function evalTelemetryPath(): string
 {
   return coralHomePath('eval-telemetry.json')
+}
+
+function telemetryModelKey(model: string): string
+{
+  return parseModelRef(model).canonical
+}
+
+function mergeTelemetryRecords(
+  left: ModelTelemetry,
+  right: ModelTelemetry
+): ModelTelemetry
+{
+  return {
+    reliability: addReliability(left.reliability, right.reliability),
+    sessions: left.sessions + right.sessions,
+    firstSeen:
+      left.firstSeen.localeCompare(right.firstSeen) <= 0
+        ? left.firstSeen
+        : right.firstSeen,
+    updatedAt:
+      left.updatedAt.localeCompare(right.updatedAt) >= 0
+        ? left.updatedAt
+        : right.updatedAt,
+  }
+}
+
+function mergeBareTelemetryKeys(store: TelemetryStore): TelemetryStore
+{
+  const models: Record<string, ModelTelemetry> = Object.create(null)
+  for (const [key, value] of Object.entries(store.models))
+  {
+    const canonical = canonicalizePersistedModelRef(key)
+    const existing = Object.hasOwn(models, canonical)
+      ? models[canonical]
+      : undefined
+    models[canonical] = existing
+      ? mergeTelemetryRecords(existing, value)
+      : value
+  }
+  return { models }
 }
 
 function emptyStore(): TelemetryStore
@@ -243,8 +287,10 @@ export function foldReliability(
   now: string
 ): TelemetryStore
 {
-  const existing = Object.hasOwn(store.models, model)
-    ? store.models[model]
+  const merged = mergeBareTelemetryKeys(store)
+  const key = telemetryModelKey(model)
+  const existing = Object.hasOwn(merged.models, key)
+    ? merged.models[key]
     : undefined
   const record: ModelTelemetry = {
     reliability: addReliability(existing?.reliability, stats),
@@ -253,11 +299,11 @@ export function foldReliability(
     updatedAt: now,
   }
   const models: Record<string, ModelTelemetry> = Object.create(null)
-  for (const [name, value] of Object.entries(store.models))
+  for (const [name, value] of Object.entries(merged.models))
   {
     models[name] = value
   }
-  models[model] = record
+  models[key] = record
   return { models }
 }
 
@@ -269,7 +315,7 @@ export function loadTelemetry(path = telemetryPath()): TelemetryStore
   {
     mergeTelemetryEvent(store, event)
   }
-  return store
+  return mergeBareTelemetryKeys(store)
 }
 
 // persist one immutable event so retries do not duplicate the legacy baseline
@@ -293,7 +339,7 @@ export function recordReliability(
   const event: TelemetryEvent = {
     version: TELEMETRY_EVENT_VERSION,
     id,
-    model,
+    model: telemetryModelKey(model),
     reliability,
     recordedAt: now,
   }

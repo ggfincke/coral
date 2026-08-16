@@ -3,7 +3,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../agent/agent.js'
-import { OllamaClient } from '../../ollama/client.js'
+import { modelRefsEqual } from '../../inference/model-ref.js'
+import type { AvailableModelList } from '../../inference/resolve-client.js'
 import type { SessionData } from '../../session/types.js'
 import type { Model } from '../../types/inference.js'
 import { clamp } from '../../utils/clamp.js'
@@ -21,6 +22,7 @@ export interface UseModelPickerOptions
   initialSession: SessionData | null
   agent: Agent | null
   activateModel: InteractiveSession['activateModel']
+  listAvailableModels: (signal?: AbortSignal) => Promise<AvailableModelList>
   isAcceptingTransitions: () => boolean
   shutdown: () => Promise<void>
   onPersistenceError: () => void
@@ -32,6 +34,7 @@ export interface ModelPickerController
   visible: boolean
   errorTitle: string
   error: string
+  warning: string
   models: Model[]
   selectedIndex: number
   reopen: () => void
@@ -48,10 +51,10 @@ export function useModelPicker(
 {
   const {
     requestedModel,
-    host,
     initialSession,
     agent,
     activateModel,
+    listAvailableModels,
     isAcceptingTransitions,
     shutdown: shutdownSession,
     onPersistenceError,
@@ -59,8 +62,9 @@ export function useModelPicker(
   const [state, setState] = useState<ModelPickerState>(
     requestedModel ? 'hidden' : 'loading'
   )
-  const [errorTitle, setErrorTitle] = useState('Failed to load Ollama models')
+  const [errorTitle, setErrorTitle] = useState('Failed to load models')
   const [error, setError] = useState('')
+  const [warning, setWarning] = useState('')
   const [models, setModels] = useState<Model[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const loadAbortRef = useRef<AbortController | null>(null)
@@ -114,15 +118,14 @@ export function useModelPicker(
     const loadGeneration = ++loadGenerationRef.current
     selectionPendingRef.current = false
     setState('loading')
-    setErrorTitle('Failed to load Ollama models')
+    setErrorTitle('Failed to load models')
     setError('')
+    setWarning('')
 
     try
     {
-      const client = new OllamaClient(host)
-      const loadedModels = sortModels(
-        await client.listModels(controller.signal)
-      )
+      const listed = await listAvailableModels(controller.signal)
+      const loadedModels = sortModels(listed.models)
       if (
         controller.signal.aborted ||
         loadGeneration !== loadGenerationRef.current ||
@@ -143,8 +146,8 @@ export function useModelPicker(
 
         if (initialSession)
         {
-          const sessionModel = loadedModels.find(
-            (loadedModel) => loadedModel.name === initialSession.meta.model
+          const sessionModel = loadedModels.find((loadedModel) =>
+            modelRefsEqual(loadedModel.name, initialSession.meta.model)
           )
           if (sessionModel)
           {
@@ -156,12 +159,15 @@ export function useModelPicker(
 
       const currentModelIndex = isReopening
         ? loadedModels.findIndex(
-            (loadedModel) => loadedModel.name === agent?.getModel()
+            (loadedModel) =>
+              agent !== null &&
+              modelRefsEqual(loadedModel.name, agent.getModel())
           )
         : 0
 
       setModels(loadedModels)
       setSelectedIndex(currentModelIndex >= 0 ? currentModelIndex : 0)
+      setWarning(listed.warning ?? '')
       setState('ready')
     }
     catch (loadError)
@@ -184,7 +190,13 @@ export function useModelPicker(
         loadAbortRef.current = null
       }
     }
-  }, [agent, chooseModel, host, initialSession, isAcceptingTransitions])
+  }, [
+    agent,
+    chooseModel,
+    initialSession,
+    isAcceptingTransitions,
+    listAvailableModels,
+  ])
 
   useEffect(() =>
   {
@@ -261,6 +273,7 @@ export function useModelPicker(
     visible: state !== 'hidden',
     errorTitle,
     error,
+    warning,
     models,
     selectedIndex,
     reopen,

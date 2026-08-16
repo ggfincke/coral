@@ -165,7 +165,7 @@ test('session files remain authoritative across distinct and same-ID writers', a
 
   const loaded = loadSession(sharedId)
   assert.ok(loaded)
-  const winner = loaded.meta.model.replace('model-', '')
+  const winner = loaded.meta.model.replace('ollama:model-', '')
   assert.ok(winner === '8' || winner === '9')
   assert.equal(loaded.meta.cwd, `/workspace/${winner}`)
   assert.equal(loaded.messages[1]?.content, `prompt-${winner}`)
@@ -225,7 +225,7 @@ test('telemetry aggregates one legacy baseline and concurrent immutable deltas',
         0
       )
   const first = loadTelemetry(path)
-  const record = first.models['shared-model']
+  const record = first.models['ollama:shared-model']
   assert.equal(record?.sessions, expectedSessions)
   assert.equal(record?.reliability.reprompts, expectedReprompts)
   assert.equal(record?.reliability.editRepairs, expectedEditRepairs)
@@ -480,7 +480,7 @@ test('same-space SQLite initialization and refresh serialize across processes', 
     }
 
     assert.equal(await readFile(legacyPath, 'utf-8'), 'legacy cache sentinel\n')
-    assert.match(dbPath, /\/retrieval\/v2\/spaces\/[a-f\d]{64}\.sqlite$/)
+    assert.match(dbPath, /\/retrieval\/v3\/spaces\/[a-f\d]{64}\.sqlite$/)
 
     if (process.platform !== 'win32')
     {

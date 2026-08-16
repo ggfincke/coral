@@ -1,8 +1,8 @@
 // src/agent/contracts.ts
 // public Agent values and callback contracts
 
-import type { ToolPermissions } from '../config/permissions.js'
 import type { McpConfigResolution } from '../config/mcp.js'
+import type { ToolPermissions } from '../config/permissions.js'
 import type { CodeIntelService } from '../lsp/contracts.js'
 import type {
   ActiveMcpMode,
@@ -10,6 +10,8 @@ import type {
   McpMode,
   McpStatus,
 } from '../mcp/types.js'
+import type { RetrievalDeps } from '../retrieval/build.js'
+import type { SkillIndex } from '../skills/types.js'
 import type { SubagentRunner } from '../tools/subagent.js'
 import type { Tool, ToolCallPresentation } from '../tools/tool.js'
 import type { TodoState } from '../types/todo.js'
@@ -94,6 +96,11 @@ export type AgentMcpManagerFactory = (
   mode: ActiveMcpMode
 ) => Promise<AgentMcpManager>
 
+export type ExtraWeightBytesResolver = (
+  model: string,
+  signal?: AbortSignal
+) => number | Promise<number>
+
 export interface AgentOptions
 {
   think?: boolean | 'low' | 'medium' | 'high'
@@ -119,6 +126,14 @@ export interface AgentOptions
   turnContext?: TurnContextDependencies
   // narrow transport seam; production uses the Ollama client by default
   inferenceClient?: AgentInferenceClient
+  // extra resident weights (embedding model beside mlx chat, or a second mlx embed)
+  extraWeightBytes?: number | ExtraWeightBytesResolver
+  // inject worker-backed search_code without the TUI importing the tool registry
+  retrievalDeps?: RetrievalDeps
+  // composition-root skill catalog; missing means empty (tests, evals)
+  skills?: SkillIndex
+  // capped AGENTS_HOME/AGENTS.md body; omit when empty
+  userInstructions?: string
   // share one runner between the task tool and post-edit verification
   readOnlySubagentRunner?: SubagentRunner
   // preserve lazy MCP SDK loading while allowing manager test doubles

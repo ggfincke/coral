@@ -14,6 +14,7 @@ interface SharedCoralConfig
 export interface UserCoralConfig extends SharedCoralConfig
 {
   mcp?: unknown
+  inference?: unknown
 }
 
 export interface ProjectCoralConfig extends SharedCoralConfig
@@ -59,6 +60,7 @@ export function loadUserConfig(): UserCoralConfig
   const result: UserCoralConfig = {}
   if (config.permissions !== undefined) result.permissions = config.permissions
   if (config.mcp !== undefined) result.mcp = config.mcp
+  if (config.inference !== undefined) result.inference = config.inference
   return result
 }
 

@@ -17,8 +17,8 @@ import type {
   SearchHit,
 } from './types.js'
 
-export const RETRIEVAL_SCHEMA_VERSION = 2
-export const RETRIEVAL_APPLICATION_ID = 0x43524c32
+export const RETRIEVAL_SCHEMA_VERSION = 3
+export const RETRIEVAL_APPLICATION_ID = 0x43524c33
 export const RETRIEVAL_BUSY_TIMEOUT_MS = 5_000
 const MAX_BUSY_RETRY_DELAY_MS = 100
 const BUSY_RETRY_SIGNAL = new Int32Array(new SharedArrayBuffer(4))
@@ -36,7 +36,8 @@ interface CountRow
 interface SpaceMetadataRow
 {
   space_id: string
-  normalized_host: string
+  provider: string
+  endpoint_identity: string
   artifact_digest: string
   display_model: string
   embedding_dimensions: number | null
@@ -78,7 +79,7 @@ interface SqliteStoreOptions
 export function embeddingSpaceDbPath(space: EmbeddingSpace): string
 {
   assertEmbeddingSpace(space)
-  return coralHomePath('retrieval', 'v2', 'spaces', `${space.id}.sqlite`)
+  return coralHomePath('retrieval', 'v3', 'spaces', `${space.id}.sqlite`)
 }
 
 function errorCode(err: unknown): string | undefined
@@ -285,7 +286,7 @@ export class SqliteIndexStore implements IndexStore
       if (existing.count !== 0)
       {
         throw new Error(
-          'Refusing to reinterpret unversioned data in the v2 retrieval cache namespace'
+          'Refusing to reinterpret unversioned data in the v3 retrieval cache namespace'
         )
       }
 
@@ -293,7 +294,8 @@ export class SqliteIndexStore implements IndexStore
         CREATE TABLE cache_metadata (
           singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
           space_id TEXT NOT NULL,
-          normalized_host TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          endpoint_identity TEXT NOT NULL,
           artifact_digest TEXT NOT NULL,
           display_model TEXT NOT NULL,
           embedding_dimensions INTEGER
@@ -346,18 +348,20 @@ export class SqliteIndexStore implements IndexStore
           INSERT INTO cache_metadata (
             singleton,
             space_id,
-            normalized_host,
+            provider,
+            endpoint_identity,
             artifact_digest,
             display_model,
             embedding_dimensions,
             created_at
           )
-          VALUES (1, ?, ?, ?, ?, NULL, ?)
+          VALUES (1, ?, ?, ?, ?, ?, NULL, ?)
         `
         )
         .run(
           this.space.id,
-          this.space.normalizedHost,
+          this.space.provider,
+          this.space.endpointIdentity ?? '',
           this.space.artifactDigest,
           this.space.displayModel,
           this.now()
@@ -403,7 +407,8 @@ export class SqliteIndexStore implements IndexStore
         `
         SELECT
           space_id,
-          normalized_host,
+          provider,
+          endpoint_identity,
           artifact_digest,
           display_model,
           embedding_dimensions
@@ -425,7 +430,8 @@ export class SqliteIndexStore implements IndexStore
       const row = this.metadata()
       if (
         row.space_id !== this.space.id ||
-        row.normalized_host !== this.space.normalizedHost ||
+        row.provider !== this.space.provider ||
+        row.endpoint_identity !== (this.space.endpointIdentity ?? '') ||
         row.artifact_digest !== this.space.artifactDigest
       )
       {

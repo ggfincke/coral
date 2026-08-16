@@ -977,6 +977,37 @@ test('Agent stores displayContent without sending it to the model', async () =>
   assert.equal(agent.getMessages()[1]?.displayContent, displayPrompt)
 })
 
+test('Agent stores explicit displayContent while sending semantic content', async () =>
+{
+  const dir = await tempDir('coral-agent-semantic-display-content-')
+  let requestMessages: OllamaMessage[] = []
+  const { agent } = makeFakeAgent(dir, async function* (request)
+  {
+    requestMessages = request?.messages ?? []
+    yield { message: { role: 'assistant', content: 'done' }, done: true }
+  })
+
+  await agent.run(
+    {
+      content: 'Use the skill tool with generated instructions.',
+      displayContent: '/architecture-review focus on inference',
+    },
+    makeAgentEvents()
+  )
+
+  const requestUser = requestMessages.find((message) => message.role === 'user')
+  assert.equal(
+    requestUser?.content,
+    'Use the skill tool with generated instructions.'
+  )
+  assert.equal(requestUser?.displayContent, undefined)
+  assert.equal(
+    agent.getMessages()[1]?.displayContent,
+    '/architecture-review focus on inference'
+  )
+  await agent.dispose()
+})
+
 test('Agent.run keeps the accepted turn when context resolution aborts', async () =>
 {
   const dir = await tempDir('coral-agent-context-abort-')

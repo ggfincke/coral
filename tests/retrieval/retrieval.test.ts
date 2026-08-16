@@ -1,6 +1,7 @@
 // tests/retrieval/retrieval.test.ts
 // tests for semantic retrieval indexing
 
+import { createHash } from 'node:crypto'
 import { strict as assert } from 'node:assert'
 import {
   mkdir,
@@ -15,7 +16,11 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import Database from 'better-sqlite3'
 import { chunkText } from '../../src/retrieval/chunker.js'
-import { createEmbeddingSpace } from '../../src/retrieval/embedding-space.js'
+import {
+  createEmbeddingSpace,
+  createMlxEmbeddingSpace,
+  embeddingSpaceId,
+} from '../../src/retrieval/embedding-space.js'
 import { collectIndexableFiles } from '../../src/retrieval/files.js'
 import { ProjectIndexer } from '../../src/retrieval/indexer.js'
 import {
@@ -564,7 +569,7 @@ test('embedding-space paths reject inconsistent or prefixed identities', () =>
   const space = makeSpace()
   assert.throws(
     () => embeddingSpaceDbPath({ ...space, id: 'f'.repeat(64) }),
-    /does not match its host and artifact digest/
+    /does not match its provider, endpoint, and artifact digest/
   )
   assert.throws(
     () =>
@@ -846,7 +851,7 @@ test('versioned space cache preserves legacy data and validates schema metadata'
     )
 
     assert.equal(await readFile(legacyPath, 'utf8'), 'legacy cache sentinel\n')
-    assert.match(path, /\/retrieval\/v2\/spaces\/[a-f\d]{64}\.sqlite$/)
+    assert.match(path, /\/retrieval\/v3\/spaces\/[a-f\d]{64}\.sqlite$/)
     if (process.platform !== 'win32')
     {
       assert.equal((await stat(path)).mode & 0o777, 0o600)
@@ -866,17 +871,19 @@ test('versioned space cache preserves legacy data and validates schema metadata'
 
       const metadata = db
         .prepare(
-          'SELECT space_id, normalized_host, artifact_digest, embedding_dimensions FROM cache_metadata'
+          'SELECT space_id, provider, endpoint_identity, artifact_digest, embedding_dimensions FROM cache_metadata'
         )
         .get() as {
         space_id: string
-        normalized_host: string
+        provider: string
+        endpoint_identity: string
         artifact_digest: string
         embedding_dimensions: number
       }
       assert.deepEqual(metadata, {
         space_id: space.id,
-        normalized_host: 'http://ollama.test',
+        provider: 'ollama',
+        endpoint_identity: 'http://ollama.test',
         artifact_digest: 'c'.repeat(64),
         embedding_dimensions: 2,
       })
@@ -885,6 +892,77 @@ test('versioned space cache preserves legacy data and validates schema metadata'
     {
       db.close()
     }
+  }
+  finally
+  {
+    store?.close()
+    if (previousHome === undefined) delete process.env.CORAL_HOME
+    else process.env.CORAL_HOME = previousHome
+  }
+})
+
+test('v3 embedding-space id hashes provider, endpoint, and digest', () =>
+{
+  const digest = 'ab'.repeat(32)
+  const host = 'http://ollama.test'
+  const expected = createHash('sha256')
+    .update('coral/embedding-space/v3')
+    .update('\0')
+    .update('ollama')
+    .update('\0')
+    .update(host)
+    .update('\0')
+    .update(digest)
+    .digest('hex')
+  const space = createEmbeddingSpace(host, {
+    model: 'nomic-embed-text',
+    digest,
+  })
+  assert.equal(space.provider, 'ollama')
+  assert.equal(space.endpointIdentity, host)
+  assert.equal(space.artifactDigest, digest)
+  assert.equal(space.id, expected)
+  assert.equal(embeddingSpaceId('ollama', host, digest), expected)
+
+  const mlxExpected = createHash('sha256')
+    .update('coral/embedding-space/v3')
+    .update('\0')
+    .update('mlx')
+    .update('\0')
+    .update('/tmp/mlx-models')
+    .update('\0')
+    .update(digest)
+    .digest('hex')
+  const mlx = createMlxEmbeddingSpace({
+    endpointIdentity: '/tmp/mlx-models',
+    artifactDigest: digest,
+    displayModel: 'Qwen3-Embedding-0.6B',
+  })
+  assert.equal(mlx.provider, 'mlx')
+  assert.equal(mlx.id, mlxExpected)
+  assert.notEqual(mlx.id, space.id)
+})
+
+test('v3 sqlite store never opens retrieval/v2 caches', async () =>
+{
+  const home = await tempDir('coral-retrieval-v2-orphan-')
+  const previousHome = process.env.CORAL_HOME
+  process.env.CORAL_HOME = home
+  const v2Path = join(home, 'retrieval', 'v2', 'spaces', 'orphan.sqlite')
+  await mkdir(join(home, 'retrieval', 'v2', 'spaces'), { recursive: true })
+  await writeFile(v2Path, 'v2 sentinel\n')
+  const space = makeSpace('e')
+  const path = embeddingSpaceDbPath(space)
+  let store: SqliteIndexStore | undefined
+  try
+  {
+    store = new SqliteIndexStore(space)
+    store.ensureProject(home)
+    store.close()
+    store = undefined
+    assert.match(path, /\/retrieval\/v3\/spaces\/[a-f\d]{64}\.sqlite$/)
+    assert.equal(await readFile(v2Path, 'utf8'), 'v2 sentinel\n')
+    assert.notEqual(path, v2Path)
   }
   finally
   {

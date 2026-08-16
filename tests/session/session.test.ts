@@ -240,7 +240,7 @@ test('same-ID saves replace one complete session snapshot', () =>
   const loaded = loadSession(initial.id)
 
   assert.ok(loaded)
-  assert.equal(loaded.meta.model, 'second-model')
+  assert.equal(loaded.meta.model, 'ollama:second-model')
   assert.equal(loaded.meta.cwd, '/tmp/second')
   assert.equal(loaded.meta.title, 'Second title')
   assert.deepEqual(loaded.messages, second)

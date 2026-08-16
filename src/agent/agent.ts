@@ -12,7 +12,14 @@ import {
 } from '../types/inference.js'
 import { allTools, subagentTools } from '../tools/registry.js'
 import { ToolCatalog } from '../tools/catalog.js'
+import { createSearchCodeTool } from '../tools/search-code.js'
+import { createSkillTool } from '../tools/skill.js'
 import type { Tool } from '../tools/tool.js'
+import {
+  EMPTY_SKILL_INDEX,
+  type SkillIndex,
+  type SkillRecord,
+} from '../skills/types.js'
 import { type SubagentResult, type SubagentRunner } from '../tools/subagent.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import { buildSystemPrompt } from './request/system-prompt.js'
@@ -119,7 +126,12 @@ import {
   estimateModelRequestMessageDeltaTokens,
   toModelRequestMessage,
 } from './request/projection.js'
-import type { AcceptedTurn, AgentEvents, AgentOptions } from './contracts.js'
+import type {
+  AcceptedTurn,
+  AgentEvents,
+  AgentOptions,
+  ExtraWeightBytesResolver,
+} from './contracts.js'
 
 // cap tool-call rounds for research subagents
 const SUBAGENT_MAX_ITERATIONS = 24
@@ -247,11 +259,14 @@ export class Agent
   private acceptedTurn?: ActiveAcceptedTurn
   // self-check edits after a clean completion (warn-only); off by default
   private verifyEdits: boolean
+  private extraWeightBytes?: number | ExtraWeightBytesResolver
   private subagentRunner: SubagentRunner
   private codeIntel: CodeIntelService
   private ownsCodeIntel: boolean
   private readonly lifecycleAbort = new AbortController()
   private readonly mcpScope: McpToolScope
+  private readonly skills: SkillIndex
+  private readonly userInstructions: string
   private readonly activeRuns = new Set<Promise<void>>()
   private disposePromise?: Promise<void>
 
@@ -267,11 +282,30 @@ export class Agent
     this.cwd = resolve(cwd ?? getCwd())
     this.client = options.inferenceClient ?? new OllamaClient(baseUrl)
     this.thinkMode = options.think ?? true
-    this.baseTools = options.tools ?? allTools
+    this.skills = options.skills ?? EMPTY_SKILL_INDEX
+    this.userInstructions = options.userInstructions ?? ''
+    const retrievalDeps = options.retrievalDeps
+    this.baseTools =
+      options.tools ??
+      (retrievalDeps || options.skills
+        ? allTools.map((tool) =>
+          {
+            if (tool.name === 'search_code' && retrievalDeps)
+              {
+              return createSearchCodeTool(retrievalDeps)
+            }
+            if (tool.name === 'skill' && options.skills)
+              {
+              return createSkillTool(options.skills)
+            }
+            return tool
+          })
+        : allTools)
     this.wireToolCatalog()
     this.maxIterations = options.maxIterations
     this.verifyEdits =
       options.verifyEdits ?? resolveVerifyConfig(this.cwd).enabled
+    this.extraWeightBytes = options.extraWeightBytes
     this.codeIntel = options.codeIntel ?? new TypeScriptCodeIntel(this.cwd)
     this.ownsCodeIntel = options.codeIntel === undefined
     this.todoState = options.todoState ?? new AgentTodoState()
@@ -331,12 +365,26 @@ export class Agent
   {
     return new Agent(this.model, this.baseUrl, this.cwd, {
       think: this.thinkMode,
-      tools: subagentTools,
+      tools: subagentTools.map((tool) =>
+      {
+        if (tool.name === 'search_code' || tool.name === 'skill')
+        {
+          return (
+            this.baseTools.find((candidate) => candidate.name === tool.name) ??
+            tool
+          )
+        }
+        return tool
+      }),
       maxIterations: SUBAGENT_MAX_ITERATIONS,
       numCtx: this.numCtx,
       verifyEdits: false,
       codeIntel: this.codeIntel,
       mcpMode: 'off',
+      inferenceClient: this.client,
+      extraWeightBytes: this.extraWeightBytes,
+      skills: this.skills,
+      userInstructions: this.userInstructions,
     })
   }
 
@@ -436,6 +484,11 @@ export class Agent
   getMcpStatus(): McpStatus
   {
     return this.mcpScope.getStatus()
+  }
+
+  getSkills(): readonly SkillRecord[]
+  {
+    return this.skills.records
   }
 
   private dynamicToolTokenBudget(): number
@@ -763,6 +816,25 @@ export class Agent
   private async resolveContextWindow(signal?: AbortSignal): Promise<number>
   {
     const requestedModel = this.model
+    let extraWeightBytes = 0
+    try
+    {
+      const extra =
+        typeof this.extraWeightBytes === 'function'
+          ? await raceAbort(
+              Promise.resolve(this.extraWeightBytes(requestedModel, signal)),
+              signal
+            )
+          : this.extraWeightBytes
+      if (typeof extra === 'number' && Number.isFinite(extra) && extra > 0)
+      {
+        extraWeightBytes = extra
+      }
+    }
+    catch (err)
+    {
+      if (signal?.aborted) throw err
+    }
     const resolved = await resolvePinnedContextWindow(
       {
         model: requestedModel,
@@ -771,6 +843,7 @@ export class Agent
         showModel: (model, requestSignal) =>
           this.client.showModel(model, requestSignal),
         listModels: (requestSignal) => this.client.listModels(requestSignal),
+        extraWeightBytes,
       },
       signal
     )
@@ -870,7 +943,7 @@ export class Agent
       const contextWindow = this.numCtx || this.contextWindowSize || MIN_NUM_CTX
       const plan = this.requestPlanner.fitSystemPrompt({
         contextWindow,
-        activeContent: activeMessage.displayContent ?? activeMessage.content,
+        activeContent: activeMessage.content,
         tools: catalog.ollamaTools,
         desiredProjectContextBudget:
           projectContextBudgetForWindow(contextWindow),
@@ -916,6 +989,8 @@ export class Agent
       cwd: this.cwd,
       catalog,
       projectContextBudget,
+      skills: this.skills,
+      userInstructions: this.userInstructions,
     })
   }
 
@@ -930,7 +1005,7 @@ export class Agent
     const contextWindow = this.numCtx || this.contextWindowSize || MIN_NUM_CTX
     const plan = this.requestPlanner.fitSystemPrompt({
       contextWindow,
-      activeContent: activeMessage.displayContent ?? activeMessage.content,
+      activeContent: activeMessage.content,
       tools: this.toolCatalog.ollamaTools,
       desiredProjectContextBudget: projectContextBudgetForWindow(contextWindow),
       systemContentAt: (projectContextBudget) =>
@@ -1089,13 +1164,16 @@ export class Agent
         ? { content: input }
         : {
             content: input.content,
+            displayContent: input.displayContent,
             attachmentPaths: input.attachmentPaths
               ? Object.freeze([...input.attachmentPaths])
               : undefined,
           }
-    const displayContent = semanticInput.attachmentPaths?.length
-      ? semanticInput.content
-      : undefined
+    const displayContent =
+      semanticInput.displayContent ??
+      (semanticInput.attachmentPaths?.length
+        ? semanticInput.content
+        : undefined)
 
     const handle: AcceptedTurn = Object.freeze({
       id: Symbol('accepted-turn'),

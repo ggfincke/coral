@@ -24,9 +24,9 @@ export function runInteractiveCli(argv: string[] = process.argv): void
 {
   const program = new Command()
     .name('coral')
-    .description('A local-first CLI/TUI coding agent for Ollama')
+    .description('A local-first CLI/TUI coding agent for local models')
     .version(version)
-    .option('-m, --model <model>', 'Ollama model to use')
+    .option('-m, --model <model>', 'model ref (backend:name; bare = ollama)')
     .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
     .option('--no-think', 'disable streamed reasoning requests')
     .option(

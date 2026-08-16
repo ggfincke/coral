@@ -12,15 +12,33 @@ import {
   resolvePermissions,
   type ToolPermissions,
 } from '../config/permissions.js'
+import { resolveDualResidencyWeightBytes } from '../inference/embedding-weights.js'
+import { parseModelRef } from '../inference/model-ref.js'
+import { resolveInferenceClient } from '../inference/resolve-client.js'
+import { WorkerSupervisor } from '../inference/worker-supervisor.js'
+import { OllamaClient } from '../ollama/client.js'
 import { DEFAULT_OLLAMA_HOST, normalizeOllamaHost } from '../ollama/host.js'
+import type {
+  CoralExecEvent,
+  CoralExecResult,
+} from '../protocol/generated/types.js'
+import {
+  canonicalEmbeddingModel,
+  resolveRetrievalConfig,
+} from '../retrieval/config.js'
 import { allTools, subagentTools } from '../tools/registry.js'
+import { replaceSearchCodeTool } from '../tools/search-code-deps.js'
+import { replaceSkillTool } from '../tools/skill.js'
 import type { Tool } from '../tools/tool.js'
+import { agentsHomePath } from '../utils/agents-home.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { writeJsonFile } from '../utils/json.js'
+import { discoverSkills, loadUserInstructions } from '../skills/discover.js'
 
 export type ExecPermissionProfile = 'read-only' | 'workspace-write'
 export type ExecOutputFormat = 'text' | 'json' | 'stream-json'
-export type ExecStatus = 'completed' | 'failed' | 'cancelled'
+export type ExecStatus = CoralExecResult['status']
+export type { CoralExecResult }
 
 export interface CoralExecOptions
 {
@@ -32,22 +50,6 @@ export interface CoralExecOptions
   outputFormat: ExecOutputFormat
   resultFile?: string
   mcp: boolean
-}
-
-export interface CoralExecResult
-{
-  version: 1
-  run_id: string
-  status: ExecStatus
-  model: string
-  response: string
-  usage: {
-    prompt_tokens: number
-    completion_tokens: number
-    prompt_eval_duration_ns: number
-    eval_duration_ns: number
-  }
-  error?: string
 }
 
 export interface HeadlessProfile
@@ -149,7 +151,7 @@ export async function runCoralExec(
     dependencies.writeStdout ?? ((text: string) => process.stdout.write(text))
   const writeStderr =
     dependencies.writeStderr ?? ((text: string) => process.stderr.write(text))
-  const emit = (event: Record<string, unknown>): void =>
+  const emit = (event: CoralExecEvent): void =>
   {
     if (options.outputFormat === 'stream-json')
     {
@@ -158,22 +160,63 @@ export async function runCoralExec(
   }
   const runId = dependencies.createRunId?.() ?? randomUUID()
   const profile = resolveHeadlessProfile(options.permissionProfile)
-  const agent = new Agent(options.model, options.host, options.cwd, {
-    tools: profile.tools,
-    permissions: resolveHeadlessPermissions(profile, options.cwd, options.mcp),
-    mcpMode: options.mcp ? 'ask' : 'off',
-    mcpConfig: options.mcp ? resolveMcpConfig() : { servers: [], issues: [] },
-    verifyEdits: false,
-    ...(dependencies.inferenceClient
-      ? { inferenceClient: dependencies.inferenceClient }
-      : {}),
-  })
+  const ref = parseModelRef(options.model)
+  const worker = new WorkerSupervisor()
+  const ollama = new OllamaClient(options.host)
+  let agent: Agent
+  try
+  {
+    const inferenceClient =
+      dependencies.inferenceClient ??
+      resolveInferenceClient(ref, {
+        ollama,
+        worker,
+      })
+    const agentsHome = agentsHomePath()
+    const skills = discoverSkills({ cwd: options.cwd, agentsHome })
+    agent = new Agent(ref.canonical, options.host, options.cwd, {
+      tools: replaceSkillTool(
+        replaceSearchCodeTool(profile.tools, worker),
+        skills
+      ),
+      permissions: resolveHeadlessPermissions(
+        profile,
+        options.cwd,
+        options.mcp
+      ),
+      mcpMode: options.mcp ? 'ask' : 'off',
+      mcpConfig: options.mcp ? resolveMcpConfig() : { servers: [], issues: [] },
+      verifyEdits: false,
+      inferenceClient,
+      skills,
+      userInstructions: loadUserInstructions(agentsHome),
+      extraWeightBytes: (model, requestSignal) =>
+      {
+        const chat = parseModelRef(model)
+        return resolveDualResidencyWeightBytes({
+          chatBackend: chat.backend,
+          chatModel: chat.model,
+          embedModel: canonicalEmbeddingModel(
+            resolveRetrievalConfig(options.cwd)
+          ),
+          listOllamaModels: (listSignal) => ollama.listModels(listSignal),
+          worker,
+          signal: requestSignal,
+        })
+      },
+    })
+  }
+  catch (error)
+  {
+    await worker.dispose()
+    throw error
+  }
   let streamedResponse = ''
   let runError: Error | undefined
 
   try
   {
-    emit({ type: 'init', run_id: runId, model: options.model })
+    emit({ type: 'init', run_id: runId, model: ref.canonical })
     await agent.run(
       options.prompt,
       {
@@ -259,6 +302,14 @@ export async function runCoralExec(
     {
       runError ??= error instanceof Error ? error : new Error(String(error))
     }
+    try
+    {
+      await worker.dispose()
+    }
+    catch (error)
+    {
+      runError ??= error instanceof Error ? error : new Error(String(error))
+    }
   }
 
   const status: ExecStatus = runError
@@ -271,7 +322,7 @@ export async function runCoralExec(
     version: 1,
     run_id: runId,
     status,
-    model: options.model,
+    model: ref.canonical,
     response: finalResponse.trim(),
     usage: usageResult(agent),
     ...(runError ? { error: runError.message } : {}),
@@ -329,7 +380,10 @@ export async function runExecCli(argv: string[]): Promise<number>
     .name('coral exec')
     .description('Run one noninteractive Coral agent turn')
     .argument('[prompt]', 'prompt text; quote multiword prompts')
-    .requiredOption('-m, --model <model>', 'Ollama model to use')
+    .requiredOption(
+      '-m, --model <model>',
+      'model ref (backend:name; bare = ollama)'
+    )
     .option('--prompt-file <path>', 'read the prompt from a UTF-8 file')
     .option('--cwd <path>', 'workspace directory', process.cwd())
     .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)

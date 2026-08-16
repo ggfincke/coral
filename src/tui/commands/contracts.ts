@@ -30,6 +30,9 @@ export interface CommandContext
   resetTokenUsage: () => void
   reopenModelPicker: () => void
   switchModel: (modelName: string) => Promise<LifecycleChangeResult>
+  listAvailableModels?: (
+    signal?: AbortSignal
+  ) => Promise<{ models: { name: string }[]; warning?: string }>
   getCwd: () => string
   signal?: AbortSignal
   buildIndexer?: (

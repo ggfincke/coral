@@ -11,7 +11,10 @@ import {
   type ToolPermissions,
 } from '../../src/config/permissions.js'
 import { loadProjectConfig } from '../../src/config/project-config.js'
-import { resolveRetrievalConfig } from '../../src/retrieval/config.js'
+import {
+  canonicalEmbeddingModel,
+  resolveRetrievalConfig,
+} from '../../src/retrieval/config.js'
 import { resolveVerifyConfig } from '../../src/config/verify.js'
 import { loadPrefs, savePrefs } from '../../src/config/prefs.js'
 import { DEFAULT_EMBEDDING_MODEL } from '../../src/retrieval/types.js'
@@ -41,6 +44,7 @@ test('resolvePermissions returns sensible defaults when no config files exist', 
   assert.equal(perms.git_diff, 'always_allow')
   assert.equal(perms.git_log, 'always_allow')
   assert.equal(perms.search_code, 'always_allow')
+  assert.equal(perms.skill, 'always_allow')
   assert.equal(perms.git_switch, 'require_approval')
   assert.equal(perms.write_file, 'require_approval')
   assert.equal(perms.edit_file, 'require_approval')
@@ -276,17 +280,21 @@ test('retrieval and verify resolvers validate raw values and preserve precedence
     assert.equal(resolvePermissions(malformedDir).bash, 'require_approval')
     assert.equal(
       resolveRetrievalConfig(malformedDir).embeddingModel,
-      DEFAULT_EMBEDDING_MODEL
+      `ollama:${DEFAULT_EMBEDDING_MODEL}`
     )
     assert.deepEqual(resolveVerifyConfig(malformedDir), { enabled: false })
     assert.equal(
       resolveRetrievalConfig(validDir).embeddingModel,
-      'project-embed'
+      'ollama:project-embed'
     )
     assert.deepEqual(resolveVerifyConfig(validDir), { enabled: true })
 
     process.env.CORAL_EMBEDDING_MODEL = 'env-embed'
-    assert.equal(resolveRetrievalConfig(validDir).embeddingModel, 'env-embed')
+    assert.equal(
+      resolveRetrievalConfig(validDir).embeddingModel,
+      'ollama:env-embed'
+    )
+    assert.equal(resolveRetrievalConfig(validDir).provider, 'ollama')
   }
   finally
   {
@@ -298,6 +306,90 @@ test('retrieval and verify resolvers validate raw values and preserve precedence
     {
       process.env.CORAL_EMBEDDING_MODEL = original
     }
+  }
+})
+
+test('retrieval config parses mlx refs and optional provider', async () =>
+{
+  const mlxDir = await tempDir('coral-config-mlx-embed-')
+  const ollamaDir = await tempDir('coral-config-ollama-embed-')
+  await writeFile(
+    join(mlxDir, '.coral.json'),
+    JSON.stringify({
+      retrieval: {
+        embeddingModel: 'Qwen3-Embedding-0.6B',
+        provider: 'mlx',
+      },
+    }),
+    'utf-8'
+  )
+  await writeFile(
+    join(ollamaDir, '.coral.json'),
+    JSON.stringify({ retrieval: { embeddingModel: 'nomic-embed-text' } }),
+    'utf-8'
+  )
+
+  const original = process.env.CORAL_EMBEDDING_MODEL
+  delete process.env.CORAL_EMBEDDING_MODEL
+  try
+  {
+    const fromProject = resolveRetrievalConfig(mlxDir)
+    assert.equal(fromProject.provider, 'mlx')
+    assert.equal(fromProject.embeddingModel, 'mlx:Qwen3-Embedding-0.6B')
+    assert.equal(
+      canonicalEmbeddingModel(fromProject),
+      'mlx:Qwen3-Embedding-0.6B'
+    )
+
+    const ollama = resolveRetrievalConfig(ollamaDir)
+    assert.equal(ollama.provider, 'ollama')
+    assert.equal(canonicalEmbeddingModel(ollama), 'ollama:nomic-embed-text')
+
+    process.env.CORAL_EMBEDDING_MODEL = 'mlx:from-env'
+    const fromEnv = resolveRetrievalConfig(ollamaDir)
+    assert.equal(fromEnv.embeddingModel, 'mlx:from-env')
+    assert.equal(fromEnv.provider, 'mlx')
+    assert.equal(canonicalEmbeddingModel(fromEnv), 'mlx:from-env')
+  }
+  finally
+  {
+    if (original === undefined) delete process.env.CORAL_EMBEDDING_MODEL
+    else process.env.CORAL_EMBEDDING_MODEL = original
+  }
+})
+
+test('embedding env overrides provider atomically and conflicts fail closed', async () =>
+{
+  const dir = await tempDir('coral-config-embed-provider-')
+  await writeFile(
+    join(dir, '.coral.json'),
+    JSON.stringify({
+      retrieval: {
+        embeddingModel: 'mlx:project-embed',
+        provider: 'ollama',
+      },
+    }),
+    'utf-8'
+  )
+  const original = process.env.CORAL_EMBEDDING_MODEL
+  delete process.env.CORAL_EMBEDDING_MODEL
+  try
+  {
+    assert.throws(
+      () => resolveRetrievalConfig(dir),
+      /provider ollama conflicts with embedding model mlx:project-embed/
+    )
+
+    process.env.CORAL_EMBEDDING_MODEL = 'env-ollama'
+    assert.deepEqual(resolveRetrievalConfig(dir), {
+      embeddingModel: 'ollama:env-ollama',
+      provider: 'ollama',
+    })
+  }
+  finally
+  {
+    if (original === undefined) delete process.env.CORAL_EMBEDDING_MODEL
+    else process.env.CORAL_EMBEDDING_MODEL = original
   }
 })
 

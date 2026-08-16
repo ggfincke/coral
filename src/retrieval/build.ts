@@ -1,16 +1,22 @@
 // src/retrieval/build.ts
 // retrieval index construction
 
+import { formatWorkerInstallError } from '../config/inference.js'
 import { OllamaClient } from '../ollama/client.js'
 import { isOllamaMissingModelError } from '../ollama/errors.js'
 import { normalizeOllamaHost } from '../ollama/host.js'
-import { resolveRetrievalConfig } from './config.js'
+import {
+  canonicalEmbeddingModel,
+  embeddingBackendName,
+  resolveRetrievalConfig,
+} from './config.js'
 import { resolveOllamaEmbeddingSpace } from './embedding-space.js'
 import { ProjectIndexer } from './indexer.js'
 import { OllamaEmbedder } from './ollama-embedder.js'
 import { SqliteIndexStore } from './sqlite-store.js'
 import {
   DEFAULT_EMBEDDING_MODEL,
+  type Embedder,
   type EmbeddingSpace,
   type IndexStore,
 } from './types.js'
@@ -27,6 +33,7 @@ export interface RetrievalDeps
     embeddingModel: string,
     signal?: AbortSignal
   ) => Promise<EmbeddingSpace>
+  createEmbedder?: (space: EmbeddingSpace, signal?: AbortSignal) => Embedder
 }
 
 export interface BuiltIndexer
@@ -84,6 +91,25 @@ export function describeRetrievalFailure(
   }
 }
 
+function defaultEmbedder(
+  space: EmbeddingSpace,
+  client: OllamaClient,
+  signal: AbortSignal | undefined,
+  createEmbedder: RetrievalDeps['createEmbedder']
+): Embedder
+{
+  if (createEmbedder) return createEmbedder(space, signal)
+  if (space.provider === 'ollama')
+  {
+    return new OllamaEmbedder(client, space, signal)
+  }
+  throw new Error(
+    formatWorkerInstallError(
+      'mlx embeddings require an injected createEmbedder at the composition root.'
+    )
+  )
+}
+
 // build the project indexer and return its caller-owned store
 // close the store when construction fails or the indexer is no longer needed
 export async function buildIndexer(
@@ -99,21 +125,35 @@ export async function buildIndexer(
   try
   {
     const config = resolveRetrievalConfig(cwd)
-    embeddingModel = config.embeddingModel
+    embeddingModel = canonicalEmbeddingModel(config)
+    const { provider, name } = embeddingBackendName(config)
+    if (provider === 'mlx' && (!deps.resolveSpace || !deps.createEmbedder))
+    {
+      throw new Error(
+        formatWorkerInstallError(
+          'mlx embeddings need resolveSpace and createEmbedder injected from the TUI or exec composition root.'
+        )
+      )
+    }
     const normalizedHost = normalizeOllamaHost(ollamaHost)
     const client =
       deps.createClient?.(normalizedHost) ?? new OllamaClient(normalizedHost)
-    const embeddingSpace = await (
-      deps.resolveSpace ?? resolveOllamaEmbeddingSpace
-    )(client, normalizedHost, config.embeddingModel, signal)
+    const embeddingSpace = deps.resolveSpace
+      ? await deps.resolveSpace(client, normalizedHost, embeddingModel, signal)
+      : await resolveOllamaEmbeddingSpace(client, normalizedHost, name, signal)
     store =
       deps.createStore?.(embeddingSpace) ?? new SqliteIndexStore(embeddingSpace)
-    const embedder = new OllamaEmbedder(client, embeddingSpace, signal)
+    const embedder = defaultEmbedder(
+      embeddingSpace,
+      client,
+      signal,
+      deps.createEmbedder
+    )
     const indexer = new ProjectIndexer(cwd, embedder, store)
     return {
       indexer,
       store,
-      embeddingModel: config.embeddingModel,
+      embeddingModel,
       embeddingSpace,
     }
   }

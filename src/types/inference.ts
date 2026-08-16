@@ -150,6 +150,10 @@ export interface ModelInfo
   // per-head key and value dimensions
   keyLength?: number
   valueLength?: number
+  // checkpoint weight bytes when the worker reports them (same units as Model.size)
+  size?: number
+  // coral/mlx-artifact/v1 digest from model.show; used by PythonEmbedder
+  digest?: string
 }
 
 // reliability counters for model tool-call recovery, surfaced in /status,

@@ -13,8 +13,18 @@ export function toErrorMessage(err: unknown): string
   return toError(err).message
 }
 
-// append the standard ollama pull hint when base already carries the error
+// append a backend-specific missing-model hint when base already carries the error
 export function withPullHint(base: string, model: string, sep: string): string
 {
-  return `${base}${sep}If the model is missing, run: ollama pull ${model}`
+  if (model.startsWith('mlx:'))
+  {
+    return (
+      `${base}${sep}If the MLX model is missing, put weights in CORAL_MLX_MODELS_DIR ` +
+      `and install the worker with: uv sync --project packages/coral-backend`
+    )
+  }
+  const ollamaName = model.startsWith('ollama:')
+    ? model.slice('ollama:'.length)
+    : model
+  return `${base}${sep}If the model is missing, run: ollama pull ${ollamaName}`
 }

@@ -3,6 +3,7 @@
 
 import chalk from 'chalk'
 import { savePrefs } from '../../config/prefs.js'
+import { matchListedModel, parseModelRef } from '../../inference/model-ref.js'
 import { OllamaClient } from '../../ollama/client.js'
 import { formatTelemetry, loadTelemetry } from '../../telemetry/store.js'
 import { toErrorMessage } from '../../utils/errors.js'
@@ -22,6 +23,7 @@ import {
   describePermissionMode,
   formatMcpStatus,
   formatPermissionsHelp,
+  formatSkillsStatus,
   formatThemeList,
   formatUnknownPermissionMode,
 } from './runtime-output.js'
@@ -178,6 +180,17 @@ const mcpCommand: Command = {
   },
 }
 
+// /skills command
+
+const skillsCommand: Command = {
+  name: 'skills',
+  description: 'Show discovered skill packages',
+  execute(_args, ctx)
+  {
+    ctx.pushOutput(systemBlock(formatSkillsStatus(ctx.agent.getSkills())))
+  },
+}
+
 // get the current git branch, or null if not in a repo
 async function getGitBranch(cwd: string): Promise<string | null>
 {
@@ -208,22 +221,28 @@ const modelCommand: Command = {
 
     const requestedModel = args.trim()
 
-    // validate model exists in Ollama
     ctx.pushOutput(systemBlock(`Looking up model: ${requestedModel}...`))
 
     let availableModels: string[]
     try
     {
-      const client = new OllamaClient(ctx.host)
-      const models = await client.listModels(ctx.signal)
+      const listed = ctx.listAvailableModels
+        ? await ctx.listAvailableModels(ctx.signal)
+        : {
+            models: await new OllamaClient(ctx.host).listModels(ctx.signal),
+          }
       if (ctx.signal?.aborted)
       {
         ctx.pushTerminalOutput(systemBlock('Model switch interrupted'))
         return
       }
-      availableModels = models.map((m) => m.name)
+      availableModels = listed.models.map((model) => model.name)
+      if (listed.warning)
+      {
+        ctx.pushOutput(systemBlock(listed.warning))
+      }
     }
-    catch
+    catch (error)
     {
       if (ctx.signal?.aborted)
       {
@@ -231,25 +250,33 @@ const modelCommand: Command = {
         return
       }
       ctx.pushOutput(
-        systemBlock('Failed to fetch models from Ollama — is it running?')
+        systemBlock(
+          `Failed to fetch models — ${toErrorMessage(error) || 'is the backend running?'}`
+        )
       )
       return
     }
 
-    // try exact match first, then prefix match
-    const exactMatch = availableModels.find((name) => name === requestedModel)
-    const prefixMatches = exactMatch
-      ? []
-      : availableModels.filter((name) => name.startsWith(requestedModel))
+    let match: { exact?: string; prefixMatches: string[] }
+    try
+    {
+      match = matchListedModel(requestedModel, availableModels)
+    }
+    catch (error)
+    {
+      ctx.pushOutput(systemBlock(toErrorMessage(error)))
+      return
+    }
 
     const resolvedModel =
-      exactMatch ?? (prefixMatches.length === 1 ? prefixMatches[0]! : null)
+      match.exact ??
+      (match.prefixMatches.length === 1 ? match.prefixMatches[0]! : null)
 
     if (!resolvedModel)
     {
-      if (prefixMatches.length > 1)
+      if (match.prefixMatches.length > 1)
       {
-        const matchList = prefixMatches
+        const matchList = match.prefixMatches
           .slice(0, 10)
           .map((n) => `  ${n}`)
           .join('\n')
@@ -263,18 +290,21 @@ const modelCommand: Command = {
       {
         ctx.pushOutput(
           systemBlock(
-            `Model "${requestedModel}" not found in Ollama.\n` +
-              `Use ${style('user')('/model')} to open the picker, or pull it first.`
+            `Model "${requestedModel}" not found.\n` +
+              `Use ${style('user')('/model')} to open the picker, or pull / download it first.`
           )
         )
       }
       return
     }
 
+    const requestedCanonical = parseModelRef(resolvedModel).canonical
+    const activeCanonical = parseModelRef(ctx.activeModel).canonical
+
     // skip if already using this model
-    if (resolvedModel === ctx.activeModel)
+    if (requestedCanonical === activeCanonical)
     {
-      ctx.pushOutput(systemBlock(`Already using ${resolvedModel}`))
+      ctx.pushOutput(systemBlock(`Already using ${requestedCanonical}`))
       return
     }
 
@@ -287,20 +317,22 @@ const modelCommand: Command = {
         ctx.pushTerminalOutput(systemBlock('Model switch interrupted'))
         return
       }
-      const result = await ctx.switchModel(resolvedModel)
+      const result = await ctx.switchModel(requestedCanonical)
       if (result.status === 'changed')
       {
         const warning = result.persistence
           ? committedSaveWarning(result.persistence, 'Model changed')
           : null
         ctx.pushTerminalOutput(
-          systemBlock(`Switched model: ${previousModel} → ${resolvedModel}`),
+          systemBlock(
+            `Switched model: ${previousModel} → ${requestedCanonical}`
+          ),
           ...(warning ? [warning] : [])
         )
       }
       else if (result.status === 'unchanged')
       {
-        ctx.pushOutput(systemBlock(`Already using ${resolvedModel}`))
+        ctx.pushOutput(systemBlock(`Already using ${requestedCanonical}`))
       }
       else if (result.status === 'busy' && !ctx.signal?.aborted)
       {
@@ -464,6 +496,7 @@ const exitCommand: Command = {
 export const runtimeCommands = {
   status: statusCommand,
   mcp: mcpCommand,
+  skills: skillsCommand,
   model: modelCommand,
   permissions: permissionsCommand,
   verify: verifyCommand,
