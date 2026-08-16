@@ -24,29 +24,29 @@ Parser: input must start with `/`; the name is lowercased; the first space split
 
 Aliases work for dispatch and `/` completion. The command palette runs the **canonical** name (`/permissions`, not `/perm`).
 
-| Command | Aliases | Arguments | What it does |
-|---|---|---|---|
-| `/help` | | | List commands and advertised keybindings |
-| `/clear` | `/reset` | | Clear conversation history, todos, and undo. Unbinds the session. Does **not** delete the session file |
-| `/compact` | | | Summarize older history. TUI needs at least 4 non-system messages. Clears undo. See [Context](context.md) |
-| `/status` | | | Model, permission mode, session id, message count, estimated tokens, Ollama prompt/decode counts and speeds when present, compaction count, frozen-prefix coverage, repair counters, self-check flag, cwd, git branch |
-| `/mcp` | | | Observational MCP status. Never launches a server. See [MCP](mcp.md) |
-| `/model` | | none or tag | No args: reopen picker. Else exact tag, then unique prefix among installed models |
-| `/permissions` | `/perm`, `/perms` | none, `ask`, `yolo` | Show or set mode. MCP catalog for the new mode starts on the **next chat turn** |
-| `/verify` | | none, `on`, `off` | Post-edit self-check. Off by default. Not written to `.coral.json` |
-| `/theme` | | none or name/label | List or switch. `/theme` writes `prefs.json`. Match is case-insensitive id **or** label |
-| `/undo` | | | Revert last live turn and captured in-workspace file/todo edits. Session JSON can duplicate file contents (including secrets) |
-| `/redo` | | | Restore the last undone turn |
-| `/diff` | | | `git diff` of the working tree. Empty → `No uncommitted changes`. Failure → `Not a git repository, or git is not installed` |
-| `/copy` | | optional `code` | Copy last assistant response, or its last fenced code block |
-| `/todo` | | none or `clear` | Show the model-maintained list, or clear it and save |
-| `/index` | | none, `rebuild`, `force` | Incremental semantic index, or full rebuild (`rebuild` and `force` are equivalent) |
-| `/sessions` | `/ls` | optional positive int | Recent sessions. Default **10** if missing or invalid |
-| `/resume` | | none or id/prefix | Prefix match allowed. No args: newest **other** than current. Saves current first; save error cancels (`Current session could not be saved; resume was canceled.`). Cwd must still exist |
-| `/rename` | | title | Rename the bound session. No args: print current id/title and `Usage: /rename <new title>`. No session: `No active session to rename. Send a message first.` |
-| `/new` | | | Save first, then clear history and unbind. Does not delete the old file. Save `error`/`stale` **aborts**: `Current session could not be saved; the new conversation was not started.` |
-| `/telemetry` | | | Lifetime local reliability counters per model |
-| `/exit` | `/quit` | | Shutdown |
+| Command        | Aliases           | Arguments                | What it does                                                                                                                                                                                                          |
+| -------------- | ----------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/help`        |                   |                          | List commands and advertised keybindings                                                                                                                                                                              |
+| `/clear`       | `/reset`          |                          | Clear conversation history, todos, and undo. Unbinds the session. Does **not** delete the session file                                                                                                                |
+| `/compact`     |                   |                          | Summarize older history. TUI needs at least 4 non-system messages. Clears undo. See [Context](context.md)                                                                                                             |
+| `/status`      |                   |                          | Model, permission mode, session id, message count, estimated tokens, Ollama prompt/decode counts and speeds when present, compaction count, frozen-prefix coverage, repair counters, self-check flag, cwd, git branch |
+| `/mcp`         |                   |                          | Observational MCP status. Never launches a server. See [MCP](mcp.md)                                                                                                                                                  |
+| `/model`       |                   | none or tag              | No args: reopen picker. Else exact tag, then unique prefix among installed models                                                                                                                                     |
+| `/permissions` | `/perm`, `/perms` | none, `ask`, `yolo`      | Show or set mode. MCP catalog for the new mode starts on the **next chat turn**                                                                                                                                       |
+| `/verify`      |                   | none, `on`, `off`        | Post-edit self-check. Off by default. Not written to `.coral.json`                                                                                                                                                    |
+| `/theme`       |                   | none or name/label       | List or switch. `/theme` writes `prefs.json`. Match is case-insensitive id **or** label                                                                                                                               |
+| `/undo`        |                   |                          | Revert last live turn and captured in-workspace file/todo edits. Session JSON can duplicate file contents (including secrets)                                                                                         |
+| `/redo`        |                   |                          | Restore the last undone turn                                                                                                                                                                                          |
+| `/diff`        |                   |                          | `git diff` of the working tree. Empty → `No uncommitted changes`. Failure → `Not a git repository, or git is not installed`                                                                                           |
+| `/copy`        |                   | optional `code`          | Copy last assistant response, or its last fenced code block                                                                                                                                                           |
+| `/todo`        |                   | none or `clear`          | Show the model-maintained list, or clear it and save                                                                                                                                                                  |
+| `/index`       |                   | none, `rebuild`, `force` | Incremental semantic index, or full rebuild (`rebuild` and `force` are equivalent)                                                                                                                                    |
+| `/sessions`    | `/ls`             | optional positive int    | Recent sessions. Default **10** if missing or invalid                                                                                                                                                                 |
+| `/resume`      |                   | none or id/prefix        | Prefix match allowed. No args: newest **other** than current. Saves current first; save error cancels (`Current session could not be saved; resume was canceled.`). Cwd must still exist                              |
+| `/rename`      |                   | title                    | Rename the bound session. No args: print current id/title and `Usage: /rename <new title>`. No session: `No active session to rename. Send a message first.`                                                          |
+| `/new`         |                   |                          | Save first, then clear history and unbind. Does not delete the old file. Save `error`/`stale` **aborts**: `Current session could not be saved; the new conversation was not started.`                                 |
+| `/telemetry`   |                   |                          | Lifetime local reliability counters per model                                                                                                                                                                         |
+| `/exit`        | `/quit`           |                          | Shutdown                                                                                                                                                                                                              |
 
 `Ctrl+Y` while a turn, command, transition, or approval is active: `Permission mode is locked while a turn or command is running.` `/permissions` cannot be submitted in that state (the prompt is ignored). Palette cannot open during a run.
 
@@ -62,15 +62,15 @@ After abort, the transcript adds `Generation interrupted`. History keeps streame
 
 From `src/tui/input/keybindings.ts` (same list as `/help`):
 
-| Keys | Action |
-|---|---|
-| `Ctrl+P` | Command palette |
-| `Ctrl+Y` | Toggle ask / yolo |
-| `Ctrl+T` | Toggle **visibility** of streamed reasoning (not `--no-think`) |
-| `Ctrl+C` | Interrupt a run, or exit when idle |
-| `Esc` | Interrupt a run, or exit when idle |
-| `↑` / `↓` | Prompt input history (when the completion menu is closed) |
-| `PageUp` / `PageDown` | Page the transcript |
+| Keys                  | Action                                                         |
+| --------------------- | -------------------------------------------------------------- |
+| `Ctrl+P`              | Command palette                                                |
+| `Ctrl+Y`              | Toggle ask / yolo                                              |
+| `Ctrl+T`              | Toggle **visibility** of streamed reasoning (not `--no-think`) |
+| `Ctrl+C`              | Interrupt a run, or exit when idle                             |
+| `Esc`                 | Interrupt a run, or exit when idle                             |
+| `↑` / `↓`             | Prompt input history (when the completion menu is closed)      |
+| `PageUp` / `PageDown` | Page the transcript                                            |
 
 `Ctrl+T` vs `--no-think`: the flag disables reasoning **requests**. The key only hides or shows thinking already (or still) being streamed.
 
@@ -82,22 +82,22 @@ Palette Enter runs keybindings that declare an `action` (`toggle-thinking`, `tog
 
 Emacs-style editing on the prompt line (`src/tui/prompt/prompt-edit.ts`):
 
-| Keys | Effect |
-|---|---|
-| `Ctrl+A` / Home | Start of line |
-| `Ctrl+E` / End | End of line |
-| `Ctrl+B` / Left | Grapheme left |
-| `Ctrl+F` / Right | Grapheme right |
-| `Ctrl/Meta+Left` | Previous word |
-| `Ctrl/Meta+Right` | Next word |
-| `Ctrl+U` | Delete to line start |
-| `Ctrl+K` | Delete to line end |
-| `Ctrl+W` / `Ctrl+Backspace` / `Meta+Backspace` | Delete word before |
-| `Ctrl+D` | Delete forward |
-| `Ctrl+Delete` / `Meta+Delete` | Delete to line end |
-| `Meta+D` | Delete word after |
-| Backspace / `Ctrl+H` | Delete backward |
-| Delete | Delete forward |
+| Keys                                           | Effect               |
+| ---------------------------------------------- | -------------------- |
+| `Ctrl+A` / Home                                | Start of line        |
+| `Ctrl+E` / End                                 | End of line          |
+| `Ctrl+B` / Left                                | Grapheme left        |
+| `Ctrl+F` / Right                               | Grapheme right       |
+| `Ctrl/Meta+Left`                               | Previous word        |
+| `Ctrl/Meta+Right`                              | Next word            |
+| `Ctrl+U`                                       | Delete to line start |
+| `Ctrl+K`                                       | Delete to line end   |
+| `Ctrl+W` / `Ctrl+Backspace` / `Meta+Backspace` | Delete word before   |
+| `Ctrl+D`                                       | Delete forward       |
+| `Ctrl+Delete` / `Meta+Delete`                  | Delete to line end   |
+| `Meta+D`                                       | Delete word after    |
+| Backspace / `Ctrl+H`                           | Delete backward      |
+| Delete                                         | Delete forward       |
 
 Mouse wheel over the prompt scrolls the transcript by 3 lines.
 
@@ -140,11 +140,11 @@ Preferred pin: `gemma4:31b-mlx`.
 
 Gated tool calls, MCP launch trust, and doom-loop pauses open a modal. If the body is taller than the terminal, it scrolls: `↑`/`↓` one line, `PgUp`/`PgDn` one page. Title and action keys stay pinned. Diff previews cap at 20 lines.
 
-| Kind | Title / actions | Keys |
-|---|---|---|
-| Tool | `Allow {tool}?` · `(y) approve  (n) reject  (esc) cancel` | `y` approve; `n` or Esc reject; `Ctrl+C` abort the run |
+| Kind       | Title / actions                                                                         | Keys                                                                                |
+| ---------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| Tool       | `Allow {tool}?` · `(y) approve  (n) reject  (esc) cancel`                               | `y` approve; `n` or Esc reject; `Ctrl+C` abort the run                              |
 | MCP launch | `Trust & launch MCP server "{alias}"?` · `(y) trust & launch  (n) reject  (esc) cancel` | `y` trust; `n` reject; **Esc and Ctrl+C abort the run** (Esc is not a clean reject) |
-| Doom loop | `(y) continue  (n) stop` | `y` continue; `n` or Esc stop; `Ctrl+C` abort |
+| Doom loop  | `(y) continue  (n) stop`                                                                | `y` continue; `n` or Esc stop; `Ctrl+C` abort                                       |
 
 Yolo auto-approves `require_approval` **tool** calls (including outside-workspace promotions). Yolo **never** auto-approves MCP launch trust.
 
@@ -152,14 +152,14 @@ Yolo auto-approves `require_approval` **tool** calls (including outside-workspac
 
 ## Themes
 
-| Id | Label | Description |
-|---|---|---|
-| `coral-reef` | Coral Reef | warm coral & ocean teal (default) |
-| `deep-sea` | Deep Sea | bioluminescent cyan & violet for dark terminals |
-| `sunset-tide` | Sunset Tide | warm coral, pink & amber |
-| `kelp-forest` | Kelp Forest | greens, teals & earthy sand |
-| `tide-pool` | Tide Pool | soft pastel pinks, teals & lavender |
-| `adaptive` | Adaptive | inherits your terminal's ANSI palette |
+| Id            | Label       | Description                                     |
+| ------------- | ----------- | ----------------------------------------------- |
+| `coral-reef`  | Coral Reef  | warm coral & ocean teal (default)               |
+| `deep-sea`    | Deep Sea    | bioluminescent cyan & violet for dark terminals |
+| `sunset-tide` | Sunset Tide | warm coral, pink & amber                        |
+| `kelp-forest` | Kelp Forest | greens, teals & earthy sand                     |
+| `tide-pool`   | Tide Pool   | soft pastel pinks, teals & lavender             |
+| `adaptive`    | Adaptive    | inherits your terminal's ANSI palette           |
 
 CLI `--theme` applies for this process. `/theme` saves `theme` in `CORAL_HOME/prefs.json`.
 

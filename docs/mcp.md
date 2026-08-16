@@ -59,15 +59,15 @@ Pin container images by digest if immutable server code matters to you. The laun
 
 Alias keys: `/^[a-z0-9][a-z0-9_-]{0,31}$/` — 1–32 characters, start with a lowercase letter or digit.
 
-| Field | Contract |
-|---|---|
-| `command` | Required. `PATH` name or **absolute** path if it contains `/` or `\`. Never passed through a shell. Max 1,024 chars, no NUL. Windows: native `.exe` / `.com` only |
-| `args` | Optional string array, default `[]`. Max 64 items, each 1–4,096 chars; duplicates allowed |
-| `enabledTools` | **Required** nonempty exact names. Each `/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/` (1–128 chars; **must start with a letter or digit**, not `_` or `-`). Unique. Wildcards rejected |
-| `yoloTools` | Optional unique subset of `enabledTools`. Default `[]` — that server **does not start in yolo** |
-| `passEnv` | Names to forward (max 32). `/^[A-Za-z_][A-Za-z0-9_]*$/`, max 128 chars. Values read at launch; `/mcp` shows names only |
-| `startupTimeoutMs` | Integer 1,000–60,000. Default **10,000** |
-| `toolTimeoutMs` | Integer 1,000–600,000. Default **60,000** |
+| Field              | Contract                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `command`          | Required. `PATH` name or **absolute** path if it contains `/` or `\`. Never passed through a shell. Max 1,024 chars, no NUL. Windows: native `.exe` / `.com` only              |
+| `args`             | Optional string array, default `[]`. Max 64 items, each 1–4,096 chars; duplicates allowed                                                                                      |
+| `enabledTools`     | **Required** nonempty exact names. Each `/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/` (1–128 chars; **must start with a letter or digit**, not `_` or `-`). Unique. Wildcards rejected |
+| `yoloTools`        | Optional unique subset of `enabledTools`. Default `[]` — that server **does not start in yolo**                                                                                |
+| `passEnv`          | Names to forward (max 32). `/^[A-Za-z_][A-Za-z0-9_]*$/`, max 128 chars. Values read at launch; `/mcp` shows names only                                                         |
+| `startupTimeoutMs` | Integer 1,000–60,000. Default **10,000**                                                                                                                                       |
+| `toolTimeoutMs`    | Integer 1,000–600,000. Default **60,000**                                                                                                                                      |
 
 Working directory is **not configurable**. Coral always sets `launchCwd` to `os.homedir()`. Trust fingerprints include that path — changing home invalidates trust.
 
@@ -79,11 +79,11 @@ If any `passEnv` variable is **unset** (`=== undefined`), that server is `failed
 
 ## Ask vs yolo vs off
 
-| Mode | Who uses it | What starts |
-|---|---|---|
-| `ask` | Interactive default | Servers with `enabledTools`; launch trust may prompt |
-| `yolo` | `--yolo`, `/permissions yolo` | Only servers with nonempty `yoloTools` **and** current trust; no trust prompt |
-| `off` | Subagents; `coral exec` without `--mcp`; Agent default | Nothing |
+| Mode   | Who uses it                                            | What starts                                                                   |
+| ------ | ------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `ask`  | Interactive default                                    | Servers with `enabledTools`; launch trust may prompt                          |
+| `yolo` | `--yolo`, `/permissions yolo`                          | Only servers with nonempty `yoloTools` **and** current trust; no trust prompt |
+| `off`  | Subagents; `coral exec` without `--mcp`; Agent default | Nothing                                                                       |
 
 Ask bootstrap: if any server remains `needs_trust`, **no** MCP tools are admitted.
 
@@ -124,15 +124,15 @@ Launch approvals in ask run sequentially in configuration order. Coral starts at
 
 `/mcp` prints mode, config issues, and per server: alias, state, executable, working dir, env names, ask tools (`enabledTools`), yolo tools, available namespaced tools when ready, detail, stderr. Footer (when at least one server is listed): `Config changes require a new Coral session.`
 
-| State | Meaning |
-|---|---|
-| `configured` | Valid config, not started yet — send a chat turn in the active mode |
-| `needs_trust` | Ask can prompt on a turn; yolo skips |
-| `blocked` | Mode has no opted-in tools, MCP is `off`, or `always_deny` removed every candidate |
-| `failed` | Missing executable/env, Docker failure, timeout, protocol error, or **no usable allowlisted tool remains**. A single missing/skipped tool with others still installed leaves the server `ready` and records the skip in Detail |
-| `rejected` | Ask-mode launch trust declined for this session |
-| `stopped` | Interrupted/timed-out call retired the server; restart Coral to use it again |
-| `ready` | Discovery succeeded; only listed active-mode namespaced tools are available |
+| State         | Meaning                                                                                                                                                                                                                        |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `configured`  | Valid config, not started yet — send a chat turn in the active mode                                                                                                                                                            |
+| `needs_trust` | Ask can prompt on a turn; yolo skips                                                                                                                                                                                           |
+| `blocked`     | Mode has no opted-in tools, MCP is `off`, or `always_deny` removed every candidate                                                                                                                                             |
+| `failed`      | Missing executable/env, Docker failure, timeout, protocol error, or **no usable allowlisted tool remains**. A single missing/skipped tool with others still installed leaves the server `ready` and records the skip in Detail |
+| `rejected`    | Ask-mode launch trust declined for this session                                                                                                                                                                                |
+| `stopped`     | Interrupted/timed-out call retired the server; restart Coral to use it again                                                                                                                                                   |
+| `ready`       | Discovery succeeded; only listed active-mode namespaced tools are available                                                                                                                                                    |
 
 Empty config: `No MCP servers are configured in ~/.coral.json.`
 

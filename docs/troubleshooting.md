@@ -39,21 +39,21 @@ Pinned window unexpectedly small: full-attention models are KV-capped (`0.75 × 
 
 Use `/mcp` first. It never launches a server.
 
-| State / detail | What to do |
-|---|---|
-| No servers in `~/.coral.json` | Config belongs in the **user** file, not the project file |
-| `mcp.servers must be an object` / alias invalid / field errors | Fix JSON; `/mcp` lists per-server issues |
-| `missing required environment variable(s)` | Export every `passEnv` name in the shell that starts Coral |
-| `needs_trust` in yolo | `/permissions ask`, send a turn, approve launch |
-| `needs_trust` after ask initialize with no tools | Ask fails closed until every configured launch settles |
-| `blocked` / `no tools are enabled for yolo mode` | Add a nonempty `yoloTools` subset, or stay in ask |
-| `failed` missing executable / Docker | PATH, absolute `command`, daemon running |
-| `failed` timeout | Raise `startupTimeoutMs` (max 60,000) or `toolTimeoutMs` (max 600,000) |
-| Allowlisted tool not exposed | Server did not advertise that exact `enabledTools` name |
-| Protocol / 16 MiB / 8192 fragments | Server stopped; inspect stderr on `/mcp` |
-| `tool call timed out; server stopped for this session` | Restart Coral to launch again |
-| Config edited but `/mcp` unchanged | Restart Coral (`Config changes require a new Coral session.`) |
-| Trust prompt every time | Fingerprint includes argv, resolved executable, home `launchCwd`, env **names**, tools; nonempty `yoloTools` is hashed. Home directory change invalidates trust |
+| State / detail                                                 | What to do                                                                                                                                                      |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No servers in `~/.coral.json`                                  | Config belongs in the **user** file, not the project file                                                                                                       |
+| `mcp.servers must be an object` / alias invalid / field errors | Fix JSON; `/mcp` lists per-server issues                                                                                                                        |
+| `missing required environment variable(s)`                     | Export every `passEnv` name in the shell that starts Coral                                                                                                      |
+| `needs_trust` in yolo                                          | `/permissions ask`, send a turn, approve launch                                                                                                                 |
+| `needs_trust` after ask initialize with no tools               | Ask fails closed until every configured launch settles                                                                                                          |
+| `blocked` / `no tools are enabled for yolo mode`               | Add a nonempty `yoloTools` subset, or stay in ask                                                                                                               |
+| `failed` missing executable / Docker                           | PATH, absolute `command`, daemon running                                                                                                                        |
+| `failed` timeout                                               | Raise `startupTimeoutMs` (max 60,000) or `toolTimeoutMs` (max 600,000)                                                                                          |
+| Allowlisted tool not exposed                                   | Server did not advertise that exact `enabledTools` name                                                                                                         |
+| Protocol / 16 MiB / 8192 fragments                             | Server stopped; inspect stderr on `/mcp`                                                                                                                        |
+| `tool call timed out; server stopped for this session`         | Restart Coral to launch again                                                                                                                                   |
+| Config edited but `/mcp` unchanged                             | Restart Coral (`Config changes require a new Coral session.`)                                                                                                   |
+| Trust prompt every time                                        | Fingerprint includes argv, resolved executable, home `launchCwd`, env **names**, tools; nonempty `yoloTools` is hashed. Home directory change invalidates trust |
 
 Headless `--mcp` still rejects prompts: only pre-trusted + `always_allow` namespaced tools run.
 

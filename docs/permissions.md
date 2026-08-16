@@ -2,11 +2,11 @@
 
 Coral has **three different knobs**. Mixing them up is the usual source of confusion.
 
-| Knob | Values | Where |
-|---|---|---|
-| **Per-tool policy** | `always_allow`, `require_approval`, `always_deny` | Built-in defaults, `~/.coral.json` `permissions`, project `.coral.json` `permissions` |
-| **TUI permission mode** | `ask` or `yolo` | `--yolo`, `/permissions`, `Ctrl+Y` |
-| **MCP mode** | `off`, `ask`, `yolo` | Interactive TUI always passes ask or yolo. `off` is Agent default, subagents, and `coral exec` without `--mcp` |
+| Knob                    | Values                                            | Where                                                                                                          |
+| ----------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Per-tool policy**     | `always_allow`, `require_approval`, `always_deny` | Built-in defaults, `~/.coral.json` `permissions`, project `.coral.json` `permissions`                          |
+| **TUI permission mode** | `ask` or `yolo`                                   | `--yolo`, `/permissions`, `Ctrl+Y`                                                                             |
+| **MCP mode**            | `off`, `ask`, `yolo`                              | Interactive TUI always passes ask or yolo. `off` is Agent default, subagents, and `coral exec` without `--mcp` |
 
 Policy is not a mode. Mode is not a sandbox.
 
