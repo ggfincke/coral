@@ -1,0 +1,558 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ggfincke/coral/tests/scripts/mlx-benchmark/result.schema.json",
+  "title": "Coral MLX benchmark result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "status",
+    "provenance",
+    "policy",
+    "configuration",
+    "topologies",
+    "forensicFindings",
+    "modelPairs",
+    "baselineSmokes",
+    "hardGates",
+    "performanceCells"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "runId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["pending", "complete"] },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "policy": { "$ref": "#/$defs/policy" },
+    "configuration": { "$ref": "#/$defs/runConfiguration" },
+    "topologies": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/topology" }
+    },
+    "forensicFindings": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/forensicFinding" }
+    },
+    "modelPairs": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/modelPair" }
+    },
+    "baselineSmokes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/baselineSmoke" }
+    },
+    "hardGates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/hardGate" }
+    },
+    "performanceCells": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/performanceCell" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "status": { "const": "complete" } },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "topologies": { "type": "array", "minItems": 3 },
+          "modelPairs": { "type": "array", "minItems": 1 }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["chip", "unifiedMemoryBytes", "os", "powerMode"],
+      "properties": {
+        "chip": { "type": "string", "minLength": 1 },
+        "unifiedMemoryBytes": { "type": "integer", "minimum": 1 },
+        "os": { "type": "string", "minLength": 1 },
+        "powerMode": { "type": "string", "minLength": 1 }
+      }
+    },
+    "software": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coralRevision",
+        "node",
+        "ollama",
+        "mlx",
+        "mlxLm",
+        "python",
+        "uv"
+      ],
+      "properties": {
+        "coralRevision": { "type": "string", "minLength": 1 },
+        "node": { "type": "string", "minLength": 1 },
+        "ollama": { "type": "string", "minLength": 1 },
+        "mlx": { "type": "string", "minLength": 1 },
+        "mlxLm": { "type": "string", "minLength": 1 },
+        "python": { "type": "string", "minLength": 1 },
+        "uv": { "type": "string", "minLength": 1 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generatedAt",
+        "machine",
+        "software",
+        "command",
+        "environment",
+        "notes"
+      ],
+      "properties": {
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "machine": { "$ref": "#/$defs/machine" },
+        "software": { "$ref": "#/$defs/software" },
+        "command": { "type": "array", "items": { "type": "string" } },
+        "environment": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "warmups",
+        "measuredRuns",
+        "bootstrapIterations",
+        "confidenceLevel",
+        "requiredImprovement",
+        "maximumRegression",
+        "rssSampleIntervalMs"
+      ],
+      "properties": {
+        "warmups": { "type": "integer", "minimum": 0 },
+        "measuredRuns": { "type": "integer", "minimum": 1 },
+        "bootstrapIterations": { "type": "integer", "minimum": 1000 },
+        "confidenceLevel": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "requiredImprovement": { "type": "number", "minimum": 0 },
+        "maximumRegression": { "type": "number", "minimum": 0 },
+        "rssSampleIntervalMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "processLaunch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "args", "cwd", "env"],
+      "properties": {
+        "command": { "type": "string", "minLength": 1 },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "cwd": { "type": "string", "minLength": 1 },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "ollamaTopologyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "role",
+        "description",
+        "host",
+        "listenerPort",
+        "processRootPids"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "ollama" },
+        "role": { "enum": ["baseline", "candidate", "forensic"] },
+        "description": { "type": "string", "minLength": 1 },
+        "requiredCapability": { "type": "string", "minLength": 1 },
+        "host": { "type": "string", "format": "uri" },
+        "listenerPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "processRootPids": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 2 }
+        }
+      }
+    },
+    "stockTopologyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "role",
+        "description",
+        "launch",
+        "host",
+        "bindAttempts",
+        "deniedBrowserOrigin",
+        "startupTimeoutMs"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "stock-mlx" },
+        "role": { "enum": ["baseline", "candidate", "forensic"] },
+        "description": { "type": "string", "minLength": 1 },
+        "requiredCapability": { "type": "string", "minLength": 1 },
+        "launch": { "$ref": "#/$defs/processLaunch" },
+        "host": { "const": "127.0.0.1" },
+        "bindAttempts": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "deniedBrowserOrigin": { "type": "string", "format": "uri" },
+        "startupTimeoutMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "customTopologyConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "role",
+        "description",
+        "checkout",
+        "expectedRevision",
+        "environment"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "custom-mlx" },
+        "role": { "enum": ["baseline", "candidate", "forensic"] },
+        "description": { "type": "string", "minLength": 1 },
+        "requiredCapability": { "type": "string", "minLength": 1 },
+        "checkout": { "type": "string", "minLength": 1 },
+        "expectedRevision": { "type": "string", "minLength": 1 },
+        "environment": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "runConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contextCeiling",
+        "maxOutputTokens",
+        "requestTimeoutMs",
+        "temperature",
+        "topP",
+        "topologies"
+      ],
+      "properties": {
+        "contextCeiling": { "type": "integer", "minimum": 1 },
+        "maxOutputTokens": { "type": "integer", "minimum": 1 },
+        "requestTimeoutMs": { "type": "integer", "minimum": 1 },
+        "temperature": { "const": 0 },
+        "topP": { "const": 1 },
+        "topologies": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/ollamaTopologyConfig" },
+              { "$ref": "#/$defs/stockTopologyConfig" },
+              { "$ref": "#/$defs/customTopologyConfig" }
+            ]
+          }
+        }
+      }
+    },
+    "topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "role", "description", "immutableRevision"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["ollama", "stock-mlx", "custom-mlx"] },
+        "role": { "enum": ["baseline", "candidate", "forensic"] },
+        "description": { "type": "string", "minLength": 1 },
+        "immutableRevision": { "type": "string", "minLength": 1 },
+        "requiredCapability": { "type": "string", "minLength": 1 },
+        "launchPorts": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        }
+      }
+    },
+    "forensicFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topologyId",
+        "immutableRevision",
+        "disposition",
+        "findings"
+      ],
+      "properties": {
+        "topologyId": { "type": "string", "minLength": 1 },
+        "immutableRevision": { "type": "string", "minLength": 1 },
+        "disposition": { "const": "disqualified" },
+        "findings": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "revision",
+        "tokenizerRevision",
+        "chatTemplateSha256",
+        "quantization",
+        "contextWindow",
+        "localPath"
+      ],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "revision": { "type": "string", "minLength": 1 },
+        "tokenizerRevision": { "type": "string", "minLength": 1 },
+        "chatTemplateSha256": { "type": "string", "minLength": 1 },
+        "quantization": { "type": "string", "minLength": 1 },
+        "contextWindow": { "type": "integer", "minimum": 1 },
+        "localPath": { "type": "string", "minLength": 1 }
+      }
+    },
+    "modelPair": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "localEvidence", "ollama", "mlx"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "description": { "type": "string", "minLength": 1 },
+        "localEvidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "ollama": {
+          "allOf": [
+            { "$ref": "#/$defs/artifact" },
+            {
+              "type": "object",
+              "properties": {
+                "revision": {
+                  "type": "string",
+                  "pattern": "^(?:sha256:)?[0-9a-fA-F]{64}$"
+                }
+              }
+            }
+          ]
+        },
+        "mlx": { "$ref": "#/$defs/artifact" }
+      }
+    },
+    "toolEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actualCalls",
+        "toolErrors",
+        "repairedToolCalls",
+        "nameRepairs",
+        "stallNudges",
+        "validationFailures",
+        "editRepairs",
+        "reprompts",
+        "maxCallsInResponse",
+        "thinkingChars"
+      ],
+      "properties": {
+        "expectedCalls": { "type": "integer", "minimum": 0 },
+        "actualCalls": { "type": "integer", "minimum": 0 },
+        "toolErrors": { "type": "integer", "minimum": 0 },
+        "repairedToolCalls": { "type": "integer", "minimum": 0 },
+        "nameRepairs": { "type": "integer", "minimum": 0 },
+        "stallNudges": { "type": "integer", "minimum": 0 },
+        "validationFailures": { "type": "integer", "minimum": 0 },
+        "editRepairs": { "type": "integer", "minimum": 0 },
+        "reprompts": { "type": "integer", "minimum": 0 },
+        "maxCallsInResponse": { "type": "integer", "minimum": 0 },
+        "argumentsMatched": { "type": "boolean" },
+        "thinkingChars": { "type": "integer", "minimum": 0 },
+        "reasoningWithToolCall": { "type": "boolean" },
+        "textBeforeToolCall": { "type": "boolean" },
+        "priorToolResultUsed": { "type": "boolean" }
+      }
+    },
+    "hardGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topologyId",
+        "modelPairId",
+        "category",
+        "caseId",
+        "repetition",
+        "passed",
+        "detail",
+        "sequence"
+      ],
+      "properties": {
+        "topologyId": { "type": "string", "minLength": 1 },
+        "modelPairId": { "type": "string", "minLength": 1 },
+        "category": {
+          "enum": [
+            "artifact-availability",
+            "correctness",
+            "tool-semantics",
+            "context",
+            "lifecycle",
+            "residency"
+          ]
+        },
+        "caseId": { "type": "string", "minLength": 1 },
+        "repetition": { "type": "integer", "minimum": 1 },
+        "passed": { "type": "boolean" },
+        "detail": { "type": "string" },
+        "sequence": { "type": "integer", "minimum": 1 },
+        "promptTokens": { "type": "integer", "minimum": 1 },
+        "toolEvidence": { "$ref": "#/$defs/toolEvidence" },
+        "memorySnapshots": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/residencyMemorySnapshot" }
+        }
+      }
+    },
+    "residencyMemorySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "processTreeRssBytes"],
+      "properties": {
+        "stage": { "type": "string", "minLength": 1 },
+        "processTreeRssBytes": { "type": "number", "minimum": 0 },
+        "ollamaRunningModels": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "model", "digest"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "model": { "type": "string", "minLength": 1 },
+              "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        },
+        "mlxAllocatorActiveBytes": { "type": "number", "minimum": 0 },
+        "mlxAllocatorCacheBytes": { "type": "number", "minimum": 0 },
+        "mlxAllocatorPeakBytes": { "type": "number", "minimum": 0 },
+        "mlxModelIdentity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "baselineSmoke": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "topologyId",
+        "modelPairId",
+        "passed",
+        "detail",
+        "temperature",
+        "think",
+        "contextWindow",
+        "promptTokens",
+        "completionTokens",
+        "loadMs",
+        "totalMs",
+        "finishReason",
+        "artifactRevision"
+      ],
+      "properties": {
+        "topologyId": { "type": "string", "minLength": 1 },
+        "modelPairId": { "type": "string", "minLength": 1 },
+        "passed": { "type": "boolean" },
+        "detail": { "type": "string" },
+        "temperature": { "const": 0 },
+        "think": { "const": false },
+        "contextWindow": { "type": "integer", "minimum": 1 },
+        "promptTokens": { "type": "integer", "minimum": 0 },
+        "completionTokens": { "type": "integer", "minimum": 0 },
+        "loadMs": { "type": "number", "minimum": 0 },
+        "totalMs": { "type": "number", "minimum": 0 },
+        "finishReason": { "type": "string" },
+        "artifactRevision": { "type": "string", "minLength": 1 }
+      }
+    },
+    "metricVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "coldFirstDeltaMs": { "type": "number", "exclusiveMinimum": 0 },
+        "warmTtftMs": { "type": "number", "exclusiveMinimum": 0 },
+        "promptTokensPerSecond": { "type": "number", "exclusiveMinimum": 0 },
+        "decodeTokensPerSecond": { "type": "number", "exclusiveMinimum": 0 },
+        "agentWallMs": { "type": "number", "exclusiveMinimum": 0 },
+        "peakRssAboveBaselineBytes": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "unloadedRssBytes": { "type": "number", "exclusiveMinimum": 0 },
+        "peakAbsoluteRssBytes": { "type": "number", "exclusiveMinimum": 0 },
+        "mlxAllocatorActiveBytes": { "type": "number", "minimum": 0 },
+        "mlxAllocatorCacheBytes": { "type": "number", "minimum": 0 },
+        "mlxAllocatorPeakBytes": { "type": "number", "minimum": 0 }
+      }
+    },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pairIndex", "order", "baseline", "candidate"],
+      "properties": {
+        "pairIndex": { "type": "integer", "minimum": 1 },
+        "order": { "enum": ["baseline-first", "candidate-first"] },
+        "baseline": { "$ref": "#/$defs/metricVector" },
+        "candidate": { "$ref": "#/$defs/metricVector" }
+      }
+    },
+    "performanceCell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidateTopologyId",
+        "modelPairId",
+        "workloadId",
+        "warmupsCompleted",
+        "metrics",
+        "samples"
+      ],
+      "properties": {
+        "candidateTopologyId": { "type": "string", "minLength": 1 },
+        "modelPairId": { "type": "string", "minLength": 1 },
+        "workloadId": { "type": "string", "minLength": 1 },
+        "warmupsCompleted": { "type": "integer", "minimum": 0 },
+        "metrics": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "coldFirstDeltaMs",
+              "warmTtftMs",
+              "promptTokensPerSecond",
+              "decodeTokensPerSecond",
+              "agentWallMs",
+              "peakRssAboveBaselineBytes"
+            ]
+          }
+        },
+        "samples": { "type": "array", "items": { "$ref": "#/$defs/sample" } }
+      }
+    }
+  }
+}

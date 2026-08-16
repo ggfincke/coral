@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "runId": "qwen38-local-only-2026-08-16",
+  "verdict": "no-go",
+  "baselineTopologyId": "ollama",
+  "candidates": [
+    {
+      "topologyId": "stock-mlx-lm-server",
+      "hardGatesPassed": false,
+      "performancePassed": false,
+      "materialImprovement": false,
+      "qualified": false,
+      "metrics": [],
+      "failures": [
+        "stock-mlx-lm-server/qwen38-27b-nvfp4 pinned direct artifact failed: pinned direct artifact mlx-community/Qwen3.8-27B-nvfp4@5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6 is not installed and benchmark downloads are forbidden: pinned direct artifact omitted or could not verify tokenizer.json; tokenizer_config.json; 3 of 3 accessible safetensors weight shards"
+      ]
+    }
+  ],
+  "failures": [
+    "stock-mlx-lm-server/qwen38-27b-nvfp4 pinned direct artifact failed: pinned direct artifact mlx-community/Qwen3.8-27B-nvfp4@5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6 is not installed and benchmark downloads are forbidden: pinned direct artifact omitted or could not verify tokenizer.json; tokenizer_config.json; 3 of 3 accessible safetensors weight shards",
+    "artifact preflight blocked correctness and performance runs"
+  ],
+  "generatedAt": "2026-08-16T16:06:22.860Z"
+}
