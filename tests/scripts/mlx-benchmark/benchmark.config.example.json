@@ -1,0 +1,125 @@
+{
+  "configVersion": 1,
+  "runId": "qwen38-local-only-2026-08-16",
+  "output": "./local-only-qwen38.result.json",
+  "resultSchema": "./result.schema.json",
+  "machine": {
+    "chip": "Apple M4 Max",
+    "unifiedMemoryBytes": 137438953472,
+    "os": "macOS 27.0 (26A5406e)",
+    "powerMode": "AC power, battery charged"
+  },
+  "software": {
+    "coralRevision": "a60b2ef6fc931a179b94a546304bb2fb9e7e7961",
+    "node": "26.7.0",
+    "ollama": "0.32.13",
+    "mlx": "0.32.0",
+    "mlxLm": "0.31.3",
+    "python": "3.14.7",
+    "uv": "0.12.3"
+  },
+  "modelPairs": [
+    {
+      "id": "qwen38-27b-nvfp4",
+      "description": "Installed Ollama Qwen3.8 versus the pinned official direct-MLX artifact",
+      "localEvidence": [
+        "Observed locally: the Ollama manifest totals 18,174,721,596 bytes across 1,209 layers; its 1,199 one-tensor ModelOpt safetensors blobs total 18,155,017,220 bytes.",
+        "Measured preflight: the local view has 2,017 keys including 409 .scale and 409 .global_scale keys; mlx-lm 0.31.3 with mlx 0.32.0 rejects 802 of them as unexpected.",
+        "Observed in the pinned official index: 1,682 keys including 498 plural .scales keys and no .global_scale keys.",
+        "Decision inference: the layouts have no stock/no-copy ingress, and conversion is outside this benchmark and forbidden by the local-only constraint."
+      ],
+      "ollama": {
+        "model": "qwen3.8:27b-mlx",
+        "revision": "5642e97495e1a088883805981563dcdc4a040c2f53388b7a41d1f24d3622cf7e",
+        "tokenizerRevision": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+        "chatTemplateSha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+        "quantization": "NVFP4",
+        "contextWindow": 262144,
+        "localPath": "${CORAL_OLLAMA_QWEN38_MANIFEST}"
+      },
+      "mlx": {
+        "model": "mlx-community/Qwen3.8-27B-nvfp4",
+        "revision": "5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6",
+        "tokenizerRevision": "5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6",
+        "chatTemplateSha256": "unavailable-without-the-pinned-local-artifact",
+        "quantization": "NVFP4",
+        "contextWindow": 262144,
+        "localPath": "${CORAL_QWEN38_MLX_SNAPSHOT}"
+      }
+    }
+  ],
+  "topologies": [
+    {
+      "id": "ollama",
+      "kind": "ollama",
+      "role": "baseline",
+      "description": "Existing Coral AgentInferenceClient through local Ollama",
+      "host": "http://127.0.0.1:11434",
+      "listenerPort": 11434,
+      "processRootPids": []
+    },
+    {
+      "id": "stock-mlx-lm-server",
+      "kind": "stock-mlx",
+      "role": "candidate",
+      "description": "Pinned mlx_lm.server with benchmark-only allocator instrumentation",
+      "launch": {
+        "command": "${CORAL_UV}",
+        "args": [
+          "run",
+          "--frozen",
+          "--no-sync",
+          "--offline",
+          "--project",
+          "${CORAL_BACKEND_PROJECT}",
+          "python",
+          "${CORAL_MLX_BENCHMARK_SERVER}",
+          "--host",
+          "{host}",
+          "--port",
+          "{port}",
+          "--allowed-origins",
+          "",
+          "--temp",
+          "0",
+          "--top-p",
+          "1",
+          "--max-tokens",
+          "8192"
+        ],
+        "cwd": "${CORAL_CUSTOM_CANDIDATE}",
+        "env": {
+          "UV_PYTHON_DOWNLOADS": "never",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1"
+        }
+      },
+      "host": "127.0.0.1",
+      "bindAttempts": 8,
+      "deniedBrowserOrigin": "https://benchmark.invalid",
+      "startupTimeoutMs": 15000
+    },
+    {
+      "id": "pr64-custom-worker",
+      "kind": "custom-mlx",
+      "role": "forensic",
+      "description": "Immutable disqualified custom worker from PR #64",
+      "checkout": "${CORAL_CUSTOM_CANDIDATE}",
+      "expectedRevision": "39a33a45682007333b7db36fd71a4ef171fd81e0",
+      "environment": {}
+    }
+  ],
+  "contextCeiling": 32768,
+  "maxOutputTokens": 8192,
+  "requestTimeoutMs": 600000,
+  "temperature": 0,
+  "topP": 1,
+  "environmentAllowlist": [
+    "CORAL_BACKEND_PROJECT",
+    "CORAL_CUSTOM_CANDIDATE",
+    "CORAL_UV",
+    "CORAL_OLLAMA_QWEN38_MANIFEST",
+    "CORAL_QWEN38_MLX_SNAPSHOT",
+    "CORAL_MLX_BENCHMARK_SERVER"
+  ]
+}

@@ -1,0 +1,231 @@
+{
+  "schemaVersion": 1,
+  "runId": "qwen38-local-only-2026-08-16",
+  "status": "complete",
+  "provenance": {
+    "generatedAt": "2026-08-16T15:50:32.569Z",
+    "machine": {
+      "chip": "Apple M4 Max",
+      "unifiedMemoryBytes": 137438953472,
+      "os": "macOS 27.0 (26A5406e)",
+      "powerMode": "AC power, battery charged"
+    },
+    "software": {
+      "coralRevision": "a60b2ef6fc931a179b94a546304bb2fb9e7e7961",
+      "node": "26.7.0",
+      "ollama": "0.32.13",
+      "mlx": "0.32.0",
+      "mlxLm": "0.31.3",
+      "python": "3.14.7",
+      "uv": "0.12.3"
+    },
+    "command": [
+      "/opt/homebrew/Cellar/node/26.7.0/bin/node",
+      "/Users/ggfincke/Projects/Experiments/coral-mlx-benchmark/tests/scripts/mlx-benchmark/run.ts",
+      "run",
+      "--config",
+      "tests/scripts/mlx-benchmark/benchmark.config.example.json"
+    ],
+    "environment": {
+      "CORAL_BACKEND_PROJECT": "/Users/ggfincke/Projects/Experiments/coral/packages/coral-backend",
+      "CORAL_CUSTOM_CANDIDATE": "/Users/ggfincke/Projects/Experiments/coral",
+      "CORAL_UV": "/opt/homebrew/bin/uv",
+      "CORAL_OLLAMA_QWEN38_MANIFEST": "/Users/ggfincke/.ollama/models/manifests/registry.ollama.ai/library/qwen3.8/27b-mlx",
+      "CORAL_QWEN38_MLX_SNAPSHOT": "/Users/ggfincke/.cache/huggingface/hub/models--mlx-community--Qwen3.8-27B-nvfp4/snapshots/5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6",
+      "CORAL_MLX_BENCHMARK_SERVER": "/Users/ggfincke/Projects/Experiments/coral-mlx-benchmark/tests/scripts/mlx-benchmark/server_with_metrics.py"
+    },
+    "notes": [
+      "Configurations compare shippable Coral runtimes, not identical-weight backend science.",
+      "No benchmark command may download a model or sync a Python environment.",
+      "The installed Ollama NVFP4 tensor layout is not a stock MLX-LM model directory; conversion is outside this benchmark.",
+      "The immutable forensic checkout HEAD and clean status were verified before evidence creation.",
+      "Benchmark worktree contained only the uncommitted PR A construction surface above Coral baseline a60b2ef6fc931a179b94a546304bb2fb9e7e7961; rerun at the published commit.",
+      "Node, Ollama, uv, Python, MLX, MLX-LM, chip, memory, macOS, and power claims were verified locally before the run.",
+      "The pinned direct snapshot was metadata-only locally; the run stopped before MLX launch."
+    ]
+  },
+  "policy": {
+    "warmups": 2,
+    "measuredRuns": 10,
+    "bootstrapIterations": 10000,
+    "confidenceLevel": 0.95,
+    "requiredImprovement": 0.2,
+    "maximumRegression": 0.1,
+    "rssSampleIntervalMs": 100
+  },
+  "configuration": {
+    "contextCeiling": 32768,
+    "maxOutputTokens": 8192,
+    "requestTimeoutMs": 600000,
+    "temperature": 0,
+    "topP": 1,
+    "topologies": [
+      {
+        "id": "ollama",
+        "kind": "ollama",
+        "role": "baseline",
+        "description": "Existing Coral AgentInferenceClient through local Ollama",
+        "host": "http://127.0.0.1:11434",
+        "listenerPort": 11434,
+        "processRootPids": []
+      },
+      {
+        "id": "stock-mlx-lm-server",
+        "kind": "stock-mlx",
+        "role": "candidate",
+        "description": "Pinned mlx_lm.server with benchmark-only allocator instrumentation",
+        "launch": {
+          "command": "/opt/homebrew/bin/uv",
+          "args": [
+            "run",
+            "--frozen",
+            "--no-sync",
+            "--offline",
+            "--project",
+            "/Users/ggfincke/Projects/Experiments/coral/packages/coral-backend",
+            "python",
+            "/Users/ggfincke/Projects/Experiments/coral-mlx-benchmark/tests/scripts/mlx-benchmark/server_with_metrics.py",
+            "--host",
+            "{host}",
+            "--port",
+            "{port}",
+            "--allowed-origins",
+            "",
+            "--temp",
+            "0",
+            "--top-p",
+            "1",
+            "--max-tokens",
+            "8192"
+          ],
+          "cwd": "/Users/ggfincke/Projects/Experiments/coral",
+          "env": {
+            "UV_PYTHON_DOWNLOADS": "never",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1"
+          }
+        },
+        "host": "127.0.0.1",
+        "bindAttempts": 8,
+        "deniedBrowserOrigin": "https://benchmark.invalid",
+        "startupTimeoutMs": 15000
+      },
+      {
+        "id": "pr64-custom-worker",
+        "kind": "custom-mlx",
+        "role": "forensic",
+        "description": "Immutable disqualified custom worker from PR #64",
+        "checkout": "/Users/ggfincke/Projects/Experiments/coral",
+        "expectedRevision": "39a33a45682007333b7db36fd71a4ef171fd81e0",
+        "environment": {}
+      }
+    ]
+  },
+  "topologies": [
+    {
+      "id": "ollama",
+      "kind": "ollama",
+      "role": "baseline",
+      "description": "Existing Coral AgentInferenceClient through local Ollama",
+      "immutableRevision": "external-ollama-service"
+    },
+    {
+      "id": "stock-mlx-lm-server",
+      "kind": "stock-mlx",
+      "role": "candidate",
+      "description": "Pinned mlx_lm.server with benchmark-only allocator instrumentation",
+      "immutableRevision": "mlx-lm@0.31.3+mlx@0.32.0",
+      "launchPorts": []
+    },
+    {
+      "id": "pr64-custom-worker",
+      "kind": "custom-mlx",
+      "role": "forensic",
+      "description": "Immutable disqualified custom worker from PR #64",
+      "immutableRevision": "39a33a45682007333b7db36fd71a4ef171fd81e0"
+    }
+  ],
+  "forensicFindings": [
+    {
+      "topologyId": "pr64-custom-worker",
+      "immutableRevision": "39a33a45682007333b7db36fd71a4ef171fd81e0",
+      "disposition": "disqualified",
+      "findings": [
+        "ordinary model-picker activation eagerly starts Python work",
+        "handwritten family parsing does not use the pinned tokenizer-native Qwen contract",
+        "malformed or mismatched frames can poison generation and pending transport state",
+        "cancellation, restart, descendant cleanup, and A-B-A residency are not lifecycle-complete"
+      ]
+    }
+  ],
+  "modelPairs": [
+    {
+      "id": "qwen38-27b-nvfp4",
+      "description": "Installed Ollama Qwen3.8 versus the pinned official direct-MLX artifact",
+      "localEvidence": [
+        "Observed locally: the Ollama manifest totals 18,174,721,596 bytes across 1,209 layers; its 1,199 one-tensor ModelOpt safetensors blobs total 18,155,017,220 bytes.",
+        "Measured preflight: the local view has 2,017 keys including 409 .scale and 409 .global_scale keys; mlx-lm 0.31.3 with mlx 0.32.0 rejects 802 of them as unexpected.",
+        "Observed in the pinned official index: 1,682 keys including 498 plural .scales keys and no .global_scale keys.",
+        "Decision inference: the layouts have no stock/no-copy ingress, and conversion is outside this benchmark and forbidden by the local-only constraint."
+      ],
+      "ollama": {
+        "model": "qwen3.8:27b-mlx",
+        "revision": "5642e97495e1a088883805981563dcdc4a040c2f53388b7a41d1f24d3622cf7e",
+        "tokenizerRevision": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+        "chatTemplateSha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+        "quantization": "NVFP4",
+        "contextWindow": 262144,
+        "localPath": "/Users/ggfincke/.ollama/models/manifests/registry.ollama.ai/library/qwen3.8/27b-mlx"
+      },
+      "mlx": {
+        "model": "mlx-community/Qwen3.8-27B-nvfp4",
+        "revision": "5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6",
+        "tokenizerRevision": "5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6",
+        "chatTemplateSha256": "unavailable-without-the-pinned-local-artifact",
+        "quantization": "NVFP4",
+        "contextWindow": 262144,
+        "localPath": "/Users/ggfincke/.cache/huggingface/hub/models--mlx-community--Qwen3.8-27B-nvfp4/snapshots/5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6"
+      }
+    }
+  ],
+  "baselineSmokes": [
+    {
+      "topologyId": "ollama",
+      "modelPairId": "qwen38-27b-nvfp4",
+      "passed": true,
+      "detail": "Ollama returned exact OK",
+      "temperature": 0,
+      "think": false,
+      "contextWindow": 4096,
+      "promptTokens": 20,
+      "completionTokens": 1,
+      "loadMs": 42.938917,
+      "totalMs": 368.041792,
+      "finishReason": "stop",
+      "artifactRevision": "5642e97495e1a088883805981563dcdc4a040c2f53388b7a41d1f24d3622cf7e"
+    }
+  ],
+  "hardGates": [
+    {
+      "topologyId": "stock-mlx-lm-server",
+      "modelPairId": "qwen38-27b-nvfp4",
+      "category": "artifact-availability",
+      "caseId": "pinned-direct-artifact-installed",
+      "repetition": 1,
+      "passed": false,
+      "detail": "pinned direct artifact mlx-community/Qwen3.8-27B-nvfp4@5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6 is not installed and benchmark downloads are forbidden: pinned direct artifact omitted or could not verify tokenizer.json; tokenizer_config.json; 3 of 3 accessible safetensors weight shards",
+      "sequence": 1
+    },
+    {
+      "topologyId": "pr64-custom-worker",
+      "modelPairId": "qwen38-27b-nvfp4",
+      "category": "artifact-availability",
+      "caseId": "pinned-direct-artifact-installed",
+      "repetition": 1,
+      "passed": false,
+      "detail": "pinned direct artifact mlx-community/Qwen3.8-27B-nvfp4@5ff8ef173ad0d7c3aae92f0be43031a6ab8067c6 is not installed and benchmark downloads are forbidden: pinned direct artifact omitted or could not verify tokenizer.json; tokenizer_config.json; 3 of 3 accessible safetensors weight shards",
+      "sequence": 2
+    }
+  ],
+  "performanceCells": []
+}

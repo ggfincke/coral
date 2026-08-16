@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "runId": "replace-with-run-id",
+  "status": "pending",
+  "provenance": {
+    "generatedAt": "2026-08-16T00:00:00.000Z",
+    "machine": {
+      "chip": "replace",
+      "unifiedMemoryBytes": 1,
+      "os": "replace",
+      "powerMode": "replace"
+    },
+    "software": {
+      "coralRevision": "replace",
+      "node": "replace",
+      "ollama": "replace",
+      "mlx": "replace",
+      "mlxLm": "replace",
+      "python": "replace",
+      "uv": "replace"
+    },
+    "command": [],
+    "environment": {},
+    "notes": []
+  },
+  "policy": {
+    "warmups": 2,
+    "measuredRuns": 10,
+    "bootstrapIterations": 10000,
+    "confidenceLevel": 0.95,
+    "requiredImprovement": 0.2,
+    "maximumRegression": 0.1,
+    "rssSampleIntervalMs": 100
+  },
+  "configuration": {
+    "contextCeiling": 32768,
+    "maxOutputTokens": 8192,
+    "requestTimeoutMs": 600000,
+    "temperature": 0,
+    "topP": 1,
+    "topologies": []
+  },
+  "topologies": [],
+  "forensicFindings": [],
+  "modelPairs": [],
+  "baselineSmokes": [],
+  "hardGates": [],
+  "performanceCells": []
+}
