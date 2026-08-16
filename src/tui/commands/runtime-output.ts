@@ -3,10 +3,23 @@
 
 import chalk from 'chalk'
 import type { McpServerStatus, McpStatus } from '../../mcp/types.js'
+import { PERSONAL_SKILLS_HINT } from '../../skills/discover.js'
+import type { SkillRecord } from '../../skills/types.js'
+import { excerpt } from '../../utils/ellipsize.js'
 import { getTheme, style, type Role, type RoleColor } from '../theme.js'
 import { THEMES } from '../themes.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { coralHeader } from './output.js'
+
+const SKILL_NAME_MAX = 128
+const SKILL_SOURCE_MAX = 32
+const SKILL_ROOT_MAX = 240
+const SKILL_DESCRIPTION_MAX = 240
+
+function skillDisplayField(value: string, max: number): string
+{
+  return excerpt(sanitizeUntrustedText(value).replace(/\s+/g, ' ').trim(), max)
+}
 
 // keep MCP availability copy consistent across status and mode formatters
 export function describePermissionMode(yolo: boolean): string
@@ -141,6 +154,38 @@ export function formatMcpStatus(status: McpStatus): string
     lines.push(...formatMcpServer(server))
   }
   lines.push('', chalk.dim('  Config changes require a new Coral session.'))
+  return lines.join('\n')
+}
+
+export function formatSkillsStatus(skills: readonly SkillRecord[]): string
+{
+  const lines = [coralHeader('skills'), '']
+  if (skills.length === 0)
+  {
+    lines.push(chalk.dim(`  No skills installed. ${PERSONAL_SKILLS_HINT}`))
+    return lines.join('\n')
+  }
+
+  for (const [index, skill] of skills.entries())
+  {
+    if (index > 0) lines.push('')
+    const name = skillDisplayField(skill.name, SKILL_NAME_MAX)
+    const source = skillDisplayField(skill.source, SKILL_SOURCE_MAX)
+    const root = skillDisplayField(skill.root, SKILL_ROOT_MAX)
+    const description = skillDisplayField(
+      skill.description,
+      SKILL_DESCRIPTION_MAX
+    )
+    lines.push(
+      `  ${style('user')(name)}  ${chalk.dim(source)}`,
+      `    ${chalk.dim(root)}`,
+      `    ${description}`
+    )
+  }
+  lines.push(
+    '',
+    chalk.dim('  Type /name to run a skill. /skills does not load a package.')
+  )
   return lines.join('\n')
 }
 

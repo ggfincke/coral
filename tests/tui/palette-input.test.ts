@@ -54,6 +54,28 @@ describe('command palette', () =>
     )
   })
 
+  test('filterPaletteEntries surfaces discovered skill slash commands', () =>
+  {
+    const withSkill: CommandInfo[] = [
+      ...commands,
+      {
+        name: 'simplification-review',
+        aliases: [],
+        description: 'Review code for safe simplifications',
+      },
+    ]
+    const entries = buildPaletteEntries(withSkill, keybindings)
+    const matches = filterPaletteEntries(entries, 'sim').map(
+      (entry) => entry.title
+    )
+    assert.equal(matches[0], '/simplification-review')
+    assert.equal(
+      entries.find((entry) => entry.title === '/simplification-review')
+        ?.command,
+      '/simplification-review'
+    )
+  })
+
   test('reducePaletteInput types literal j and k while arrows navigate', () =>
   {
     assert.deepEqual(

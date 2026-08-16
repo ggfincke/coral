@@ -10,6 +10,7 @@ import { globTool } from './glob.js'
 import { listFilesTool } from './list-files.js'
 import { bashTool } from './bash.js'
 import { searchCodeTool } from './search-code.js'
+import { skillTool } from './skill.js'
 import {
   gitStatusTool,
   gitDiffTool,
@@ -33,6 +34,7 @@ export const allTools: readonly Tool[] = Object.freeze([
   globTool,
   listFilesTool,
   searchCodeTool,
+  skillTool,
   codeIntelTool,
   bashTool,
   gitStatusTool,

@@ -27,6 +27,7 @@ import { taskTool } from '../../src/tools/task.js'
 import { setSubagentRunner } from '../../src/tools/subagent.js'
 import { subagentTools } from '../../src/tools/registry.js'
 import { searchCodeTool } from '../../src/tools/search-code.js'
+import { skillTool } from '../../src/tools/skill.js'
 import { TEXT_FILE_READ_LIMIT_BYTES } from '../../src/utils/file-read.js'
 import { execFileCommand, formatProcessError } from '../../src/utils/process.js'
 import { makeTempDirPool } from '../helpers/temp.js'
@@ -656,6 +657,7 @@ test('subagentTools exposes only subagent-safe tools', () =>
   assert.ok(names.includes('read_file'))
   assert.ok(names.includes('grep'))
   assert.ok(names.includes('search_code'))
+  assert.ok(names.includes('skill'))
   for (const name of [
     'write_file',
     'edit_file',
@@ -673,4 +675,6 @@ test('subagentTools exposes only subagent-safe tools', () =>
   assert.ok(subagentTools.every((tool) => tool.subagentSafe === true))
   assert.equal(searchCodeTool.subagentSafe, true)
   assert.equal(searchCodeTool.parallelSafe, undefined)
+  assert.equal(skillTool.subagentSafe, true)
+  assert.equal(skillTool.parallelSafe, true)
 })

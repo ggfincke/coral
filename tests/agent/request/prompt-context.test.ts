@@ -9,13 +9,23 @@ import {
   gatherProjectContext,
   projectContextBudgetForWindow,
 } from '../../../src/agent/request/project-context.js'
-import { buildSystemPrompt } from '../../../src/agent/request/system-prompt.js'
+import {
+  buildSystemPrompt,
+  SUPPLEMENTAL_CONTEXT_MAX_BYTES,
+} from '../../../src/agent/request/system-prompt.js'
+import { requestBudgetCapacity } from '../../../src/agent/request/budget.js'
+import {
+  estimateModelRequestMessageTokens,
+  estimateModelRequestToolTokens,
+  estimateRequestFramingTokens,
+} from '../../../src/agent/request/projection.js'
 import {
   builtInToolRegistrations,
   ToolCatalog,
 } from '../../../src/tools/catalog.js'
 import { allTools, subagentTools } from '../../../src/tools/registry.js'
 import type { Tool } from '../../../src/tools/tool.js'
+import { SkillIndex } from '../../../src/skills/types.js'
 import { makeTempDirPool } from '../../helpers/temp.js'
 
 describe('project-context', () =>
@@ -298,5 +308,112 @@ describe('system-prompt', () =>
       catalog: profiles[4]!.catalog,
     })
     assert.match(mcpPrompt, /\*\*mcp__fixture__echo\*\*/)
+  })
+
+  test('buildSystemPrompt lists a skill catalog and omits it when empty', async () =>
+  {
+    const dir = await tempDir('coral-prompt-skills-')
+    const catalog = new ToolCatalog({ trustedTools: allTools })
+    const skills = new SkillIndex([
+      {
+        name: 'comment-style',
+        description: 'Apply a low-noise comment style',
+        source: 'user',
+        root: '/tmp/comment-style',
+      },
+    ])
+
+    const withSkills = buildSystemPrompt({
+      model: 'test-model',
+      cwd: dir,
+      catalog,
+      skills,
+    })
+    assert.match(withSkills, /## Skills/)
+    assert.match(
+      withSkills,
+      /\*\*comment-style\*\*: Apply a low-noise comment style/
+    )
+    assert.match(withSkills, /call `skill`/)
+
+    const withoutSkills = buildSystemPrompt({
+      model: 'test-model',
+      cwd: dir,
+      catalog,
+    })
+    assert.doesNotMatch(withoutSkills, /## Skills/)
+  })
+
+  test('user instructions are injected ahead of loaded project files', async () =>
+  {
+    const dir = await tempDir('coral-prompt-user-instr-')
+    await writeFile(
+      join(dir, 'package.json'),
+      `${JSON.stringify({ name: 'crowder' })}\n`,
+      'utf-8'
+    )
+
+    const prompt = buildSystemPrompt({
+      model: 'test-model',
+      cwd: dir,
+      catalog: new ToolCatalog({ trustedTools: [] }),
+      userInstructions: 'STANDING-USER-RULE',
+    })
+    const userIndex = prompt.indexOf('## User instructions')
+    const projectIndex = prompt.indexOf('## Project Context')
+    const loadedIndex = prompt.indexOf('## Loaded Project Context')
+    assert.ok(userIndex >= 0)
+    assert.ok(userIndex < projectIndex)
+    assert.ok(loadedIndex > projectIndex)
+    assert.ok(prompt.indexOf('STANDING-USER-RULE') > userIndex)
+    assert.ok(prompt.indexOf('STANDING-USER-RULE') < projectIndex)
+    assert.match(prompt, /AGENTS_HOME\/AGENTS\.md/)
+    assert.doesNotMatch(prompt, /CORAL_HOME\/AGENTS\.md/)
+  })
+
+  test('user instructions and a non-ASCII skill catalog share an 8K-safe byte budget', async () =>
+  {
+    const dir = await tempDir('coral-prompt-supplemental-budget-')
+    const catalog = new ToolCatalog({ trustedTools: allTools })
+    const skills = new SkillIndex(
+      Array.from({ length: 26 }, (_, index) => ({
+        name: `skill-${String(index).padStart(2, '0')}`,
+        description: `説明${'界'.repeat(300)}`,
+        source: 'user' as const,
+        root: `/tmp/skill-${index}`,
+      }))
+    )
+    const prompt = buildSystemPrompt({
+      model: 'test-model',
+      cwd: dir,
+      catalog,
+      projectContextBudget: 0,
+      skills,
+      userInstructions: `優先規則\n${'界'.repeat(6_000)}`,
+    })
+    const workingDirectoryEnd =
+      prompt.indexOf('All relative paths are resolved from this directory.') +
+      'All relative paths are resolved from this directory.'.length
+    const projectContextStart = prompt.indexOf('\n\n## Project Context')
+    const supplemental = prompt.slice(workingDirectoryEnd, projectContextStart)
+
+    assert.ok(
+      Buffer.byteLength(supplemental, 'utf-8') <= SUPPLEMENTAL_CONTEXT_MAX_BYTES
+    )
+    assert.match(supplemental, /優先規則/)
+    assert.match(supplemental, /## Skills/)
+
+    const fixedTokens =
+      estimateModelRequestMessageTokens({
+        role: 'system',
+        content: prompt,
+      }) +
+      estimateModelRequestMessageTokens({
+        role: 'user',
+        content: 'review this change',
+      }) +
+      estimateModelRequestToolTokens(catalog.ollamaTools) +
+      estimateRequestFramingTokens(2)
+    assert.ok(fixedTokens <= requestBudgetCapacity(8_192).promptLimit)
   })
 })

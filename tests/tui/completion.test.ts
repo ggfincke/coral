@@ -67,20 +67,16 @@ test('rankCommands puts prefix matches first & honors the cap', () =>
   assert.equal(rankCommands('', COMMANDS).length, COMMANDS.length)
 })
 
-test('rankCommands matches aliases but inserts canonical command names', () =>
+test('rankCommands matches skill names by prefix', () =>
 {
-  const ranked = rankCommands('perms', [
+  const ranked = rankCommands('sim', [
+    { name: 'status', description: 'show status' },
     {
-      name: 'permissions',
-      aliases: ['perms'],
-      description: 'set permission mode',
+      name: 'simplification-review',
+      description: 'Review code for safe simplifications',
     },
-  ])
-
-  assert.deepEqual(
-    ranked.map((item) => item.value),
-    ['permissions']
-  )
+  ]).map((item) => item.value)
+  assert.deepEqual(ranked, ['simplification-review'])
 })
 
 test('rankFiles favors basename matches & shorter paths', () =>

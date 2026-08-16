@@ -31,6 +31,7 @@ DEFAULT_ALWAYS_ALLOWED_TOOLS = {
     "list_files",
     "read_file",
     "search_code",
+    "skill",
     "task",
     "todo_write",
 }

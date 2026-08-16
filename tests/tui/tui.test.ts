@@ -22,6 +22,7 @@ import {
   formatAutoCompactionResult,
   formatManualCompactionResult,
 } from '../../src/tui/commands/conversation-output.js'
+import { formatSkillsStatus } from '../../src/tui/commands/runtime-output.js'
 import {
   formatCliSessionList,
   formatTuiSessionList,
@@ -30,8 +31,11 @@ import {
   commandCompletions,
   commandInfos,
   dispatchCommand,
+  formatAmbiguousSkill,
+  formatSkillInvokePrompt,
+  resolveSlashSkill,
 } from '../../src/tui/commands/registry.js'
-import type { CommandContext } from '../../src/tui/commands/contracts.js'
+import { rankCommands } from '../../src/tui/prompt/completion.js'
 import type { Agent, CompactionResult } from '../../src/agent/agent.js'
 import type { IndexStore } from '../../src/retrieval/types.js'
 import { createEmbeddingSpace } from '../../src/retrieval/embedding-space.js'
@@ -94,6 +98,7 @@ test('command registry preserves order, aliases, help, and dispatch', async () =
     'compact',
     'status',
     'mcp',
+    'skills',
     'model',
     'permissions',
     'verify',
@@ -156,6 +161,130 @@ test('command registry preserves order, aliases, help, and dispatch', async () =
 
   assert.equal(await dispatchCommand('/RESET', context), true)
   assert.equal(clears, 1)
+})
+
+test('skill slash commands complete, yield to builtins, and format an invoke prompt', async () =>
+{
+  const skills = [
+    {
+      name: 'simplification-review',
+      description: 'Review code for safe simplifications',
+      source: 'project-agents' as const,
+      root: '/tmp/simplification-review',
+    },
+    {
+      name: 'status',
+      description: 'must not collide with /status',
+      source: 'user' as const,
+      root: '/tmp/status-skill',
+    },
+    {
+      name: 'similar-skill',
+      description: 'another sim prefix',
+      source: 'user' as const,
+      root: '/tmp/similar-skill',
+    },
+  ]
+
+  const infos = commandInfos(skills)
+  assert.ok(infos.some((command) => command.name === 'simplification-review'))
+  assert.ok(infos.some((command) => command.name === 'similar-skill'))
+  assert.equal(infos.filter((command) => command.name === 'status').length, 1)
+  assert.equal(
+    infos.find((command) => command.name === 'status')?.description,
+    'Show model, session, token usage, & working directory'
+  )
+
+  const ranked = rankCommands('sim', commandCompletions(skills)).map(
+    (item) => item.value
+  )
+  assert.ok(ranked.includes('simplification-review'))
+  assert.ok(ranked.includes('similar-skill'))
+  assert.ok(!ranked.includes('status'))
+
+  const exact = resolveSlashSkill('/simplification-review extra please', skills)
+  assert.equal(exact?.kind, 'skill')
+  if (exact?.kind === 'skill')
+  {
+    assert.equal(exact.record.name, 'simplification-review')
+    assert.equal(exact.args, 'extra please')
+    assert.equal(
+      exact.prompt,
+      formatSkillInvokePrompt(exact.record, 'extra please')
+    )
+    assert.match(exact.prompt, /skill tool/)
+    assert.match(exact.prompt, /extra please/)
+  }
+
+  assert.equal(resolveSlashSkill('/status', skills), null)
+  assert.equal(resolveSlashSkill('/s', skills), null)
+
+  const unique = resolveSlashSkill('/sim', [skills[0]!])
+  assert.equal(unique?.kind, 'skill')
+  if (unique?.kind === 'skill')
+  {
+    assert.equal(unique.record.name, 'simplification-review')
+  }
+
+  const ambiguous = resolveSlashSkill('/sim', skills)
+  assert.equal(ambiguous?.kind, 'ambiguous')
+  if (ambiguous?.kind === 'ambiguous')
+  {
+    assert.deepEqual(ambiguous.names, [
+      'similar-skill',
+      'simplification-review',
+    ])
+    assert.match(
+      plain(formatAmbiguousSkill(ambiguous.query, ambiguous.names)),
+      /similar-skill/
+    )
+  }
+
+  const output: OutputBlock[] = []
+  const context = makeCommandContext(
+    {
+      getSkills: () =>
+        skills.filter((skill) => skill.name === 'simplification-review'),
+    },
+    output
+  )
+  assert.equal(await dispatchCommand('/help', context), true)
+  const help = plain(output.map((block) => block.content))
+  assert.match(help, /\/simplification-review/)
+  assert.match(help, /Skill names start a chat turn/)
+
+  const unsafeInfo = commandInfos([
+    {
+      name: 'terminal-safe',
+      description: 'safe\x1b]52;c;SGVsbG8=\x07text',
+      source: 'project-coral',
+      root: '/tmp/terminal-safe',
+    },
+  ]).find((command) => command.name === 'terminal-safe')
+  assert.ok(unsafeInfo)
+  assert.equal(
+    unsafeInfo.description.includes(String.fromCharCode(27)) ||
+      unsafeInfo.description.includes(String.fromCharCode(7)),
+    false
+  )
+
+  const skillsStatus = plain(
+    formatSkillsStatus([
+      {
+        name: 'terminal-safe',
+        description: `safe\x1b]52;c;SGVsbG8=\x07text ${'x'.repeat(10_000)}`,
+        source: 'project-coral',
+        root: '/tmp/terminal\nroot',
+      },
+    ])
+  )
+  assert.equal(
+    skillsStatus.includes(String.fromCharCode(27)) ||
+      skillsStatus.includes(String.fromCharCode(7)),
+    false
+  )
+  assert.match(skillsStatus, /terminal root/)
+  assert.ok(skillsStatus.length < 1_000)
 })
 
 test('buildTranscriptLines renders conversation and tool results in scrollable order', () =>

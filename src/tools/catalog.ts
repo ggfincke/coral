@@ -79,6 +79,7 @@ const REGISTRATIONS: BuiltInToolRegistration[] = [
     workspacePath: { argument: 'path', defaultPath: '.' },
   },
   { name: 'search_code', defaultPolicy: 'always_allow' },
+  { name: 'skill', defaultPolicy: 'always_allow' },
   {
     name: 'code_intel',
     defaultPolicy: 'always_allow',
