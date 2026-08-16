@@ -23,6 +23,39 @@ updates:
     labels:
       - 'dependencies'
 
+  - package-ecosystem: 'uv'
+    directory: '/packages/coral-backend'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    versioning-strategy: 'increase'
+    allow:
+      - dependency-type: 'all'
+    labels:
+      - 'dependencies'
+
+  - package-ecosystem: 'uv'
+    directory: '/packages/coral-sdk'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    versioning-strategy: 'increase'
+    allow:
+      - dependency-type: 'all'
+    labels:
+      - 'dependencies'
+
+  - package-ecosystem: 'uv'
+    directory: '/packages/coral-plugins'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    versioning-strategy: 'increase'
+    allow:
+      - dependency-type: 'all'
+    labels:
+      - 'dependencies'
+
   - package-ecosystem: 'github-actions'
     directory: '/'
     schedule:

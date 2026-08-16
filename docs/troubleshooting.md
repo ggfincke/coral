@@ -6,20 +6,26 @@ Errors below are from live source paths. If your build differs, trust the runnin
 
 ## Ollama will not talk
 
-**Symptom:** picker `Failed to fetch models from Ollama — is it running?` or `/model` same text. Chat: `Cannot reach Ollama at {url}: {detail}` (chat adds ` - the server may be down, or the request may have exceeded the model's context or memory`).
+**Symptom:** picker `Failed to fetch models — …` / `is the backend running?`, or Ollama chat: `Cannot reach Ollama at {url}: {detail}` (chat adds ` - the server may be down, or the request may have exceeded the model's context or memory`).
 
 **Check:**
 
-1. Ollama is running and `ollama list` shows models.
-2. `--host` matches that server. Default `http://localhost:11434`. Coral does **not** read `OLLAMA_HOST`.
+1. Ollama is running and `ollama list` shows models (needed for the default backend and default embeddings).
+2. `--host` matches that server. Default `http://localhost:11434`. Coral does **not** read `OLLAMA_HOST`. `--host` does not address the MLX worker.
 3. Host URL rules: `http` or `https` only; no username/password; no query or fragment. Errors: `Invalid Ollama host URL`, `Invalid Ollama host protocol …; use http or https`, `Ollama host URLs cannot include credentials…`, `…cannot include a query string or fragment`. Startup wraps these as `Cannot start Coral: …`.
 4. API failures: `Ollama API error: {status} {body}`. Empty stream body: `No response body`. `/api/tags` without a models array: `Ollama /api/tags response did not include a models array`.
 
-**No models:** `No Ollama models found` / `Pull a model or pass --model explicitly.`
+**No models:** `No models found` / `Pull an Ollama model, add mlx: weights, or pass --model.`
 
-**`--model` tag missing:** Agent still starts; the first chat then fails against Ollama. Prefer pulling the tag or using the picker.
+**`--model` tag missing:** Agent still starts for Ollama names; the first chat then fails against Ollama. Prefer pulling the tag or using the picker. `mlx:<name>` without a synced worker fails at composition with install instructions (`uv sync --project packages/coral-backend`).
 
 Streamed reasoning missing without an error: `/api/chat` 400/404/422 whose body mentions `think` or `unknown field` is retried once without `think`. `--no-think` sends `think: false`. `Ctrl+T` only hides UI.
+
+## MLX worker
+
+**Symptom:** `MLX inference requires the Coral Python worker, which is not available.` plus `uv sync --project packages/coral-backend`.
+
+**Do:** sync `packages/coral-backend` on standard CPython 3.14 (not `3.14t`), set `CORAL_MLX_MODELS_DIR` or `inference.mlxModelsDir`, put `<name>/config.json` + weights under that dir, then `coral -m mlx:<name>`. Details: [Python](python.md).
 
 ---
 
@@ -39,21 +45,21 @@ Pinned window unexpectedly small: full-attention models are KV-capped (`0.75 × 
 
 Use `/mcp` first. It never launches a server.
 
-| State / detail | What to do |
-|---|---|
-| No servers in `~/.coral.json` | Config belongs in the **user** file, not the project file |
-| `mcp.servers must be an object` / alias invalid / field errors | Fix JSON; `/mcp` lists per-server issues |
-| `missing required environment variable(s)` | Export every `passEnv` name in the shell that starts Coral |
-| `needs_trust` in yolo | `/permissions ask`, send a turn, approve launch |
-| `needs_trust` after ask initialize with no tools | Ask fails closed until every configured launch settles |
-| `blocked` / `no tools are enabled for yolo mode` | Add a nonempty `yoloTools` subset, or stay in ask |
-| `failed` missing executable / Docker | PATH, absolute `command`, daemon running |
-| `failed` timeout | Raise `startupTimeoutMs` (max 60,000) or `toolTimeoutMs` (max 600,000) |
-| Allowlisted tool not exposed | Server did not advertise that exact `enabledTools` name |
-| Protocol / 16 MiB / 8192 fragments | Server stopped; inspect stderr on `/mcp` |
-| `tool call timed out; server stopped for this session` | Restart Coral to launch again |
-| Config edited but `/mcp` unchanged | Restart Coral (`Config changes require a new Coral session.`) |
-| Trust prompt every time | Fingerprint includes argv, resolved executable, home `launchCwd`, env **names**, tools; nonempty `yoloTools` is hashed. Home directory change invalidates trust |
+| State / detail                                                 | What to do                                                                                                                                                      |
+| -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No servers in `~/.coral.json`                                  | Config belongs in the **user** file, not the project file                                                                                                       |
+| `mcp.servers must be an object` / alias invalid / field errors | Fix JSON; `/mcp` lists per-server issues                                                                                                                        |
+| `missing required environment variable(s)`                     | Export every `passEnv` name in the shell that starts Coral                                                                                                      |
+| `needs_trust` in yolo                                          | `/permissions ask`, send a turn, approve launch                                                                                                                 |
+| `needs_trust` after ask initialize with no tools               | Ask fails closed until every configured launch settles                                                                                                          |
+| `blocked` / `no tools are enabled for yolo mode`               | Add a nonempty `yoloTools` subset, or stay in ask                                                                                                               |
+| `failed` missing executable / Docker                           | PATH, absolute `command`, daemon running                                                                                                                        |
+| `failed` timeout                                               | Raise `startupTimeoutMs` (max 60,000) or `toolTimeoutMs` (max 600,000)                                                                                          |
+| Allowlisted tool not exposed                                   | Server did not advertise that exact `enabledTools` name                                                                                                         |
+| Protocol / 16 MiB / 8192 fragments                             | Server stopped; inspect stderr on `/mcp`                                                                                                                        |
+| `tool call timed out; server stopped for this session`         | Restart Coral to launch again                                                                                                                                   |
+| Config edited but `/mcp` unchanged                             | Restart Coral (`Config changes require a new Coral session.`)                                                                                                   |
+| Trust prompt every time                                        | Fingerprint includes argv, resolved executable, home `launchCwd`, env **names**, tools; nonempty `yoloTools` is hashed. Home directory change invalidates trust |
 
 Headless `--mcp` still rejects prompts: only pre-trusted + `always_allow` namespaced tools run.
 
@@ -71,11 +77,11 @@ Timeout 15s, 5 MiB buffer, 200 grep hits / 100 glob files.
 
 ## Semantic search / `/index`
 
-`search_code failed while using embedding model {name}: …` and, if the model is missing, a hint to `ollama pull {name}`.
+`search_code failed while using embedding model {name}: …` and, if the model is missing, a hint to `ollama pull {name}` (Ollama) or `CORAL_MLX_MODELS_DIR` / `uv sync --project packages/coral-backend` (`mlx:`).
 
 `/index` uses a different string: `Index build failed (embedding model {name}): …` plus the same pull hint when the model is missing. Already in progress: `Index build already in progress`. Usage: `/index` or `/index rebuild` (`force` is the same as `rebuild`).
 
-Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete. Digest errors (missing/ambiguous/invalid from `/api/tags`) fail closed so Coral will not reuse vectors under a mutable tag. Index files: `CORAL_HOME/retrieval/v2/spaces/*.sqlite`. Legacy `retrieval/index.sqlite` is unused.
+Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete. Digest errors (missing/ambiguous/invalid from `/api/tags`, or an MLX checkpoint whose artifact digest changed) fail closed so Coral will not reuse vectors under a mutable identity. Index files: `CORAL_HOME/retrieval/v3/spaces/*.sqlite`. `retrieval/v2/` and legacy `retrieval/index.sqlite` are unused.
 
 ---
 

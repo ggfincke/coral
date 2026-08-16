@@ -13,6 +13,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already on `main` (typically `git push --follow-tags`) runs the release
   workflow. It repeats the CI gates, requires the tag to match `package.json`,
   and publishes a GitHub Release from that version's changelog section.
+- **Direct MLX chat (`mlx:` models):** add an optional Coral-owned Python
+  worker that runs `mlx_lm` as a library over a versioned stdio protocol.
+  `coral -m mlx:<name>` (and the picker / `/model`) can select it; bare names
+  still mean Ollama. Missing worker is one install error. Subagents inherit the
+  injected client. `--host` remains the Ollama URL.
+- **Python SDK over `coral exec`:** add unpublished `packages/coral-sdk` with
+  async-first `CoralClient`, a thin sync wrapper, typed stream-json events, and
+  a subprocess transport. Not on PyPI.
+- **Python MCP plugin scaffold:** add unpublished `packages/coral-plugins` with an
+  `@tool` decorator and a read-only `word_count` example. Admitted through the
+  existing MCP host; file-mutating tools stay out.
+- **MLX embeddings:** `search_code` and `/index` can use `mlx:` embedding
+  models through the same worker, with v3 embedding spaces. Default stays
+  Ollama `nomic-embed-text`.
+- **Shared protocol schemas:** add `protocol/` JSON Schemas plus `protocol:gen`
+  / `protocol:check` codegen for TypeScript types/validators and Pydantic
+  models. `coral exec` stream-json emit is now typed from that schema.
+- **Agent Skills:** discover instruction packs from `AGENTS_HOME/skills`
+  (env `AGENTS_HOME`, default `~/.agents/skills`), `<cwd>/.agents/skills`, and
+  `<cwd>/.coral/skills`. The system prompt lists a catalog and injects
+  `AGENTS_HOME/AGENTS.md`; the built-in `skill` tool loads a body on demand.
+  `coral skills {list,path}` and `/skills` list the catalog. Each discovered
+  skill is also a `/name` slash command (`/simplification-review`); invoking it
+  starts a turn that loads the body via the `skill` tool. Built-ins win on
+  name collision. `coral skills seed` does not copy into `CORAL_HOME`; it
+  points at ggfincke-skills (`sync-skills.py --target agents` / `make sync`).
+  Not a plugin loader.
 
 ## [0.14.0] - 2026-08-14
 

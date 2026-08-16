@@ -10,28 +10,29 @@ TUI labels (Read, Write, Shell, …) are display only.
 
 ## Catalog at a glance
 
-| Name | Default policy | Path gate | Subagent | Parallel | Approval notes |
-|---|---|---|---|---|---|
-| `read_file` | always_allow | `path` | yes | yes | Outside workspace still prompts |
-| `write_file` | require_approval | `path` (default `.`) | no | no | Outside workspace: not undoable |
-| `edit_file` | require_approval | `path` (default `.`) | no | no | Exact match; optional `replace_all` |
-| `grep` | always_allow | `path` (default `.`) | yes | yes | Needs `rg` |
-| `glob` | always_allow | `path` (default `.`) | yes | yes | Needs `rg` |
-| `list_files` | always_allow | `path` (default `.`) | yes | yes | Tree, depth cap 5 |
-| `search_code` | always_allow | no | yes | no | Local embedding index |
-| `code_intel` | always_allow | `path` | yes | no | TS/JS LSP |
-| `bash` | require_approval | no | no | no | Not sandboxed |
-| `git_status` | always_allow | no | yes | yes | |
-| `git_diff` | always_allow | no | yes | yes | |
-| `git_log` | always_allow | no | yes | yes | |
-| `git_add` | require_approval | no | no | no | |
-| `git_commit` | require_approval | no | no | no | Staged only |
-| `git_switch` | require_approval | no | no | no | |
-| `git_push` | require_approval | no | no | no | 60s timeout |
-| `task` | always_allow | no | no | no | Spawns read-only child |
-| `todo_write` | always_allow | no | no | no | Primary session only |
+| Name          | Default policy   | Path gate            | Subagent | Parallel | Approval notes                      |
+| ------------- | ---------------- | -------------------- | -------- | -------- | ----------------------------------- |
+| `read_file`   | always_allow     | `path`               | yes      | yes      | Outside workspace still prompts     |
+| `write_file`  | require_approval | `path` (default `.`) | no       | no       | Outside workspace: not undoable     |
+| `edit_file`   | require_approval | `path` (default `.`) | no       | no       | Exact match; optional `replace_all` |
+| `grep`        | always_allow     | `path` (default `.`) | yes      | yes      | Needs `rg`                          |
+| `glob`        | always_allow     | `path` (default `.`) | yes      | yes      | Needs `rg`                          |
+| `list_files`  | always_allow     | `path` (default `.`) | yes      | yes      | Tree, depth cap 5                   |
+| `search_code` | always_allow     | no                   | yes      | no       | Local embedding index               |
+| `skill`       | always_allow     | no                   | yes      | yes      | Instruction pack; no script exec    |
+| `code_intel`  | always_allow     | `path`               | yes      | no       | TS/JS LSP                           |
+| `bash`        | require_approval | no                   | no       | no       | Not sandboxed                       |
+| `git_status`  | always_allow     | no                   | yes      | yes      |                                     |
+| `git_diff`    | always_allow     | no                   | yes      | yes      |                                     |
+| `git_log`     | always_allow     | no                   | yes      | yes      |                                     |
+| `git_add`     | require_approval | no                   | no       | no       |                                     |
+| `git_commit`  | require_approval | no                   | no       | no       | Staged only                         |
+| `git_switch`  | require_approval | no                   | no       | no       |                                     |
+| `git_push`    | require_approval | no                   | no       | no       | 60s timeout                         |
+| `task`        | always_allow     | no                   | no       | no       | Spawns read-only child              |
+| `todo_write`  | always_allow     | no                   | no       | no       | Primary session only                |
 
-Subagent set: the nine `yes` rows under Subagent. `coral exec --permission-profile read-only` uses that same set. `workspace-write` adds `write_file`, `edit_file`, `bash` only.
+Subagent set: the ten `yes` rows under Subagent. `coral exec --permission-profile read-only` uses that same set. `workspace-write` adds `write_file`, `edit_file`, `bash` only.
 
 Ripgrep timeout 15s, buffer 5 MiB. Git default timeout 10s except `git_push` (60s). Tool results fed to the model are capped at about 100,000 characters.
 
@@ -85,11 +86,28 @@ Natural-language search over an on-disk embedding index for **this project**. **
 
 Each search refreshes the index (`refreshDeduped`). Snippets: at most 12 lines / 1,200 characters. Empty: `No semantically similar code chunks found.`
 
-Index path: `CORAL_HOME/retrieval/v2/spaces/<sha256>.sqlite`. Space id is SHA-256 of a version string plus normalized Ollama host plus the embedding model's **manifest digest** from `/api/tags`. Missing/ambiguous digest fails closed (no reuse under a mutable tag).
+Index path: `CORAL_HOME/retrieval/v3/spaces/<sha256>.sqlite`. Space id is SHA-256 of `coral/embedding-space/v3` plus provider (`ollama` or `mlx`) plus endpoint identity (normalized Ollama host, or the MLX models dir) plus the embedding model's **artifact digest**. Ollama digests come from `/api/tags`; MLX digests come from the worker `model.show` hash over checkpoint files. Missing/ambiguous digest fails closed (no reuse under a mutable tag). Older `retrieval/v2/` files are left in place and never opened.
 
 Indexing limits: 2,000 files, 512 KiB per file, skip binaries, the `list_files` noise set, extra names `.coral` / `.coral-retrieval`, **reject symlinks**. Git repos use `git ls-files -z --cached --others --exclude-standard`. Chunker: 80 lines, 10-line overlap, 6,000 chars.
 
-Default embedding model: `nomic-embed-text`. `/index` and `/index rebuild` (or `force`) share this indexer. Intended for ordinary project sizes, not giant monorepos (in-process vector scan).
+Default embedding model: `nomic-embed-text` (Ollama). Override with
+`CORAL_EMBEDDING_MODEL` (`mlx:<name>`, `ollama:<name>`, or a bare Ollama name)
+or project `.coral.json` `retrieval.embeddingModel` / optional
+`retrieval.provider`. The environment override selects both model and provider;
+conflicting project prefixes/providers fail closed. `/index` and `/index
+rebuild` (or `force`) share this indexer. Intended for ordinary project sizes,
+not giant monorepos (in-process vector scan).
+
+---
+
+## Skills
+
+### `skill`
+
+Load a discovered skill's instructions. **Required:** `name` (catalog name).
+Optional `file` must be under `references/`; the default is `SKILL.md`.
+
+Unknown names return the catalog (not an error). `..`, absolute paths, and symlink escape are errors. Output is sanitized and capped like other tools. Skills cannot grant tools or permissions. Coral does not execute skill `scripts/`. See [Skills](skills.md).
 
 ---
 

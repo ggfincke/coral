@@ -1,15 +1,17 @@
 # Coral
 
-Coral is a local-first CLI/TUI coding agent powered by Ollama. It can inspect a
-codebase, search by text or meaning, edit files, run commands, work with Git,
-delegate read-only research, and preserve multi-turn sessions from a terminal.
+Coral is a local-first CLI/TUI coding agent for local models. It uses Ollama by
+default and can run `mlx:` models through a Coral-owned Python worker. It can
+inspect a codebase, search by text or meaning, edit files, run commands, work
+with Git, delegate read-only research, and preserve multi-turn sessions from a
+terminal.
 
 Coral has no cloud inference API or remote telemetry. Model requests go only to
-the Ollama host you configure (`http://localhost:11434` by default), and Coral's
-reliability telemetry stays in local files under `CORAL_HOME`. Optional MCP
-servers are separate subprocesses that you explicitly configure and trust; they
-may access local files, the host, or remote services according to their own
-behavior.
+the Ollama host you configure (`http://localhost:11434` by default) or the local
+MLX worker you select. Coral's reliability telemetry stays in local files under
+`CORAL_HOME`. Optional MCP servers are separate subprocesses that you explicitly
+configure and trust; they may access local files, the host, or remote services
+according to their own behavior.
 
 > Coral is pre-1.0 and built for capable local models. Interfaces, session data,
 > and configuration may still change between minor releases.
@@ -20,14 +22,17 @@ fit together is in [`docs/architecture.md`](docs/architecture.md).
 ## Requirements
 
 - Node.js 24 or newer
-- A running [Ollama](https://ollama.com/) server
-- At least one model already pulled into Ollama
+- At least one local inference backend: a running
+  [Ollama](https://ollama.com/) server with a pulled model, or `uv` plus CPython
+  3.14 and a configured MLX checkpoint
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for the `grep` and
   `glob` tools
 - Optional: the executable or container runtime required by any MCP server you
   configure
-- Optional: `nomic-embed-text` (or another configured Ollama embedding model)
-  for semantic code search
+- Optional: `nomic-embed-text` (or another configured embedding model) for
+  semantic code search
+- Optional on the Ollama path: `uv` and CPython 3.14 for MLX embeddings or
+  Python MCP tools (`docs/python.md`)
 
 TypeScript/JavaScript code intelligence is bundled with Coral; it does not need
 a separately installed language server.
@@ -68,7 +73,7 @@ ollama pull nomic-embed-text
 | Option                  | Behavior                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------------ |
 | `-V`, `--version`       | Print the Coral version                                                              |
-| `-m`, `--model <model>` | Use an installed Ollama model without opening the picker                             |
+| `-m`, `--model <model>` | Model ref (`backend:name`; bare = ollama). Skip the picker                           |
 | `--host <url>`          | Set the Ollama host; defaults to `http://localhost:11434`                            |
 | `--no-think`            | Disable streamed reasoning requests                                                  |
 | `--yolo`                | Auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP `yoloTools` |
@@ -142,6 +147,7 @@ still isolate workspaces and validate final filesystem or Git scope.
 | `/compact`                                     | Summarize older conversation history to free context                 |
 | `/status`                                      | Show model, session, token, context, permission, and Git branch info |
 | `/mcp`                                         | Show MCP config, launch, server, and available-tool status           |
+| `/skills`                                      | Show discovered skill packages                                       |
 | `/model [name]`                                | Open the model picker or switch to a named installed model           |
 | `/permissions [ask\|yolo]` (`/perm`, `/perms`) | Show or change approval mode                                         |
 | `/verify [on\|off]`                            | Toggle the post-edit read-only self-check                            |
@@ -179,7 +185,8 @@ Coral exposes a small structured toolset to the model:
   search
 - Git status, diff, log, add, commit, branch switching, and push
 - Shell execution with bounded output, timeouts, and interrupt support
-- Semantic `search_code` over a local Ollama embedding index
+- Semantic `search_code` over a local Ollama or MLX embedding index
+- On-demand `skill` instruction packs from `AGENTS_HOME/skills`
 - TypeScript/JavaScript `code_intel` for definitions, references, hover/type
   information, and per-file diagnostics
 - A read-only `task` subagent for bounded research that should not consume the
@@ -300,11 +307,11 @@ the interactive application starts, context when the active model session
 begins, and retrieval whenever an indexer is constructed.
 
 Before opening a persistent retrieval cache, Coral resolves the configured
-embedding tag through Ollama's model list and binds the cache to the normalized
-host plus the model manifest digest. A missing, ambiguous, or malformed digest
-fails closed instead of reusing vectors under a mutable display tag. Coral also
-rechecks the digest around embedding requests because Ollama's embed endpoint
-accepts a model name, not a digest-pinned artifact reference.
+embedding model through its selected local backend. Ollama spaces bind the
+normalized host to the model manifest digest; MLX spaces bind the canonical
+checkpoint root to the worker's artifact digest. Missing, ambiguous, malformed,
+or changed identities fail closed instead of reusing vectors under a mutable
+display name.
 
 ### Local MCP servers
 
@@ -438,11 +445,12 @@ The command is observational and never launches a server. Common states:
 
 ### Environment variables
 
-| Variable                | Behavior                                                                         |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| `CORAL_HOME`            | Move mutable Coral state from `~/.coral` to another directory                    |
-| `CORAL_NUM_CTX`         | Override the project context-window ceiling; environment wins over `.coral.json` |
-| `CORAL_EMBEDDING_MODEL` | Override the semantic embedding model; environment wins over `.coral.json`       |
+| Variable                | Behavior                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `CORAL_HOME`            | Move mutable Coral state from `~/.coral` to another directory                     |
+| `CORAL_NUM_CTX`         | Override the project context-window ceiling; environment wins over `.coral.json`  |
+| `CORAL_EMBEDDING_MODEL` | Override the semantic embedding model; environment wins over `.coral.json`        |
+| `AGENTS_HOME`           | Shared Agents directory for personal skills and `AGENTS.md` (default `~/.agents`) |
 
 ## Local data and privacy
 
@@ -455,9 +463,14 @@ By default Coral stores:
 | `~/.coral/prefs.json`                     | Mutable UI preferences such as the selected theme                      |
 | `~/.coral/telemetry.json` + `telemetry.d` | Legacy baseline plus immutable per-Agent-lifetime counter deltas       |
 | `~/.coral/eval-telemetry.json` + `.d`     | Legacy eval baseline plus optional immutable eval counter deltas       |
-| `~/.coral/retrieval/v2/spaces/*.sqlite`   | Versioned semantic indexes, one per verified embedding space           |
+| `~/.coral/retrieval/v3/spaces/*.sqlite`   | Versioned semantic indexes, one per verified embedding space           |
+| `~/.coral/retrieval/v2/spaces/*.sqlite`   | Orphaned v2 caches; current Coral does not open them                   |
 | `~/.coral/retrieval/index.sqlite`         | Preserved legacy retrieval cache; current Coral does not open it       |
 | `~/.coral/mcp-trust.json` + `.d`          | Legacy trust baseline plus atomic per-alias approval records           |
+
+Personal skills live under `AGENTS_HOME/skills` (default `~/.agents/skills`), and
+standing user instructions under `AGENTS_HOME/AGENTS.md`. Those paths are **not**
+relocated by `CORAL_HOME`.
 
 `CORAL_HOME` relocates every path in this table. The separate read-only user
 configuration remains `~/.coral.json`.
@@ -495,6 +508,8 @@ npm run typecheck:scripts
 npm run check:dev-tools
 npm run check:architecture
 npm run check:changelog
+npm run protocol:check
+npm run package:check
 npm audit --audit-level=high
 ```
 

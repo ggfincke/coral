@@ -1,0 +1,83 @@
+# packages/coral-sdk/src/coral_sdk/__init__.py
+# unpublished python SDK for coral exec stream-json
+
+from coral_sdk.client import (
+    PROFILE_EXCLUDED_TOOLS,
+    READ_ONLY_TOOLS,
+    WORKSPACE_WRITE_EXTRA_TOOLS,
+    CoralClient,
+    PermissionProfile,
+)
+from coral_sdk.errors import (
+    CoralBinaryError,
+    CoralCancelledError,
+    CoralError,
+    CoralFailedError,
+    CoralProtocolError,
+    CoralUsageError,
+)
+from coral_sdk.events import (
+    ApprovalRejectedEvent,
+    AssistantDeltaEvent,
+    CoralExecEvent,
+    CoralExecFrame,
+    CoralExecResult,
+    CoralExecResultUsage,
+    DoneEvent,
+    DoomLoopStoppedEvent,
+    ErrorEvent,
+    InitEvent,
+    KNOWN_EVENT_TYPES,
+    McpLaunchRejectedEvent,
+    ResultEvent,
+    ThinkingDeltaEvent,
+    TokenUsage,
+    ToolCallEvent,
+    ToolResultEvent,
+    Usage,
+    UsageEvent,
+    parse_event,
+    parse_frame,
+)
+from coral_sdk.prompt import MAX_PROMPT_BYTES, ARGV_PROMPT_MAX_BYTES
+from coral_sdk.sync import SyncCoralClient
+from coral_sdk.transport import Transport
+
+__all__ = [
+    "ARGV_PROMPT_MAX_BYTES",
+    "ApprovalRejectedEvent",
+    "AssistantDeltaEvent",
+    "CoralBinaryError",
+    "CoralCancelledError",
+    "CoralClient",
+    "CoralError",
+    "CoralExecEvent",
+    "CoralExecFrame",
+    "CoralExecResult",
+    "CoralExecResultUsage",
+    "CoralFailedError",
+    "CoralProtocolError",
+    "CoralUsageError",
+    "DoneEvent",
+    "DoomLoopStoppedEvent",
+    "ErrorEvent",
+    "InitEvent",
+    "KNOWN_EVENT_TYPES",
+    "MAX_PROMPT_BYTES",
+    "McpLaunchRejectedEvent",
+    "PROFILE_EXCLUDED_TOOLS",
+    "PermissionProfile",
+    "READ_ONLY_TOOLS",
+    "ResultEvent",
+    "SyncCoralClient",
+    "ThinkingDeltaEvent",
+    "TokenUsage",
+    "ToolCallEvent",
+    "ToolResultEvent",
+    "Transport",
+    "Usage",
+    "UsageEvent",
+    "WORKSPACE_WRITE_EXTRA_TOOLS",
+    "parse_event",
+    "parse_frame",
+]

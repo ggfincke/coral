@@ -61,6 +61,12 @@ jobs:
       - name: Check architecture boundaries
         run: npm run check:architecture
 
+      - name: Check protocol codegen
+        run: npm run protocol:check
+
+      - name: Test Python packages
+        run: npm run test:python
+
   build:
     runs-on: ubuntu-latest
     needs: test
@@ -80,3 +86,6 @@ jobs:
 
       - name: Build CLI
         run: npm run build
+
+      - name: Smoke-test packed CLI
+        run: npm run package:check

@@ -1,0 +1,18 @@
+[project]
+name = "coral-sdk"
+version = "0.1.0"
+description = "Unpublished Python SDK for coral exec stream-json"
+requires-python = ">=3.14"
+dependencies = [
+    "pydantic>=2,<3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coral_sdk"]
+
+[tool.uv]
+package = true

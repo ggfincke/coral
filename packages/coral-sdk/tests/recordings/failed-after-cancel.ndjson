@@ -1,0 +1,2 @@
+{"type":"init","run_id":"run-1","model":"gemma4:31b-mlx"}
+{"type":"result","version":1,"run_id":"run-1","status":"failed","model":"gemma4:31b-mlx","response":"","usage":{"prompt_tokens":0,"completion_tokens":0,"prompt_eval_duration_ns":0,"eval_duration_ns":0},"error":"failed to write result file: EACCES"}

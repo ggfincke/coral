@@ -4,21 +4,21 @@ This is the systems document for Coral: what it is, how a turn actually runs, wh
 
 It is written for people who run Coral and want to understand the machine. It is not a contributor onboarding dump and not an internal planner. Implementation trivia (ESM `.js` import suffixes, test doubles) appears only where it explains a boundary you can observe.
 
-Related how-tos: [Getting started](getting-started.md), [CLI](cli.md), [TUI](tui.md), [Configuration](configuration.md), [Permissions](permissions.md), [Tools](tools.md), [MCP](mcp.md), [Sessions](sessions.md), [Context](context.md), [Troubleshooting](troubleshooting.md).
+Related how-tos: [Getting started](getting-started.md), [CLI](cli.md), [TUI](tui.md), [Configuration](configuration.md), [Permissions](permissions.md), [Tools](tools.md), [Skills](skills.md), [MCP](mcp.md), [Sessions](sessions.md), [Context](context.md), [Troubleshooting](troubleshooting.md), [Python](python.md).
 
 ---
 
 ## What Coral is
 
-Coral is a **local-first coding agent** that runs in your terminal. You type a request. Coral streams a model response from **Ollama**, detects tool calls, executes them against your workspace (and optionally against MCP servers you configured), feeds results back, and loops until the model is done or you interrupt.
+Coral is a **local-first coding agent** that runs in your terminal. You type a request. Coral streams a model response from **Ollama** by default (or from a local MLX worker when you select an `mlx:` model), detects tool calls, executes them against your workspace (and optionally against MCP servers you configured), feeds results back, and loops until the model is done or you interrupt.
 
 That loop — stream, tools, settle, repeat — is the product. Conversational Q&A works, but the design assumes a capable local model doing coding work: reading a repo, editing files, running commands, using Git, searching by text or meaning, and keeping a multi-turn session.
 
 Facts that follow from that:
 
-- **Inference is Ollama-only.** Every chat request goes to the host you configure (`http://localhost:11434` by default). There is no built-in cloud inference API and no provider matrix.
+- **Inference is local.** The default chat backend is the Ollama host you configure (`http://localhost:11434`). `mlx:<name>` uses a Coral-owned Python worker on-device. There is no built-in cloud inference API and no OpenAI/Anthropic provider matrix.
 - **No remote telemetry.** Reliability counters stay in files under `CORAL_HOME` (default `~/.coral`). Coral does not upload them.
-- **MCP is an extra data boundary you opt into.** Local stdio subprocesses you define in `~/.coral.json` may reach files, the host, or remote APIs according to *their* behavior. Coral does not sandbox them.
+- **MCP is an extra data boundary you opt into.** Local stdio subprocesses you define in `~/.coral.json` may reach files, the host, or remote APIs according to _their_ behavior. Coral does not sandbox them.
 - **Coding agent, not chatbot wrapper.** The model sees a structured tool catalog, a system prompt that lists those tools as exhaustive, Git snapshots at request time, optional `@` file attachments, and conversation history that Coral compact/prune/trims when the window fills.
 
 Coral currently targets **large local models** (the startup picker prefers `gemma4:31b-mlx` when that tag is installed). Small models can run; prompts and tools are not dumbed down for them.
@@ -29,12 +29,12 @@ Package version at the time of this writing is `0.14.0`. Node.js `>=24` is requi
 
 ## What Coral is not
 
-- Not a multi-provider agent (OpenAI / Anthropic / …). The `AgentInferenceClient` seam is an Ollama-shaped test/runtime injection point. Production constructs `OllamaClient`.
+- Not a multi-provider agent (OpenAI / Anthropic / …). The `AgentInferenceClient` seam is an Ollama-shaped transport (four operations). Production composition roots inject `OllamaClient` or `PythonInferenceClient`; Agent never selects backends.
 - Not a remote-hosted service. The process on your machine owns the TUI, the Agent, tools, and local files.
 - Not a hostile-process sandbox. `bash` and MCP servers run as ordinary host processes. Headless permission profiles are **deterministic tool catalogs**, not isolation.
 - Not an IDE. TypeScript/JavaScript code intelligence is a bundled language-server tool (`code_intel`), not an editor.
 - Not a session sync or collaboration product. Sessions are whole-file JSON on disk; concurrent saves of the same ID are last-writer-wins, not merged.
-- Not a plugin/extension host. Built-in tools are a static registry; the only dynamic tools are MCP tools you allowlist.
+- Not a plugin/extension host. Built-in tools are a static registry; the only dynamic tools are MCP tools you allowlist. Skills are instruction packs loaded through the `skill` tool; Coral does not execute skill `scripts/`.
 
 ---
 
@@ -42,7 +42,7 @@ Package version at the time of this writing is `0.14.0`. Node.js `>=24` is requi
 
 Coral is four layers with strict ownership. Each exists so a different kind of change stays local: swap the HTTP client without rewriting history; change the TUI without rewriting the Agent; add an MCP server without teaching subagents about it.
 
-The mermaid below also shows the **CLI dispatcher** (`src/cli/main.tsx`) and the MCP helpers behind the manager. Those are not extra runtime layers. Session persistence sits **beside** the four layers (types / codec / store), not inside the Agent.
+The mermaid below also shows the **CLI dispatcher** (`src/cli/main.tsx`) and the MCP helpers behind the manager. Those are not extra runtime layers. Session persistence sits **beside** the four layers (types / codec / store), not inside the Agent. Retrieval (`src/retrieval/`) and skills (`src/skills/`) are siblings of the Agent loop: indexes stay TypeScript; skill packages are instruction files, not a plugin host. MLX embeddings are injected from the composition root.
 
 ```mermaid
 flowchart TB
@@ -69,9 +69,12 @@ flowchart TB
     mcpScope["McpToolScope"]
   end
 
-  subgraph transportLayer [Ollama transport]
+  subgraph transportLayer [Inference]
+    resolve["composition root / ModelRef"]
     client["OllamaClient"]
+    python["PythonInferenceClient"]
     host["Configured Ollama host"]
+    worker["packages/coral-backend"]
   end
 
   subgraph mcpLayer [MCP client]
@@ -87,25 +90,29 @@ flowchart TB
   runtime --> commands
   runtime --> agent
   execCmd --> agent
+  runtime --> resolve
+  execCmd --> resolve
+  resolve --> client
+  resolve --> python
   agent --> planner
   agent --> rounds
   agent --> conv
   agent --> compact
   agent --> replay
   agent --> mcpScope
-  agent --> client
   client --> host
+  python --> worker
   mcpScope --> manager
   manager --> launch
 ```
 
-### 1. Ollama transport
+### 1. Inference
 
 `src/ollama/client.ts` is the REST client. It streams `POST /api/chat` as NDJSON, lists models via `/api/tags`, resolves model metadata for context pinning, and (separately from the Agent chat loop) embeds text for semantic search.
 
-The Agent does not depend on that whole class. It consumes `AgentInferenceClient` in `src/agent/inference-client.ts`: `startKeepAlive`, `showModel`, `listModels`, `chatStream`. Production still does `new OllamaClient(baseUrl)` unless a test injects a double.
+`src/inference/` is not a generic provider framework. It parses `ModelRef` (`ollama` | `mlx`; bare names mean ollama), picks `OllamaClient` or `PythonInferenceClient` at composition roots, and owns the worker supervisor. Provider-specific search binding lives in `src/tools/search-code-deps.ts`; the Agent's runtime import closure does not reach that module or any `src/inference/` module. It consumes `AgentInferenceClient` in `src/agent/inference-client.ts`: `startKeepAlive`, `showModel`, `listModels`, `chatStream`. Production composition roots inject the client; Agent still does `new OllamaClient(baseUrl)` only when nothing is injected (tests, eval harness).
 
-Default host is `http://localhost:11434`. URLs must be `http` or `https`, with no credentials, query string, or fragment. Trailing slashes on the path are stripped.
+Default Ollama host is `http://localhost:11434`. URLs must be `http` or `https`, with no credentials, query string, or fragment. Trailing slashes on the path are stripped. `--host` does not address the Python worker.
 
 Chat requests send `keep_alive: '10m'` unless a caller overrides `ChatRequest.keep_alive`. They also send `options.num_ctx` (the pinned window) and `options.num_predict` (the request's response reserve). Streamed reasoning uses Ollama's `think` field when the Agent think flag is on. `--no-think` still sends `think: false`; it does not omit the field.
 
@@ -123,14 +130,14 @@ This layer exists so HTTP, NDJSON, and Ollama quirks do not leak into conversati
 
 It **delegates** work it must not own:
 
-| Collaborator | Owns | Must not |
-|---|---|---|
-| `RequestPlanner` | Exact request bytes: system fit, git/project degrade, attachment fit, tool-result reservation | Conversation mutations, compaction commits |
-| `ToolRoundExecutor` | One catalog snapshot: name repair, approval, parallel/serial execution, staged results | History commits (Agent pushes messages after the round) |
-| `ConversationState` | Stored messages, token estimates, frozen compaction prefix, active-turn anchor, undo/redo stacks, compaction metrics | Filesystem I/O, inference, MCP |
-| `CompactionCoordinator` | Prune / summarize / hard-fit / trim via revision-checked plans | Direct history edits that skip the state API |
-| `ReplayCoordinator` | Undo/redo across messages, files, and todos, fail-closed | Compaction |
-| `McpToolScope` | Mode, lazy manager identity, bootstrap, admission, retirement | Conversation state |
+| Collaborator            | Owns                                                                                                                 | Must not                                                |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| `RequestPlanner`        | Exact request bytes: system fit, git/project degrade, attachment fit, tool-result reservation                        | Conversation mutations, compaction commits              |
+| `ToolRoundExecutor`     | One catalog snapshot: name repair, approval, parallel/serial execution, staged results                               | History commits (Agent pushes messages after the round) |
+| `ConversationState`     | Stored messages, token estimates, frozen compaction prefix, active-turn anchor, undo/redo stacks, compaction metrics | Filesystem I/O, inference, MCP                          |
+| `CompactionCoordinator` | Prune / summarize / hard-fit / trim via revision-checked plans                                                       | Direct history edits that skip the state API            |
+| `ReplayCoordinator`     | Undo/redo across messages, files, and todos, fail-closed                                                             | Compaction                                              |
+| `McpToolScope`          | Mode, lazy manager identity, bootstrap, admission, retirement                                                        | Conversation state                                      |
 
 Public callbacks live on `AgentEvents` in `src/agent/contracts.ts` (`onToken`, `onThinking`, `onToolCall`, `onToolResult`, `onToolApproval`, `onMcpLaunchApproval`, `onDoomLoop`, `onVerification`, `onUsage`, `onAttachments`, `onCompactionStart`, `onCompaction`, `onDone`, `onError`). Semantics that are easy to misread: `onCompactionStart` is summarization-only (not prune); `onAttachments` fires only after the user message is committed with a materialization; `onUsage` is Ollama token counts plus nanosecond durations; `onVerification` is warn-only with one retry on FAIL.
 
@@ -147,7 +154,7 @@ The Ink UI is not the Agent.
 - `App.tsx` retains terminal geometry, top-level input routing, modal composition, and rendering.
 - Slash commands are four feature bundles plus `/help`, registered in a **fixed order** in `src/tui/commands/registry.ts`.
 
-`src/cli/main.tsx` is a tiny dispatcher: if `argv[2] === 'exec'`, run headless; otherwise parse interactive flags with commander and render `<App>`. Interactive `--help` therefore does **not** list `exec`. Use `coral exec --help`.
+`src/cli/main.tsx` is a tiny dispatcher: `exec` runs headless, `skills` lists/prints `AGENTS_HOME/skills`, otherwise parse interactive flags with commander and render `<App>`. Interactive `--help` therefore does **not** list `exec` or `skills`.
 
 This layer exists so Ink/React can be swapped or tested without rewriting the Agent, and so only one turn, command, or transition runs at a time.
 
@@ -168,10 +175,10 @@ This layer exists so MCP SDK cost is not paid when MCP is off, and so yolo canno
 
 Not a fifth runtime layer, but a separate disk contract:
 
-| Module | Job |
-|---|---|
-| `src/session/types.ts` | Hydrated public values (`SessionData`, `SessionMeta`) |
-| `src/session/codec.ts` | Untrusted-bytes validation and serialization |
+| Module                 | Job                                                               |
+| ---------------------- | ----------------------------------------------------------------- |
+| `src/session/types.ts` | Hydrated public values (`SessionData`, `SessionMeta`)             |
+| `src/session/codec.ts` | Untrusted-bytes validation and serialization                      |
 | `src/session/store.ts` | Paths, discovery, atomic whole-file writes, multiwriter semantics |
 
 Codec owns “is this JSON a session?”. Store owns “where does it live and how is it replaced?”.
@@ -189,7 +196,7 @@ sequenceDiagram
   participant Agent as Agent façade
   participant State as ConversationState
   participant Planner as RequestPlanner
-  participant Ollama
+  participant Model as Inference client
   participant Round as ToolRoundExecutor
   participant Store as Session store
 
@@ -203,15 +210,15 @@ sequenceDiagram
   loop until model finishes, errors, or abort
     Agent->>Planner: planModelRequest (history, git, tools)
     Planner-->>Agent: messages + budget or needs compaction
-    Agent->>Ollama: chatStream
-    Ollama-->>App: tokens / thinking
+    Agent->>Model: chatStream
+    Model-->>App: tokens / thinking
     alt model emitted tool_calls
       Agent->>Round: prepare (catalog snapshot)
       Round->>User: approval prompt if require_approval
       Round-->>Agent: staged results + diffs / undo changes
       Agent->>State: commit assistant + tool messages
     else empty / invalid tool-shaped text
-      Agent->>Ollama: stall nudge or repair reprompt
+      Agent->>Model: stall nudge or repair reprompt
     else final assistant text
       opt verifyEdits and edits exist
         Agent->>Agent: read-only self-check subagent
@@ -225,7 +232,7 @@ sequenceDiagram
 ### 1. Input
 
 - Plain text starts a turn.
-- Lines starting with `/` are slash commands and are **not** sent to the model.
+- Lines starting with `/` are slash commands. Built-in commands are **not** sent to the model. Each discovered skill is also a `/name` command; invoking it starts a turn that tells the model to load that skill via the `skill` tool. Built-in names win on collision.
 - `@path` or `@"quoted path"` mentions are parsed on submit. The runtime passes `attachmentPaths` into `acceptTurn`. Coral reads those files only after the context window and tool budget are known, then fits them in mention order against the same whole-request limit as history, tools, Git context, and the reserved response.
 
 ### 2. Admission
@@ -246,7 +253,7 @@ In order:
 - Rebuild **Git context** (request-only; not stored in history). If the cwd is not a git work tree, it is omitted.
 - **Compact if needed** (prune old tool results, then summarize; fail-twice trim; plus a 100-message guard). See [Context](context.md).
 - `RequestPlanner.planModelRequest` builds the exact messages/tools payload. If it does not fit: compact git → drop git → strip project context → hard-fit history compaction → fit attachments. Overflow of protected history or fixed cost becomes a `RequestBudgetError` (`fixed_cost_overflow` or `history_overflow`) surfaced as `onError`.
-- `chatStream` to Ollama. `thinking` chunks → `onThinking`. `content` → `onToken`. `tool_calls` are merged by function index.
+- `chatStream` to the injected inference client (Ollama HTTP or the MLX worker). `thinking` chunks → `onThinking`. `content` → `onToken`. `tool_calls` are merged by function index.
 
 ### 5. Tool settlement
 
@@ -263,8 +270,8 @@ The loop continues.
 
 - A tool-free assistant message ends the turn (after optional edit verification).
 - Interrupt (`Ctrl+C` / `Esc` during a run) aborts. Streamed assistant text is kept. If only reasoning streamed, Coral stores an assistant message with content `(interrupted)` and that thinking. If **neither** content nor thinking arrived, history is unchanged. The TUI still appends `Generation interrupted`.
-- Empty model turn (no content **and** no thinking): up to **2** stall nudges — *Your last turn was empty. Call a tool to make progress, or give your final answer as plain text.*
-- Tool-shaped invalid text: **1** reprompt — *That looked like a tool call, but it wasn't valid…*
+- Empty model turn (no content **and** no thinking): up to **2** stall nudges — _Your last turn was empty. Call a tool to make progress, or give your final answer as plain text._
+- Tool-shaped invalid text: **1** reprompt — _That looked like a tool call, but it wasn't valid…_
 - If `RequestPlanner` still cannot fit after degrading Git and project context, it returns `needs_history_compaction`. The Agent then runs **hard-fit** summarization of everything between the system message and the active user turn, then retries the plan. Protected history that still overflows becomes `RequestBudgetError`.
 - `finalizeActiveTurn` records an undo turn (messages, file changes, todo change), caps at 10, and **clears redo**.
 - `InteractiveSessionRuntime.completeTurn` always attempts an atomic session write for that turn (`persistence`: `saved` / `error` / `not_attempted`). The React adapter's `persistCurrent` (slash commands) skips when there are zero non-system messages **and** no bound session id (`status: 'empty'`). `stale` means the Agent is already closing.
@@ -277,17 +284,17 @@ Headless `coral exec` runs the same Agent loop once, never creates a Coral sessi
 
 This is the ownership rule that keeps compaction, undo, and MCP from racing.
 
-| Component | Mutates | Does not mutate |
-|---|---|---|
-| **Agent** | Admission, which collaborator runs, tool catalog rebuild after MCP admit, `numCtx`, think/verify flags, reliability counters, dispose | Direct surgery of the message array (goes through `ConversationState`) |
-| **RequestPlanner** | Nothing durable — plans from a snapshot | `ConversationState`, files, MCP |
-| **ToolRoundExecutor** | Host files/processes via tools; staged round outcomes | History (Agent commits after execute) |
-| **ConversationState** | Messages, frozen prefix, anchors, undo/redo, revision, compaction counters | Disk, Ollama, MCP processes |
-| **CompactionCoordinator** | History **only** by committing revision-checked plans | Files; must not apply a stale plan |
-| **ReplayCoordinator** | Files + todos + history via `commitReplay` | Compaction prefix (undo is refused after compaction) |
-| **McpToolScope** | Mode, manager identity, admitted dynamic tools | Conversation messages |
-| **InteractiveSessionRuntime** | Which Agent is current, session binding, prompts, shutdown | Message contents (reads Agent snapshots) |
-| **Session store** | Files under `CORAL_HOME/sessions/` | Live Agent memory except via load/restore |
+| Component                     | Mutates                                                                                                                               | Does not mutate                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| **Agent**                     | Admission, which collaborator runs, tool catalog rebuild after MCP admit, `numCtx`, think/verify flags, reliability counters, dispose | Direct surgery of the message array (goes through `ConversationState`) |
+| **RequestPlanner**            | Nothing durable — plans from a snapshot                                                                                               | `ConversationState`, files, MCP                                        |
+| **ToolRoundExecutor**         | Host files/processes via tools; staged round outcomes                                                                                 | History (Agent commits after execute)                                  |
+| **ConversationState**         | Messages, frozen prefix, anchors, undo/redo, revision, compaction counters                                                            | Disk, Ollama, MCP processes                                            |
+| **CompactionCoordinator**     | History **only** by committing revision-checked plans                                                                                 | Files; must not apply a stale plan                                     |
+| **ReplayCoordinator**         | Files + todos + history via `commitReplay`                                                                                            | Compaction prefix (undo is refused after compaction)                   |
+| **McpToolScope**              | Mode, manager identity, admitted dynamic tools                                                                                        | Conversation messages                                                  |
+| **InteractiveSessionRuntime** | Which Agent is current, session binding, prompts, shutdown                                                                            | Message contents (reads Agent snapshots)                               |
+| **Session store**             | Files under `CORAL_HOME/sessions/`                                                                                                    | Live Agent memory except via load/restore                              |
 
 `ConversationState.touch()` bumps a revision on every mutation. Compaction and undo plans carry that revision; a stale plan returns `{ status: 'stale' }` and does not commit. Summarize, hard-fit, trim, `/compact`, and `/clear` **clear undo/redo**. Tool-result **prune** does not (it rewrites tool bodies in place and leaves stacks aligned). Undo refuses “after compaction or history changes” and “after concurrent history changes”.
 
@@ -331,21 +338,21 @@ Adding a built-in means both files. MCP tools are never added to `allTools`.
 
 ### Built-in names
 
-`read_file`, `write_file`, `edit_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `bash`, `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_switch`, `git_push`, `task`, `todo_write`.
+`read_file`, `write_file`, `edit_file`, `grep`, `glob`, `list_files`, `search_code`, `skill`, `code_intel`, `bash`, `git_status`, `git_diff`, `git_log`, `git_add`, `git_commit`, `git_switch`, `git_push`, `task`, `todo_write`.
 
 Default policies and path rules: [Tools](tools.md) and [Permissions](permissions.md).
 
 ### Built-in vs MCP
 
-| | Built-in | MCP |
-|---|---|---|
-| Source | Static registry | Discovered after launch |
-| Name | Exact built-in | `mcp__<alias>__<tool>` |
-| Default policy | Per-tool in catalog | `require_approval` (unknown-name default) |
-| `subagentSafe` / `parallelSafe` | If the tool sets them | Always false in the catalog |
-| Workspace path rule | Some tools | Never |
-| Yolo | Same as other gated tools | Only `yoloTools` + current trust |
-| Subagents | Nine read-only tools | Never (`mcpMode: 'off'`) |
+|                                 | Built-in                  | MCP                                       |
+| ------------------------------- | ------------------------- | ----------------------------------------- |
+| Source                          | Static registry           | Discovered after launch                   |
+| Name                            | Exact built-in            | `mcp__<alias>__<tool>`                    |
+| Default policy                  | Per-tool in catalog       | `require_approval` (unknown-name default) |
+| `subagentSafe` / `parallelSafe` | If the tool sets them     | Always false in the catalog               |
+| Workspace path rule             | Some tools                | Never                                     |
+| Yolo                            | Same as other gated tools | Only `yoloTools` + current trust          |
+| Subagents                       | Ten read-only tools       | Never (`mcpMode: 'off'`)                  |
 
 MCP tools cannot claim a built-in name (after normalization). They cannot self-grant workspace-path handling, parallel execution, or subagent eligibility.
 
@@ -355,7 +362,7 @@ MCP tools cannot claim a built-in name (after normalization). They cannot self-g
 
 ### `task` subagents
 
-`task` runs a **read-only child Agent** with a 24-iteration cap, shared LSP client, inherited `num_ctx`, `mcpMode: 'off'`, `verifyEdits: false`, and tools limited to `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`. Unexpected `require_approval` calls are denied (no prompt). `task` itself is not subagent-safe (no recursion). The optional `description` argument is display-only; only `prompt` is forwarded.
+`task` runs a **read-only child Agent** with a 24-iteration cap, shared LSP client, inherited `num_ctx`, `mcpMode: 'off'`, `verifyEdits: false`, and tools limited to `read_file`, `grep`, `glob`, `list_files`, `search_code`, `skill`, `code_intel`, `git_status`, `git_diff`, `git_log`. Unexpected `require_approval` calls are denied (no prompt). `task` itself is not subagent-safe (no recursion). The optional `description` argument is display-only; only `prompt` is forwarded.
 
 ---
 
@@ -419,10 +426,10 @@ Slash-command **order** is mixed across the four bundles (`help`, then conversat
 
 **Headless** constructs an Agent with a profile tool list, always-reject approvals, `verifyEdits: false`, think left at Agent default (`true`), and `mcpMode: 'ask'` only if `--mcp` (still reject launch/tool prompts). It never calls the session store.
 
-| Profile | Tools (`always_allow` inside the profile) |
-|---|---|
-| `read-only` (default) | The nine `subagentSafe` tools: `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log` |
-| `workspace-write` | Those plus `write_file`, `edit_file`, `bash` |
+| Profile               | Tools (`always_allow` inside the profile)                                                                                                          |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read-only` (default) | The ten `subagentSafe` tools: `read_file`, `grep`, `glob`, `list_files`, `search_code`, `skill`, `code_intel`, `git_status`, `git_diff`, `git_log` |
+| `workspace-write`     | Those plus `write_file`, `edit_file`, `bash`                                                                                                       |
 
 **In neither profile:** `git_add`, `git_commit`, `git_switch`, `git_push`, `task`, `todo_write`. Unexpected tools and every approval prompt are rejected. `--ephemeral` does nothing.
 
@@ -481,10 +488,10 @@ The pin is what Ollama allocates for KV. **Request budgeting is a separate, tigh
 
 Degrade order when the request does not fit: compact Git → drop Git → strip project files from the system prompt → hard-fit history compaction if allowed → fit attachments. Overflow of protected history or fixed cost becomes `RequestBudgetError`:
 
-| `code` | Advice in the message |
-|---|---|
+| `code`                | Advice in the message                                                    |
+| --------------------- | ------------------------------------------------------------------------ |
 | `fixed_cost_overflow` | shorten the turn, disable optional MCP tools, or raise the context limit |
-| `history_overflow` | start a new session, compact earlier, or raise the context limit |
+| `history_overflow`    | start a new session, compact earlier, or raise the context limit         |
 
 If `showModel` fails or native length is `<= 0`, Coral falls back to **8192**. Compaction uses **32,768** as a conservative window when the live pin is still unknown.
 
@@ -507,15 +514,17 @@ flowchart TD
   count["message count > 100"] --> trimGuard["trimToMax every request iteration"]
 ```
 
-| Mode | When | What it keeps | Clears undo? |
-|---|---|---|---|
-| **automatic prune** | ≥ 10 messages and estimated tokens > **75%** of the window | Newest **6** tool results; others become `[tool result pruned — toolName: preview, ~N tokens]` | **No** |
-| **automatic summarize** | ≥ 20 messages and tokens > **90%** | Newest **10** messages verbatim, plus at most **4** frozen `[Conversation handoff` summaries | **Yes** |
-| **automatic fail-trim** | Summarize fails **2** times in a row | Most recent **100** messages (`DEFAULT_MAX_HISTORY`) | **Yes** |
-| **hard-fit** | Planner returned `needs_history_compaction` | System + active turn; everything between is summarized | **Yes** |
-| **manual** (`/compact`) | User command | Frozen prefix is **system only**, then the new handoff. TUI refuses when **non-system** messages < 4; `forceCompact` / `prepareSummary('manual')` refuse when **total** messages (including system) < 4 | **Yes** |
+| Mode                    | When                                                       | What it keeps                                                                                                                                                                                           | Clears undo? |
+| ----------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| **automatic prune**     | ≥ 10 messages and estimated tokens > **75%** of the window | Newest **6** tool results, the latest loaded skill, and other `skill` results in the active turn; older bodies become markers. Completed assistant reasoning is removed except for the newest field.    | **No**       |
+| **automatic summarize** | ≥ 20 messages and tokens > **90%**                         | Newest **10** messages verbatim, plus at most **4** frozen `[Conversation handoff` summaries                                                                                                            | **Yes**      |
+| **automatic fail-trim** | Summarize fails **2** times in a row                       | Most recent **100** messages (`DEFAULT_MAX_HISTORY`)                                                                                                                                                    | **Yes**      |
+| **hard-fit**            | Planner returned `needs_history_compaction`                | System + active turn; everything between is summarized                                                                                                                                                  | **Yes**      |
+| **manual** (`/compact`) | User command                                               | Frozen prefix is **system only**, then the new handoff. TUI refuses when **non-system** messages < 4; `forceCompact` / `prepareSummary('manual')` refuse when **total** messages (including system) < 4 | **Yes**      |
 
 A separate **hard message-count guard** runs every model-request iteration after `compactIfNeeded`: if stored messages exceed 100, Coral trims to 100 (preserving the active turn). That is independent of whether prune/summarize ran.
+
+All skill results in the active turn are protected until finalization. After that, only the most recently loaded skill remains protected so a follow-up such as `continue` retains its contract; loading a newer skill makes the older body eligible for pruning. This bounds cross-turn retention to one full skill body.
 
 `onCompactionStart` fires only before a **summarization** model call, not before prune. Successful summarize/trim TUI notices include `Undo history cleared`. Prune notices do not.
 
@@ -525,14 +534,14 @@ A separate **hard message-count guard** runs every model-request iteration after
 
 `AgentOptions` includes four narrow injections. None of them is a plugin host or a second inference provider.
 
-| Option | Type | Why it exists |
-|---|---|---|
-| `inferenceClient` | `AgentInferenceClient` | Tests and causal doubles. Production: `OllamaClient`. |
-| `readOnlySubagentRunner` | `SubagentRunner` | Share one runner between `task` and post-edit verification. |
-| `mcpManagerFactory` | `(mode: 'ask' \| 'yolo') => Promise<AgentMcpManager>` | Lazy SDK load + manager test doubles. |
-| `turnContext` | `TurnContextDependencies` | Deterministic git/project/attachment I/O for tests. Production uses the real filesystem. |
+| Option                   | Type                                                  | Why it exists                                                                                                                        |
+| ------------------------ | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `inferenceClient`        | `AgentInferenceClient`                                | Tests, causal doubles, and production composition-root injection (`OllamaClient` or `PythonInferenceClient`). Not a provider matrix. |
+| `readOnlySubagentRunner` | `SubagentRunner`                                      | Share one runner between `task` and post-edit verification.                                                                          |
+| `mcpManagerFactory`      | `(mode: 'ask' \| 'yolo') => Promise<AgentMcpManager>` | Lazy SDK load + manager test doubles.                                                                                                |
+| `turnContext`            | `TurnContextDependencies`                             | Deterministic git/project/attachment I/O for tests. Production uses the real filesystem.                                             |
 
-Other options you can observe: `think` (CLI/TUI pass boolean; the type also allows `'low' \| 'medium' \| 'high'` but the interactive CLI does not), `tools`, `maxIterations`, `numCtx`, `verifyEdits`, `permissions`, `codeIntel`, `mcpMode`, `mcpConfig`, `todoState`.
+Other options you can observe: `think` (CLI/TUI pass boolean; the type also allows `'low' \| 'medium' \| 'high'` but the interactive CLI does not), `tools`, `maxIterations`, `numCtx`, `verifyEdits`, `permissions`, `codeIntel`, `mcpMode`, `mcpConfig`, `todoState`, `retrievalDeps`, `skills`, `userInstructions`.
 
 `dispose()` aborts Agent-local work, disposes MCP, and stops LSP if owned. It does **not** evict models from the Ollama host.
 
@@ -542,39 +551,41 @@ Other options you can observe: `think` (CLI/TUI pass boolean; the type also allo
 
 Useful granularity for navigating behavior, not every file.
 
-| Path | Role |
-|---|---|
-| `src/cli/` | `main.tsx` dispatch; `interactive.tsx` commander flags; `exec.ts` headless turn; `app-launch.ts` Ink mount |
-| `src/cwd.ts` | Process workspace directory for tools |
-| `src/tui/App.tsx` | Terminal chrome, input routing, modals |
-| `src/tui/session/` | Runtime, React session hook, Agent bind/persist, `@` file catalog |
-| `src/tui/commands/` | Slash commands (conversation, runtime, workspace, sessions) |
-| `src/tui/run/` | Turn projection, approval box, status line |
-| `src/tui/prompt/` | Input, `@`/`/` completion, Emacs-style edit, history JSONL |
-| `src/tui/model/` | Picker; preferred default `gemma4:31b-mlx` |
-| `src/tui/input/` | Keybindings, keypress |
-| `src/tui/shell/` | Shutdown coordinator, copy, welcome, metrics |
-| `src/tui/transcript/` | Transcript, todo panel, markdown, sanitize |
-| `src/tui/palette/` | Command palette |
-| `src/agent/agent.ts` | Façade |
-| `src/agent/contracts.ts` | Public events and options |
-| `src/agent/inference-client.ts` | Transport seam |
-| `src/agent/mcp-scope.ts` | Per-Agent MCP lifetime |
-| `src/agent/loop/` | Planner, tool rounds, compaction coordinator, doom loop, repair, verify |
-| `src/agent/state/` | Conversation, compaction shaping, todos |
-| `src/agent/effects/` | Undo/redo coordination and file replay |
-| `src/agent/request/` | System prompt, budget, attachments, git/project context, projection |
-| `src/ollama/` | Host canonicalize, REST client, API errors |
-| `src/tools/` | Built-ins, catalog, registry, path policy |
-| `src/mcp/` | Manager, launch, trust, adapter, output, stdio bounds |
-| `src/lsp/` | Bundled TypeScript language-server client |
-| `src/retrieval/` | Semantic index, embeddings, SQLite spaces |
-| `src/session/` | Types, codec, store, resume, undo persist shaping |
-| `src/config/` | User/project JSON, permissions, MCP parse, context, verify, prefs |
-| `src/telemetry/` | Local reliability deltas |
-| `src/shared/` | Workspace paths, project files/tree, ignored names |
-| `src/types/` | Inference, todos, undo, attachments |
-| `src/utils/` | `CORAL_HOME`, JSON IO, limits, git helpers |
+| Path                            | Role                                                                                                                              |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `src/cli/`                      | `main.tsx` dispatch; `interactive.tsx` commander flags; `exec.ts` headless turn; `skills.ts` list/path; `app-launch.ts` Ink mount |
+| `src/cwd.ts`                    | Process workspace directory for tools                                                                                             |
+| `src/tui/App.tsx`               | Terminal chrome, input routing, modals                                                                                            |
+| `src/tui/session/`              | Runtime, React session hook, Agent bind/persist, `@` file catalog                                                                 |
+| `src/tui/commands/`             | Slash commands (conversation, runtime, workspace, sessions)                                                                       |
+| `src/tui/run/`                  | Turn projection, approval box, status line                                                                                        |
+| `src/tui/prompt/`               | Input, `@`/`/` completion, Emacs-style edit, history JSONL                                                                        |
+| `src/tui/model/`                | Picker; preferred default `gemma4:31b-mlx`                                                                                        |
+| `src/tui/input/`                | Keybindings, keypress                                                                                                             |
+| `src/tui/shell/`                | Shutdown coordinator, copy, welcome, metrics                                                                                      |
+| `src/tui/transcript/`           | Transcript, todo panel, markdown, sanitize                                                                                        |
+| `src/tui/palette/`              | Command palette                                                                                                                   |
+| `src/agent/agent.ts`            | Façade                                                                                                                            |
+| `src/agent/contracts.ts`        | Public events and options                                                                                                         |
+| `src/agent/inference-client.ts` | Transport seam                                                                                                                    |
+| `src/agent/mcp-scope.ts`        | Per-Agent MCP lifetime                                                                                                            |
+| `src/agent/loop/`               | Planner, tool rounds, compaction coordinator, doom loop, repair, verify                                                           |
+| `src/agent/state/`              | Conversation, compaction shaping, todos                                                                                           |
+| `src/agent/effects/`            | Undo/redo coordination and file replay                                                                                            |
+| `src/agent/request/`            | System prompt, budget, attachments, git/project context, projection                                                               |
+| `src/ollama/`                   | Host canonicalize, REST client, API errors                                                                                        |
+| `src/inference/`                | Model refs, Python worker client/supervisor, PythonEmbedder (injected into retrieval)                                             |
+| `src/tools/`                    | Built-ins, catalog, registry, path policy                                                                                         |
+| `src/mcp/`                      | Manager, launch, trust, adapter, output, stdio bounds                                                                             |
+| `src/lsp/`                      | Bundled TypeScript language-server client                                                                                         |
+| `src/retrieval/`                | Semantic index, embeddings, SQLite v3 spaces (must not import `src/inference/`)                                                   |
+| `src/skills/`                   | Discover/parse/load skill packages; not a plugin loader                                                                           |
+| `src/session/`                  | Types, codec, store, resume, undo persist shaping                                                                                 |
+| `src/config/`                   | User/project JSON, permissions, MCP parse, context, verify, prefs                                                                 |
+| `src/telemetry/`                | Local reliability deltas                                                                                                          |
+| `src/shared/`                   | Workspace paths, project files/tree, ignored names                                                                                |
+| `src/types/`                    | Inference, todos, undo, attachments                                                                                               |
+| `src/utils/`                    | `CORAL_HOME`, `AGENTS_HOME`, JSON IO, limits, git helpers                                                                         |
 
 ---
 
@@ -597,17 +608,17 @@ These are Agent-loop features, not separate products:
 
 These names and strings are what a stuck session actually prints. They are not an SDK.
 
-| Surface | Where it comes from |
-|---|---|
-| `RequestBudgetError` (`fixed_cost_overflow` / `history_overflow`) | `src/agent/request/budget.ts` — `onError` |
-| `OllamaApiError: {status} {body}` | `src/ollama/errors.ts` |
-| `OllamaModelIdentityError` (`missing` \| `ambiguous` \| `invalid_digest` \| `invalid_response`) | embedding-space digest checks |
-| `Agent already has an accepted turn` | second `acceptTurn` while one is live |
-| `Request planning requires a system message` | `RequestPlanner` if history[0] is not system |
-| `Cannot start Coral: …` | invalid `--host` at interactive startup |
-| `Nothing to undo` / `Cannot undo after compaction or history changes` / `Cannot undo after concurrent history changes` | `ReplayCoordinator` |
-| `Conversation too short to compact` | TUI `/compact` when non-system messages < 4 |
-| `Generation interrupted` | TUI after abort (history may still be unchanged) |
+| Surface                                                                                                                | Where it comes from                              |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `RequestBudgetError` (`fixed_cost_overflow` / `history_overflow`)                                                      | `src/agent/request/budget.ts` — `onError`        |
+| `OllamaApiError: {status} {body}`                                                                                      | `src/ollama/errors.ts`                           |
+| `OllamaModelIdentityError` (`missing` \| `ambiguous` \| `invalid_digest` \| `invalid_response`)                        | embedding-space digest checks                    |
+| `Agent already has an accepted turn`                                                                                   | second `acceptTurn` while one is live            |
+| `Request planning requires a system message`                                                                           | `RequestPlanner` if history[0] is not system     |
+| `Cannot start Coral: …`                                                                                                | invalid `--host` at interactive startup          |
+| `Nothing to undo` / `Cannot undo after compaction or history changes` / `Cannot undo after concurrent history changes` | `ReplayCoordinator`                              |
+| `Conversation too short to compact`                                                                                    | TUI `/compact` when non-system messages < 4      |
+| `Generation interrupted`                                                                                               | TUI after abort (history may still be unchanged) |
 
 ---
 
@@ -634,6 +645,7 @@ These names and strings are what a stuck session actually prints. They are not a
 - Ask / yolo / path gates: [Permissions](permissions.md)
 - Tool catalog: [Tools](tools.md)
 - Servers and trust: [MCP](mcp.md)
+- Optional Python worker / SDK / plugins: [Python](python.md)
 - Disk conversations: [Sessions](sessions.md)
 - Windows, `/compact`, `/undo`: [Context](context.md)
 - Failures: [Troubleshooting](troubleshooting.md)

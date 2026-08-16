@@ -1,14 +1,18 @@
 # Getting started
 
-Coral is a local-first coding agent in your terminal. It talks to **your** Ollama server, not a Coral cloud.
+Coral is a local-first coding agent in your terminal. It uses **your** Ollama
+server by default or a Coral-owned local MLX worker, never a Coral cloud.
 
 ## Requirements
 
 - **Node.js 24** or newer (`package.json` `engines.node` is `>=24`)
-- A running [Ollama](https://ollama.com/) server
-- At least one model already pulled into Ollama
+- At least one local inference backend: a running
+  [Ollama](https://ollama.com/) server with a pulled model, or `uv` plus CPython
+  3.14 and a configured MLX checkpoint
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for the `grep` and `glob` tools
 - Optional: whatever executable or container runtime your MCP servers need
+- Optional on the Ollama path: `uv` + CPython 3.14 for MLX embeddings or
+  Python MCP tools ([Python](python.md))
 - Optional: `nomic-embed-text` (or another embedding model you configure) for semantic `search_code`
 
 TypeScript/JavaScript `code_intel` is bundled. You do not install a separate language server.
@@ -44,14 +48,19 @@ npm run dev -- --host http://localhost:11434
 
 ## First session
 
-1. Start Ollama and confirm `ollama list` shows a model.
+1. Prepare a local model: start Ollama and confirm `ollama list` shows a tag,
+   or sync `packages/coral-backend` and place an MLX checkpoint under the
+   configured models directory.
 2. From a project directory, run `npm run dev` (or `npm start` after build).
-3. If you did not pass `--model`, Coral opens a **model picker** of tags already installed in Ollama.
-   - `gemma4:31b-mlx` is pinned to the top and pre-selected **when that tag is installed**.
+3. If you did not pass `--model`, Coral opens a **model picker** of tags already installed in Ollama, plus any MLX checkpoints the worker can list.
+   - `gemma4:31b-mlx` is pinned to the top and pre-selected **when that Ollama tag is installed**. It is an Ollama tag, not an `mlx:` backend ref.
    - If it is not installed, the first row is the newest model by `modified_at`.
    - Exactly one installed model, or a resumed session whose stored model is still installed, skips the picker.
+   - Pass `mlx:<name>` to skip the picker and use the Python worker. Missing worker is an install error.
 4. Type a normal prompt and press Enter. `/` autocompletes slash commands. `@` picks a project file.
-5. `/help` lists commands and keybindings. They are not sent to the model.
+5. `/help` lists commands and keybindings. Built-in commands are not sent to
+   the model; discovered `/skill-name` commands start a turn that loads that
+   instruction pack.
 
 Default Ollama host is `http://localhost:11434`. Override with `--host`. Coral does not read `OLLAMA_HOST`.
 
@@ -67,16 +76,23 @@ Permission mode starts as **ask** (prompt before gated calls) unless you pass `-
 ollama pull nomic-embed-text
 ```
 
-Then `/index` in the TUI, or just use `search_code` — the first search also refreshes the index. Override the model with `CORAL_EMBEDDING_MODEL` or project `.coral.json` `retrieval.embeddingModel`.
+Then `/index` in the TUI, or just use `search_code` — the first search also
+refreshes the index. Override the model with `CORAL_EMBEDDING_MODEL` (bare
+Ollama name, `ollama:<name>`, or `mlx:<name>`) or project `.coral.json`
+`retrieval.embeddingModel` / optional `retrieval.provider`. The environment
+override replaces both project fields. Default stays `nomic-embed-text` on
+Ollama.
 
 ## Project instructions
 
-If the workspace contains `.coral.md` (then `AGENTS.md`, `README.md`, and other known files), Coral may inject excerpts into the system prompt as **Loaded Project Context**. That text cannot grant tools or permissions. See [Architecture](architecture.md) and [Configuration](configuration.md).
+If the workspace contains `.coral.md` (then `AGENTS.md`, `README.md`, and other known files), Coral may inject excerpts into the system prompt as **Loaded Project Context**. Standing user rules from `AGENTS_HOME/AGENTS.md` (default `~/.agents/AGENTS.md`) are injected first. That text cannot grant tools or permissions. See [Architecture](architecture.md), [Configuration](configuration.md), and [Skills](skills.md).
 
 ## What to read next
 
 - Daily use: [TUI](tui.md)
+- Skills: [Skills](skills.md)
 - Flags and `coral exec`: [CLI](cli.md)
 - `.coral.json` and `CORAL_HOME`: [Configuration](configuration.md)
+- Optional MLX / Python SDK / plugins: [Python](python.md)
 - How the loop is built: [Architecture](architecture.md)
 - Resume and session files: [Sessions](sessions.md)

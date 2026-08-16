@@ -280,6 +280,44 @@ function runtimeCycles(files, edges)
   return cycles
 }
 
+// find the shortest runtime path from an entrypoint to a forbidden subtree
+function runtimePathToPrefix(start, targetPrefix, edges)
+{
+  const adjacency = new Map()
+  for (const edge of edges)
+  {
+    if (!edge.runtime) continue
+    const targets = adjacency.get(edge.source) ?? []
+    targets.push(edge.target)
+    adjacency.set(edge.source, targets)
+  }
+
+  const queue = [start]
+  const previous = new Map([[start, null]])
+  while (queue.length > 0)
+  {
+    const source = queue.shift()
+    for (const target of adjacency.get(source) ?? [])
+    {
+      if (previous.has(target)) continue
+      previous.set(target, source)
+      if (target.startsWith(targetPrefix))
+      {
+        const path = []
+        let current = target
+        while (current !== null)
+        {
+          path.push(current)
+          current = previous.get(current)
+        }
+        return path.reverse()
+      }
+      queue.push(target)
+    }
+  }
+  return undefined
+}
+
 function topLevel(path)
 {
   return path.split('/')[1]
@@ -424,14 +462,108 @@ function dependencyErrors(edges)
           'lsp',
           'retrieval',
           'ollama',
+          'inference',
+          'skills',
         ],
         'utility boundary'
+      )
+    }
+    if (source === 'skills')
+    {
+      forbid(
+        edge,
+        [
+          'agent',
+          'tui',
+          'session',
+          'mcp',
+          'cli',
+          'tools',
+          'retrieval',
+          'inference',
+          'ollama',
+          'lsp',
+          'telemetry',
+        ],
+        'skills boundary'
       )
     }
     if (source === 'config' && target === 'retrieval')
     {
       errors.push(
         `config must not depend on retrieval: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'config' && target === 'inference')
+    {
+      errors.push(
+        `config must not depend on inference: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'config' && target === 'skills')
+    {
+      errors.push(
+        `config must not depend on skills: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'retrieval' && target === 'skills')
+    {
+      errors.push(
+        `retrieval must not depend on skills: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'inference' && target === 'skills')
+    {
+      errors.push(
+        `inference must not depend on skills: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'session' && target === 'skills')
+    {
+      errors.push(
+        `session must not depend on skills: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'inference')
+    {
+      const allowed = new Set([
+        'inference',
+        'types',
+        'utils',
+        'config',
+        'protocol',
+      ])
+      const agentContract =
+        target === 'agent' && edge.target === 'src/agent/inference-client.ts'
+      // PythonEmbedder implements retrieval Embedder; runtime still cannot
+      // import retrieval implementations (createEmbedder is injected)
+      const retrievalTypes =
+        !edge.runtime && edge.target === 'src/retrieval/types.ts'
+      if (!allowed.has(target) && !agentContract && !retrievalTypes)
+      {
+        errors.push(`inference boundary: ${edge.source} -> ${edge.target}`)
+      }
+    }
+    if (
+      source === 'agent' &&
+      target === 'inference' &&
+      (edge.source !== 'src/agent/agent.ts' || !edge.runtime)
+    )
+    {
+      errors.push(
+        `Agent must not depend on inference: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'retrieval' && target === 'inference')
+    {
+      errors.push(
+        `retrieval must not depend on inference: ${edge.source} -> ${edge.target}`
+      )
+    }
+    if (source === 'session' && target === 'inference')
+    {
+      errors.push(
+        `session must not depend on inference: ${edge.source} -> ${edge.target}`
       )
     }
     if (
@@ -584,7 +716,9 @@ function externalDependencyErrors(external)
       edge.specifier === 'ajv-formats' ||
       edge.specifier.startsWith('ajv-formats/')
     if (!isMcpSdk && !isAjv) continue
-    if (!edge.source.startsWith('src/mcp/'))
+    const protocolGeneratedAjv =
+      isAjv && edge.source.startsWith('src/protocol/generated/')
+    if (!edge.source.startsWith('src/mcp/') && !protocolGeneratedAjv)
     {
       errors.push(
         `MCP SDK and schema runtimes must stay inside the lazy MCP boundary: ${edge.source} -> ${edge.specifier}`
@@ -607,6 +741,18 @@ const errors = [
   ...dependencyErrors(edges),
   ...externalDependencyErrors(external),
 ]
+
+const agentInferencePath = runtimePathToPrefix(
+  'src/agent/agent.ts',
+  'src/inference/',
+  edges
+)
+if (agentInferencePath)
+{
+  errors.push(
+    `Agent runtime closure must not reach inference: ${agentInferencePath.join(' -> ')}`
+  )
+}
 
 for (const item of unresolved)
 {

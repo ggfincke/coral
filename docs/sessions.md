@@ -47,16 +47,16 @@ Discovery lists `sessions/*.json`. A legacy `sessions/index.json` is not read or
 
 ## List, resume, rename, new
 
-| Action | Prefix id? | Cwd must exist? | Notes |
-|---|---|---|---|
-| `coral --sessions` | n/a | n/a | All sessions, newest `updatedAt` first, then exit. Hint: `coral --session <id>` |
-| `/sessions [n]` (`/ls`) | n/a | n/a | Default **10**. Hint: `/resume <id>` |
-| `coral --resume` | n/a | **yes** | Newest session only. Missing cwd → **exit 1**, no fallback to the next session |
-| `coral --session <id>` | **no** (exact) | **yes** | Wins over `--resume` |
-| `/resume [id]` | **yes** | **yes** | No args: newest **other** than current. Saves current first; save error cancels resume |
-| `/rename <title>` | n/a | n/a | Needs a bound session |
-| `/new` | n/a | n/a | Save first; on save error/stale **abort** (`Current session could not be saved; the new conversation was not started.`). Success: `clearHistory` + unbind |
-| `/clear` (`/reset`) | n/a | n/a | Clear history/todos/undo/metrics, unbind. Does not rewrite or delete the old file |
+| Action                  | Prefix id?     | Cwd must exist? | Notes                                                                                                                                                     |
+| ----------------------- | -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coral --sessions`      | n/a            | n/a             | All sessions, newest `updatedAt` first, then exit. Hint: `coral --session <id>`                                                                           |
+| `/sessions [n]` (`/ls`) | n/a            | n/a             | Default **10**. Hint: `/resume <id>`                                                                                                                      |
+| `coral --resume`        | n/a            | **yes**         | Newest session only. Missing cwd → **exit 1**, no fallback to the next session                                                                            |
+| `coral --session <id>`  | **no** (exact) | **yes**         | Wins over `--resume`                                                                                                                                      |
+| `/resume [id]`          | **yes**        | **yes**         | No args: newest **other** than current. Saves current first; save error cancels resume                                                                    |
+| `/rename <title>`       | n/a            | n/a             | Needs a bound session                                                                                                                                     |
+| `/new`                  | n/a            | n/a             | Save first; on save error/stale **abort** (`Current session could not be saved; the new conversation was not started.`). Success: `clearHistory` + unbind |
+| `/clear` (`/reset`)     | n/a            | n/a             | Clear history/todos/undo/metrics, unbind. Does not rewrite or delete the old file                                                                         |
 
 `--model` plus `--resume` / `--session`: Agent is built with the **CLI model** and restored messages (picker skipped). `/resume` uses the **session file's** `meta.model`.
 

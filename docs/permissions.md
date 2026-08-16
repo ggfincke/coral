@@ -2,11 +2,11 @@
 
 Coral has **three different knobs**. Mixing them up is the usual source of confusion.
 
-| Knob | Values | Where |
-|---|---|---|
-| **Per-tool policy** | `always_allow`, `require_approval`, `always_deny` | Built-in defaults, `~/.coral.json` `permissions`, project `.coral.json` `permissions` |
-| **TUI permission mode** | `ask` or `yolo` | `--yolo`, `/permissions`, `Ctrl+Y` |
-| **MCP mode** | `off`, `ask`, `yolo` | Interactive TUI always passes ask or yolo. `off` is Agent default, subagents, and `coral exec` without `--mcp` |
+| Knob                    | Values                                            | Where                                                                                                          |
+| ----------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **Per-tool policy**     | `always_allow`, `require_approval`, `always_deny` | Built-in defaults, `~/.coral.json` `permissions`, project `.coral.json` `permissions`                          |
+| **TUI permission mode** | `ask` or `yolo`                                   | `--yolo`, `/permissions`, `Ctrl+Y`                                                                             |
+| **MCP mode**            | `off`, `ask`, `yolo`                              | Interactive TUI always passes ask or yolo. `off` is Agent default, subagents, and `coral exec` without `--mcp` |
 
 Policy is not a mode. Mode is not a sandbox.
 
@@ -28,7 +28,7 @@ MCP tools are keyed by the canonical name `mcp__<alias>__<tool>`. Project config
 
 ### Built-in defaults
 
-**`always_allow`:** `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`, `task`, `todo_write`
+**`always_allow`:** `read_file`, `grep`, `glob`, `list_files`, `search_code`, `skill`, `code_intel`, `git_status`, `git_diff`, `git_log`, `task`, `todo_write`
 
 **`require_approval`:** `write_file`, `edit_file`, `bash`, `git_add`, `git_commit`, `git_switch`, `git_push`
 
@@ -57,7 +57,7 @@ File/search/code-intel tools that declare a `path` argument still need a **separ
 
 After you approve, that invocation may read/write the resolved path. Outside-workspace **writes/edits are not undoable**.
 
-**Not covered by path policy:** `bash`, all `git_*` tools (including `git_diff` / `git_log`, which take a `path` argument that is **not** workspace-gated), `search_code`, `task`, `todo_write`, MCP tools. `bash` runs in the session cwd with no workspace fence; after you approve the command, the shell can touch anything the OS user can.
+**Not covered by workspace path policy:** `bash`, all `git_*` tools (including `git_diff` / `git_log`, which take a `path` argument that is **not** workspace-gated), `search_code`, `skill`, `task`, `todo_write`, MCP tools. The `skill` tool instead confines reads to a discovered package's `SKILL.md` and `references/`. `bash` runs in the session cwd with no workspace fence; after you approve the command, the shell can touch anything the OS user can.
 
 ---
 

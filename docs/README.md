@@ -1,6 +1,7 @@
 # Coral documentation
 
-Guides for people running Coral: a local-first CLI/TUI coding agent that talks to your Ollama host.
+Guides for people running Coral: a local-first CLI/TUI coding agent that uses
+your Ollama host by default or a Coral-owned local MLX worker.
 
 Coral is pre-1.0. Interfaces, session files, and configuration can still change between minor releases.
 
@@ -19,16 +20,19 @@ Coral is pre-1.0. Interfaces, session files, and configuration can still change 
 ## What the agent can do
 
 7. [Tools](tools.md) — every built-in tool, params, and policy highlights.
-8. [Sessions](sessions.md) — save, resume, list, what is stored.
-9. [Context, compaction, and undo](context.md) — window sizing, `/compact`, `/undo`.
+8. [Skills](skills.md) — catalog, `skill` tool, `AGENTS_HOME/skills`.
+9. [Sessions](sessions.md) — save, resume, list, what is stored.
+10. [Context, compaction, and undo](context.md) — window sizing, `/compact`, `/undo`.
 
 ## How it is put together
 
-10. [Architecture](architecture.md) — layers, turn loop, ownership, compaction modes, constructor seams, and non-goals. This is the systems document, not a how-to.
-11. [Troubleshooting](troubleshooting.md) — Ollama, context, MCP, sessions, common failures.
+11. [Architecture](architecture.md) — layers, turn loop, ownership, compaction modes, constructor seams, and non-goals. This is the systems document, not a how-to.
+12. [Troubleshooting](troubleshooting.md) — Ollama, MLX worker, context, MCP, sessions, common failures.
+13. [Python plane](python.md) — optional MLX worker, unpublished exec SDK, and MCP plugin scaffold.
 
 ## Reading order
 
 - **Use Coral today:** getting started → TUI → permissions.
 - **Wire MCP or lock down a project:** configuration → permissions → MCP.
+- **Run an `mlx:` model or write Python tools:** python → configuration → MCP.
 - **Understand a session or a stuck turn:** architecture → context → troubleshooting.

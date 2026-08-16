@@ -13,7 +13,7 @@ On first need (and again after `/model`), Coral chooses `num_ctx` and sends it a
 Constants in `src/config/context.ts`:
 
 - Usable RAM: **75%** of `os.totalmem()`
-- Reserve: **6 GiB** plus model weight bytes (from `/api/tags` `size`; missing → 0)
+- Reserve: **6 GiB** plus **chat** model weight bytes (from the active backend's `listModels` / `show` `size`; missing → 0). Embedding weights are also counted whenever the configured embedding model is separately resident: a different Ollama model, a cross-backend model, or a second MLX checkpoint. The same normalized Ollama identity or MLX checkpoint adds zero. Ollama chat weights are not subtracted when the session's chat backend is MLX.
 - Minimum window: **8,192** tokens
 - Full-attention KV estimate: f16 (2 bytes/element) × layers × KV heads × (key + value length)
 - Sliding-window architectures **`gemma` / `gemma2` / `gemma3` / `gemma4`**: treated as KV-light → pin **native** context after the weight check (no 1024 rounding from KV math)
@@ -25,7 +25,7 @@ If `showModel` fails or native length is `<= 0`, Coral falls back to **8192**. C
 
 `context.maxNumCtx` / `CORAL_NUM_CTX` are ceilings, not a promise you get that many tokens. A tiny override (for example 512) is still floored at 8192 unless native is smaller.
 
-The pin is what Ollama allocates for KV. **Each request is then budgeted more tightly** (`src/agent/request/budget.ts`): response reserve ≈ 1/8 of the window (cap **16,384**, sent as `num_predict`); prompt limit = `window − reserve`, then capped at **32,768**. A large native pin does not mean Coral sends a 32k+ prompt. Attachments may use up to half of the remaining flexible budget, with a **4 MiB** aggregate capture cap.
+The pin is what the active backend allocates for KV. **Each request is then budgeted more tightly** (`src/agent/request/budget.ts`): response reserve ≈ 1/8 of the window (cap **16,384**, sent as `num_predict`); prompt limit = `window − reserve`, then capped at **32,768**. A large native pin does not mean Coral sends a 32k+ prompt. Attachments may use up to half of the remaining flexible budget, with a **4 MiB** aggregate capture cap.
 
 `/status` shows estimated tokens (history + tool defs + framing) and, when Ollama has reported them, prompt/decode counts and average speeds.
 
@@ -50,8 +50,8 @@ Git context is a **request-only** extra system payload (`## Git Context`): branc
 
 During `runInternal`, before a request:
 
-1. **Prune** old tool results if there are at least **10** messages and estimated tokens exceed **75%** of the window. Newest **6** tool results are kept. Others become markers like `[tool result pruned — toolName: preview, ~N tokens]`. Prune does **not** clear undo. TUI: `Auto-pruned N old tool results (~… tokens freed)`.
-2. **Summarize** if at least **20** messages and tokens exceed **90%**. Newest **10** messages stay verbatim. The summarizer is a tool-free Ollama call with a structured handoff prompt (Goal, Decisions, Work completed, Work remaining, Relevant files). Thinking is replaced with `[reasoning was used]`. TUI first line: `Context auto-compacted`, then `Undo history cleared`.
+1. **Prune** old tool results if there are at least **10** messages and estimated tokens exceed **75%** of the window. Newest **6** tool results are kept. Others become markers like `[tool result pruned — toolName: preview, ~N tokens]`. Every `skill` result loaded during the active turn stays intact through later tool rounds; after finalization, only the latest loaded skill remains protected so a `continue` turn retains its contract. Loading a newer skill makes the older body eligible for pruning. Completed assistant reasoning is removed except for the newest field. Prune does **not** clear undo. TUI reports the combined tool-result and reasoning reduction.
+2. **Summarize** if at least **20** messages and tokens exceed **90%**. Newest **10** messages stay verbatim. The summarizer is a tool-free call through the active inference client with a structured handoff prompt (Goal, Decisions, Work completed, Work remaining, Relevant files). Thinking is replaced with `[reasoning was used]`. TUI first line: `Context auto-compacted`, then `Undo history cleared`.
 3. If summarization fails **2** times, Coral **trims** to the most recent **100** messages (`DEFAULT_MAX_HISTORY`). TUI: `Context trimmed to recent history (summarization unavailable)` plus `Undo history cleared`.
 4. **Every** request iteration, if stored messages exceed 100, Coral also trims to 100 (preserving the active turn). That guard is independent of whether prune/summarize ran.
 
@@ -100,7 +100,7 @@ Outside-workspace writes are not in the undo log.
 
 ## Request repairs that use context
 
-- Empty model turn: up to **2** nudges — *Your last turn was empty…*
+- Empty model turn: up to **2** nudges — _Your last turn was empty…_
 - Tool-shaped invalid text: **1** reprompt
 - Doom loop: **3** identical calls or errors in a window of **12** → TUI continue/stop; exec stops
 - `/verify on`: after edits, a read-only subagent must emit `VERDICT: PASS` or `VERDICT: FAIL`; one model retry on FAIL

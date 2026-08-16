@@ -1,11 +1,12 @@
 # CLI reference
 
-The `coral` program has two entry points. `src/cli/main.tsx` dispatches on the first argument:
+The `coral` program dispatches on the first argument:
 
 - `coral exec …` → headless (`src/cli/exec.ts`)
+- `coral skills …` → list / path (`src/cli/skills.ts`; `seed` prints a ggfincke-skills pointer)
 - anything else → interactive TUI (`src/cli/interactive.tsx`)
 
-`coral --help` does **not** list `exec`. Use `coral exec --help`.
+`coral --help` does **not** list `exec` or `skills`. Use `coral exec --help` and `coral skills --help`.
 
 Version comes from `package.json` (currently `0.14.0`) via `-V` / `--version` on the interactive command only. `coral exec` has no `--version`.
 
@@ -19,26 +20,31 @@ npm run dev -- [options]
 npm start -- [options]
 ```
 
-| Flag | Help text in commander | Behavior |
-|---|---|---|
-| `-V`, `--version` | output the version number | Print version and exit |
-| `-m`, `--model <model>` | Ollama model to use | Skip the picker; construct the Agent with this tag. Combined with `--resume` / `--session`, the **CLI model** is used with restored messages |
-| `--host <url>` | Ollama host URL | Default `http://localhost:11434`. Must be `http` or `https`, no userinfo, query, or fragment |
-| `--no-think` | disable streamed reasoning requests | Agent `think: false`. Default is think **on** |
-| `--yolo` | auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP yoloTools | Start in yolo permission mode |
-| `--resume` | resume the most recent session | Newest session by `updatedAt`. If that session's `cwd` no longer exists, Coral **exits 1** — it does not walk to the next session |
-| `--session <id>` | resume a specific session by ID | **Exact** 8-hex id (no prefix). Same cwd check. Wins over `--resume` |
-| `--sessions` | list saved sessions & exit | Prints every discovered session, newest first |
-| `--theme <name>` | color theme (see /theme for the list) | Theme **id** or **label**, case-insensitive. Unknown name → exit 1 with the id list. Precedence: this flag > `prefs.json` > `coral-reef` |
-| `-h`, `--help` | display help for command | Interactive help only |
+| Flag                    | Help text in commander                                                             | Behavior                                                                                                                                     |
+| ----------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-V`, `--version`       | output the version number                                                          | Print version and exit                                                                                                                       |
+| `-m`, `--model <model>` | model ref (`backend:name`; bare = ollama)                                          | Skip the picker; construct the Agent with this ref. Combined with `--resume` / `--session`, the **CLI model** is used with restored messages |
+| `--host <url>`          | Ollama host URL                                                                    | Default `http://localhost:11434`. Must be `http` or `https`, no userinfo, query, or fragment                                                 |
+| `--no-think`            | disable streamed reasoning requests                                                | Agent `think: false`. Default is think **on**                                                                                                |
+| `--yolo`                | auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP yoloTools | Start in yolo permission mode                                                                                                                |
+| `--resume`              | resume the most recent session                                                     | Newest session by `updatedAt`. If that session's `cwd` no longer exists, Coral **exits 1** — it does not walk to the next session            |
+| `--session <id>`        | resume a specific session by ID                                                    | **Exact** 8-hex id (no prefix). Same cwd check. Wins over `--resume`                                                                         |
+| `--sessions`            | list saved sessions & exit                                                         | Prints every discovered session, newest first                                                                                                |
+| `--theme <name>`        | color theme (see /theme for the list)                                              | Theme **id** or **label**, case-insensitive. Unknown name → exit 1 with the id list. Precedence: this flag > `prefs.json` > `coral-reef`     |
+| `-h`, `--help`          | display help for command                                                           | Interactive help only                                                                                                                        |
 
-Program name/description: `coral` / `A local-first CLI/TUI coding agent for Ollama`.
+Program name/description: `coral` / `A local-first CLI/TUI coding agent for local models`.
 
 `--sessions` with none: `No saved sessions.` Footer: `Resume with: coral --session <id>`.
 
 CLI resume errors (exit 1): `No sessions to resume.`; `Session not found: …` plus `Run coral --sessions to see available sessions.`; `Cannot resume session {id}.` / `Working directory no longer exists: {cwd}`; `Ambiguous session ID "…" — multiple matches:` plus `Use the full session ID.`; `Session already active: …` (TUI concern; CLI resume has no current session).
 
 Invalid `--host` prints `Cannot start Coral: …` (same canonicalize errors as [Troubleshooting](troubleshooting.md)).
+
+An untagged model name uses Ollama. A lowercase letter-only segment before the
+first `:` is reserved for a backend, so ambiguous Ollama tags must be explicit:
+use `ollama:mistral:latest`, not `mistral:latest`. Tags such as
+`gemma4:31b-mlx` remain unambiguous bare Ollama names.
 
 Unknown `--theme`: `Unknown theme: …` plus `Available themes: coral-reef, deep-sea, sunset-tide, kelp-forest, tide-pool, adaptive`. Unknown saved prefs theme is ignored with a stderr warning.
 
@@ -60,33 +66,33 @@ coral exec \
   --no-mcp
 ```
 
-| Flag / argument | Help text | Default | Notes |
-|---|---|---|---|
-| `[prompt]` | prompt text; quote multiword prompts | — | Mutually exclusive with `--prompt-file` |
-| `-m, --model <model>` | Ollama model to use | **required** | Empty after trim → `model must be nonempty` |
-| `--prompt-file <path>` | read the prompt from a UTF-8 file | — | Max **1,048,576** bytes |
-| `--cwd <path>` | workspace directory | `process.cwd()` at parse time | Must be a directory |
-| `--host <url>` | Ollama host URL | `http://localhost:11434` | Same canonicalize rules |
-| `--permission-profile <profile>` | headless tool profile | `read-only` | Choices: `read-only`, `workspace-write` |
-| `--output-format <format>` | stdout format | `text` | Choices: `text`, `json`, `stream-json` |
-| `--result-file <path>` | atomically write the structured result | — | Same JSON as the final result object |
-| `--ephemeral` | do not persist a Coral conversation | — | **Accepted and unused.** Exec never persists sessions either way |
-| `--mcp` | enable pre-trusted, always-allowed MCP tools | `false` | `mcpMode: 'ask'` but every approval is rejected |
-| `--no-mcp` | explicitly disable configured MCP servers | — | Sets MCP off |
-| `-h, --help` | display help for command | — | |
+| Flag / argument                  | Help text                                    | Default                       | Notes                                                            |
+| -------------------------------- | -------------------------------------------- | ----------------------------- | ---------------------------------------------------------------- |
+| `[prompt]`                       | prompt text; quote multiword prompts         | —                             | Mutually exclusive with `--prompt-file`                          |
+| `-m, --model <model>`            | model ref (`backend:name`; bare = ollama)    | **required**                  | Empty after trim → `model must be nonempty`                      |
+| `--prompt-file <path>`           | read the prompt from a UTF-8 file            | —                             | Max **1,048,576** bytes                                          |
+| `--cwd <path>`                   | workspace directory                          | `process.cwd()` at parse time | Must be a directory                                              |
+| `--host <url>`                   | Ollama host URL                              | `http://localhost:11434`      | Same canonicalize rules                                          |
+| `--permission-profile <profile>` | headless tool profile                        | `read-only`                   | Choices: `read-only`, `workspace-write`                          |
+| `--output-format <format>`       | stdout format                                | `text`                        | Choices: `text`, `json`, `stream-json`                           |
+| `--result-file <path>`           | atomically write the structured result       | —                             | Same JSON as the final result object                             |
+| `--ephemeral`                    | do not persist a Coral conversation          | —                             | **Accepted and unused.** Exec never persists sessions either way |
+| `--mcp`                          | enable pre-trusted, always-allowed MCP tools | `false`                       | `mcpMode: 'ask'` but every approval is rejected                  |
+| `--no-mcp`                       | explicitly disable configured MCP servers    | —                             | Sets MCP off                                                     |
+| `-h, --help`                     | display help for command                     | —                             |                                                                  |
 
 Prompt errors: `provide either a prompt argument or --prompt-file, not both`; `a nonempty prompt is required`; `prompt file exceeds 1048576 bytes`; `not a directory: …`.
 
 ### Exit codes
 
-| Status | Code |
-|---|---|
-| completed | 0 |
-| failed (Agent error or result-file write failure) | 1 |
-| cancelled SIGINT | 130 |
-| cancelled SIGTERM | 143 |
-| Commander parse/help/version-style errors | commander's `exitCode` |
-| other thrown errors | 2 |
+| Status                                            | Code                   |
+| ------------------------------------------------- | ---------------------- |
+| completed                                         | 0                      |
+| failed (Agent error or result-file write failure) | 1                      |
+| cancelled SIGINT                                  | 130                    |
+| cancelled SIGTERM                                 | 143                    |
+| Commander parse/help/version-style errors         | commander's `exitCode` |
+| other thrown errors                               | 2                      |
 
 ### Permission profiles
 
@@ -94,7 +100,7 @@ Every listed tool is set to `always_allow` inside the profile. Approvals still *
 
 **`read-only`** (same set as read-only subagents):
 
-`read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`
+`read_file`, `grep`, `glob`, `list_files`, `search_code`, `skill`, `code_intel`, `git_status`, `git_diff`, `git_log`
 
 **`workspace-write`:** those plus `write_file`, `edit_file`, `bash`.
 
@@ -129,6 +135,18 @@ Result-file write failures set `error` to `failed to write result file: …`, or
 
 ---
 
+## Skills: `coral skills`
+
+```bash
+coral skills
+coral skills path
+coral skills seed   # fails with a ggfincke-skills pointer; does not copy
+```
+
+`list` (default) prints name, source root, and description. `path` prints `AGENTS_HOME/skills` (env `AGENTS_HOME`, default `~/.agents/skills`). Details: [Skills](skills.md).
+
+---
+
 ## Related
 
-[Getting started](getting-started.md) · [TUI](tui.md) · [Permissions](permissions.md) · [Sessions](sessions.md) · [Configuration](configuration.md) · [Architecture](architecture.md)
+[Getting started](getting-started.md) · [TUI](tui.md) · [Skills](skills.md) · [Permissions](permissions.md) · [Sessions](sessions.md) · [Configuration](configuration.md) · [Architecture](architecture.md) · [Python](python.md)
