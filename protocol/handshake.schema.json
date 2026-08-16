@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ggfincke/coral/protocol/handshake.schema.json",
+  "title": "HandshakeFrame",
+  "$comment": "First worker request after spawn. Payloads ride inside the envelope (method handshake). Phase 3 workers advertise embed alongside chat.start, model.list, and model.show. TS refuses methods the worker did not advertise.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/HandshakeRequest"
+    },
+    {
+      "$ref": "#/$defs/HandshakeResult"
+    }
+  ],
+  "$defs": {
+    "HandshakeRequest": {
+      "title": "HandshakeRequest",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["protocolVersion", "client"],
+      "properties": {
+        "protocolVersion": {
+          "const": 1
+        },
+        "client": {
+          "type": "string",
+          "minLength": 1
+        },
+        "modelsDir": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "HandshakeVersions": {
+      "title": "HandshakeVersions",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["python"],
+      "properties": {
+        "python": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mlx": {
+          "type": "string"
+        },
+        "mlx_lm": {
+          "type": "string"
+        }
+      }
+    },
+    "HandshakeResult": {
+      "title": "HandshakeResult",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["protocolVersion", "methods", "versions"],
+      "properties": {
+        "protocolVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "versions": {
+          "$ref": "#/$defs/HandshakeVersions"
+        }
+      }
+    }
+  }
+}

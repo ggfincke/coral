@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "id": "req-1",
+  "kind": "error",
+  "method": "chat.start",
+  "payload": {
+    "code": "model_not_found",
+    "message": "mlx checkpoint was not found under CORAL_MLX_MODELS_DIR"
+  }
+}

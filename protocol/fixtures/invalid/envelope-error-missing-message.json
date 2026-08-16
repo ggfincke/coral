@@ -1,0 +1,8 @@
+{
+  "v": 1,
+  "id": "req-1",
+  "kind": "error",
+  "payload": {
+    "code": "internal"
+  }
+}

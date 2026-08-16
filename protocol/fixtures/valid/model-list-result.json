@@ -1,0 +1,10 @@
+{
+  "models": [
+    {
+      "name": "gemma4-demo",
+      "model": "gemma4-demo",
+      "size": 2048,
+      "modified_at": "2026-08-14T00:00:00Z"
+    }
+  ]
+}

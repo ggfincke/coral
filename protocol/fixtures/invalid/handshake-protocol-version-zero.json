@@ -1,0 +1,7 @@
+{
+  "protocolVersion": 0,
+  "methods": ["chat.start"],
+  "versions": {
+    "python": "3.14.0"
+  }
+}

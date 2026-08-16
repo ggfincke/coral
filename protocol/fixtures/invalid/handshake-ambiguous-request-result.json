@@ -1,0 +1,8 @@
+{
+  "protocolVersion": 1,
+  "client": "coral-test",
+  "methods": ["chat.start"],
+  "versions": {
+    "python": "3.14"
+  }
+}

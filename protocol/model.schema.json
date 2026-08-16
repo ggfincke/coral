@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ggfincke/coral/protocol/model.schema.json",
+  "title": "ModelProtocol",
+  "$comment": "Mirrors Model, ModelInfo in src/types/inference.ts plus ModelRef and the pinned model.list / model.show request and result wrappers. Closed backend set: ollama | mlx. model.show uses payload.name (checkpoint remainder, not mlx:). model.list result is { models: Model[] }. ModelInfo.size is weight bytes.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Model"
+    },
+    {
+      "$ref": "#/$defs/ModelInfo"
+    },
+    {
+      "$ref": "#/$defs/ModelRef"
+    },
+    {
+      "$ref": "#/$defs/ModelListRequest"
+    },
+    {
+      "$ref": "#/$defs/ModelShowRequest"
+    },
+    {
+      "$ref": "#/$defs/ModelListResult"
+    }
+  ],
+  "$defs": {
+    "Model": {
+      "title": "Model",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "size", "modified_at"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "size": {
+          "type": "number"
+        },
+        "modified_at": {
+          "type": "string"
+        },
+        "digest": {
+          "type": "string"
+        }
+      }
+    },
+    "ModelInfo": {
+      "title": "ModelInfo",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["contextLength"],
+      "properties": {
+        "contextLength": {
+          "type": "number"
+        },
+        "architecture": {
+          "type": "string"
+        },
+        "blockCount": {
+          "type": "number"
+        },
+        "kvHeadCount": {
+          "type": "number"
+        },
+        "keyLength": {
+          "type": "number"
+        },
+        "valueLength": {
+          "type": "number"
+        },
+        "size": {
+          "type": "number",
+          "$comment": "weight bytes for this checkpoint; same units as Model.size"
+        },
+        "digest": {
+          "type": "string",
+          "$comment": "64-hex SHA-256 artifact digest (coral/mlx-artifact/v1) so TS can assert identity before/after embed"
+        }
+      }
+    },
+    "ModelListRequest": {
+      "title": "ModelListRequest",
+      "$comment": "model.list request. Empty object is valid. Optional modelsDir overrides inventory for that call only; spawn-time CORAL_MLX_MODELS_DIR still wins in the worker.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "modelsDir": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ModelShowRequest": {
+      "title": "ModelShowRequest",
+      "$comment": "model.show request. name is the checkpoint remainder (not the mlx: canonical ref).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ModelListResult": {
+      "title": "ModelListResult",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["models"],
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Model"
+          }
+        }
+      }
+    },
+    "ModelRef": {
+      "title": "ModelRef",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "model", "canonical"],
+      "properties": {
+        "backend": {
+          "enum": ["ollama", "mlx"]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonical": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

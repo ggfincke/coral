@@ -1,0 +1,5 @@
+{
+  "type": "init",
+  "run_id": "run-fixture",
+  "model": "gemma4:31b-mlx"
+}

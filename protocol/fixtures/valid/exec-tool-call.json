@@ -1,0 +1,9 @@
+{
+  "type": "tool_call",
+  "name": "read_file",
+  "args": {
+    "path": "README.md"
+  },
+  "call_id": 1,
+  "run_id": "run-fixture"
+}

@@ -1,0 +1,14 @@
+{
+  "type": "result",
+  "version": 1,
+  "run_id": "run-fixture",
+  "status": "completed",
+  "model": "gemma4:31b-mlx",
+  "response": "",
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "prompt_eval_duration_ns": 0,
+    "eval_duration_ns": 0
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "type": "tool_result",
+  "name": "read_file",
+  "output": "# Coral\n",
+  "call_id": 1,
+  "run_id": "run-fixture"
+}

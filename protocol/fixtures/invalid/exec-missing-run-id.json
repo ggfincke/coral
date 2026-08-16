@@ -1,0 +1,4 @@
+{
+  "type": "init",
+  "model": "gemma4:31b-mlx"
+}

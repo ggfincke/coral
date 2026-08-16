@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ggfincke/coral/protocol/embedding.schema.json",
+  "title": "EmbeddingProtocol",
+  "$comment": "Worker embed method. JSON float arrays only (no packed encodings). model is the checkpoint remainder, matching model.show name. Empty texts yield empty vectors.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/EmbedRequest"
+    },
+    {
+      "$ref": "#/$defs/EmbedResult"
+    }
+  ],
+  "$defs": {
+    "EmbedRequest": {
+      "title": "EmbedRequest",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "texts"],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "texts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "EmbedResult": {
+      "title": "EmbedResult",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vectors"],
+      "properties": {
+        "vectors": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    }
+  }
+}

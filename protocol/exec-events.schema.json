@@ -1,0 +1,420 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ggfincke/coral/protocol/exec-events.schema.json",
+  "title": "CoralExecFrame",
+  "$comment": "Sibling of the worker envelope: coral exec JSONL events plus the bare CoralExecResult object. Stream usage is camelCase TokenUsage; result.usage is snake_case four fields.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/CoralExecEvent"
+    },
+    {
+      "$ref": "#/$defs/CoralExecResult"
+    }
+  ],
+  "$defs": {
+    "TokenUsage": {
+      "title": "TokenUsage",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "promptTokens",
+        "completionTokens",
+        "totalPromptTokens",
+        "totalCompletionTokens",
+        "contextTokens",
+        "totalPromptEvalDurationNs",
+        "totalEvalDurationNs"
+      ],
+      "properties": {
+        "promptTokens": {
+          "type": "number"
+        },
+        "completionTokens": {
+          "type": "number"
+        },
+        "totalPromptTokens": {
+          "type": "number"
+        },
+        "totalCompletionTokens": {
+          "type": "number"
+        },
+        "contextTokens": {
+          "type": "number"
+        },
+        "promptEvalDurationNs": {
+          "type": "number"
+        },
+        "evalDurationNs": {
+          "type": "number"
+        },
+        "totalPromptEvalDurationNs": {
+          "type": "number"
+        },
+        "totalEvalDurationNs": {
+          "type": "number"
+        }
+      }
+    },
+    "CoralExecResultUsage": {
+      "title": "CoralExecResultUsage",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prompt_tokens",
+        "completion_tokens",
+        "prompt_eval_duration_ns",
+        "eval_duration_ns"
+      ],
+      "properties": {
+        "prompt_tokens": {
+          "type": "number"
+        },
+        "completion_tokens": {
+          "type": "number"
+        },
+        "prompt_eval_duration_ns": {
+          "type": "number"
+        },
+        "eval_duration_ns": {
+          "type": "number"
+        }
+      }
+    },
+    "JsonObject": {
+      "title": "JsonObject",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "CoralExecResult": {
+      "title": "CoralExecResult",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "run_id", "status", "model", "response", "usage"],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": ["completed", "failed", "cancelled"]
+        },
+        "model": {
+          "type": "string"
+        },
+        "response": {
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/CoralExecResultUsage"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "InitEvent": {
+      "title": "InitEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "run_id", "model"],
+      "properties": {
+        "type": {
+          "const": "init"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string"
+        }
+      }
+    },
+    "AssistantDeltaEvent": {
+      "title": "AssistantDeltaEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "text", "run_id"],
+      "properties": {
+        "type": {
+          "const": "assistant_delta"
+        },
+        "text": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ThinkingDeltaEvent": {
+      "title": "ThinkingDeltaEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "text", "run_id"],
+      "properties": {
+        "type": {
+          "const": "thinking_delta"
+        },
+        "text": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ToolCallEvent": {
+      "title": "ToolCallEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "name", "args", "call_id", "run_id"],
+      "properties": {
+        "type": {
+          "const": "tool_call"
+        },
+        "name": {
+          "type": "string"
+        },
+        "args": {
+          "$ref": "#/$defs/JsonObject"
+        },
+        "call_id": {
+          "type": "number"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ToolResultEvent": {
+      "title": "ToolResultEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "name", "output", "call_id", "run_id"],
+      "properties": {
+        "type": {
+          "const": "tool_result"
+        },
+        "name": {
+          "type": "string"
+        },
+        "output": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "call_id": {
+          "type": "number"
+        },
+        "diff": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ApprovalRejectedEvent": {
+      "title": "ApprovalRejectedEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "name", "args", "run_id"],
+      "properties": {
+        "type": {
+          "const": "approval_rejected"
+        },
+        "name": {
+          "type": "string"
+        },
+        "args": {
+          "$ref": "#/$defs/JsonObject"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "McpLaunchRejectedEvent": {
+      "title": "McpLaunchRejectedEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "alias", "run_id"],
+      "properties": {
+        "type": {
+          "const": "mcp_launch_rejected"
+        },
+        "alias": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "DoomLoopStoppedEvent": {
+      "title": "DoomLoopStoppedEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "message", "run_id"],
+      "properties": {
+        "type": {
+          "const": "doom_loop_stopped"
+        },
+        "message": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "UsageEvent": {
+      "title": "UsageEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "usage", "run_id"],
+      "properties": {
+        "type": {
+          "const": "usage"
+        },
+        "usage": {
+          "$ref": "#/$defs/TokenUsage"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "DoneEvent": {
+      "title": "DoneEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "run_id"],
+      "properties": {
+        "type": {
+          "const": "done"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ErrorEvent": {
+      "title": "ErrorEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "error", "run_id"],
+      "properties": {
+        "type": {
+          "const": "error"
+        },
+        "error": {
+          "type": "string"
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "ResultEvent": {
+      "title": "ResultEvent",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "version",
+        "run_id",
+        "status",
+        "model",
+        "response",
+        "usage"
+      ],
+      "properties": {
+        "type": {
+          "const": "result"
+        },
+        "version": {
+          "const": 1
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": ["completed", "failed", "cancelled"]
+        },
+        "model": {
+          "type": "string"
+        },
+        "response": {
+          "type": "string"
+        },
+        "usage": {
+          "$ref": "#/$defs/CoralExecResultUsage"
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "CoralExecEvent": {
+      "title": "CoralExecEvent",
+      "discriminator": {
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/InitEvent"
+        },
+        {
+          "$ref": "#/$defs/AssistantDeltaEvent"
+        },
+        {
+          "$ref": "#/$defs/ThinkingDeltaEvent"
+        },
+        {
+          "$ref": "#/$defs/ToolCallEvent"
+        },
+        {
+          "$ref": "#/$defs/ToolResultEvent"
+        },
+        {
+          "$ref": "#/$defs/ApprovalRejectedEvent"
+        },
+        {
+          "$ref": "#/$defs/McpLaunchRejectedEvent"
+        },
+        {
+          "$ref": "#/$defs/DoomLoopStoppedEvent"
+        },
+        {
+          "$ref": "#/$defs/UsageEvent"
+        },
+        {
+          "$ref": "#/$defs/DoneEvent"
+        },
+        {
+          "$ref": "#/$defs/ErrorEvent"
+        },
+        {
+          "$ref": "#/$defs/ResultEvent"
+        }
+      ]
+    }
+  }
+}

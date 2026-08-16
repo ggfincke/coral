@@ -1,0 +1,4 @@
+{
+  "model": "Qwen3-Embedding-0.6B",
+  "texts": ["hello", "world"]
+}

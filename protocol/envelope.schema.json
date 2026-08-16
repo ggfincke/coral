@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ggfincke/coral/protocol/envelope.schema.json",
+  "title": "Envelope",
+  "$comment": "Every worker-stdio frame (Phase 2+) is one NDJSON envelope. coral exec JSONL is a sibling schema and is not wrapped in this envelope.",
+  "discriminator": {
+    "propertyName": "kind"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/EnvelopeRequest"
+    },
+    {
+      "$ref": "#/$defs/EnvelopeEvent"
+    },
+    {
+      "$ref": "#/$defs/EnvelopeResult"
+    },
+    {
+      "$ref": "#/$defs/EnvelopeCancel"
+    },
+    {
+      "$ref": "#/$defs/EnvelopeError"
+    }
+  ],
+  "$defs": {
+    "EnvelopePayload": {
+      "title": "EnvelopePayload",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "EnvelopeErrorPayload": {
+      "title": "EnvelopeErrorPayload",
+      "$comment": "kind:error payload is pinned to message; optional code names the worker failure class. Do not send a sibling error string.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["message"],
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "code": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "EnvelopeRequest": {
+      "title": "EnvelopeRequest",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["v", "id", "kind", "method", "payload"],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "request"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "$ref": "#/$defs/EnvelopePayload"
+        }
+      }
+    },
+    "EnvelopeEvent": {
+      "title": "EnvelopeEvent",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["v", "id", "kind", "method", "payload"],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "event"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "$ref": "#/$defs/EnvelopePayload"
+        }
+      }
+    },
+    "EnvelopeResult": {
+      "title": "EnvelopeResult",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["v", "id", "kind", "method", "payload"],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "result"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "$ref": "#/$defs/EnvelopePayload"
+        }
+      }
+    },
+    "EnvelopeCancel": {
+      "title": "EnvelopeCancel",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["v", "id", "kind"],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "cancel"
+        }
+      }
+    },
+    "EnvelopeError": {
+      "title": "EnvelopeError",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["v", "id", "kind", "payload"],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "const": "error"
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "$ref": "#/$defs/EnvelopeErrorPayload"
+        }
+      }
+    }
+  }
+}

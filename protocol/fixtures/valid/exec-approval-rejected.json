@@ -1,0 +1,8 @@
+{
+  "type": "approval_rejected",
+  "name": "bash",
+  "args": {
+    "command": "ls"
+  },
+  "run_id": "run-fixture"
+}

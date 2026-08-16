@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "id": "req-1",
+  "kind": "request",
+  "method": "handshake",
+  "payload": {
+    "protocolVersion": 1,
+    "client": "coral"
+  }
+}

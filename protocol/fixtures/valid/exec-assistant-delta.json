@@ -1,0 +1,5 @@
+{
+  "type": "assistant_delta",
+  "text": "hello",
+  "run_id": "run-fixture"
+}

@@ -1,0 +1,293 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ggfincke/coral/protocol/chat.schema.json",
+  "title": "ChatProtocol",
+  "$comment": "Ollama-dialect ChatRequest / ChatResponse from src/types/inference.ts. Durations are nanoseconds. tool_calls.function.arguments is an object. Streaming partial tool calls must set function.index.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/ChatRequest"
+    },
+    {
+      "$ref": "#/$defs/ChatResponse"
+    }
+  ],
+  "$defs": {
+    "ChatJsonObject": {
+      "title": "ChatJsonObject",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "JsonSchema": {
+      "title": "JsonSchema",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "const": "object"
+        }
+      }
+    },
+    "OllamaToolCallFunction": {
+      "title": "OllamaToolCallFunction",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "arguments"],
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "$ref": "#/$defs/ChatJsonObject"
+        }
+      }
+    },
+    "OllamaToolCall": {
+      "title": "OllamaToolCall",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["function"],
+      "properties": {
+        "type": {
+          "const": "function"
+        },
+        "function": {
+          "$ref": "#/$defs/OllamaToolCallFunction"
+        }
+      }
+    },
+    "OllamaToolFunction": {
+      "title": "OllamaToolFunction",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "description", "parameters"],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/JsonSchema"
+        }
+      }
+    },
+    "OllamaTool": {
+      "title": "OllamaTool",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["type", "function"],
+      "properties": {
+        "type": {
+          "const": "function"
+        },
+        "function": {
+          "$ref": "#/$defs/OllamaToolFunction"
+        }
+      }
+    },
+    "AttachmentReportAttached": {
+      "title": "AttachmentReportAttached",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "truncated"],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "AttachmentReportSkip": {
+      "title": "AttachmentReportSkip",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "reason"],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "enum": [
+            "not found",
+            "too large",
+            "binary",
+            "unreadable",
+            "outside workspace",
+            "over budget"
+          ]
+        }
+      }
+    },
+    "AttachmentReport": {
+      "title": "AttachmentReport",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["attached", "skipped"],
+      "properties": {
+        "attached": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttachmentReportAttached"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AttachmentReportSkip"
+          }
+        },
+        "omittedOverBudget": {
+          "type": "number"
+        }
+      }
+    },
+    "ModelRequestMessage": {
+      "title": "ModelRequestMessage",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "enum": ["system", "user", "assistant", "tool"]
+        },
+        "content": {
+          "type": "string"
+        },
+        "thinking": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OllamaToolCall"
+          }
+        }
+      }
+    },
+    "OllamaMessage": {
+      "title": "OllamaMessage",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "enum": ["system", "user", "assistant", "tool"]
+        },
+        "content": {
+          "type": "string"
+        },
+        "thinking": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OllamaToolCall"
+          }
+        },
+        "displayContent": {
+          "type": "string"
+        },
+        "attachmentReport": {
+          "$ref": "#/$defs/AttachmentReport"
+        }
+      }
+    },
+    "ChatThink": {
+      "title": "ChatThink",
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "enum": ["low", "medium", "high"]
+        }
+      ]
+    },
+    "ChatKeepAlive": {
+      "title": "ChatKeepAlive",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "ChatRequest": {
+      "title": "ChatRequest",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["model", "messages"],
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ModelRequestMessage"
+          }
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OllamaTool"
+          }
+        },
+        "think": {
+          "$ref": "#/$defs/ChatThink"
+        },
+        "keep_alive": {
+          "$ref": "#/$defs/ChatKeepAlive"
+        },
+        "num_ctx": {
+          "type": "number"
+        },
+        "num_predict": {
+          "type": "number"
+        }
+      }
+    },
+    "ChatResponse": {
+      "title": "ChatResponse",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["message", "done"],
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/OllamaMessage"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "prompt_eval_count": {
+          "type": "number"
+        },
+        "prompt_eval_duration": {
+          "type": "number"
+        },
+        "eval_count": {
+          "type": "number"
+        },
+        "eval_duration": {
+          "type": "number"
+        }
+      }
+    }
+  }
+}

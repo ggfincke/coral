@@ -1,0 +1,9 @@
+{
+  "contextLength": 8192,
+  "architecture": "gemma4",
+  "blockCount": 48,
+  "kvHeadCount": 8,
+  "keyLength": 256,
+  "valueLength": 256,
+  "size": 2048
+}
