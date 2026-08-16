@@ -62,7 +62,7 @@ async function main(): Promise<void>
     saveBenchmarkJson(decisionPath, decision)
     await writeFile(
       markdownPath,
-      formatDecisionMarkdown(decision) +
+      formatDecisionMarkdown(decision, result) +
         `\n${formatModelEvidenceMarkdown(result.modelPairs)}` +
         `\n${formatForensicMarkdown(result.forensicFindings)}`,
       'utf8'
@@ -88,7 +88,7 @@ async function main(): Promise<void>
     saveBenchmarkJson(decisionPath, decision)
     await writeFile(
       markdownPath,
-      formatDecisionMarkdown(decision) +
+      formatDecisionMarkdown(decision, result) +
         `\n${formatModelEvidenceMarkdown(result.modelPairs)}` +
         `\n${formatForensicMarkdown(result.forensicFindings)}`,
       'utf8'

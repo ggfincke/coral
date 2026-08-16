@@ -1,14 +1,27 @@
 // tests/scripts/mlx-benchmark/report.ts
 // concise durable Markdown rendering for a machine decision
 
-import type { BenchmarkDecision, ModelPair } from './types.js'
+import type { BenchmarkDecision, BenchmarkResult, ModelPair } from './types.js'
 
 function percent(value: number): string
 {
   return `${(value * 100).toFixed(1)}%`
 }
 
-export function formatDecisionMarkdown(decision: BenchmarkDecision): string
+function artifactBlockedDecision(result: BenchmarkResult): boolean
+{
+  return (
+    result.performanceCells.length === 0 &&
+    result.hardGates.some(
+      (gate) => gate.category === 'artifact-availability' && !gate.passed
+    )
+  )
+}
+
+export function formatDecisionMarkdown(
+  decision: BenchmarkDecision,
+  result: BenchmarkResult
+): string
 {
   const lines = [
     '# MLX benchmark decision',
@@ -20,6 +33,24 @@ export function formatDecisionMarkdown(decision: BenchmarkDecision): string
     `- Generated: ${decision.generatedAt}`,
     '',
   ]
+
+  if (decision.verdict === 'no-go' && artifactBlockedDecision(result))
+  {
+    lines.push(
+      '## Decision',
+      '',
+      'Decision: **NO-GO.** Neither evaluated direct-MLX topology qualified ' +
+        'for production integration. The pinned stock MLX-LM artifact was not ' +
+        'locally installed, downloads were forbidden, and the available ' +
+        'Ollama artifact had no stock-compatible zero-copy MLX-LM ingress. ' +
+        'Correctness and performance measurement therefore did not proceed. ' +
+        "PR #64's custom worker was separately disqualified by confirmed " +
+        'activation, parser, transport, cancellation, restart, cleanup, and ' +
+        "residency defects. Ollama remains Coral's sole production inference " +
+        'backend, and no direct-MLX runtime code will be merged from this effort.',
+      ''
+    )
+  }
 
   for (const candidate of decision.candidates)
   {
