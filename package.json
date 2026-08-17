@@ -66,7 +66,7 @@
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "better-sqlite3": "^12.10.1",
-    "chalk": "^5.6.2",
+    "chalk": "^6.0.0",
     "cli-highlight": "^2.1.11",
     "commander": "^15.0.0",
     "diff": "^9.0.0",
