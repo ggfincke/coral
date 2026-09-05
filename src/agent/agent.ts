@@ -16,7 +16,11 @@ import type { Tool } from '../tools/tool.js'
 import { type SubagentResult, type SubagentRunner } from '../tools/subagent.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import { buildSystemPrompt } from './request/system-prompt.js'
-import { projectContextBudgetForWindow } from './request/project-context.js'
+import {
+  captureProjectContext,
+  projectContextBudgetForWindow,
+  type ProjectContextSnapshot,
+} from './request/project-context.js'
 import { setCwd, getCwd } from '../cwd.js'
 import { resolve } from 'node:path'
 import {
@@ -892,6 +896,7 @@ export class Agent
         throw new Error('Accepted turn is no longer present in Agent history')
       }
       const contextWindow = this.numCtx || this.contextWindowSize || MIN_NUM_CTX
+      const projectContextSnapshot = captureProjectContext(this.cwd)
       const plan = this.requestPlanner.fitSystemPrompt({
         contextWindow,
         activeContent: activeMessage.displayContent ?? activeMessage.content,
@@ -899,7 +904,12 @@ export class Agent
         desiredProjectContextBudget:
           projectContextBudgetForWindow(contextWindow),
         systemContentAt: (projectContextBudget) =>
-          this.buildSystemContent(this.model, projectContextBudget, catalog),
+          this.buildSystemContent(
+            this.model,
+            projectContextBudget,
+            catalog,
+            projectContextSnapshot
+          ),
       })
       if (!plan.budget.fits)
       {
@@ -932,7 +942,8 @@ export class Agent
     projectContextBudget = projectContextBudgetForWindow(
       this.contextWindowSize
     ),
-    catalog: ToolCatalog = this.toolCatalog
+    catalog: ToolCatalog = this.toolCatalog,
+    projectContextSnapshot?: ProjectContextSnapshot
   ): string
   {
     return buildSystemPrompt({
@@ -940,6 +951,7 @@ export class Agent
       cwd: this.cwd,
       catalog,
       projectContextBudget,
+      projectContextSnapshot,
     })
   }
 
@@ -952,13 +964,19 @@ export class Agent
       throw new Error('Accepted turn is no longer present in Agent history')
     }
     const contextWindow = this.numCtx || this.contextWindowSize || MIN_NUM_CTX
+    const projectContextSnapshot = captureProjectContext(this.cwd)
     const plan = this.requestPlanner.fitSystemPrompt({
       contextWindow,
       activeContent: activeMessage.displayContent ?? activeMessage.content,
       tools: this.toolCatalog.ollamaTools,
       desiredProjectContextBudget: projectContextBudgetForWindow(contextWindow),
       systemContentAt: (projectContextBudget) =>
-        this.buildSystemContent(this.model, projectContextBudget),
+        this.buildSystemContent(
+          this.model,
+          projectContextBudget,
+          this.toolCatalog,
+          projectContextSnapshot
+        ),
     })
     this.replaceSystemPrompt(plan.content)
     if (!plan.budget.fits)
@@ -984,7 +1002,7 @@ export class Agent
     if (this.state.indexOf(anchor) < 0) return 0
     return this.requestPlanner.attachmentBudgetChars({
       contextWindow: this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
-      systemContent: this.state.getMessages()[0]!.content,
+      systemContent: this.state.getSystemContent(),
       cleanActiveContent: cleanContent,
       tools: this.toolCatalog.ollamaTools,
     })
@@ -1049,7 +1067,7 @@ export class Agent
         plan.kind === 'prepared'
           ? plan.reservation.systemContent
           : plan.systemContent
-      if (this.state.getMessages()[0]?.content !== systemContent)
+      if (this.state.getSystemContent() !== systemContent)
       {
         this.replaceSystemPrompt(systemContent)
       }
@@ -1335,7 +1353,7 @@ export class Agent
             (fileChanges ? estimateMessageTokens(fileChanges) : 0) +
             pendingAttachmentTokens
 
-          await this.compactor.compactIfNeeded({
+          let refreshFileChanges = await this.compactor.compactIfNeeded({
             runtime: this.compactionRuntime(),
             volatileTokens,
             signal,
@@ -1354,8 +1372,12 @@ export class Agent
           while (!preparedRequest)
           {
             // compaction can await inference while external edits keep arriving
-            fileChanges = await this.turnContext.gatherFileChanges(signal)
-            signal.throwIfAborted()
+            if (refreshFileChanges)
+            {
+              fileChanges = await this.turnContext.gatherFileChanges(signal)
+              signal.throwIfAborted()
+              refreshFileChanges = false
+            }
             const activeIndex = this.state.indexOf(runAnchor)
             if (activeIndex < 0)
             {
@@ -1391,7 +1413,7 @@ export class Agent
               break
             }
 
-            if (this.state.getMessages()[0]?.content !== plan.systemContent)
+            if (this.state.getSystemContent() !== plan.systemContent)
             {
               this.replaceSystemPrompt(plan.systemContent)
             }
@@ -1404,12 +1426,10 @@ export class Agent
             })
             signal.throwIfAborted()
             historyCompactionAvailable = false
+            refreshFileChanges = true
           }
 
-          if (
-            this.state.getMessages()[0]?.content !==
-            preparedRequest.systemContent
-          )
+          if (this.state.getSystemContent() !== preparedRequest.systemContent)
           {
             this.replaceSystemPrompt(preparedRequest.systemContent)
           }

@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
-import { listSessions, loadSession } from '../../session/store.js'
+import { listSessions, loadSessionPreview } from '../../session/store.js'
+import type { OllamaMessage } from '../../types/inference.js'
 import type { SessionMeta } from '../../session/types.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import {
@@ -18,7 +19,7 @@ import { formatBlocksPlain } from '../transcript/plain.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { buildRestoredBlocks } from '../transcript/restored-blocks.js'
 import { useCoralInput } from '../input/use-coral-input.js'
-import { selectionStyle, style } from '../theme.js'
+import { getThemeGeneration, selectionStyle, style } from '../theme.js'
 import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
 import { LineList } from '../components/line-list.js'
 
@@ -39,6 +40,9 @@ export interface SessionPickerLinesOptions
   selectedIndex: number
   width: number
   height: number
+  previewLines?: readonly string[]
+  // callers restyle retained plain rows when the active theme changes
+  themeGeneration?: number
 }
 
 export interface SessionPickerInputState
@@ -112,10 +116,136 @@ export function filterSessions(
     .filter((session): session is SessionMeta => session !== undefined)
 }
 
-function loadPreviewLines(id: string): string[]
+interface SessionPreviewTail
 {
-  const stored = loadSession(id)
-  return stored ? formatBlocksPlain(buildRestoredBlocks(stored.messages)) : []
+  lines: string[]
+  complete: boolean
+}
+
+// walk backward only until the visible tail is filled; restored/plain owners
+// retain displayContent, thinking, attachment notices, and tool-output policy
+export function buildSessionPreviewTail(
+  messages: readonly OllamaMessage[],
+  maxRows: number
+): SessionPreviewTail
+{
+  const budget = Math.max(0, Math.floor(maxRows))
+  const groups: string[][] = []
+  let retained = 0
+  let index = messages.length - 1
+  for (; index >= 0 && retained < budget; index--)
+  {
+    const lines = formatBlocksPlain(buildRestoredBlocks([messages[index]!]))
+    const tail = lines.slice(Math.max(lines.length - (budget - retained), 0))
+    groups.push(tail)
+    retained += tail.length
+    if (tail.length < lines.length)
+    {
+      return { lines: groups.reverse().flat(), complete: false }
+    }
+  }
+  return { lines: groups.reverse().flat(), complete: index < 0 }
+}
+
+interface CachedSessionPreview
+{
+  id: string
+  revision: string
+  tail: SessionPreviewTail
+}
+
+const MAX_PREVIEW_CACHE_ROWS = 256
+const MAX_PREVIEW_CACHE_BYTES = 256 * 1024
+
+/** Owns one picker preview's cancellation, revision checks, and bounded tail. */
+export class SessionPreviewLoader
+{
+  private controller: AbortController | undefined
+  private generation = 0
+  private cache: CachedSessionPreview | undefined
+
+  constructor(private readonly readPreview = loadSessionPreview)
+  {}
+
+  async load(
+    id: string,
+    maxRows: number
+  ): Promise<SessionPreviewTail | undefined>
+  {
+    this.cancel()
+    const generation = this.generation
+    const controller = new AbortController()
+    this.controller = controller
+    if (this.cache?.id !== id) this.cache = undefined
+    const cached = this.cache
+    const sufficient =
+      cached && (cached.tail.complete || cached.tail.lines.length >= maxRows)
+    try
+    {
+      const result = await this.readPreview(id, {
+        knownRevision: sufficient ? cached.revision : undefined,
+        signal: controller.signal,
+      })
+      if (controller.signal.aborted || generation !== this.generation) return
+      if (result.kind === 'unchanged') return cached?.tail
+      if (result.kind === 'missing')
+      {
+        this.cache = undefined
+        return { lines: [], complete: true }
+      }
+
+      const tail = buildSessionPreviewTail(result.messages, maxRows)
+      const entry =
+        result.revision === null
+          ? undefined
+          : { id, revision: result.revision, tail }
+      this.cache =
+        entry &&
+        tail.lines.length <= MAX_PREVIEW_CACHE_ROWS &&
+        Buffer.byteLength(JSON.stringify(entry)) <= MAX_PREVIEW_CACHE_BYTES
+          ? entry
+          : undefined
+      return tail
+    }
+    catch (error)
+    {
+      if (controller.signal.aborted || generation !== this.generation) return
+      throw error
+    }
+  }
+
+  cancel(): void
+  {
+    this.controller?.abort()
+    this.controller = undefined
+    this.generation++
+  }
+
+  dispose(): void
+  {
+    this.cancel()
+    this.cache = undefined
+  }
+}
+
+function pickerLayout(sessionCount: number, height: number)
+{
+  const headerRows =
+    Number(height >= 2) + Number(height >= 3) + Number(height >= 6)
+  const availableHeight = Math.max(height - headerRows, 0)
+  const listRows = Math.min(
+    Math.max(Math.floor(availableHeight / 2), MIN_LIST_ROWS),
+    MAX_LIST_ROWS,
+    sessionCount,
+    availableHeight
+  )
+  const countRows = Number(
+    sessionCount > listRows && listRows < availableHeight
+  )
+  return {
+    listRows,
+    previewRows: Math.max(availableHeight - listRows - countRows - 1, 0),
+  }
 }
 
 // every returned row occupies one terminal row, including wide characters
@@ -132,13 +262,12 @@ function clipRow(line: string, width: number): string
 
 // newest-lines transcript window for the selected session, capped to maxRows
 export function buildSessionPreviewLines(
-  id: string | undefined,
+  lines: readonly string[],
   maxRows: number,
   width: number
 ): string[]
 {
-  if (!id || maxRows <= 0) return []
-  const lines = loadPreviewLines(id)
+  if (maxRows <= 0) return []
   const start = Math.max(lines.length - maxRows, 0)
   return lines
     .slice(start)
@@ -206,13 +335,7 @@ export function buildSessionPickerLines(
   )
 
   // split the remaining viewport between rows and the preview pane
-  const availableHeight = height - lines.length
-  const listRows = Math.min(
-    Math.max(Math.floor(availableHeight / 2), MIN_LIST_ROWS),
-    MAX_LIST_ROWS,
-    sessions.length,
-    availableHeight
-  )
+  const { listRows, previewRows } = pickerLayout(sessions.length, height)
   const start = Math.min(
     Math.max(selectedIndex - Math.floor(listRows / 2), 0),
     Math.max(sessions.length - listRows, 0)
@@ -240,11 +363,7 @@ export function buildSessionPickerLines(
       .trim()
     lines.push(`${chalk.bold('Preview')} ${chalk.dim(`· ${context}`)}`)
     lines.push(
-      ...buildSessionPreviewLines(
-        sessions[selectedIndex]?.id,
-        remaining - 1,
-        width
-      )
+      ...buildSessionPreviewLines(opts.previewLines ?? [], previewRows, width)
     )
   }
 
@@ -300,33 +419,78 @@ export default function SessionPicker({
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
 
+  const [reload, setReload] = useState(0)
+  const [previewLoader] = useState(() => new SessionPreviewLoader())
+  const [preview, setPreview] = useState<{
+    id: string
+    lines: string[]
+  } | null>(null)
   const load = useCallback(() =>
   {
     setState('loading')
     setError('')
-    try
-    {
-      // listSessions owns ordering & policy; the picker never refilters by cwd
-      setSessions(listSessions())
-      setState('ready')
-    }
-    catch (loadError)
-    {
-      setError(toErrorMessage(loadError))
-      setState('error')
-    }
+    setReload((previous) => previous + 1)
   }, [])
 
   useEffect(() =>
   {
-    queueMicrotask(load)
-  }, [load])
+    const controller = new AbortController()
+    // listSessions owns ordering & policy; the picker never refilters by cwd
+    void listSessions({ signal: controller.signal }).then(
+      (loaded) =>
+      {
+        if (controller.signal.aborted) return
+        setSessions(loaded)
+        setState('ready')
+      },
+      (loadError: unknown) =>
+      {
+        if (controller.signal.aborted) return
+        setError(toErrorMessage(loadError))
+        setState('error')
+      }
+    )
+    return () => controller.abort()
+  }, [reload])
+
+  useEffect(() => () => previewLoader.dispose(), [previewLoader])
 
   const matches = useMemo(
     () => filterSessions(sessions, query),
     [query, sessions]
   )
   const safeIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0))
+  const selectedId = matches[safeIndex]?.id
+  const previewRows = pickerLayout(
+    matches.length,
+    Math.max(Math.floor(height), 0)
+  ).previewRows
+  useEffect(() =>
+  {
+    if (state !== 'ready' || !selectedId || previewRows === 0)
+    {
+      previewLoader.dispose()
+      return
+    }
+    let disposed = false
+    void previewLoader.load(selectedId, previewRows).then(
+      (tail) =>
+      {
+        if (!disposed && tail) setPreview({ id: selectedId, lines: tail.lines })
+      },
+      () =>
+      {
+        if (!disposed) setPreview(null)
+      }
+    )
+    return () =>
+    {
+      disposed = true
+      previewLoader.cancel()
+    }
+  }, [height, previewLoader, previewRows, query, selectedId, state, width])
+
+  const themeGeneration = getThemeGeneration()
   const lines = useMemo(
     () =>
       state === 'ready'
@@ -336,6 +500,8 @@ export default function SessionPicker({
             selectedIndex: safeIndex,
             width,
             height,
+            previewLines: preview?.id === selectedId ? preview.lines : [],
+            themeGeneration,
           })
         : state === 'loading'
           ? ['Loading saved sessions…']
@@ -343,7 +509,18 @@ export default function SessionPicker({
               'Failed to load saved sessions',
               sanitizeUntrustedText(error).replace(/\s+/g, ' ').trim(),
             ],
-    [error, height, matches, query, safeIndex, state, width]
+    [
+      error,
+      height,
+      matches,
+      preview,
+      query,
+      safeIndex,
+      selectedId,
+      state,
+      themeGeneration,
+      width,
+    ]
   )
 
   useCoralInput(
@@ -375,6 +552,13 @@ export default function SessionPicker({
       )
       if (next.handled)
       {
+        if (
+          next.state.query !== query ||
+          next.state.selectedIndex !== safeIndex
+        )
+        {
+          setPreview(null)
+        }
         setQuery(next.state.query)
         setSelectedIndex(next.state.selectedIndex)
       }

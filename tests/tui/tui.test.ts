@@ -3,7 +3,12 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
+import chalk from 'chalk'
+import highlighter from 'cli-highlight'
 import stripAnsi from 'strip-ansi'
+import { highlightCode } from '../../src/tui/transcript/code-highlight.js'
+import { renderMarkdownToAnsi } from '../../src/tui/transcript/markdown.js'
+import { getTheme, setTheme } from '../../src/tui/theme.js'
 import {
   buildTranscriptLines,
   failPendingToolCalls,
@@ -47,7 +52,7 @@ import { RetrievalBuildError } from '../../src/retrieval/build.js'
 import { OllamaModelIdentityError } from '../../src/ollama/errors.js'
 import { buildTodoPanel } from '../../src/tui/transcript/todo-panel.js'
 import { AgentTodoState } from '../../src/agent/state/todos.js'
-import { visibleWidth } from '../../src/tui/wrap.js'
+import { visibleWidth, wrapLines } from '../../src/tui/wrap.js'
 import { makeFakeAgent } from '../helpers/agent-harness.js'
 import { makeSessionMeta } from '../helpers/session.js'
 import { makeTempDirPool } from '../helpers/temp.js'
@@ -478,6 +483,221 @@ test('renderStreamingMarkdown caches the stable region between boundaries', () =
   const shared = first.filter((line) => second.includes(line))
   assert.ok(shared.length > 0)
   assert.ok(second.join('').length >= first.join('').length)
+})
+
+test('streaming Markdown reuses highlighting while later references update earlier paragraphs', (t) =>
+{
+  setTheme(getTheme())
+  const highlighted = t.mock.method(highlighter, 'highlight')
+  const prefix = '[guide][manual]\n\n```ts\nconst cachedValue = 1\n```\n\n'
+  renderStreamingMarkdown(prefix, 80)
+  for (let index = 0; index < 5; index++)
+  {
+    renderStreamingMarkdown(`${prefix}paragraph ${index}\n\n`, 80)
+  }
+  const complete = `${prefix}[manual]: https://example.com/docs\n\n`
+  const rendered = renderStreamingMarkdown(complete, 80)
+  assert.deepEqual(
+    rendered,
+    wrapLines(renderMarkdownToAnsi(complete), 77, '   ')
+  )
+  assert.match(plain(rendered), /guide \(https:\/\/example.com\/docs\)/)
+  assert.equal(highlighted.mock.callCount(), 1)
+})
+
+test('code highlighting bounds retention and invalidates presentation without caching failures', (t) =>
+{
+  const previousLevel = chalk.level
+  t.after(() =>
+  {
+    chalk.level = previousLevel
+    setTheme(getTheme())
+  })
+  const highlighted = t.mock.method(
+    highlighter,
+    'highlight',
+    (text: string) => text
+  )
+  setTheme(getTheme())
+  for (let index = 0; index < 32; index++) highlightCode(`entry ${index}`, 'ts')
+  highlightCode('entry 0', 'ts')
+  highlightCode('entry 32', 'ts')
+  highlightCode('entry 0', 'ts')
+  assert.equal(highlighted.mock.callCount(), 33)
+  highlightCode('entry 1', 'ts')
+  assert.equal(highlighted.mock.callCount(), 34)
+  chalk.level = previousLevel === 0 ? 1 : 0
+  highlightCode('entry 1', 'ts')
+  setTheme(getTheme())
+  highlightCode('entry 1', 'ts')
+  assert.equal(highlighted.mock.callCount(), 36)
+
+  const large = 'a'.repeat(550_000)
+  highlightCode(large, 'ts')
+  highlightCode('b'.repeat(550_000), 'ts')
+  highlightCode(large, 'ts')
+  assert.equal(highlighted.mock.callCount(), 39)
+  const oversized = 'z'.repeat(2_200_000)
+  highlightCode(oversized, 'ts')
+  highlightCode(oversized, 'ts')
+  assert.equal(highlighted.mock.callCount(), 41)
+
+  highlighted.mock.mockImplementationOnce(() =>
+  {
+    throw new Error('highlight failed')
+  })
+  assert.equal(highlightCode('retry this code', 'ts'), 'retry this code')
+  highlightCode('retry this code', 'ts')
+  assert.equal(highlighted.mock.callCount(), 43)
+})
+
+test('finalized blocks retain only four recent width variants and refresh presentation', (t) =>
+{
+  const previousLevel = chalk.level
+  t.after(() =>
+  {
+    chalk.level = previousLevel
+    setTheme(getTheme())
+  })
+  let renders = 0
+  const block: OutputBlock = {
+    type: 'system',
+    get content()
+    {
+      renders++
+      return 'cached system output'
+    },
+  }
+  const render = (width: number) =>
+    buildTranscriptLines({ blocks: [block], streaming: '', width })
+  for (const width of [80, 81, 82, 83, 80, 84, 80]) render(width)
+  assert.equal(renders, 5)
+  render(81)
+  assert.equal(renders, 6)
+  chalk.level = previousLevel === 0 ? 1 : 0
+  render(81)
+  setTheme(getTheme())
+  render(81)
+  assert.equal(renders, 8)
+})
+
+test('streaming thinking preserves ANSI rows and only wraps newly completed lines and the tail', (t) =>
+{
+  const previousLevel = chalk.level
+  t.after(() =>
+  {
+    chalk.level = previousLevel
+    setTheme(getTheme())
+  })
+  chalk.level = 1
+  const prefix = `completed-work-marker ${'wide 界 🙂 words '.repeat(30)}\n\n`
+  const inputs = [
+    prefix + 'tail',
+    prefix + 'tail grows',
+    prefix + 'tail grows\n\tnew line',
+    prefix + 'tail grows\n\tnew line\x1b]52;c;payload',
+    prefix + 'tail grows\n\tnew line\x1b]52;c;payload\x07safe',
+    'replacement\nshort',
+    '',
+    'after reset\nnext',
+  ]
+  const reference = (content: string, width: number) =>
+    buildTranscriptLines({
+      blocks: content ? [{ type: 'thinking', content }] : [],
+      streaming: '',
+      width,
+    })
+  const expected = inputs.map((content) => reference(content, 40))
+  const split = String.prototype.split
+  let completedWraps = 0
+  t.mock.method(
+    String.prototype,
+    'split',
+    function (this: string, separator: string | RegExp, limit?: number)
+    {
+      if (String(this).includes('completed-work-marker')) completedWraps++
+      return split.call(String(this), separator, limit)
+    }
+  )
+  let initialWraps = 0
+  for (let index = 0; index < inputs.length; index++)
+  {
+    const actual = buildTranscriptLines({
+      blocks: [],
+      streaming: '',
+      streamingThinking: inputs[index]!,
+      width: 40,
+    })
+    assert.deepEqual(actual, expected[index])
+    if (index === 0) initialWraps = completedWraps
+    if (index > 0 && index < 5) assert.equal(completedWraps, initialWraps)
+  }
+  assert.ok(initialWraps > 0)
+  for (const width of [18, 80])
+  {
+    const expectedResize = reference(prefix, width)
+    buildTranscriptLines({
+      blocks: [],
+      streaming: '',
+      streamingThinking: prefix,
+      width: 40,
+    })
+    const beforeResize = completedWraps
+    assert.deepEqual(
+      buildTranscriptLines({
+        blocks: [],
+        streaming: '',
+        streamingThinking: prefix,
+        width,
+      }),
+      expectedResize
+    )
+    assert.ok(completedWraps > beforeResize)
+  }
+  chalk.level = 0
+  const uncolored = reference(prefix, 40)
+  chalk.level = 1
+  buildTranscriptLines({
+    blocks: [],
+    streaming: '',
+    streamingThinking: prefix,
+    width: 40,
+  })
+  chalk.level = 0
+  assert.deepEqual(
+    buildTranscriptLines({
+      blocks: [],
+      streaming: '',
+      streamingThinking: prefix,
+      width: 40,
+    }),
+    uncolored
+  )
+  const beforeThemeChange = completedWraps
+  setTheme(getTheme())
+  buildTranscriptLines({
+    blocks: [],
+    streaming: '',
+    streamingThinking: prefix,
+    width: 40,
+  })
+  assert.ok(completedWraps > beforeThemeChange)
+
+  const oversized = `completed-work-marker ${'v'.repeat(550_000)}\n`
+  buildTranscriptLines({
+    blocks: [],
+    streaming: '',
+    streamingThinking: oversized,
+    width: 80,
+  })
+  const firstOversized = completedWraps
+  buildTranscriptLines({
+    blocks: [],
+    streaming: '',
+    streamingThinking: oversized,
+    width: 80,
+  })
+  assert.ok(completedWraps > firstOversized)
 })
 
 test('session list formatters sanitize session identifiers and models', () =>

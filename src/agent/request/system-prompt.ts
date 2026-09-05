@@ -1,23 +1,14 @@
 // src/agent/request/system-prompt.ts
 // system prompt construction
 
-import { readdirSync } from 'node:fs'
-import { basename } from 'node:path'
 import type { Tool } from '../../tools/tool.js'
 import type { ToolCatalog } from '../../tools/catalog.js'
 import { jsonSchemaTypeLabel, paramEntries } from '../../types/inference.js'
-import { gatherProjectContext } from './project-context.js'
-import { createIgnoredEntrySet } from '../../shared/ignored-entries.js'
 import {
-  compareProjectTreeEntries,
-  formatProjectTreeEntryName,
-  shouldIncludeProjectTreeEntry,
-} from '../../shared/project-tree.js'
-
-const PROJECT_CONTEXT_LIMIT = 12
-
-// root entries that add noise to the model context
-const IGNORED_ROOT_ENTRIES = createIgnoredEntrySet()
+  captureProjectContext,
+  renderProjectContext,
+  type ProjectContextSnapshot,
+} from './project-context.js'
 
 // format a single tool into a readable block
 function formatTool(tool: Tool): string
@@ -57,50 +48,26 @@ function formatBulletSection(
   return `\n\n## ${title}\n\n${bullets.join('\n')}`
 }
 
-// summarize the project root so the model starts with lightweight repo context
-function formatProjectContext(cwd: string): string
-{
-  let entries: string[]
-
-  try
-  {
-    entries = readdirSync(cwd, { withFileTypes: true })
-      .filter((entry) =>
-        shouldIncludeProjectTreeEntry(entry.name, IGNORED_ROOT_ENTRIES)
-      )
-      .map((entry) => ({
-        name: entry.name,
-        isDir: entry.isDirectory(),
-        isSymlink: entry.isSymbolicLink(),
-      }))
-      .sort(compareProjectTreeEntries)
-      .slice(0, PROJECT_CONTEXT_LIMIT)
-      .map(formatProjectTreeEntryName)
-  }
-  catch
-  {
-    return `Project name: ${basename(cwd)}\nTop-level entries: unavailable`
-  }
-
-  const suffix = entries.length === PROJECT_CONTEXT_LIMIT ? ' (truncated)' : ''
-  const summary = entries.length > 0 ? entries.join(', ') : '(empty)'
-  return `Project name: ${basename(cwd)}\nTop-level entries${suffix}: ${summary}`
-}
-
 // build the complete system prompt for a model and project context
 export function buildSystemPrompt(ctx: {
   model: string
   cwd: string
   catalog: ToolCatalog
   projectContextBudget?: number
+  projectContextSnapshot?: ProjectContextSnapshot
 }): string
 {
   const toolBlock =
     ctx.catalog.tools.length > 0
       ? formatTools(ctx.catalog.tools)
       : 'You have no tools available.'
-  const projectContext = formatProjectContext(ctx.cwd)
-  const injectedContext = gatherProjectContext(ctx.cwd, {
+  const snapshot =
+    ctx.projectContextSnapshot ??
+    captureProjectContext(ctx.cwd, {
+      maxTotalChars: ctx.projectContextBudget,
+    })
+  const projectContext = snapshot.rootSummary
+  const injectedContext = renderProjectContext(snapshot, {
     maxTotalChars: ctx.projectContextBudget,
   })
   const loadedProjectContext = injectedContext

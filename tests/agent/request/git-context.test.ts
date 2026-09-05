@@ -4,7 +4,7 @@
 import { strict as assert } from 'node:assert'
 import { existsSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import {
   buildGitContextMessage,
@@ -76,6 +76,66 @@ test(
 
     assert.ok(message)
     assert.match(message.content, /operation: merge/)
+  }
+)
+
+test(
+  'git operation markers stay local to their linked worktree',
+  { skip: !HAS_GIT },
+  async () =>
+  {
+    const dir = await tempDir('coral-git-context-worktree-')
+    const run = initTestRepo(dir)
+    await writeFile(join(dir, 'tracked.txt'), 'base\n', 'utf-8')
+    assert.equal(run('add', '-A').status, 0)
+    assert.equal(run('commit', '-m', 'base').status, 0)
+
+    const worktree = join(await tempDir('coral-git-context-linked-'), 'linked')
+    assert.equal(run('worktree', 'add', '-b', 'linked', worktree).status, 0)
+    const head = run('rev-parse', 'HEAD').stdout.trim()
+    await writeFile(join(dir, '.git', 'MERGE_HEAD'), `${head}\n`, 'utf-8')
+    const marker = run(
+      '-C',
+      worktree,
+      'rev-parse',
+      '--git-path',
+      'CHERRY_PICK_HEAD'
+    )
+    assert.equal(marker.status, 0)
+    await writeFile(
+      resolve(worktree, marker.stdout.trimEnd()),
+      `${head}\n`,
+      'utf-8'
+    )
+
+    const [primary, linked] = await Promise.all([
+      buildGitContextMessage(dir),
+      buildGitContextMessage(worktree),
+    ])
+    assert.ok(primary)
+    assert.ok(linked)
+    assert.match(primary.content, /operation: merge\n/)
+    assert.match(linked.content, /operation: cherry-pick\n/)
+  }
+)
+
+test(
+  'git operation markers fall back when repository paths contain newlines',
+  { skip: !HAS_GIT || process.platform === 'win32' },
+  async () =>
+  {
+    const dir = await tempDir('coral-git-context-multiline-\n')
+    const run = initTestRepo(dir)
+    await writeFile(join(dir, 'tracked.txt'), 'base\n', 'utf-8')
+    assert.equal(run('add', '-A').status, 0)
+    assert.equal(run('commit', '-m', 'base').status, 0)
+    const head = run('rev-parse', 'HEAD').stdout.trim()
+    await writeFile(join(dir, '.git', 'MERGE_HEAD'), `${head}\n`, 'utf-8')
+
+    const message = await buildGitContextMessage(dir)
+
+    assert.ok(message)
+    assert.match(message.content, /operation: merge\n/)
   }
 )
 

@@ -76,6 +76,7 @@ export interface PromptInputProps
   showCursor?: boolean
   width?: number
   maxHeight?: number
+  allocatedHeight?: number
   onHeightChange?: (rows: number) => void
   filesCacheKey?: string
   completionCommands?: CommandSummary[]
@@ -126,6 +127,7 @@ export default function PromptInput({
   showCursor = true,
   width = 80,
   maxHeight = 17,
+  allocatedHeight = maxHeight,
   onHeightChange,
   filesCacheKey,
   completionCommands = [],
@@ -626,23 +628,71 @@ export default function PromptInput({
       showCursor,
     ]
   )
-  const completionRows =
-    menuRequested && query
-      ? buildCompletionMenuRows(
-          items,
-          safeIndex,
-          query.kind,
-          contentWidth,
-          rowBudget - draft.rows.length - hintRows
-        )
-      : []
-  // a hidden suggestion must never consume Enter or navigation keys
-  const menuOpen = completionRows.some((row) => !row.detail)
-  const renderedHeight = draft.rows.length + hintRows + completionRows.length
+  const desiredCompletionRows = useMemo(
+    () =>
+      menuRequested && query
+        ? buildCompletionMenuRows(
+            items,
+            safeIndex,
+            query.kind,
+            contentWidth,
+            rowBudget - draft.rows.length - hintRows
+          )
+        : [],
+    [
+      contentWidth,
+      draft.rows.length,
+      hintRows,
+      items,
+      menuRequested,
+      query,
+      rowBudget,
+      safeIndex,
+    ]
+  )
+  const desiredHeight =
+    draft.rows.length + hintRows + desiredCompletionRows.length
   useEffect(() =>
   {
-    onHeightChange?.(renderedHeight)
-  }, [onHeightChange, renderedHeight])
+    onHeightChange?.(desiredHeight)
+  }, [onHeightChange, desiredHeight])
+
+  // the parent applies desired height on a later frame; keep the cursor visible
+  // within its current allocation without segmenting the draft a second time
+  const allocatedRows = Math.max(
+    1,
+    Math.min(rowBudget, Math.floor(allocatedHeight))
+  )
+  const visibleHintRows = hint && allocatedRows > 1 ? 1 : 0
+  const visibleDraftRows = Math.min(
+    draft.rows.length,
+    allocatedRows - visibleHintRows
+  )
+  const draftStart = Math.max(
+    0,
+    Math.min(
+      draft.cursorRow - Math.floor(visibleDraftRows / 2),
+      draft.rows.length - visibleDraftRows
+    )
+  )
+  const displayedDraft = draft.rows.slice(
+    draftStart,
+    draftStart + visibleDraftRows
+  )
+  const completionRows =
+    allocatedRows >= desiredHeight
+      ? desiredCompletionRows
+      : menuRequested && query
+        ? buildCompletionMenuRows(
+            items,
+            safeIndex,
+            query.kind,
+            contentWidth,
+            allocatedRows - displayedDraft.length - visibleHintRows
+          )
+        : []
+  // a hidden suggestion must never consume Enter or navigation keys
+  const menuOpen = completionRows.some((row) => !row.detail)
 
   const handleInput = useCallback(
     (input: string, key: CoralKey) =>
@@ -1030,14 +1080,14 @@ export default function PromptInput({
 
   return (
     <Box flexDirection="column" width={contentWidth} flexShrink={0}>
-      {draft.rows.map((row, index) => (
+      {displayedDraft.map((row, index) => (
         <Box key={index} height={1} flexShrink={0}>
           <Text wrap="truncate-end">
             {displayPlaceholder ? style('muted')(row) : row || ' '}
           </Text>
         </Box>
       ))}
-      {hintRows > 0 && (
+      {visibleHintRows > 0 && (
         <Box height={1} flexShrink={0}>
           <Text wrap="truncate-end">
             {style('muted')(fitPromptLine(hint ?? '', contentWidth))}

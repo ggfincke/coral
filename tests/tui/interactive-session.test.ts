@@ -12,6 +12,7 @@ import {
   type PromptSettlement,
 } from '../../src/tui/session/interactive-runtime.js'
 import { resolveStartupSession } from '../../src/tui/session/agent-session.js'
+import { runAdmittedCommand } from '../../src/tui/commands/command-operation.js'
 import type { SessionMeta } from '../../src/session/types.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import { makeSessionMeta } from '../helpers/session.js'
@@ -110,6 +111,96 @@ function makeRuntime(
     initialSession
   )
 }
+
+test('command history failures preserve the draft and release the joined operation', async () =>
+{
+  const runtime = makeRuntime(new FakeAgent('command'), null)
+  const operation = runtime.beginOperation('command')
+  assert.ok(operation)
+  const events: string[] = []
+  let draft = '/help'
+  let finishes = 0
+  const failure = new Error('ENOSPC: history is full')
+  const result = await runAdmittedCommand<{
+    admitted: boolean
+    handled: boolean
+  }>(
+    {
+      run: (work) =>
+      {
+        events.push('registered')
+        return runtime.runOperation(operation, work)
+      },
+      recordHistory: () =>
+      {
+        events.push('history')
+        throw failure
+      },
+      setRunning: (running) => events.push(`running:${running}`),
+      finish: () =>
+      {
+        finishes++
+        assert.equal(runtime.finishCommand(operation), true)
+      },
+      onError: (error) =>
+      {
+        assert.equal(error, failure)
+        events.push('reported')
+        return { admitted: true, handled: true }
+      },
+    },
+    () =>
+    {
+      draft = ''
+      assert.fail('history failure must not dispatch or clear the draft')
+    }
+  )
+  assert.deepEqual(result, { admitted: true, handled: true })
+  assert.equal(draft, '/help')
+  assert.equal(finishes, 1)
+  assert.equal(runtime.hasActiveOperation(), false)
+  assert.deepEqual(events, [
+    'registered',
+    'running:true',
+    'history',
+    'reported',
+    'running:false',
+  ])
+
+  const resume = runtime.beginOperation('command')
+  assert.ok(resume)
+  const picker = deferred()
+  const resumeTask = runAdmittedCommand(
+    {
+      run: (work) => runtime.runOperation(resume, work),
+      recordHistory: () => events.push('resume history'),
+      setRunning: () => undefined,
+      finish: () =>
+      {
+        finishes++
+        assert.equal(runtime.finishCommand(resume), true)
+      },
+      onError: (error) => assert.fail(String(error)),
+    },
+    async () =>
+    {
+      assert.equal(runtime.hasActiveOperation(), true)
+      draft = ''
+      await picker.promise
+      return { admitted: true, handled: true }
+    }
+  )
+  await Promise.resolve()
+  assert.equal(runtime.beginOperation('turn'), null)
+  picker.resolve()
+  assert.deepEqual(await resumeTask, { admitted: true, handled: true })
+  assert.equal(finishes, 2)
+  assert.equal(draft, '')
+  const nextTurn = runtime.beginOperation('turn')
+  assert.ok(nextTurn)
+  runtime.completeTurn(nextTurn)
+  await runtime.shutdown()
+})
 
 test('blocking prompts settle once across answer, abort, & replacement', async () =>
 {

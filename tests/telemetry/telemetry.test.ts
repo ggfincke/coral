@@ -3,7 +3,9 @@
 
 import { strict as assert } from 'node:assert'
 import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import {
@@ -85,12 +87,13 @@ test('telemetry model maps safely retain prototype-like model names', async () =
   assert.equal(Object.getPrototypeOf(folded.models), null)
   assert.equal(folded.models['__proto__']?.reliability.reprompts, 1)
 
-  const loaded = recordReliability(
+  recordReliability(
     '__proto__',
     makeReliabilityStats({ editRepairs: 2 }),
     '2026-06-22T00:00:00.000Z',
     path
   )
+  const loaded = loadTelemetry(path)
   assert.equal(Object.getPrototypeOf(loaded.models), null)
   assert.equal(loaded.models['__proto__']?.reliability.editRepairs, 2)
 })
@@ -162,7 +165,7 @@ test('addReliability coerces a corrupt on-disk base to zero', () =>
   assert.equal(sum.reprompts, 2)
 })
 
-test('recordReliability preserves one legacy baseline and adds immutable events', async () =>
+test('telemetry append avoids historical reads and explicit loading merges legacy and immutable records', async (t) =>
 {
   const dir = await tempDir('coral-telemetry-')
   const path = join(dir, 'telemetry.json')
@@ -175,18 +178,31 @@ test('recordReliability preserves one legacy baseline and adds immutable events'
   const legacyBytes = JSON.stringify(legacy)
   await writeFile(path, legacyBytes, 'utf-8')
 
-  recordReliability(
-    'gemma',
-    makeReliabilityStats({ doomLoopTrips: 1 }),
-    '2026-06-23T00:00:00.000Z',
-    path
-  )
-  recordReliability(
-    'gemma',
-    makeReliabilityStats({ doomLoopTrips: 2 }),
-    '2026-06-22T00:00:00.000Z',
-    path
-  )
+  const reads = t.mock.method(fs, 'readFileSync')
+  const listings = t.mock.method(fs, 'readdirSync')
+  syncBuiltinESMExports()
+  try
+  {
+    recordReliability(
+      'gemma',
+      makeReliabilityStats({ doomLoopTrips: 1 }),
+      '2026-06-23T00:00:00.000Z',
+      path
+    )
+    recordReliability(
+      'gemma',
+      makeReliabilityStats({ doomLoopTrips: 2 }),
+      '2026-06-22T00:00:00.000Z',
+      path
+    )
+    assert.equal(reads.mock.callCount(), 0)
+    assert.equal(listings.mock.callCount(), 0)
+  }
+  finally
+  {
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  }
 
   const eventsDir = join(dir, 'telemetry.d')
   const eventFiles = await readdir(eventsDir)

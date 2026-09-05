@@ -150,7 +150,7 @@ test('session files remain authoritative across distinct and same-ID writers', a
 
   process.env.CORAL_HOME = home
   assert.deepEqual(
-    sorted(listSessions().map((session) => session.id)),
+    sorted((await listSessions()).map((session) => session.id)),
     sorted(distinctIds.flat())
   )
 
@@ -171,8 +171,9 @@ test('session files remain authoritative across distinct and same-ID writers', a
   assert.equal(loaded.messages[1]?.content, `prompt-${winner}`)
   assert.equal(loaded.messages[2]?.content, `response-${winner}`)
   assert.equal(
-    listSessions().filter((session: SessionMeta) => session.id === sharedId)
-      .length,
+    (await listSessions()).filter(
+      (session: SessionMeta) => session.id === sharedId
+    ).length,
     1
   )
 

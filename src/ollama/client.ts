@@ -292,9 +292,7 @@ export class OllamaClient
   {
     const thinkSupport = this.getThinkSupport(request.model)
     const includeThink =
-      request.think !== undefined &&
-      request.think !== false &&
-      thinkSupport !== 'unsupported'
+      request.think !== undefined && thinkSupport !== 'unsupported'
     const initial = await this.chatFetch(
       this.buildChatBody(request, includeThink),
       signal

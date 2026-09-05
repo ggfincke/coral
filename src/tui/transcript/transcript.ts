@@ -50,6 +50,7 @@ const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', 
 interface CachedLines
 {
   generation: number
+  colorLevel: number
   cwd?: string
   lines: string[]
 }
@@ -94,14 +95,26 @@ function getCachedBlockLines(
   const key = blockCacheKey(width, toolResultExpansionKey(block))
   const widthCache = FINALIZED_BLOCK_CACHE.get(block)
   const cached = widthCache?.get(key)
-  if (cached && cached.generation === generation && cached.cwd === cwd)
+  if (
+    cached &&
+    cached.generation === generation &&
+    cached.colorLevel === chalk.level &&
+    cached.cwd === cwd
+  )
   {
+    widthCache!.delete(key)
+    widthCache!.set(key, cached)
     return cached.lines
   }
 
   const lines = physicalLines(render(), width)
   const nextWidthCache = widthCache ?? new Map<number, CachedLines>()
-  nextWidthCache.set(key, { generation, lines, cwd })
+  nextWidthCache.delete(key)
+  nextWidthCache.set(key, { generation, colorLevel: chalk.level, lines, cwd })
+  if (nextWidthCache.size > 4)
+  {
+    nextWidthCache.delete(nextWidthCache.keys().next().value!)
+  }
   FINALIZED_BLOCK_CACHE.set(block, nextWidthCache)
 
   return lines
@@ -160,6 +173,92 @@ function formatStreamingAssistantText(
     '',
     ` ${style('primary').bold('●')} ${chalk.bold('Coral')}`,
     ...renderStreamingMarkdown(content, width, themeGeneration),
+  ]
+}
+
+interface ThinkingCache
+{
+  raw: string
+  completed: string
+  width: number
+  generation: number
+  colorLevel: number
+  lines: string[]
+  lineChars: number
+}
+
+const MAX_THINKING_CACHE_BYTES = 2 * 1_024 * 1_024
+let thinkingCache: ThinkingCache | undefined
+
+// only completed lines are reusable; sanitize the whole input before comparing
+// prefixes because a later control-sequence terminator can change earlier text
+function formatStreamingThinking(
+  content: string,
+  width: number,
+  generation: number
+): string[]
+{
+  if (!content)
+  {
+    thinkingCache = undefined
+    return []
+  }
+  const sanitized = sanitizeUntrustedText(content)
+  const border = style('thinking')('│')
+  const cached = thinkingCache
+  const reusable =
+    cached &&
+    cached.width === width &&
+    cached.generation === generation &&
+    cached.colorLevel === chalk.level &&
+    content.startsWith(cached.raw) &&
+    sanitized.startsWith(cached.completed)
+  const completed = sanitized.slice(0, sanitized.lastIndexOf('\n') + 1)
+  const lines = reusable ? cached.lines : []
+  let lineChars = reusable ? cached.lineChars : 0
+  const previousLength = reusable ? cached.completed.length : 0
+  const formatLine = (line: string): string[] =>
+  {
+    // chalk styles empty interior lines when dimming a multiline string
+    const styled = line
+      ? chalk.dim(line)
+      : sanitized
+        ? chalk.dim('\n').split('\n')[0]!
+        : ''
+    return physicalLines(
+      wrapLines(styled, width - 6, '').map((row) => `   ${border} ${row}`),
+      width
+    )
+  }
+  if (completed.length > previousLength)
+  {
+    for (const line of completed.slice(previousLength, -1).split('\n'))
+    {
+      const rows = formatLine(line)
+      lines.push(...rows)
+      lineChars += rows.reduce((total, row) => total + row.length, 0)
+    }
+  }
+  const bytes = (content.length + completed.length + lineChars) * 2
+  thinkingCache =
+    bytes <= MAX_THINKING_CACHE_BYTES
+      ? {
+          raw: content,
+          completed,
+          width,
+          generation,
+          colorLevel: chalk.level,
+          lines,
+          lineChars,
+        }
+      : undefined
+  return [
+    ...physicalLines(
+      ['', `   ${border} ${style('thinking').dim('Thinking')}`],
+      width
+    ),
+    ...lines,
+    ...formatLine(sanitized.slice(completed.length)),
   ]
 }
 
@@ -420,28 +519,32 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
     )
   }
 
-  const live: string[] = []
-  if (showThinking && streamingThinking)
+  if (showThinking)
   {
-    live.push(
-      ...formatBlock(
-        { type: 'thinking', content: streamingThinking },
-        width,
-        spinnerTick,
-        themeGeneration
-      )
+    transcript.push(
+      ...formatStreamingThinking(streamingThinking, width, themeGeneration)
     )
   }
-  else if (streamingThinking)
+  else
   {
-    const border = style('thinking')('│')
-    live.push('')
-    live.push(
-      `   ${border} ${style('thinking').dim('Thinking')} ${chalk.dim('· ctrl+t to show')}`
-    )
+    thinkingCache = undefined
+    if (streamingThinking)
+    {
+      const border = style('thinking')('│')
+      transcript.push(
+        ...physicalLines(
+          [
+            '',
+            `   ${border} ${style('thinking').dim('Thinking')} ${chalk.dim('· ctrl+t to show')}`,
+          ],
+          width
+        )
+      )
+    }
   }
 
   // render streaming assistant text after reasoning
+  const live: string[] = []
   if (streaming)
   {
     live.push(

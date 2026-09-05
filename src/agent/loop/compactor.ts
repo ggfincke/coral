@@ -124,10 +124,11 @@ export class CompactionCoordinator
     return this.resultForTransition(committed.transition, runtime)
   }
 
-  async compactIfNeeded(options: AutomaticCompactionOptions): Promise<void>
+  // report awaited summary work even when it failed or could not commit
+  async compactIfNeeded(options: AutomaticCompactionOptions): Promise<boolean>
   {
     const { runtime, volatileTokens = 0, signal, callbacks } = options
-    if (signal?.aborted) return
+    if (signal?.aborted) return false
     const totalTokens = this.estimateContextTokens(
       runtime.toolDefinitionTokens,
       volatileTokens
@@ -139,7 +140,7 @@ export class CompactionCoordinator
       const transition = this.state.pruneToolResults(new Date().toISOString())
       if (transition)
       {
-        if (signal?.aborted) return
+        if (signal?.aborted) return false
         this.resultForTransition(transition, runtime, callbacks)
       }
     }
@@ -156,14 +157,14 @@ export class CompactionCoordinator
       )
     )
     {
-      return
+      return false
     }
 
     const prepared = this.state.prepareSummary({
       mode: 'automatic',
       config: this.config,
     })
-    if (!prepared) return
+    if (!prepared) return false
 
     const summary = await this.buildSummary(
       prepared.messages,
@@ -174,7 +175,7 @@ export class CompactionCoordinator
     if (summary === null)
     {
       // cancellation is not an automatic-compaction failure
-      if (signal?.aborted) return
+      if (signal?.aborted) return true
       const failure = this.state.recordAutomaticSummaryFailure(
         prepared.plan,
         DEFAULT_MAX_HISTORY
@@ -183,7 +184,7 @@ export class CompactionCoordinator
       {
         this.resultForTransition(failure.transition, runtime, callbacks)
       }
-      return
+      return true
     }
 
     const committed = this.state.commitSummary(
@@ -195,6 +196,7 @@ export class CompactionCoordinator
     {
       this.resultForTransition(committed.transition, runtime, callbacks)
     }
+    return true
   }
 
   async compactHistoryForHardFit(

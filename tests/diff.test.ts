@@ -99,6 +99,29 @@ test('applyEdit covers the substitution outcomes', () =>
   })
 })
 
+test('applyEdit inserts replacement dollar sequences literally', () =>
+{
+  const replacement = "$$ $& $` $' $1 $<name>"
+  assert.deepEqual(
+    applyEdit('prefix TARGET suffix', 'TARGET', replacement, false),
+    {
+      ok: true,
+      after: `prefix ${replacement} suffix`,
+      count: 1,
+      matchType: 'exact',
+    }
+  )
+  assert.deepEqual(
+    applyEdit('prefix TARGET TARGET suffix', 'TARGET', replacement, true),
+    {
+      ok: true,
+      after: `prefix ${replacement} ${replacement} suffix`,
+      count: 2,
+      matchType: 'exact',
+    }
+  )
+})
+
 // exercise the whitespace fallback used when weak-model edits drift
 test('applyEdit fuzzy-matches whitespace drift & re-indents the replacement', () =>
 {
@@ -186,6 +209,83 @@ test('applyEdit fuzzy path preserves file structure', () =>
     ok: true,
     after: 'X\nY\na \n',
     count: 1,
+    matchType: 'fuzzy',
+  })
+})
+
+test('fuzzy correspondence preserves repeated lines or refuses ambiguous deletion', () =>
+{
+  const before = 'def f():\n    if ok:\n        act()\n    act()\n'
+  assert.deepEqual(
+    applyEdit(
+      before,
+      '    if ok:  \n        act()\n    act()',
+      '    if ready:\n        act()\n    act()',
+      false
+    ),
+    {
+      ok: true,
+      after: 'def f():\n    if ready:\n        act()\n    act()\n',
+      count: 1,
+      matchType: 'fuzzy',
+    }
+  )
+
+  // the retained anchor disambiguates which repeated call survives deletion
+  assert.deepEqual(
+    applyEdit(
+      '  act()\n  anchor()\n    act()\n',
+      'act()  \nanchor()\nact()',
+      'anchor()\nact()',
+      false
+    ),
+    {
+      ok: true,
+      after: '  anchor()\n    act()\n',
+      count: 1,
+      matchType: 'fuzzy',
+    }
+  )
+  assert.deepEqual(
+    applyEdit('  act()\n    act()\n', 'act()  \nact()', 'act()', false),
+    { ok: false, reason: 'not_found', count: 0 }
+  )
+  assert.deepEqual(
+    applyEdit('  act()\n  act()\n', 'act()  \nact()', 'act()', false),
+    { ok: true, after: '  act()\n', count: 1, matchType: 'fuzzy' }
+  )
+
+  // changed CRLF lines must acquire exactly one source line ending
+  assert.deepEqual(
+    applyEdit(
+      '  if ok:\r\n    act()\r\n',
+      'if ok:  \r\n  act()\r\n',
+      'if ready:\r\n  act()\r\n',
+      false
+    ),
+    {
+      ok: true,
+      after: '  if ready:\r\n    act()\r\n',
+      count: 1,
+      matchType: 'fuzzy',
+    }
+  )
+})
+
+test('fuzzy matching finds long repetitive blocks and keeps non-overlapping replacements', () =>
+{
+  const before = '    act()\n'.repeat(8000) + '    finish()\n'
+  const oldString = 'act()\n'.repeat(2000) + 'finish()'
+  assert.deepEqual(applyEdit(before, oldString, 'done()', false), {
+    ok: true,
+    after: '    act()\n'.repeat(6000) + '    done()\n',
+    count: 1,
+    matchType: 'fuzzy',
+  })
+  assert.deepEqual(applyEdit('a \na \na \na \na \n', 'a\na', 'X\nY', true), {
+    ok: true,
+    after: 'X\nY\nX\nY\na \n',
+    count: 2,
     matchType: 'fuzzy',
   })
 })
