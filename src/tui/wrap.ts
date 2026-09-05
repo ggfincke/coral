@@ -33,10 +33,11 @@ export const SOFT_WRAP_OPTIONS = {
   wordWrap: true,
 } as const
 
-// wrap text to width while preserving an optional prefix indent
+// wrap text to width while preserving an optional prefix indent; measured by
+// visible width so styled indents do not overstate the available columns
 export function wrapLines(text: string, width: number, indent = ''): string[]
 {
-  const wrapWidth = Math.max(width - indent.length, 12)
+  const wrapWidth = Math.max(width - visibleWidth(indent), 12)
 
   return text.split('\n').flatMap((line) =>
   {

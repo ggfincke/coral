@@ -4,7 +4,8 @@
 import chalk, { type ChalkInstance } from 'chalk'
 import { DEFAULT_THEME } from './themes.js'
 
-// semantic roles; codeBg is the inline-code background
+// semantic roles; codeBg is the inline-code background,
+// the trailing four are diff/gutter/selection backgrounds
 export type Role =
   | 'primary'
   | 'accent'
@@ -16,6 +17,10 @@ export type Role =
   | 'error'
   | 'thinking'
   | 'codeBg'
+  | 'diffAddBg'
+  | 'diffRemoveBg'
+  | 'gutter'
+  | 'selection'
 
 export type RGB = { r: number; g: number; b: number }
 

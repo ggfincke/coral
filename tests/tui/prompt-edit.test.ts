@@ -8,6 +8,10 @@ import {
   type PromptCursorState,
 } from '../../src/tui/prompt/prompt-edit.js'
 import { buildPromptCursorSegments } from '../../src/tui/prompt/prompt-render.js'
+import {
+  continueWithNewline,
+  insertTextAt,
+} from '../../src/tui/prompt/prompt-edit.js'
 import { buildKey } from '../../src/tui/input/terminal-input.js'
 
 function buildCursor(cursorOffset: number, cursorWidth = 0): PromptCursorState
@@ -34,7 +38,7 @@ test('applyPromptEdit handles line movement, word deletion, and insertion', () =
       key: buildKey({ meta: true, backspace: true }),
       cursor: buildCursor(11),
     }),
-    { value: 'hello  world', cursorOffset: 6, cursorWidth: 0 }
+    { value: 'hello  world', cursorOffset: 6, cursorWidth: 0, killed: 'brave' }
   )
 
   assert.deepEqual(
@@ -165,4 +169,81 @@ test('buildPromptCursorSegments compares cursor offsets as UTF-16 boundaries', (
     { text: 'f', highlighted: false },
     { text: 'e\u0301', highlighted: true },
   ])
+})
+
+test('ctrl+j & meta+enter insert newlines', () =>
+{
+  assert.deepEqual(
+    applyPromptEdit({
+      value: 'line one line two',
+      input: 'j',
+      key: buildKey({ ctrl: true }),
+      cursor: buildCursor(8),
+    }),
+    { value: 'line one\n line two', cursorOffset: 9, cursorWidth: 0 }
+  )
+
+  assert.deepEqual(
+    applyPromptEdit({
+      value: 'ab',
+      input: '\r',
+      key: buildKey({ meta: true, return: true }),
+      cursor: buildCursor(2),
+    }),
+    { value: 'ab\n', cursorOffset: 3, cursorWidth: 0 }
+  )
+})
+
+test('continueWithNewline converts a trailing backslash or returns null', () =>
+{
+  assert.deepEqual(continueWithNewline('first\\second', 6), {
+    value: 'first\nsecond',
+    cursorOffset: 6,
+    cursorWidth: 0,
+  })
+
+  // no backslash before the cursor -> caller submits
+  assert.equal(continueWithNewline('plain text', 10), null)
+  assert.equal(continueWithNewline('', 0), null)
+})
+
+test('kills are multi-line aware & report their text', () =>
+{
+  const value = 'alpha\nbeta\ngamma'
+
+  // ctrl+u kills only to the current line's start
+  assert.deepEqual(
+    applyPromptEdit({
+      value,
+      input: 'u',
+      key: buildKey({ ctrl: true }),
+      cursor: buildCursor(8),
+    }),
+    { value: 'alpha\nta\ngamma', cursorOffset: 6, cursorWidth: 0, killed: 'be' }
+  )
+
+  // ctrl+k kills only to the current line's end
+  assert.deepEqual(
+    applyPromptEdit({
+      value,
+      input: 'k',
+      key: buildKey({ ctrl: true }),
+      cursor: buildCursor(6),
+    }),
+    { value: 'alpha\n\ngamma', cursorOffset: 6, cursorWidth: 0, killed: 'beta' }
+  )
+})
+
+test('insertTextAt splices text at an offset for yank', () =>
+{
+  assert.deepEqual(insertTextAt('hello world', 5, ','), {
+    value: 'hello, world',
+    cursorOffset: 6,
+    cursorWidth: 0,
+  })
+  assert.deepEqual(insertTextAt('abc', 99, '!'), {
+    value: 'abc!',
+    cursorOffset: 4,
+    cursorWidth: 0,
+  })
 })

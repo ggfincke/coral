@@ -32,9 +32,11 @@ const sessionsCommand: Command = {
 
 // /resume command
 
+// bare /resume is intercepted by App to open the interactive picker; an id
+// argument keeps the direct prefix-resolution path below
 const resumeCommand: Command = {
   name: 'resume',
-  description: 'Resume a saved session (no args = latest)',
+  description: 'Resume a saved session (bare opens picker)',
   execute(args, ctx)
   {
     const target = resolveResumeSession({

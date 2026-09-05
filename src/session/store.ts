@@ -190,6 +190,13 @@ export function listSessions(): SessionMeta[]
   return discoverSessions()
 }
 
+// heuristic title a fresh untitled session receives; exposed so callers can
+// distinguish fallback titles from explicit renames without duplicating policy
+export function derivedSessionTitle(messages: OllamaMessage[]): string
+{
+  return extractTitle(messages)
+}
+
 // rename a session title
 export function renameSession(
   id: string,

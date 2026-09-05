@@ -14,6 +14,14 @@ import {
 import type { OutputBlock } from '../../src/tui/transcript/types.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
 import {
+  renderStreamingMarkdown,
+  splitStableMarkdown,
+} from '../../src/tui/transcript/stream-markdown.js'
+import {
+  resolveToolResultView,
+  toggleNewestToolResult,
+} from '../../src/tui/transcript/expansion.js'
+import {
   buildApprovalContent,
   buildMcpApprovalContent,
   renderPromptBox,
@@ -98,10 +106,14 @@ test('command registry preserves order, aliases, help, and dispatch', async () =
     'permissions',
     'verify',
     'theme',
+    'keybindings',
     'undo',
     'redo',
     'diff',
     'copy',
+    'export',
+    'raw',
+    'vim',
     'todo',
     'index',
     'sessions',
@@ -194,6 +206,65 @@ test('buildTranscriptLines renders conversation and tool results in scrollable o
   assert.ok(lines.some((line) => line.includes('file contents here')))
   assert.equal(topViewport[0], lines[0])
   assert.equal(liveViewport.at(-1), lines.at(-1))
+})
+
+test('tool results collapse at render time & expand on toggle', () =>
+{
+  const lines = Array.from({ length: 40 }, (_, i) => `out-${i}`)
+  const block: OutputBlock = {
+    type: 'tool_result',
+    toolName: 'bash',
+    content: lines.join('\n'),
+  }
+
+  const collapsed = buildTranscriptLines({
+    blocks: [block],
+    streaming: '',
+    width: 80,
+  }).map((line) => stripAnsi(line))
+  assert.ok(!collapsed.some((line) => line.includes('out-35')))
+  assert.ok(collapsed.some((line) => line.includes('10 more lines')))
+  assert.ok(collapsed.some((line) => line.includes('ctrl+o expands')))
+
+  // toggling the same block instance reveals the tail (identity-keyed state)
+  toggleNewestToolResult([block])
+  const expanded = buildTranscriptLines({
+    blocks: [block],
+    streaming: '',
+    width: 80,
+  }).map((line) => stripAnsi(line))
+  assert.ok(expanded.some((line) => line.includes('out-39')))
+  // and the cache did not bleed between expansion states
+  assert.equal(expanded.length > collapsed.length, true)
+
+  toggleNewestToolResult([block])
+  const recollapsed = buildTranscriptLines({
+    blocks: [block],
+    streaming: '',
+    width: 80,
+  }).map((line) => stripAnsi(line))
+  assert.deepEqual(recollapsed, collapsed)
+})
+
+test('mcp results collapse tighter than local tools', () =>
+{
+  const content = Array.from({ length: 30 }, (_, i) => `row-${i}`).join('\n')
+  const mcpBlock: OutputBlock = {
+    type: 'tool_result',
+    toolName: 'mcp__fs__read',
+    content,
+  }
+  const localBlock: OutputBlock = {
+    type: 'tool_result',
+    toolName: 'read_file',
+    content,
+  }
+
+  const mcpView = resolveToolResultView(mcpBlock)
+  const localView = resolveToolResultView(localBlock)
+
+  assert.equal(mcpView.hiddenLines, 15)
+  assert.equal(localView.hiddenLines, 0)
 })
 
 test('terminal cleanup fails pending tool calls and preserves their elapsed duration', () =>
@@ -370,19 +441,43 @@ test('buildTranscriptLines keeps app SGR styling in system blocks but strips con
   assert.ok(plain(rendered).includes('plain colored end'))
 })
 
-test('buildTranscriptLines leaves streaming markdown unparsed until finalized', () =>
+test('buildTranscriptLines styles settled streaming blocks & keeps the tail plain', () =>
 {
   const rendered = plain(
     buildTranscriptLines({
       blocks: [],
-      streaming: '## Live\n\n```ts\nconst value = 1\n```',
+      // '## Live' paragraph is complete (blank line follows); the fenced
+      // block is still open, so it must render as raw text
+      streaming: '## Live\n\n```ts\nconst value = 1',
       width: 80,
     })
   )
 
-  assert.ok(rendered.includes('## Live'))
+  assert.ok(rendered.includes('Live'))
+  assert.ok(!rendered.includes('## Live'))
   assert.ok(rendered.includes('```ts'))
   assert.ok(rendered.includes('const value = 1'))
+})
+
+test('streaming markdown never styles an unclosed fence mid-block', () =>
+{
+  const split = splitStableMarkdown('# Done\n\ntext after\n\n```ts\nopen')
+  assert.equal(split.stableText, '# Done\n\ntext after\n')
+  assert.equal(split.unstableTail, '```ts\nopen')
+
+  const tableSplit = splitStableMarkdown('intro\n\n| a | b |\n| - | - |')
+  assert.equal(tableSplit.stableText, '')
+})
+
+test('renderStreamingMarkdown caches the stable region between boundaries', () =>
+{
+  const first = renderStreamingMarkdown('para one\n\ntail', 80, 3)
+  const second = renderStreamingMarkdown('para one\n\nmore tail text', 80, 3)
+
+  // the styled prefix is byte-identical across frames while the tail grows
+  const shared = first.filter((line) => second.includes(line))
+  assert.ok(shared.length > 0)
+  assert.ok(second.join('').length >= first.join('').length)
 })
 
 test('session list formatters sanitize session identifiers and models', () =>
@@ -539,6 +634,28 @@ test('approval and confirm boxes share framed prompt rendering', () =>
     (_, offset) => plain(renderPromptBox(narrow, 20, 10, offset).lines)
   ).some((rendered) => rendered.includes('f'.repeat(8)))
   assert.equal(fingerprintReachable, true)
+
+  // tool approvals offer a session-scoped allow-always action; MCP launch
+  // trust keeps its y/n-only actions because grants never cover launches
+  const approvalActions = buildApprovalContent('bash', {}, 60).actionLine
+  assert.ok(approvalActions.includes('(y) approve'))
+  assert.ok(approvalActions.includes('(a) allow always (session)'))
+  assert.ok(approvalActions.includes('(n) reject'))
+  const mcpActions = buildMcpApprovalContent(
+    {
+      alias: 'fixture',
+      command: 'node',
+      executable: '/usr/bin/node',
+      args: [],
+      launchCwd: '/tmp',
+      passEnv: [],
+      enabledTools: ['echo'],
+      yoloTools: [],
+      fingerprint: 'f'.repeat(64),
+    },
+    60
+  ).actionLine
+  assert.ok(!mcpActions.includes('allow always'))
 })
 
 test('todo panel and commands follow the active Agent session lifecycle', async () =>

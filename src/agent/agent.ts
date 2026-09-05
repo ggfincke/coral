@@ -522,6 +522,14 @@ export class Agent
     return this.replay.redoLastTurn(signal)
   }
 
+  // drop stored history from an earlier user turn onward (esc-esc backtrack);
+  // refused while a turn is accepted or running so live state cannot orphan
+  truncateToTurn(startIndex: number): number | null
+  {
+    if (this.acceptedTurn) return null
+    return this.state.truncateToTurn(startIndex)
+  }
+
   getModel(): string
   {
     return this.model

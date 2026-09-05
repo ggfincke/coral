@@ -102,7 +102,41 @@ interface PendingPrompt
 {
   prompt: ActivePrompt
   settled: boolean
-  resolve: (answer: boolean) => void
+  resolve: (settlement: PromptSettlement) => void
+}
+
+// answer object form of an approval settlement; plain booleans remain valid
+export interface ToolPromptAnswer
+{
+  approved: boolean
+  // approve & grant this tool identity for the rest of the session
+  always?: boolean
+}
+
+export type PromptSettlement = boolean | ToolPromptAnswer
+
+export type ToolApprovalRequest = Omit<
+  Extract<ActivePrompt, { kind: 'tool' }>,
+  'id' | 'kind'
+>
+
+// grants fingerprint tool identity only, never args; dynamic MCP names carry
+// their stable server qualifier so they can never collide w/ a built-in
+export function sessionToolGrantFingerprint(
+  toolName: string,
+  presentation?: ToolCallPresentation
+): string
+{
+  if (presentation?.mcp === true || toolName.startsWith('mcp__'))
+  {
+    return `mcp:${toolName}`
+  }
+  return toolName
+}
+
+export function settlementApproved(settlement: PromptSettlement): boolean
+{
+  return typeof settlement === 'object' ? settlement.approved : settlement
 }
 
 export interface InteractiveRuntimeDependencies<
@@ -147,6 +181,8 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
   private operation: ActiveOperation<A> | null = null
   private prompt: PendingPrompt | null = null
   private transition: ActiveLifecycleTransition<A> | null = null
+  // session-scoped tool approval grants; cleared whenever the binding changes
+  private readonly sessionToolGrants = new Set<string>()
   private readonly cleanups = new WeakMap<A, Promise<void>>()
   private readonly pendingCleanups = new Set<Promise<void>>()
   private readonly pendingOperationTasks = new Set<Promise<void>>()
@@ -402,12 +438,12 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
   requestPrompt(
     handle: OperationHandle<A>,
     request: PromptRequest
-  ): Promise<boolean>
+  ): Promise<PromptSettlement>
   {
     if (!this.acceptsEvent(handle)) return Promise.resolve(false)
 
     this.settlePromptInternal(false)
-    return new Promise<boolean>((resolve) =>
+    return new Promise<PromptSettlement>((resolve) =>
     {
       const prompt = { ...request, id: this.nextPromptId++ } as ActivePrompt
       this.prompt = {
@@ -419,10 +455,45 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
     })
   }
 
-  settlePrompt(promptId: number, answer: boolean): boolean
+  // grant-aware tool approval consumption: a recorded fingerprint settles
+  // approved without publishing any prompt, and an always-approve settlement
+  // records its grant for the rest of the session binding
+  async requestToolApproval(
+    handle: OperationHandle<A>,
+    request: ToolApprovalRequest
+  ): Promise<boolean>
+  {
+    if (!this.acceptsEvent(handle)) return false
+
+    const fingerprint = sessionToolGrantFingerprint(
+      request.toolName,
+      request.presentation
+    )
+    if (this.sessionToolGrants.has(fingerprint)) return true
+
+    const settlement = await this.requestPrompt(handle, {
+      kind: 'tool',
+      ...request,
+    })
+    return settlementApproved(settlement)
+  }
+
+  settlePrompt(promptId: number, settlement: PromptSettlement): boolean
   {
     if (!this.prompt || this.prompt.prompt.id !== promptId) return false
-    return this.settlePromptInternal(answer)
+    if (
+      typeof settlement === 'object' &&
+      settlement.approved &&
+      settlement.always === true &&
+      this.prompt.prompt.kind === 'tool'
+    )
+    {
+      const { toolName, presentation } = this.prompt.prompt
+      this.sessionToolGrants.add(
+        sessionToolGrantFingerprint(toolName, presentation)
+      )
+    }
+    return this.settlePromptInternal(settlement)
   }
 
   abortActive(): boolean
@@ -495,6 +566,7 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
 
   replaceSession(meta: SessionMeta | null): void
   {
+    this.clearSessionToolGrants()
     this.binding = this.createBinding(meta)
     this.dependencies.onSessionChange(cloneSessionMeta(meta))
   }
@@ -535,6 +607,7 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
   private async shutdownInternal(): Promise<void>
   {
     this.closing = true
+    this.clearSessionToolGrants()
     const operation = this.operation
     if (operation)
     {
@@ -601,7 +674,7 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
     return cloneSessionMeta(persisted)
   }
 
-  private settlePromptInternal(answer: boolean): boolean
+  private settlePromptInternal(settlement: PromptSettlement): boolean
   {
     const pending = this.prompt
     if (!pending || pending.settled) return false
@@ -609,8 +682,13 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
     pending.settled = true
     this.prompt = null
     this.dependencies.onPromptChange(null)
-    pending.resolve(answer)
+    pending.resolve(settlement)
     return true
+  }
+
+  private clearSessionToolGrants(): void
+  {
+    this.sessionToolGrants.clear()
   }
 
   private retireOperation(preserveCommand: boolean): void

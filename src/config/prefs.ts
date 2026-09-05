@@ -7,6 +7,10 @@ import { readJsonObjectFile, writeJsonFile } from '../utils/json.js'
 export interface Prefs
 {
   theme?: string
+  // modal editing preference persisted by /vim
+  vim?: boolean
+  // raw {action, chord} overrides validated at consumption time
+  keybindings?: unknown
 }
 
 // load preferences, treating a missing or corrupt file as empty

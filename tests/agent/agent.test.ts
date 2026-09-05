@@ -317,6 +317,43 @@ test('Agent undo and redo restore a tool-use turn with file edits', async () =>
   assert.equal(agent.getMessageCount(), messageCount)
 })
 
+test('Agent.truncateToTurn drops later turns and refuses mid-turn admission', async () =>
+{
+  const dir = await tempDir('coral-agent-backtrack-')
+  const { agent } = makeFakeAgent(dir, [
+    [{ message: { role: 'assistant', content: 'one' }, done: true }],
+    [{ message: { role: 'assistant', content: 'two' }, done: true }],
+  ])
+
+  await agent.run('first question', makeAgentEvents())
+  await agent.run('second question', makeAgentEvents())
+  const secondStart = agent
+    .getMessages()
+    .findIndex(
+      (message) =>
+        message.role === 'user' && message.content === 'second question'
+    )
+  assert.ok(secondStart > 0)
+
+  const removed = agent.truncateToTurn(secondStart)
+  assert.ok(removed !== null && removed > 0)
+  assert.deepEqual(
+    agent
+      .getMessages()
+      .map((message) =>
+        message.role === 'user' ? message.content : message.role
+      ),
+    ['system', 'first question', 'assistant']
+  )
+  // an arbitrary cut destroys replay granularity the same way compaction does
+  assert.equal(agent.getUndoStack().length, 0)
+  assert.equal(agent.getRedoStack().length, 0)
+
+  // an accepted-but-unsettled turn blocks backtrack admission
+  agent.acceptTurn('in flight')
+  assert.equal(agent.truncateToTurn(1), null)
+})
+
 test('Agent undo and redo restore edited and created files together', async () =>
 {
   const dir = await tempDir('coral-agent-undo-multi-')

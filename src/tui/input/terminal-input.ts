@@ -46,6 +46,7 @@ export interface CoralKey
   meta: boolean
   wheelUp: boolean
   wheelDown: boolean
+  functionKey?: string
 }
 
 export interface ParsedInputEvent
@@ -241,7 +242,17 @@ export function toInputEvent(packet: string): ParsedInputEvent | null
     meta: keypress.meta || keypress.option,
   })
 
-  let input = keypress.ctrl ? keypress.name : keypress.sequence
+  // CSI-u printable keys carry their character in sequence rather than name
+  let input = keypress.ctrl
+    ? keypress.name ||
+      (keypress.sequence.startsWith('\u001b')
+        ? ''
+        : keypress.sequence.toLowerCase())
+    : keypress.sequence
+  if (/^f(?:[1-9]|1[0-2])$/.test(keypress.name))
+  {
+    key.functionKey = keypress.name
+  }
   if (nonAlphanumericKeys.includes(keypress.name))
   {
     input = ''
