@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import { chunkText } from './chunker.js'
 import { collectIndexableFiles, revalidateSourceFile } from './files.js'
 import type {
+  CodeChunk,
   Embedder,
   IndexedFile,
   IndexedFileStatus,
@@ -12,6 +13,7 @@ import type {
   IndexStats,
   IndexStore,
   SearchHit,
+  SourceFile,
 } from './types.js'
 import { CHUNKER_VERSION } from './types.js'
 import { clamp } from '../utils/clamp.js'
@@ -33,28 +35,31 @@ interface InFlightRefresh
   promise: Promise<IndexStats>
 }
 
+interface PendingEmbeddingFile
+{
+  kind: 'embed'
+  source: SourceFile
+  chunks: CodeChunk[]
+  embeddings: number[][]
+}
+
+type PendingFileAction =
+  | PendingEmbeddingFile
+  | { kind: 'touch'; source: SourceFile; expected: IndexedFileStatus }
+  | { kind: 'delete'; source: SourceFile }
+
+interface PendingChunk
+{
+  file: PendingEmbeddingFile
+  index: number
+}
+
 const inFlightRefreshes = new Map<string, InFlightRefresh>()
 
 function clampLimit(limit: number | undefined): number
 {
   if (limit === undefined || !Number.isFinite(limit)) return DEFAULT_LIMIT
   return clamp(Math.floor(limit), 1, MAX_LIMIT)
-}
-
-async function embedInBatches(
-  embedder: Embedder,
-  texts: string[]
-): Promise<number[][]>
-{
-  const vectors: number[][] = []
-
-  for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE)
-  {
-    const batch = texts.slice(i, i + EMBED_BATCH_SIZE)
-    vectors.push(...(await embedder.embed(batch)))
-  }
-
-  return vectors
 }
 
 export class ProjectIndexer
@@ -110,19 +115,29 @@ export class ProjectIndexer
     let embeddedFiles = 0
     let chunkCount = 0
     let staleSource = false
+    const pendingFiles: PendingFileAction[] = []
+    const batch: PendingChunk[] = []
 
     // report progress once per processed file
     const report = (path: string) =>
       onProgress?.({ processed: (processed += 1), total, path })
 
-    for (const source of changed)
+    // commit complete files in discovery order, including metadata-only work
+    const drainReadyFiles = async () =>
     {
-      currentPaths.add(source.path)
-
-      // refresh metadata when content is unchanged despite timestamp churn
-      const row = known.get(source.path)
-      if (row?.embeddingsCurrent && row.sha256 === source.sha256)
+      while (pendingFiles.length > 0)
       {
+        const action = pendingFiles[0]
+        if (
+          action.kind === 'embed' &&
+          action.embeddings.length !== action.chunks.length
+        )
+        {
+          return
+        }
+        pendingFiles.shift()
+
+        const { source } = action
         const current = await revalidateSourceFile(this.cwd, source)
         if (!current)
         {
@@ -131,82 +146,112 @@ export class ProjectIndexer
           continue
         }
 
-        const touched = this.store.touchFile(
-          projectId,
-          source.path,
-          current.size,
-          current.mtimeMs,
-          current.ctimeMs,
-          row
-        )
-        if (!touched) staleSource = true
+        let stored: boolean
+        if (action.kind === 'touch')
+        {
+          stored = this.store.touchFile(
+            projectId,
+            source.path,
+            current.size,
+            current.mtimeMs,
+            current.ctimeMs,
+            action.expected
+          )
+        }
+        else if (action.kind === 'delete')
+        {
+          stored = this.store.deleteFile(
+            projectId,
+            source.path,
+            snapshot.get(source.path)
+          )
+        }
+        else
+        {
+          const indexedFile: IndexedFile = {
+            path: source.path,
+            size: current.size,
+            mtimeMs: current.mtimeMs,
+            ctimeMs: current.ctimeMs,
+            sha256: source.sha256,
+            chunks: action.chunks.map((chunk, index) => ({
+              ...chunk,
+              embedding: action.embeddings[index],
+            })),
+          }
+
+          stored = this.store.upsertFile(
+            projectId,
+            indexedFile,
+            snapshot.get(source.path)
+          )
+          embeddedFiles++
+          chunkCount += action.chunks.length
+        }
+        if (!stored) staleSource = true
         report(source.path)
+      }
+    }
+
+    // batch positions retain their file and chunk ownership until settlement
+    const flushBatch = async () =>
+    {
+      if (batch.length > 0)
+      {
+        const embeddings = await this.embedder.embed(
+          batch.map(({ file, index }) => file.chunks[index].text)
+        )
+        if (embeddings.length !== batch.length)
+        {
+          throw new Error(
+            `Embedding count mismatch for batch: expected ${batch.length}, got ${embeddings.length}`
+          )
+        }
+        for (const [index, chunk] of batch.entries())
+        {
+          chunk.file.embeddings[chunk.index] = embeddings[index]
+        }
+        batch.length = 0
+      }
+      await drainReadyFiles()
+    }
+
+    for (const source of changed)
+    {
+      currentPaths.add(source.path)
+      // bound metadata-only actions waiting behind an unfinished batch
+      if (pendingFiles.length >= EMBED_BATCH_SIZE) await flushBatch()
+
+      const row = known.get(source.path)
+      if (row?.embeddingsCurrent && row.sha256 === source.sha256)
+      {
+        pendingFiles.push({ kind: 'touch', source, expected: row })
+        await drainReadyFiles()
         continue
       }
 
       const chunks = chunkText(source.content)
       if (chunks.length === 0)
       {
-        const current = await revalidateSourceFile(this.cwd, source)
-        if (!current)
-        {
-          staleSource = true
-          report(source.path)
-          continue
-        }
-
-        const deleted = this.store.deleteFile(
-          projectId,
-          source.path,
-          snapshot.get(source.path)
-        )
-        if (!deleted) staleSource = true
-        report(source.path)
+        pendingFiles.push({ kind: 'delete', source })
+        await drainReadyFiles()
         continue
       }
 
-      const embeddings = await embedInBatches(
-        this.embedder,
-        chunks.map((chunk) => chunk.text)
-      )
-
-      if (embeddings.length !== chunks.length)
+      const file: PendingEmbeddingFile = {
+        kind: 'embed',
+        source,
+        chunks,
+        embeddings: [],
+      }
+      pendingFiles.push(file)
+      for (const index of chunks.keys())
       {
-        throw new Error(
-          `Embedding count mismatch for ${source.path}: expected ${chunks.length}, got ${embeddings.length}`
-        )
+        batch.push({ file, index })
+        if (batch.length === EMBED_BATCH_SIZE) await flushBatch()
       }
-
-      const current = await revalidateSourceFile(this.cwd, source)
-      if (!current)
-      {
-        staleSource = true
-        report(source.path)
-        continue
-      }
-
-      const indexedFile: IndexedFile = {
-        path: source.path,
-        size: current.size,
-        mtimeMs: current.mtimeMs,
-        ctimeMs: current.ctimeMs,
-        sha256: source.sha256,
-        chunks: chunks.map((chunk, index) => ({
-          ...chunk,
-          embedding: embeddings[index],
-        })),
-      }
-
-      const stored = this.store.upsertFile(
-        projectId,
-        indexedFile,
-        snapshot.get(source.path)
-      )
-      if (!stored) staleSource = true
-      embeddedFiles++
-      chunkCount += chunks.length
-      report(source.path)
     }
+    await flushBatch()
 
     if (staleSource)
     {
