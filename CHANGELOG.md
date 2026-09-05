@@ -9,10 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Terminal editing and run control:** multiline paste protection, editor
+  history and reverse search, Vi editing, external editor handoff, validated
+  keybinding overrides, queued follow-ups, and conversation backtracking.
+- **Session and transcript tools:** searchable resume picker, generated
+  session titles, Markdown export, plain transcript mode, expandable tool
+  output, progressive Markdown styling, and word-highlighted side-by-side
+  diffs on wide terminals.
+- **Terminal integration:** focus-aware completion and approval notifications,
+  activity titles, optional file hyperlinks and extended keyboard input,
+  reduced-motion rendering, and Unix suspend/resume with terminal restoration.
+- **Interactive file-change awareness:** refresh file-picker catalogs after
+  creation or deletion and provide bounded request-context notices when
+  recently observed workspace files change, including during compaction.
 - **Tag-triggered GitHub Release:** pushing an annotated `v*` tag that is
   already on `main` (typically `git push --follow-tags`) runs the release
   workflow. It repeats the CI gates, requires the tag to match `package.json`,
   and publishes a GitHub Release from that version's changelog section.
+
+### Security
+
+- Refresh transitive Browserslist, fast-uri, and qs dependencies to resolve
+  dependency audit advisories within the existing dependency ranges.
 
 ## [0.14.0] - 2026-08-14
 
