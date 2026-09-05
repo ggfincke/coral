@@ -295,7 +295,7 @@ test('chatStream sends think when requested', async () =>
   )
 })
 
-test('think fallback is tracked per model', async () =>
+test('explicit false reaches Ollama and unsupported fallback is cached per model', async () =>
 {
   const requests: unknown[] = []
 
@@ -308,7 +308,7 @@ test('think fallback is tracked per model', async () =>
       }>(init)
       requests.push(body)
 
-      if (body.model === 'model-a' && body.think === true)
+      if (body.model === 'model-a' && body.think === false)
       {
         return new Response('json: unknown field "think"', { status: 400 })
       }
@@ -330,7 +330,7 @@ test('think fallback is tracked per model', async () =>
       for await (const chunk of client.chatStream({
         model: 'model-a',
         messages: [{ role: 'user', content: 'hello' }],
-        think: true,
+        think: false,
       }))
       {
         void chunk
@@ -340,7 +340,7 @@ test('think fallback is tracked per model', async () =>
       for await (const chunk of client.chatStream({
         model: 'model-a',
         messages: [{ role: 'user', content: 'hello again' }],
-        think: true,
+        think: false,
       }))
       {
         void chunk
@@ -349,7 +349,7 @@ test('think fallback is tracked per model', async () =>
       for await (const chunk of client.chatStream({
         model: 'model-b',
         messages: [{ role: 'user', content: 'hello again' }],
-        think: true,
+        think: false,
       }))
       {
         void chunk
@@ -359,7 +359,7 @@ test('think fallback is tracked per model', async () =>
         {
           model: 'model-a',
           messages: [{ role: 'user', content: 'hello' }],
-          think: true,
+          think: false,
           keep_alive: '10m',
           stream: true,
         },
@@ -378,7 +378,7 @@ test('think fallback is tracked per model', async () =>
         {
           model: 'model-b',
           messages: [{ role: 'user', content: 'hello again' }],
-          think: true,
+          think: false,
           keep_alive: '10m',
           stream: true,
         },
