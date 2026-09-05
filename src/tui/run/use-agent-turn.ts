@@ -22,12 +22,11 @@ import type {
   InteractiveSession,
   InteractiveSessionView,
 } from '../session/use-interactive-session.js'
+import { settlementApproved } from '../session/interactive-runtime.js'
 import { style } from '../theme.js'
-import {
-  buildRestoredBlocks,
-  truncateToolResult,
-} from '../transcript/restored-blocks.js'
+import { buildRestoredBlocks } from '../transcript/restored-blocks.js'
 import { failPendingToolCalls } from '../transcript/transcript.js'
+import { capStoredOutput } from '../../utils/truncate-output.js'
 import type {
   DiffBlock,
   OutputBlock,
@@ -38,6 +37,46 @@ import { useAnimationTimer } from './use-animation-timer.js'
 import { useStreamBuffer, type StreamBuffer } from './use-stream-buffer.js'
 
 const FLUSH_INTERVAL = 32
+// silence threshold before the status line flags the stream as stalled
+const STALL_WARNING_MS = 3_000
+
+// timer-polled stall flag: token-driven stages measure since the last chunk,
+// the waiting stage measures since the run began
+function useStalledFlag(
+  runStage: RunStage,
+  lastTokenAt: number | null,
+  startedAt: () => number | null
+): boolean
+{
+  const [stalled, setStalled] = useState(false)
+
+  useEffect(() =>
+  {
+    const stageActive =
+      runStage === 'responding' ||
+      runStage === 'thinking' ||
+      runStage === 'waiting'
+
+    // polled (never set synchronously) so the flag both latches and clears
+    // without cascading renders
+    const timer = setInterval(() =>
+    {
+      if (!stageActive)
+      {
+        setStalled(false)
+        return
+      }
+
+      const now = Date.now()
+      const since = runStage === 'waiting' ? (startedAt() ?? now) : lastTokenAt
+      setStalled(since !== null && now - since > STALL_WARNING_MS)
+    }, SPINNER_INTERVAL)
+
+    return () => clearInterval(timer)
+  }, [lastTokenAt, runStage, startedAt])
+
+  return stalled
+}
 const SPINNER_INTERVAL = 80
 
 export interface TokenUsageView
@@ -70,6 +109,8 @@ export interface RunAgentTurnOptions
 {
   historyRecorded: boolean
   attachmentPaths: string[]
+  // autosends leave a newer unsubmitted composer draft intact
+  preserveInput?: boolean
 }
 
 export interface AgentTurnController
@@ -87,6 +128,8 @@ export interface AgentTurnController
   rebuildTranscript: (agent?: Agent | null) => void
   run: (value: string, options: RunAgentTurnOptions) => Promise<void>
   isRunning: boolean
+  // true while tokens have stopped flowing past the stall threshold
+  stalled: boolean
 }
 
 export function useAgentTurn(
@@ -108,6 +151,7 @@ export function useAgentTurn(
     getSessionId,
     isYolo,
     requestPrompt,
+    requestToolApproval,
     runOperation,
   } = session
   const [output, setOutput] = useState<OutputBlock[]>(() =>
@@ -133,6 +177,14 @@ export function useAgentTurn(
     stopWaiting,
     resetAnimation,
   } = useAnimationTimer(runStage, SPINNER_INTERVAL)
+
+  // no tokens for a while (or a long silent wait for the first one) flags a
+  // stalled stream; polled by a short interval so the flag clears itself
+  const stalled = useStalledFlag(
+    runStage,
+    streamBuf.lastTokenAt,
+    () => runStartTimeRef.current
+  )
 
   const resetRunState = useCallback(() =>
   {
@@ -250,7 +302,7 @@ export function useAgentTurn(
           addHistoryEntry(value.trim(), getSessionId())
         }
 
-        clearInput()
+        if (!runOptions.preserveInput) clearInput()
         scrollToLatest()
         setOutput((previous) => [...previous, { type: 'user', content: value }])
         setRunStage('waiting')
@@ -314,8 +366,7 @@ export function useAgentTurn(
                 cwd: runAgent.getCwd(),
               })
               if (!acceptsEvent(operation)) return false
-              return requestPrompt(operation, {
-                kind: 'tool',
+              return requestToolApproval(operation, {
                 toolName: name,
                 args,
                 diff: preview?.kind === 'diff' ? preview.diff : undefined,
@@ -330,13 +381,17 @@ export function useAgentTurn(
               // yolo may use only launch identities commissioned in ask mode
               if (isYolo()) return Promise.resolve(false)
               stopWaiting()
-              return requestPrompt(operation, { kind: 'mcp', request })
+              return requestPrompt(operation, { kind: 'mcp', request }).then(
+                settlementApproved
+              )
             },
             onDoomLoop(message)
             {
               if (!acceptsEvent(operation)) return Promise.resolve(false)
               stopWaiting()
-              return requestPrompt(operation, { kind: 'doom', message })
+              return requestPrompt(operation, { kind: 'doom', message }).then(
+                settlementApproved
+              )
             },
             onVerification(result)
             {
@@ -409,10 +464,12 @@ export function useAgentTurn(
                 }
                 else if (result)
                 {
+                  // blocks keep the full (bounded) result; collapse is a
+                  // render-time decision so ctrl+o can reach the rest
                   next.push({
                     type: 'tool_result',
                     toolName: name,
-                    content: truncateToolResult(result),
+                    content: capStoredOutput(result).text,
                   })
                 }
                 return next
@@ -519,6 +576,7 @@ export function useAgentTurn(
       isYolo,
       rebuildTranscript,
       requestPrompt,
+      requestToolApproval,
       resetRunState,
       resetStreamBuffer,
       runOperation,
@@ -542,5 +600,6 @@ export function useAgentTurn(
     rebuildTranscript,
     run,
     isRunning: runStage !== 'idle',
+    stalled,
   }
 }

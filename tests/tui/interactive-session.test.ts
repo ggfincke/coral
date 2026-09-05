@@ -6,8 +6,10 @@ import { after, beforeEach, test } from 'node:test'
 import { makeReliabilityStats } from '../../src/types/inference.js'
 import {
   InteractiveSessionRuntime,
+  sessionToolGrantFingerprint,
   type ActivePrompt,
   type InteractiveLifetimeAgent,
+  type PromptSettlement,
 } from '../../src/tui/session/interactive-runtime.js'
 import { resolveStartupSession } from '../../src/tui/session/agent-session.js'
 import type { SessionMeta } from '../../src/session/types.js'
@@ -373,4 +375,139 @@ test('shutdown joins command settlement and permits exact terminal persistence',
 test('a missing startup resume ID produces no saved session binding', () =>
 {
   assert.equal(resolveStartupSession('deadbeef').session, null)
+})
+
+test('session grants fingerprint tool identity w/ a server qualifier for MCP', () =>
+{
+  assert.equal(sessionToolGrantFingerprint('bash'), 'bash')
+  assert.notEqual(
+    sessionToolGrantFingerprint('bash'),
+    sessionToolGrantFingerprint('write_file')
+  )
+  // dynamic MCP names embed their stable server qualifier
+  assert.equal(
+    sessionToolGrantFingerprint('mcp__fixture__echo', {
+      label: 'echo',
+      mcp: true,
+    }),
+    'mcp:mcp__fixture__echo'
+  )
+  assert.equal(
+    sessionToolGrantFingerprint('mcp__fixture__echo'),
+    'mcp:mcp__fixture__echo'
+  )
+  assert.notEqual(
+    sessionToolGrantFingerprint('mcp__fixture__echo'),
+    sessionToolGrantFingerprint('mcp__other__echo')
+  )
+})
+
+test('always-approvals grant identical tool calls without prompting until reset', async () =>
+{
+  const prompts: Array<ActivePrompt | null> = []
+  const agent = new FakeAgent('grants')
+  const runtime = makeRuntime(agent, makeSessionMeta({ id: 'aaaaaa11' }), {
+    onPromptChange: (prompt) => prompts.push(prompt),
+  })
+  const published = () => prompts.filter(Boolean).length
+  const settle = (settlement: PromptSettlement) =>
+  {
+    const prompt = prompts.at(-1)
+    assert.ok(prompt && prompt.kind === 'tool')
+    assert.equal(runtime.settlePrompt(prompt.id, settlement), true)
+    return prompt
+  }
+
+  const run = runtime.beginOperation('turn')
+  assert.ok(run)
+
+  // the first bash call publishes a prompt; 'a' settles allow-always & records
+  const first = runtime.requestToolApproval(run, {
+    toolName: 'bash',
+    args: { command: 'npm test' },
+  })
+  assert.equal(published(), 1)
+  settle({ approved: true, always: true })
+  assert.equal(await first, true)
+
+  // a grant hit auto-approves w/o publishing any prompt; args are irrelevant
+  // because grants fingerprint tool identity only
+  assert.equal(
+    await runtime.requestToolApproval(run, {
+      toolName: 'bash',
+      args: { command: 'rm -rf /tmp/x' },
+    }),
+    true
+  )
+  assert.equal(published(), 1)
+
+  // a different tool does not match the grant; plain reject records nothing,
+  // so it prompts again and a plain y settles w/o recording an always-grant
+  const second = runtime.requestToolApproval(run, {
+    toolName: 'write_file',
+    args: {},
+  })
+  assert.equal(published(), 2)
+  settle(false)
+  assert.equal(await second, false)
+
+  const third = runtime.requestToolApproval(run, {
+    toolName: 'write_file',
+    args: {},
+  })
+  assert.equal(published(), 3)
+  settle(true)
+  assert.equal(await third, true)
+
+  // an MCP grant stays scoped to its server qualifier
+  const mcp = runtime.requestToolApproval(run, {
+    toolName: 'mcp__fixture__echo',
+    args: {},
+    presentation: { label: 'echo', mcp: true },
+  })
+  assert.equal(published(), 4)
+  const mcpPrompt = prompts.at(-1)!
+  settle({ approved: true, always: true })
+  assert.equal(await mcp, true)
+  assert.equal(
+    await runtime.requestToolApproval(run, {
+      toolName: 'mcp__fixture__echo',
+      args: { text: 'again' },
+      presentation: { label: 'echo', mcp: true },
+    }),
+    true
+  )
+  assert.equal(published(), 4)
+
+  const otherServer = runtime.requestToolApproval(run, {
+    toolName: 'mcp__other__echo',
+    args: {},
+    presentation: { label: 'echo', mcp: true },
+  })
+  assert.equal(prompts.at(-1)!.id > mcpPrompt.id, true)
+  settle(false)
+  assert.equal(await otherServer, false)
+
+  // the widened channel resolves an always-settlement object verbatim
+  const raw = runtime.requestPrompt(run, {
+    kind: 'tool',
+    toolName: 'grep',
+    args: {},
+  })
+  assert.equal(published(), 6)
+  const rawSettlement = settle({ approved: true, always: true })
+  assert.deepEqual(await raw, { approved: true, always: true })
+  assert.equal(rawSettlement.id > mcpPrompt.id, true)
+
+  // a session reset clears every recorded grant
+  runtime.replaceSession(makeSessionMeta({ id: 'bbbbbb22' }))
+  const afterReset = runtime.requestToolApproval(run, {
+    toolName: 'bash',
+    args: { command: 'npm test' },
+  })
+  assert.equal(prompts.at(-1)?.kind, 'tool')
+  settle(true)
+  assert.equal(await afterReset, true)
+
+  await runtime.shutdown()
 })

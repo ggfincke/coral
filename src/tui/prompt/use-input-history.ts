@@ -21,6 +21,8 @@ export interface InputHistoryControls
   addEntry: (text: string, sessionId: string | null) => void
   // exit history mode (call when user edits text manually)
   resetNavigation: () => void
+  // newest-500 entries, oldest first; loads on first call
+  getEntries: () => readonly HistoryEntry[]
 }
 
 export function useInputHistory(): InputHistoryControls
@@ -108,5 +110,11 @@ export function useInputHistory(): InputHistoryControls
     [ensureLoaded, resetNavigation]
   )
 
-  return { navigateUp, navigateDown, addEntry, resetNavigation }
+  const getEntries = useCallback((): readonly HistoryEntry[] =>
+  {
+    ensureLoaded()
+    return entriesRef.current
+  }, [ensureLoaded])
+
+  return { navigateUp, navigateDown, addEntry, resetNavigation, getEntries }
 }

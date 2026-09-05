@@ -668,6 +668,88 @@ describe('ConversationState', () =>
     assert.equal(state.getRedoStack().length, 0)
     assertExactEstimate(state)
   })
+
+  test('ConversationState.truncateToTurn drops a turn tail & invalidates replay plans', () =>
+  {
+    const state = new ConversationState('system')
+    const firstAnchor = state.acceptUserMessage('first')
+    state.appendMessage({ role: 'assistant', content: 'first answer' })
+    state.finalizeActiveTurn(firstAnchor)
+    const secondAnchor = state.acceptUserMessage('second')
+    state.appendMessage({ role: 'assistant', content: 'second answer' })
+    state.finalizeActiveTurn(secondAnchor)
+    const thirdAnchor = state.acceptUserMessage('third')
+    state.appendMessage({ role: 'assistant', content: 'third answer' })
+    state.finalizeActiveTurn(thirdAnchor)
+
+    // a replay plan prepared before the cut cannot commit over it
+    const staleUndo = requireReadyReplay(state.prepareUndo())
+
+    assert.equal(state.truncateToTurn(3), 4)
+    assert.deepEqual(state.getMessages(), [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'first answer' },
+    ])
+    assertExactEstimate(state)
+    assert.equal(state.getUndoStack().length, 0)
+    assert.equal(state.getRedoStack().length, 0)
+    assert.deepEqual(state.commitReplay(staleUndo.plan), { status: 'stale' })
+
+    // anchors into dropped history resolve empty; retained ones stay valid
+    assert.equal(state.getMessage(secondAnchor), undefined)
+    assert.equal(state.getMessage(firstAnchor)?.content, 'first')
+  })
+
+  test('ConversationState.truncateToTurn refuses frozen-prefix cuts, bad indexes, & active turns', () =>
+  {
+    const state = new ConversationState('system')
+    const only = state.acceptUserMessage('only')
+    state.appendMessage({ role: 'assistant', content: 'only answer' })
+    state.finalizeActiveTurn(only)
+
+    // an accepted-but-unfinalized turn blocks truncation entirely
+    const activeAnchor = state.acceptUserMessage('active')
+    assert.equal(state.truncateToTurn(1), null)
+    state.finalizeActiveTurn(activeAnchor)
+
+    for (const badIndex of [Number.NaN, -1, 0.5])
+    {
+      assert.equal(state.truncateToTurn(badIndex), null)
+    }
+    assert.equal(state.truncateToTurn(state.getMessageCount()), null)
+
+    // manual compaction freezes a summary prefix that cannot be cut into
+    state.appendMessages([
+      { role: 'user', content: 'a' },
+      { role: 'assistant', content: 'a answer' },
+      { role: 'user', content: 'b' },
+      { role: 'assistant', content: 'b answer' },
+      { role: 'user', content: 'c' },
+      { role: 'assistant', content: 'c answer' },
+    ])
+    const summaryPlan = state.prepareSummary({
+      mode: 'manual',
+      config: compactConfig,
+    })!
+    assert.ok(summaryPlan)
+    assert.equal(
+      state.commitSummary(
+        summaryPlan.plan,
+        'kept context',
+        '2026-08-23T00:00:00.000Z'
+      ).status,
+      'committed'
+    )
+
+    const frozenPrefixLength = state.getFrozenPrefixLength()
+    assert.ok(frozenPrefixLength > 1)
+    assert.equal(state.truncateToTurn(1), null)
+    const liveMessages = state.getMessageCount() - frozenPrefixLength
+    assert.equal(state.truncateToTurn(frozenPrefixLength), liveMessages)
+    assert.deepEqual(state.getMessages(), state.getFrozenPrefix())
+    assertExactEstimate(state)
+  })
 })
 
 describe('compaction helpers', () =>

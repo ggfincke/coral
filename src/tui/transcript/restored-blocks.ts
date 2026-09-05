@@ -2,23 +2,9 @@
 // rebuild transcript blocks from saved messages
 
 import type { OllamaMessage } from '../../types/inference.js'
-import {
-  truncateOutput,
-  type TruncateOutputOptions,
-} from '../../utils/truncate-output.js'
+import { capStoredOutput } from '../../utils/truncate-output.js'
 import type { OutputBlock } from './types.js'
 import { formatMentionNotice } from '../prompt/mentions.js'
-
-const TRUNCATED_TOOL_RESULT_OPTIONS: TruncateOutputOptions = {
-  dropEmpty: false,
-  separator: '\n',
-  buildSuffix: (shown, total) => `… (${total - shown} more lines)`,
-}
-
-export function truncateToolResult(result: string): string
-{
-  return truncateOutput(result, 30, 'lines', TRUNCATED_TOOL_RESULT_OPTIONS)
-}
 
 export function buildRestoredBlocks(messages: OllamaMessage[]): OutputBlock[]
 {
@@ -65,7 +51,9 @@ export function buildRestoredBlocks(messages: OllamaMessage[]): OutputBlock[]
       restoredBlocks.push({
         type: 'tool_result',
         toolName: msg.tool_name ?? 'tool',
-        content: truncateToolResult(msg.content),
+        // restored blocks keep the persisted (bounded) text; collapse is a
+        // render-time decision so ctrl+o reaches everything that survived
+        content: capStoredOutput(msg.content).text,
       })
     }
   }

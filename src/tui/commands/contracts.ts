@@ -43,6 +43,12 @@ export interface CommandContext
   saveCurrentSession: () => SessionSaveResult
   renameCurrentSession: (title: string) => boolean
   notifyThemeChanged: () => void
+  // raw scrollback toggle; undefined flips it & returns the resulting state
+  setRawMode: (enabled?: boolean) => boolean
+  // persist & apply the modal-editing preference
+  setVimMode: (enabled: boolean) => void
+  // live modal-editing state for toggle commands
+  isVimMode: () => boolean
 }
 
 export interface Command

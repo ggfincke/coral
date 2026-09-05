@@ -3,6 +3,20 @@
 
 const ESC = '\u001b'
 const META_KEY_CODE_RE = new RegExp(`^(?:${ESC})([a-zA-Z0-9])$`)
+// kitty CSI-u: ESC [ codepoint (:shifted)? (;mods)? u — kitty encodes mods+1,
+// so a plain key sends 1 and any value >= 1 is treated as base-minus-one
+const CSI_U_RE = new RegExp(`^(?:${ESC})\\[(\\d+)(?::\\d+)?(?:;(\\d+))?u$`)
+// functional codepoints from the kitty keyboard protocol
+const CSI_U_KEY_NAMES: Record<number, string> = {
+  9: 'tab',
+  13: 'return',
+  27: 'escape',
+  127: 'backspace',
+  57414: 'return',
+  57425: 'tab',
+  57427: 'escape',
+}
+const MAX_CODEPOINT = 0x10ffff
 const FN_KEY_RE = new RegExp(
   `^(?:${ESC}+)(O|N|\\[|\\[\\[)(?:(\\d+)(?:;(\\d+))?([~^$])|(?:1;)?(\\d+)?([a-zA-Z]))`
 )
@@ -147,6 +161,13 @@ export function parseKeypress(input: string = ''): ParsedKey
     key.raw = undefined
     key.name = 'return'
   }
+  // meta+enter arrives as esc-prefixed CR (some terminals send LF)
+  else if (value === '\x1b\r' || value === '\x1b\n')
+  {
+    key.raw = undefined
+    key.name = 'return'
+    key.meta = true
+  }
   // keep a bare '\n' (pasted newline) as literal input; otherwise it falls
   // through to the ctrl-letter path as Ctrl+J. Enter arrives as '\r'.
   else if (value === '\n')
@@ -200,6 +221,24 @@ export function parseKeypress(input: string = ''): ParsedKey
   {
     key.name = value.toLowerCase()
     key.shift = true
+  }
+  // CSI-u must be recognized before the generic escape fall-throughs, which
+  // would otherwise consume e.g. ESC [ 13 u as an unknown fn key
+  else if ((parts = CSI_U_RE.exec(value)))
+  {
+    const codepoint = Number.parseInt(parts[1]!, 10)
+    const modsParam = Number.parseInt(parts[2] ?? '0', 10)
+    const mods = modsParam >= 1 ? modsParam - 1 : 0
+
+    key.shift = !!(mods & 1)
+    key.meta = !!(mods & 2)
+    key.ctrl = !!(mods & 4)
+    key.name = CSI_U_KEY_NAMES[codepoint] ?? ''
+    if (!key.name && codepoint <= MAX_CODEPOINT)
+    {
+      // printable codepoints insert like typed chars; name stays ''
+      key.sequence = String.fromCodePoint(codepoint)
+    }
   }
   else if ((parts = META_KEY_CODE_RE.exec(value)))
   {

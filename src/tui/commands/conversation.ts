@@ -1,9 +1,12 @@
 // src/tui/commands/conversation.ts
-// conversation-history and task-list commands
+// conversation-history, export, view-mode, and task-list commands
 
+import { join } from 'node:path'
+import { writeFileSync } from 'node:fs'
 import { copyToClipboard } from '../../utils/clipboard.js'
 import { pluralize } from '../../utils/pluralize.js'
 import { style } from '../theme.js'
+import { buildSessionMarkdown } from '../shell/export-markdown.js'
 import { lastAssistantText, lastCodeBlock } from '../shell/copy.js'
 import type { Command } from './contracts.js'
 import {
@@ -167,7 +170,130 @@ const copyCommand: Command = {
 
     const lineCount = payload.split('\n').length
     const detail = pluralize(lineCount, 'line')
-    ctx.pushOutput(systemBlock(`Copied last ${label} to clipboard (${detail})`))
+    const transport = result.via ? ` · ${result.via}` : ''
+    ctx.pushOutput(
+      systemBlock(`Copied last ${label} to clipboard (${detail}${transport})`)
+    )
+  },
+}
+
+// /export command
+
+const exportCommand: Command = {
+  name: 'export',
+  description:
+    "Export the conversation as Markdown to clipboard ('file' writes one, 'tools' includes tool detail)",
+  async execute(args, ctx)
+  {
+    const tokens = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
+    const asFile = tokens.includes('file')
+    const includeTools = tokens.includes('tools')
+
+    const markdown = buildSessionMarkdown(
+      {
+        sessionId: ctx.sessionLabelId,
+        model: ctx.activeModel,
+        cwd: ctx.getCwd(),
+        messages: ctx.agent.getMessages(),
+      },
+      { includeTools, includeThinking: true }
+    )
+
+    if (!asFile)
+    {
+      const result = await copyToClipboard(markdown)
+      if (!result.ok)
+      {
+        ctx.pushOutput(
+          systemBlock(
+            `Failed to copy export: ${result.error ?? 'clipboard unavailable'} — try /export file`
+          )
+        )
+        return
+      }
+      ctx.pushOutput(
+        systemBlock(
+          `Exported ${markdown.length} chars of Markdown to clipboard (tools ${includeTools ? 'included' : 'omitted'}${result.via ? ` · ${result.via}` : ''})`
+        )
+      )
+      return
+    }
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const path = join(ctx.getCwd(), `coral-export-${stamp}.md`)
+    try
+    {
+      writeFileSync(path, markdown, { encoding: 'utf-8', flag: 'wx' })
+    }
+    catch (error)
+    {
+      ctx.pushOutput(
+        systemBlock(`Failed to write export file: ${(error as Error).message}`)
+      )
+      return
+    }
+    ctx.pushOutput(systemBlock(`Exported Markdown to ${path}`))
+  },
+}
+
+// /raw command
+
+const rawCommand: Command = {
+  name: 'raw',
+  description:
+    'Toggle plain-text scrollback for terminal-native selection (/raw off returns to styled view)',
+  execute(args, ctx)
+  {
+    const arg = args.trim().toLowerCase()
+    if (arg && arg !== 'on' && arg !== 'off')
+    {
+      ctx.pushOutput(
+        systemBlock(
+          `Unknown option: "${arg}"\nUsage: ${style('user')('/raw')}, ${style('user')('/raw on')}, ${style('user')('/raw off')}`
+        )
+      )
+      return
+    }
+
+    const enabled = ctx.setRawMode(
+      arg === 'off' ? false : arg === 'on' ? true : undefined
+    )
+    ctx.pushOutput(
+      systemBlock(
+        enabled
+          ? 'Raw mode on — transcript dumped as plain text; select & copy freely'
+          : 'Raw mode off — styled transcript restored'
+      )
+    )
+  },
+}
+
+// /vim command
+
+const vimCommand: Command = {
+  name: 'vim',
+  description: 'Toggle vi modal editing in the composer (/vim on|off)',
+  execute(args, ctx)
+  {
+    const arg = args.trim().toLowerCase()
+    if (arg && arg !== 'on' && arg !== 'off')
+    {
+      ctx.pushOutput(
+        systemBlock(
+          `Unknown option: "${arg}"\nUsage: ${style('user')('/vim')}, ${style('user')('/vim on')}, ${style('user')('/vim off')}`
+        )
+      )
+      return
+    }
+
+    const enabled =
+      arg === 'on' ? true : arg === 'off' ? false : !ctx.isVimMode()
+    ctx.setVimMode(enabled)
+    ctx.pushOutput(
+      systemBlock(
+        `Vi mode ${enabled ? 'on — esc for NORMAL, i to insert' : 'off'}`
+      )
+    )
   },
 }
 
@@ -221,5 +347,8 @@ export const conversationCommands = {
   undo: undoCommand,
   redo: redoCommand,
   copy: copyCommand,
+  export: exportCommand,
+  raw: rawCommand,
+  vim: vimCommand,
   todo: todoCommand,
 } satisfies Record<string, Command>

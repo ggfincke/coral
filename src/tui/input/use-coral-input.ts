@@ -10,13 +10,9 @@ import {
   type CoralKey,
 } from './terminal-input.js'
 
-const ENABLE_MOUSE_TRACKING = '\x1b[?1000h\x1b[?1006h'
-const DISABLE_MOUSE_TRACKING = '\x1b[?1006l\x1b[?1000l'
-
 interface UseCoralInputOptions
 {
   isActive?: boolean
-  enableMouseTracking?: boolean
 }
 
 interface CoralStdinContext
@@ -33,7 +29,7 @@ export function useCoralInput(
 {
   const { setRawMode, internal_exitOnCtrlC, internal_eventEmitter } =
     useStdin() as unknown as CoralStdinContext
-  const { isActive = true, enableMouseTracking = false } = options
+  const { isActive = true } = options
   const pendingRef = useRef('')
   const handlerRef = useRef(handler)
 
@@ -53,18 +49,6 @@ export function useCoralInput(
       setRawMode(false)
     }
   }, [isActive, setRawMode])
-
-  useEffect(() =>
-  {
-    if (!isActive || !enableMouseTracking) return
-
-    process.stdout.write(ENABLE_MOUSE_TRACKING)
-
-    return () =>
-    {
-      process.stdout.write(DISABLE_MOUSE_TRACKING)
-    }
-  }, [enableMouseTracking, isActive])
 
   useEffect(() =>
   {

@@ -359,6 +359,30 @@ export class ConversationState
     return cleared
   }
 
+  // drop stored messages from a user-turn start onward; mirrors the
+  // misaligned-replay invalidation idiom because an arbitrary cut destroys
+  // redo granularity (returns removed count, or null when refused)
+  truncateToTurn(startIndex: number): number | null
+  {
+    if (this.activeAnchor) return null
+    if (
+      !Number.isInteger(startIndex) ||
+      startIndex < this.frozenPrefixLength ||
+      startIndex >= this.messages.length ||
+      this.messages[startIndex]?.role !== 'user'
+    )
+    {
+      return null
+    }
+
+    const removedMessages = this.messages.length - startIndex
+    this.messages = this.messages.slice(0, startIndex)
+    this.clearUndoRedoStacks()
+    this.rebuildTokenEstimate()
+    this.touch()
+    return removedMessages
+  }
+
   resetCompactionMetrics(): void
   {
     this.compactFailureCount = 0

@@ -57,3 +57,37 @@ export function truncateToLineBoundary(
   const head = lastNewline > 0 ? slice.slice(0, lastNewline) : slice
   return { head, omitted: text.length - head.length, truncated: true }
 }
+
+// keep a bounded head+tail of oversized output for in-memory display; the
+// middle is genuinely gone (mirrors the session persistence ceiling's spirit)
+export interface BoundedOutput
+{
+  text: string
+  omittedChars: number
+}
+
+export function capStoredOutput(
+  text: string,
+  maxChars = 100_000
+): BoundedOutput
+{
+  if (!Number.isSafeInteger(maxChars) || maxChars < 0)
+  {
+    throw new RangeError('maxChars must be a non-negative safe integer')
+  }
+  if (text.length <= maxChars)
+  {
+    return { text, omittedChars: 0 }
+  }
+
+  const headChars = Math.floor(maxChars * 0.6)
+  const tailChars = maxChars - headChars
+  const omittedChars = text.length - maxChars
+  return {
+    text:
+      text.slice(0, headChars) +
+      `\n…[${omittedChars} chars not retained]…\n` +
+      text.slice(text.length - tailChars),
+    omittedChars,
+  }
+}

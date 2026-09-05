@@ -108,6 +108,7 @@ export function buildApprovalContent(
     MAX_APPROVAL_TOOL_NAME_CHARS
   )
   box.title(`Allow ${cleanToolName}?`)
+  box.title('(a) grants this tool with any arguments for this session.')
   box.push(formatApprovalArgs(toolName, args, presentation), box.warn)
 
   if (diff)
@@ -129,7 +130,11 @@ export function buildApprovalContent(
     box.push(chalk.dim(sanitizeUntrustedText(previewMessage)))
   }
 
-  return box.finish(box.warn('(y) approve  (n) reject  (esc) cancel'))
+  return box.finish(
+    box.warn(
+      '(y) approve  (a) allow always (session)  (n) reject  (esc) cancel'
+    )
+  )
 }
 
 function cleanLaunchValue(value: string): string
