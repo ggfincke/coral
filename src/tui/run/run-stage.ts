@@ -12,7 +12,5 @@ export type RunStage =
 // show animation only when the UI displays a shimmer or spinner
 export function isAnimatedRunStage(stage: RunStage): boolean
 {
-  return (
-    stage === 'waiting' || stage === 'compacting' || stage.startsWith('tool:')
-  )
+  return stage === 'waiting' || stage.startsWith('tool:')
 }

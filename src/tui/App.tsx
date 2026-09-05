@@ -51,6 +51,7 @@ import {
   keybindingInfos,
 } from './commands/registry.js'
 import type { CommandContext } from './commands/contracts.js'
+import { runAdmittedCommand } from './commands/command-operation.js'
 import {
   resolveKeybindingConfig,
   type KeybindingAction,
@@ -553,6 +554,10 @@ export default function App({
       Math.max(availableHeight - composerChromeHeight - queueLines.length, 0)
     )
   )
+  const allocatedPromptHeight = Math.max(
+    Math.min(promptHeight, promptMaxHeight),
+    1
+  )
   const inputHeight = showComposer
     ? Math.min(promptHeight, promptMaxHeight) +
       composerChromeHeight +
@@ -1000,90 +1005,98 @@ export default function App({
       const acceptsCommand = () => acceptsCommandEvent(commandOperation)
       const acceptsTerminal = () => acceptsCommandTerminal(commandOperation)
 
-      addHistoryEntry(value.trim(), getSessionId())
+      return runAdmittedCommand<SlashDispatchResult>(
+        {
+          run: (work) => runOperation(commandOperation, work),
+          recordHistory: () => addHistoryEntry(value.trim(), getSessionId()),
+          setRunning: setCommandRunning,
+          finish: () => finishCommand(commandOperation),
+          onError: (error) =>
+          {
+            if (acceptsTerminal())
+            {
+              setOutput((prev) => [
+                ...prev,
+                {
+                  type: 'error',
+                  content: `Command failed: ${toErrorMessage(error)}`,
+                },
+              ])
+            }
+            return { admitted: true, handled: true }
+          },
+        },
+        async () =>
+        {
+          setInput('')
+          setScrollOffset(0)
 
-      setInput('')
-      setScrollOffset(0)
-      // lock submits for the command's lifetime so /index and /compact cannot
-      // overlap with a chat turn or another command
-      setCommandRunning(true)
+          const cmdCtx: CommandContext = {
+            agent: commandAgent,
+            activeModel: commandAgent.getModel(),
+            host,
+            yolo: isYolo(),
+            sessionLabelId: getSessionId(),
+            signal: commandOperation.signal,
+            getCwd: () => commandAgent.getCwd(),
+            pushOutput: (...blocks) =>
+            {
+              if (acceptsCommand()) setOutput((prev) => [...prev, ...blocks])
+            },
+            pushTerminalOutput: (...blocks) =>
+            {
+              if (acceptsTerminal()) setOutput((prev) => [...prev, ...blocks])
+            },
+            clearSession: () =>
+            {
+              if (acceptsCommand()) clearSession()
+            },
+            rebuildTranscript: () =>
+            {
+              if (acceptsTerminal()) rebuildTranscript(commandAgent)
+            },
+            resetTokenUsage: () =>
+            {
+              if (acceptsTerminal()) resetTokenUsage()
+            },
+            reopenModelPicker: () =>
+            {
+              if (acceptsCommand()) reopenModelPicker()
+            },
+            switchModel: (nextModel) =>
+              switchModel(nextModel, commandOperation),
+            setYolo: (nextYolo) =>
+              setPermissionMode(nextYolo, commandOperation),
+            exitApp: () =>
+            {
+              if (acceptsCommand()) void shutdown()
+            },
+            resumeSession: (id) =>
+              acceptsCommand() && resumeSessionById(id, commandOperation),
+            saveCurrentSession: () => saveOperationSession(commandOperation),
+            renameCurrentSession: (title) =>
+              acceptsCommand() && renameCurrentSession(title),
+            notifyThemeChanged: () =>
+            {
+              if (acceptsCommand()) setThemeGeneration(getThemeGeneration())
+            },
+            setRawMode,
+            setVimMode,
+            // /vim reads the live state back to toggle correctly
+            isVimMode: () => viMode,
+          }
 
-      const cmdCtx: CommandContext = {
-        agent: commandAgent,
-        activeModel: commandAgent.getModel(),
-        host,
-        yolo: isYolo(),
-        sessionLabelId: getSessionId(),
-        signal: commandOperation.signal,
-        getCwd: () => commandAgent.getCwd(),
-        pushOutput: (...blocks) =>
-        {
-          if (acceptsCommand()) setOutput((prev) => [...prev, ...blocks])
-        },
-        pushTerminalOutput: (...blocks) =>
-        {
-          if (acceptsTerminal()) setOutput((prev) => [...prev, ...blocks])
-        },
-        clearSession: () =>
-        {
-          if (acceptsCommand()) clearSession()
-        },
-        rebuildTranscript: () =>
-        {
-          if (acceptsTerminal()) rebuildTranscript(commandAgent)
-        },
-        resetTokenUsage: () =>
-        {
-          if (acceptsTerminal()) resetTokenUsage()
-        },
-        reopenModelPicker: () =>
-        {
-          if (acceptsCommand()) reopenModelPicker()
-        },
-        switchModel: (nextModel) => switchModel(nextModel, commandOperation),
-        setYolo: (nextYolo) => setPermissionMode(nextYolo, commandOperation),
-        exitApp: () =>
-        {
-          if (acceptsCommand()) void shutdown()
-        },
-        resumeSession: (id) =>
-          acceptsCommand() && resumeSessionById(id, commandOperation),
-        saveCurrentSession: () => saveOperationSession(commandOperation),
-        renameCurrentSession: (title) =>
-          acceptsCommand() && renameCurrentSession(title),
-        notifyThemeChanged: () =>
-        {
-          if (acceptsCommand()) setThemeGeneration(getThemeGeneration())
-        },
-        setRawMode,
-        setVimMode,
-        // /vim reads the live state back to toggle correctly
-        isVimMode: () => viMode,
-      }
+          // bare /resume opens the picker inside the joined command lifetime
+          if (value.trim() === '/resume')
+          {
+            setSessionPickerOpen(true)
+            return { admitted: true, handled: true }
+          }
 
-      // bare /resume opens the interactive session picker instead of the
-      // latest-session fallback; an id argument still dispatches normally
-      if (value.trim() === '/resume')
-      {
-        finishCommand(commandOperation)
-        setCommandRunning(false)
-        setSessionPickerOpen(true)
-        return { admitted: true, handled: true }
-      }
-
-      return runOperation(commandOperation, async () =>
-      {
-        try
-        {
           const handled = await dispatchCommand(value.trim(), cmdCtx)
           return { admitted: true, handled }
         }
-        finally
-        {
-          finishCommand(commandOperation)
-          setCommandRunning(false)
-        }
-      })
+      )
     },
     [
       acceptsCommandEvent,
@@ -1744,19 +1757,12 @@ export default function App({
               ),
             ]}
           />
-          <Box
-            height={Math.max(Math.min(promptHeight, promptMaxHeight), 1)}
-            flexShrink={0}
-            overflowY="hidden"
-          >
+          <Box height={allocatedPromptHeight} flexShrink={0} overflowY="hidden">
             <Box width={4} flexShrink={0}>
               <LineList
                 lines={Array.from(
                   {
-                    length: Math.max(
-                      Math.min(promptHeight, promptMaxHeight),
-                      1
-                    ),
+                    length: allocatedPromptHeight,
                   },
                   (_, index) =>
                     style('muted')('│ ') +
@@ -1767,6 +1773,7 @@ export default function App({
             <PromptInput
               width={Math.max(transcriptWidth - 6, 1)}
               maxHeight={promptMaxHeight}
+              allocatedHeight={allocatedPromptHeight}
               onHeightChange={setPromptHeight}
               value={input}
               focus={
@@ -1812,10 +1819,7 @@ export default function App({
               <LineList
                 lines={Array.from(
                   {
-                    length: Math.max(
-                      Math.min(promptHeight, promptMaxHeight),
-                      1
-                    ),
+                    length: allocatedPromptHeight,
                   },
                   () => style('muted')(' │')
                 )}

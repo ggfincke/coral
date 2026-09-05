@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { clearTimerRef } from './clear-timer-ref.js'
 import { isAnimatedRunStage, type RunStage } from './run-stage.js'
+import { prefersReducedMotion } from '../shell/terminal-prefs.js'
 
 export interface AnimationTimerState
 {
@@ -27,6 +28,7 @@ export function useAnimationTimer(
   const [spinnerTick, setSpinnerTick] = useState(0)
   const [waitingElapsed, setWaitingElapsed] = useState(0)
   const [showWaitingIndicator, setShowWaitingIndicator] = useState(false)
+  const reducedMotion = prefersReducedMotion()
 
   const startWaiting = useCallback(() =>
   {
@@ -52,7 +54,7 @@ export function useAnimationTimer(
 
   useEffect(() =>
   {
-    if (!isAnimatedRunStage(runStage)) return
+    if (reducedMotion || !isAnimatedRunStage(runStage)) return
 
     timerRef.current = setInterval(() =>
     {
@@ -71,7 +73,7 @@ export function useAnimationTimer(
     {
       clearTimerRef(timerRef)
     }
-  }, [interval, runStage])
+  }, [interval, runStage, reducedMotion])
 
   return {
     spinnerTick,
