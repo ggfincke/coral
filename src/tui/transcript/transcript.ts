@@ -15,7 +15,7 @@ import { buildFileLink } from '../shell/links.js'
 import { formatElapsed } from '../shell/metrics.js'
 import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from '../theme.js'
-import { SOFT_WRAP_OPTIONS, wrapLines } from '../wrap.js'
+import { physicalLines, SOFT_WRAP_OPTIONS, wrapLines } from '../wrap.js'
 import type { ToolCallPresentation } from '../../tools/tool.js'
 import { ellipsize } from '../../utils/ellipsize.js'
 import { stringifyForDisplay } from '../../utils/untrusted-text.js'
@@ -99,7 +99,7 @@ function getCachedBlockLines(
     return cached.lines
   }
 
-  const lines = render()
+  const lines = physicalLines(render(), width)
   const nextWidthCache = widthCache ?? new Map<number, CachedLines>()
   nextWidthCache.set(key, { generation, lines, cwd })
   FINALIZED_BLOCK_CACHE.set(block, nextWidthCache)
@@ -133,7 +133,7 @@ function formatPendingToolCall(
     cwd
   )
 
-  const header = `   ${style('code')('│')} ${spinner} ${style('code')(label)} ${argDisplay}`
+  const header = `   ${chalk.dim('│')} ${spinner} ${chalk.bold(label)} ${argDisplay}`
 
   return wrapLines(header, width)
 }
@@ -143,7 +143,7 @@ function formatAssistantText(content: string, width: number): string[]
 {
   return [
     '',
-    ` ${style('primary').bold('●')} ${style('muted')('Coral')}`,
+    ` ${style('primary').bold('●')} ${chalk.bold('Coral')}`,
     ...wrapLines(renderMarkdownToAnsi(content), width - 3, '   '),
   ]
 }
@@ -158,7 +158,7 @@ function formatStreamingAssistantText(
 {
   return [
     '',
-    ` ${style('primary').bold('●')} ${style('muted')('Coral')}`,
+    ` ${style('primary').bold('●')} ${chalk.bold('Coral')}`,
     ...renderStreamingMarkdown(content, width, themeGeneration),
   ]
 }
@@ -177,7 +177,7 @@ function formatToolArgDisplay(
   const argSummary = summarizeToolArgs(args, display)
   if (toolName === 'bash')
   {
-    return chalk.dim('$ ') + chalk.white(argSummary)
+    return chalk.dim('$ ') + argSummary
   }
 
   const linked = maybeLinkifyPathArg(args, argSummary, display, cwd)
@@ -225,12 +225,10 @@ function formatFinalizedBlock(
       const contentLines = sanitizeUntrustedText(block.content).split('\n')
       const lines: string[] = []
       lines.push('')
-      lines.push(
-        ` ${style('user').bold('›')} ${style('user')(contentLines[0] ?? '')}`
-      )
+      lines.push(` ${style('user').bold('›')} ${contentLines[0] ?? ''}`)
       for (let i = 1; i < contentLines.length; i++)
       {
-        lines.push(`   ${style('user')(contentLines[i]!)}`)
+        lines.push(`   ${contentLines[i]!}`)
       }
       return lines
     }
@@ -265,7 +263,7 @@ function formatFinalizedBlock(
         block.duration != null
           ? chalk.dim(` ${formatElapsed(block.duration)}`)
           : ''
-      const border = isError ? style('error')('│') : style('code')('│')
+      const border = isError ? style('error')('│') : chalk.dim('│')
       const argDisplay = formatToolArgDisplay(
         block.toolName,
         block.args,
@@ -273,7 +271,7 @@ function formatFinalizedBlock(
         cwd
       )
 
-      const header = `   ${border} ${statusMark} ${style('code')(label)} ${argDisplay}${duration}`
+      const header = `   ${border} ${statusMark} ${chalk.bold(label)} ${argDisplay}${duration}`
       return wrapLines(header, width)
     }
 
@@ -334,7 +332,10 @@ function formatBlock(
 {
   if (block.type === 'tool_call' && !block.status)
   {
-    return formatPendingToolCall(block, width, spinnerTick, cwd)
+    return physicalLines(
+      formatPendingToolCall(block, width, spinnerTick, cwd),
+      width
+    )
   }
 
   return getCachedBlockLines(
@@ -419,9 +420,10 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
     )
   }
 
+  const live: string[] = []
   if (showThinking && streamingThinking)
   {
-    transcript.push(
+    live.push(
       ...formatBlock(
         { type: 'thinking', content: streamingThinking },
         width,
@@ -433,8 +435,8 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
   else if (streamingThinking)
   {
     const border = style('thinking')('│')
-    transcript.push('')
-    transcript.push(
+    live.push('')
+    live.push(
       `   ${border} ${style('thinking').dim('Thinking')} ${chalk.dim('· ctrl+t to show')}`
     )
   }
@@ -442,18 +444,19 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
   // render streaming assistant text after reasoning
   if (streaming)
   {
-    transcript.push(
+    live.push(
       ...formatStreamingAssistantText(streaming, width, themeGeneration)
     )
   }
   else if (showWaitingIndicator)
   {
-    transcript.push('')
-    transcript.push(
+    live.push('')
+    live.push(
       ` ${style('primary').bold('●')} ${shimmerText('thinking...', waitingElapsed)}`
     )
   }
 
+  transcript.push(...physicalLines(live, width))
   return transcript
 }
 

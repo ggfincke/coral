@@ -16,7 +16,6 @@ import {
   sliceViewport,
 } from './transcript/transcript.js'
 import PromptInput from './prompt/prompt-input.js'
-import { countPromptRenderRows } from './prompt/prompt-render.js'
 import { formatBlocksPlain } from './transcript/plain.js'
 import { toggleNewestToolResult } from './transcript/expansion.js'
 import { runInExternalEditor } from './prompt/editor-handoff.js'
@@ -38,6 +37,12 @@ import { useTerminalModes } from './input/use-terminal-modes.js'
 const QUEUE_PREVIEW_ROWS = 3
 import CommandPalette from './palette/command-palette.js'
 import { getThemeGeneration, inkColor, style } from './theme.js'
+import { physicalLines, truncateLine } from './wrap.js'
+import {
+  buildActivityLines,
+  buildComposerRule,
+  buildHeaderLine,
+} from './shell/layout.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
   commandCompletions,
@@ -63,11 +68,7 @@ import {
 } from './session/use-interactive-session.js'
 import { resolveStartupSession } from './session/agent-session.js'
 import { getCwd } from '../cwd.js'
-import {
-  buildTokenGauge,
-  formatTokenCount,
-  formatTokensPerSecond,
-} from './shell/metrics.js'
+import { buildMetricLines } from './shell/metrics.js'
 import {
   buildApprovalContent,
   buildConfirmContent,
@@ -147,6 +148,7 @@ export default function App({
     null
   )
   const [input, setInput] = useState('')
+  const [promptHeight, setPromptHeight] = useState(1)
   // prompts typed while a run is active; drained as autosends at the boundary
   const [queued, setQueued] = useState(emptyMessageQueue)
   const [showThinking, setShowThinking] = useState(true)
@@ -341,7 +343,7 @@ export default function App({
   // prompt viewport geometry for the modal scroll keys
   const promptViewportRef = useRef({ maxOffset: 0, pageSize: 1 })
   const currentCwd = agent?.getCwd() ?? getCwd()
-  const transcriptWidth = Math.max(terminalSize.columns - 2, 20)
+  const transcriptWidth = Math.max(terminalSize.columns - 2, 1)
   const sessionPickerVisible =
     sessionPickerOpen && !pickerVisible && Boolean(agent)
   const paletteVisible =
@@ -379,28 +381,189 @@ export default function App({
     () => buildTodoPanel(todos, transcriptWidth),
     [todos, transcriptWidth]
   )
-  const headerHeight = 2
-  // any modal prompt takes over the input row; multi-line drafts grow the
-  // reserved block so the transcript viewport math stays honest
   const promptActive = Boolean(activePromptContent)
-  const queuePreviewRows =
-    promptActive || paletteVisible || backtrackOpen || sessionPickerVisible
-      ? 0
-      : Math.min(queued.entries.length, QUEUE_PREVIEW_ROWS) +
-        (queued.entries.length > QUEUE_PREVIEW_ROWS ? 1 : 0)
-  const inputHeight =
-    promptActive || paletteVisible || backtrackOpen || sessionPickerVisible
-      ? 0
-      : 2 + countPromptRenderRows(input) + queuePreviewRows
-  const statusHeight = 1
-  // bound the prompt so chat keeps six rows whenever terminal geometry permits
-  const promptCapacity = Math.max(
-    terminalSize.rows - headerHeight - statusHeight,
-    1
+  const pickerOverlay =
+    pickerVisible || paletteVisible || backtrackOpen || sessionPickerVisible
+  const showComposer = Boolean(agent) && !pickerOverlay && !promptActive
+  const metricLines = agent
+    ? buildMetricLines(
+        {
+          decodeTps: tokenUsage.lastDecodeTps,
+          prefillTps: tokenUsage.lastPrefillTps,
+          contextTokens: tokenUsage.context,
+          contextWindow,
+          sessionTokens: tokenUsage.prompt + tokenUsage.completion,
+        },
+        transcriptWidth
+      )
+    : []
+  const ctxLow =
+    contextWindow > 0 && tokenUsage.context >= contextWindow * CTX_LOW_RATIO
+  let activity = 'ready'
+  let activityHint = ''
+  if (paletteVisible)
+  {
+    activity = 'command palette'
+    activityHint = 'enter runs · esc closes'
+  }
+  else if (backtrackOpen)
+  {
+    activity = 'backtrack'
+    activityHint = 'enter restores · esc cancels'
+  }
+  else if (sessionPickerVisible)
+  {
+    activity = 'resume session'
+    activityHint = 'enter resumes · esc cancels'
+  }
+  else if (pickerVisible)
+  {
+    activity =
+      pickerState === 'loading'
+        ? 'loading models from Ollama…'
+        : pickerState === 'error'
+          ? 'model unavailable'
+          : `${models.length} models available`
+    activityHint =
+      pickerState === 'error'
+        ? 'r retries · esc closes'
+        : 'enter selects · esc closes'
+  }
+  else if (promptActive)
+  {
+    activity = style('warning')(
+      `waiting for your approval${runElapsed ? ` · ${runElapsed}` : ''}`
+    )
+  }
+  else if (scrollOffset > 0)
+  {
+    activity = isRunning
+      ? describeRunStageWithElapsed(runStage, runElapsed, {
+          prefix: 'scrollback',
+          elapsedFallback: '0.0s',
+        })
+      : `scrollback · ${scrollOffset} lines above`
+    activityHint = isRunning
+      ? 'ctrl+c interrupts · pgdn returns'
+      : 'pgdn returns'
+  }
+  else if (isRunning)
+  {
+    activity = describeRunStageWithElapsed(runStage, runElapsed)
+    activityHint = 'ctrl+c interrupts'
+  }
+  else if (sessionTransition)
+  {
+    activity =
+      sessionTransition.kind === 'model'
+        ? sessionTransition.phase === 'precommit'
+          ? 'switching model…'
+          : 'finishing model update…'
+        : sessionTransition.kind === 'permission'
+          ? 'finishing permission update…'
+          : 'finishing session update…'
+    activityHint =
+      sessionTransition.owner === 'command' &&
+      sessionTransition.phase === 'precommit'
+        ? 'ctrl+c interrupts'
+        : sessionTransition.phase === 'committed_cleanup'
+          ? 'cleanup in progress'
+          : 'esc quits'
+  }
+  else if (commandRunning)
+  {
+    activity = 'running command…'
+    activityHint = 'ctrl+c interrupts'
+  }
+  else if (backtrackArmed)
+  {
+    activityHint = 'esc again -> edit an earlier prompt'
+  }
+  if (stalled && isRunning)
+  {
+    activity += ` · ${style('warning')('no tokens')}`
+  }
+  if (ctxLow)
+  {
+    activity += ` · ${style('warning')('ctx low — /compact')}`
+  }
+  const activityLines = buildActivityLines(
+    activity,
+    activityHint,
+    transcriptWidth
   )
-  const maxPromptRows = Math.min(
-    Math.max(promptCapacity - 7, 10),
-    promptCapacity
+  const headerHeight = 2
+  const statusHeight = activityLines.length + metricLines.length
+  const availableHeight = Math.max(
+    terminalSize.rows - headerHeight - statusHeight,
+    0
+  )
+  const approvalPinnedRows = activePromptContent
+    ? physicalLines(
+        activePromptContent.titleLines,
+        Math.max(transcriptWidth - 4, 1)
+      ).length +
+      physicalLines(
+        [activePromptContent.actionLine],
+        Math.max(transcriptWidth - 4, 1)
+      ).length +
+      3
+    : 0
+  const terminalTooSmall =
+    terminalSize.columns < 24 ||
+    availableHeight <
+      (promptActive ? approvalPinnedRows : pickerOverlay ? 4 : 5)
+  // the editor budget does not depend on its reported height, avoiding a
+  // render-measure feedback loop while hints and suggestions appear
+  const queueCapacity = showComposer
+    ? Math.max(availableHeight - 5 - 8 - 6, 0)
+    : 0
+  const queuePreviewCount = Math.min(
+    queued.entries.length,
+    QUEUE_PREVIEW_ROWS,
+    Math.max(queueCapacity - 1, 0)
+  )
+  const queueLines =
+    showComposer && queued.entries.length > 0 && queueCapacity > 0
+      ? [
+          style('muted')(
+            truncateLine(
+              `${queued.entries.length} queued · meta+backspace edits newest`,
+              transcriptWidth
+            )
+          ),
+          ...(queuePreviewCount > 0
+            ? queued.entries.slice(-queuePreviewCount)
+            : []
+          ).map((entry) =>
+            style('muted')(
+              truncateLine(formatQueueLines([entry])[0] ?? '', transcriptWidth)
+            )
+          ),
+        ]
+      : []
+  const composerChromeHeight = 3
+  const promptMaxHeight = Math.max(
+    Math.min(
+      17,
+      availableHeight - composerChromeHeight - queueLines.length - 6
+    ),
+    Math.min(
+      2,
+      Math.max(availableHeight - composerChromeHeight - queueLines.length, 0)
+    )
+  )
+  const inputHeight = showComposer
+    ? Math.min(promptHeight, promptMaxHeight) +
+      composerChromeHeight +
+      queueLines.length
+    : 0
+  const maxPromptRows = Math.max(
+    Math.min(
+      availableHeight,
+      Math.max(approvalPinnedRows, availableHeight - 6)
+    ),
+    0
   )
   const promptRender = useMemo(
     () =>
@@ -415,22 +578,47 @@ export default function App({
     [activePromptContent, maxPromptRows, promptScrollOffset, transcriptWidth]
   )
   const promptBoxLines = promptRender?.lines ?? []
-  const approvalHeight = promptActive ? promptBoxLines.length + 1 : 0
-  const todoHeight = promptActive ? 0 : todoPanelLines.length
+  const approvalHeight = promptActive ? promptBoxLines.length : 0
+  const todoBudget = showComposer
+    ? Math.max(availableHeight - inputHeight - 6, 0)
+    : 0
+  const visibleTodoLines =
+    todoPanelLines.length <= todoBudget
+      ? todoPanelLines
+      : todoPanelLines.length > 0 && todoBudget > 0
+        ? [
+            style('muted')(
+              truncateLine(
+                `tasks ${todos.filter((todo) => todo.status === 'completed').length}/${todos.length} · /todo`,
+                transcriptWidth
+              )
+            ),
+          ]
+        : []
+  const todoHeight = showComposer ? visibleTodoLines.length : 0
   const chatViewportHeight = Math.max(
-    terminalSize.rows -
-      headerHeight -
-      inputHeight -
-      statusHeight -
-      approvalHeight -
-      todoHeight,
-    promptActive ? 0 : 6
+    availableHeight - inputHeight - approvalHeight - todoHeight,
+    0
   )
-  const pickerViewportHeight = Math.max(
-    terminalSize.rows - headerHeight - statusHeight,
-    6
-  )
+  const pickerViewportHeight = availableHeight
   const paletteViewportHeight = pickerViewportHeight
+  const headerLine = buildHeaderLine({
+    cwd: currentCwd,
+    model: activeModel,
+    yolo,
+    width: transcriptWidth,
+  })
+  const headerSep = style('muted')(buildRule(transcriptWidth))
+  const composerHint = truncateLine(
+    isRunning
+      ? `${viMode ? ':wq' : 'enter'} queues · ${
+          queued.entries.length > 0 && queueLines.length === 0
+            ? 'meta+backspace edits queued'
+            : 'ctrl+g editor'
+        }`
+      : `${viMode ? ':wq' : 'enter'} sends · ctrl+g editor · ctrl+p commands · ctrl+c quit`,
+    transcriptWidth
+  )
 
   // expansion lives in a module-level WeakMap, so a tick forces the memoized
   // transcript to re-read it
@@ -495,11 +683,6 @@ export default function App({
     pickerViewportHeight
   )
 
-  const messageCount = useMemo(
-    () => output.filter((block) => block.type === 'user').length,
-    [output]
-  )
-
   // rewind targets come from conversation storage so indices line up with
   // messages; transcript blocks are a projection of these same turns
   const backtrackTurns = useMemo(
@@ -521,7 +704,10 @@ export default function App({
       }),
     [transcriptWidth, chatViewportHeight, activeModel, currentCwd]
   )
-  const paddedWelcome = centerLinesVertical(welcomeLines, chatViewportHeight)
+  const paddedWelcome = centerLinesVertical(
+    welcomeLines.slice(0, chatViewportHeight),
+    chatViewportHeight
+  )
 
   useEffect(() =>
   {
@@ -608,6 +794,15 @@ export default function App({
   useInput(
     (ch, key) =>
     {
+      if (terminalTooSmall)
+      {
+        if (key.ctrl && ch.toLowerCase() === 'c')
+        {
+          if (hasActiveOperation()) abortRun()
+          else void shutdown()
+        }
+        return
+      }
       // scroll keys work inside every modal prompt viewport
       if (activePrompt)
       {
@@ -726,7 +921,7 @@ export default function App({
       }
     },
     {
-      isActive: pickerVisible || Boolean(activePrompt),
+      isActive: terminalTooSmall || pickerVisible || Boolean(activePrompt),
     }
   )
 
@@ -1101,150 +1296,6 @@ export default function App({
     return true
   }, [queued, resetNavigation])
 
-  const sessionLabel = sessionLabelId ? `session ${sessionLabelId}` : ''
-  // ctx gauge reflects current context occupancy, not lifetime throughput
-  const tokenGauge = buildTokenGauge(tokenUsage.context, contextWindow)
-  // warn before the window runs out; /compact frees space on demand
-  const ctxLow =
-    contextWindow > 0 && tokenUsage.context >= contextWindow * CTX_LOW_RATIO
-  const ctxLowNote = ctxLow ? style('warning')('ctx low — /compact') : ''
-  // cumulative tokens processed this session — distinct from current occupancy
-  const sessionTokens = tokenUsage.prompt + tokenUsage.completion
-  const sessionGauge =
-    sessionTokens > 0 ? `${formatTokenCount(sessionTokens)} tok session` : ''
-
-  // last-turn throughput — compact "45 tok/s · 210 tok/s prefill" or empty string
-  // decode tok/s is the number the user feels, so it leads
-  const decodeTpsStr = formatTokensPerSecond(tokenUsage.lastDecodeTps)
-  const prefillTpsStr = formatTokensPerSecond(tokenUsage.lastPrefillTps)
-  const perfGauge = decodeTpsStr
-    ? prefillTpsStr
-      ? `${decodeTpsStr} · ${prefillTpsStr} prefill`
-      : decodeTpsStr
-    : ''
-
-  const pickerEscHint = agent ? 'esc returns to chat' : 'esc quits'
-  let statusLine: string
-
-  if (paletteVisible)
-  {
-    statusLine = buildStatusLine(
-      'command palette',
-      'enter runs · esc closes',
-      transcriptWidth
-    )
-  }
-  else if (backtrackOpen)
-  {
-    statusLine = buildStatusLine(
-      'backtrack',
-      'enter restores · esc cancels',
-      transcriptWidth
-    )
-  }
-  else if (sessionPickerVisible)
-  {
-    statusLine = buildStatusLine(
-      'resume session',
-      'type to filter · enter resumes · esc cancels',
-      transcriptWidth
-    )
-  }
-  else if (pickerVisible)
-  {
-    statusLine =
-      pickerState === 'loading'
-        ? 'loading models from Ollama…'
-        : pickerState === 'error'
-          ? `press r to retry · ${pickerEscHint}`
-          : `${models.length} models available · enter selects · ${pickerEscHint}`
-  }
-  else if (!agent || promptActive)
-  {
-    statusLine = ''
-  }
-  else if (scrollOffset > 0)
-  {
-    const stateLeft = isRunning
-      ? describeRunStageWithElapsed(runStage, runElapsed, {
-          prefix: 'scrollback',
-          elapsedFallback: '0.0s',
-        })
-      : `scrollback · ${scrollOffset} lines above`
-    const hintRight = isRunning
-      ? 'ctrl+c interrupts · pgdn returns'
-      : 'pgdn returns'
-    statusLine = buildStatusLine(stateLeft, hintRight, transcriptWidth)
-  }
-  else if (isRunning)
-  {
-    const stageStr = describeRunStageWithElapsed(runStage, runElapsed)
-    const stallNote = stalled ? ` · ${style('warning')('no tokens')}` : ''
-    const stateLeft = [stageStr + stallNote, tokenGauge, perfGauge]
-      .filter(Boolean)
-      .join(' · ')
-    statusLine = buildStatusLine(
-      stateLeft,
-      'ctrl+c interrupts',
-      transcriptWidth
-    )
-  }
-  else if (sessionTransition)
-  {
-    const transitionLabel =
-      sessionTransition.kind === 'model'
-        ? sessionTransition.phase === 'precommit'
-          ? 'switching model…'
-          : 'finishing model update…'
-        : sessionTransition.kind === 'permission'
-          ? 'finishing permission update…'
-          : 'finishing session update…'
-    const transitionHint =
-      sessionTransition.owner === 'command' &&
-      sessionTransition.phase === 'precommit'
-        ? 'ctrl+c interrupts'
-        : sessionTransition.phase === 'committed_cleanup'
-          ? 'cleanup in progress'
-          : 'esc quits'
-    statusLine = buildStatusLine(
-      transitionLabel,
-      transitionHint,
-      transcriptWidth
-    )
-  }
-  else if (commandRunning)
-  {
-    statusLine = buildStatusLine(
-      'running command…',
-      'ctrl+c interrupts',
-      transcriptWidth
-    )
-  }
-  else
-  {
-    // show the context gauge, last-turn throughput, and session total while idle
-    const stateLeft = [
-      tokenGauge || 'ready',
-      perfGauge,
-      sessionGauge,
-      ctxLowNote,
-    ]
-      .filter(Boolean)
-      .join(' · ')
-    const yoloHint = yolo ? style('warning')('⚠ yolo') : ''
-    // idle escape arms esc-esc backtrack instead of quitting; ctrl+c still exits
-    const hints = (
-      backtrackArmed
-        ? ['esc again -> edit an earlier prompt']
-        : [yoloHint, 'ctrl+p commands', '/help', 'ctrl+c quit']
-    )
-      .filter(Boolean)
-      .join(' · ')
-    statusLine = buildStatusLine(stateLeft, hints, transcriptWidth)
-  }
-
-  const headerSep = buildRule(transcriptWidth)
-
   // terminal title mirrors activity state; written on stage changes only so
   // the braille frame stays static (animation would spam escape writes)
   const promptActiveForTitle = Boolean(activePromptContent)
@@ -1590,190 +1641,197 @@ export default function App({
   ])
 
   return (
-    <Box flexDirection="column" height={terminalSize.rows}>
-      <Box>
-        <Text>
-          <Text bold color={inkColor('primary')}>
-            coral
-          </Text>
-          <Text dimColor>{' · '}</Text>
-          <Text color="white">{activeModel || 'pick a model'}</Text>
-          <Text dimColor>{' · '}</Text>
-          {yolo ? (
-            <Text backgroundColor={inkColor('warning')} color="black" bold>
-              {' YOLO '}
-            </Text>
-          ) : (
-            <Text dimColor>ask</Text>
-          )}
-          {sessionLabel && (
-            <>
-              <Text dimColor>{' · '}</Text>
-              <Text dimColor>{sessionLabel}</Text>
-            </>
-          )}
-          {messageCount > 0 && (
-            <>
-              <Text dimColor>{' · '}</Text>
-              <Text dimColor>{pluralize(messageCount, 'message')}</Text>
-            </>
-          )}
+    <Box
+      flexDirection="column"
+      width={Math.max(terminalSize.columns, 1)}
+      height={rawMode ? undefined : Math.max(terminalSize.rows, 1)}
+      paddingX={terminalSize.columns > 2 ? 1 : 0}
+    >
+      {terminalTooSmall && (
+        <Text wrap="truncate-end" color={inkColor('warning')}>
+          Resize terminal to show controls and stats
         </Text>
-      </Box>
-
-      <Text dimColor>{headerSep}</Text>
-
-      {pickerVisible ? (
-        <LineList lines={visiblePicker} />
-      ) : paletteVisible ? (
-        <CommandPalette
-          entries={paletteEntries}
-          width={transcriptWidth}
-          height={paletteViewportHeight}
-          onSelect={onPaletteSelect}
-          onClose={() => setPaletteOpen(false)}
-        />
-      ) : backtrackOpen ? (
-        <BacktrackSelector
-          turns={backtrackTurns}
-          width={transcriptWidth}
-          height={paletteViewportHeight}
-          onSelect={(turn) => void backtrackToTurn(turn)}
-          onClose={() => setBacktrackOpen(false)}
-        />
-      ) : sessionPickerVisible ? (
-        <SessionPicker
-          width={transcriptWidth}
-          height={paletteViewportHeight}
-          onResume={(id) =>
-            {
-            // confirm routes through the /resume command so the transition
-            // machinery (save -> resumeSessionById) stays the only path
-            setSessionPickerOpen(false)
-            void runSlashCommand(`/resume ${id}`)
-          }}
-          onClose={() => setSessionPickerOpen(false)}
-        />
-      ) : agent ? (
-        rawMode ? (
-          // native scrollback: the full plain dump renders once so terminal
-          // selection behaves like ordinary output; no inline viewport math
-          <Box flexDirection="column">
-            <Text>{rawDump}</Text>
-            <Text dimColor>
-              {' '}
-              {buildStatusLine(
-                'raw mode',
-                '/raw off returns to styled view',
-                transcriptWidth
-              )}
-            </Text>
-          </Box>
-        ) : (
-          <LineList
-            lines={output.length === 0 ? paddedWelcome : paddedTranscript}
-          />
-        )
-      ) : null}
-
-      {!pickerVisible &&
-        !paletteVisible &&
-        !backtrackOpen &&
-        !sessionPickerVisible &&
-        agent &&
-        !promptActive &&
-        todoPanelLines.length > 0 && <LineList lines={todoPanelLines} dim />}
-
-      {!pickerVisible && !sessionPickerVisible && agent && promptActive && (
-        <LineList lines={promptBoxLines} />
       )}
-
-      <Box
-        flexDirection="column"
-        display={
-          !pickerVisible &&
-          !paletteVisible &&
-          !backtrackOpen &&
-          !sessionPickerVisible &&
-          agent &&
-          !promptActive
-            ? 'flex'
-            : 'none'
-        }
-      >
-        <Text dimColor color={yolo ? inkColor('warning') : undefined}>
-          {headerSep}
-        </Text>
-        {queued.entries.length > 0 && (
-          <Box flexDirection="column">
-            {(queued.entries.length > QUEUE_PREVIEW_ROWS
-              ? [
-                  {
-                    id: 0,
-                    line: `+${queued.entries.length - QUEUE_PREVIEW_ROWS} earlier queued`,
-                  },
-                  ...queued.entries.slice(-QUEUE_PREVIEW_ROWS).map((entry) => ({
-                    id: entry.id,
-                    line: formatQueueLines([entry])[0] ?? '',
-                  })),
-                ]
-              : queued.entries.map((entry) => ({
-                  id: entry.id,
-                  line: formatQueueLines([entry])[0] ?? '',
-                }))
-            ).map((row) => (
-              <Text key={row.id} dimColor wrap="truncate-end">
-                {` ⏳ ${row.line}  (meta+backspace to edit)`}
-              </Text>
-            ))}
-          </Box>
+      <Box flexDirection="column" display={terminalTooSmall ? 'none' : 'flex'}>
+        <LineList lines={[headerLine, headerSep]} />
+        <Box
+          flexDirection="column"
+          height={
+            rawMode && !pickerOverlay
+              ? undefined
+              : pickerOverlay
+                ? pickerViewportHeight
+                : chatViewportHeight
+          }
+          flexShrink={0}
+          overflowY={rawMode ? undefined : 'hidden'}
+        >
+          {pickerVisible ? (
+            <LineList lines={visiblePicker} />
+          ) : paletteVisible ? (
+            <CommandPalette
+              active={!terminalTooSmall}
+              entries={paletteEntries}
+              width={transcriptWidth}
+              height={paletteViewportHeight}
+              onSelect={onPaletteSelect}
+              onClose={() => setPaletteOpen(false)}
+            />
+          ) : backtrackOpen ? (
+            <BacktrackSelector
+              active={!terminalTooSmall}
+              turns={backtrackTurns}
+              width={transcriptWidth}
+              height={paletteViewportHeight}
+              onSelect={(turn) => void backtrackToTurn(turn)}
+              onClose={() => setBacktrackOpen(false)}
+            />
+          ) : sessionPickerVisible ? (
+            <SessionPicker
+              active={!terminalTooSmall}
+              width={transcriptWidth}
+              height={paletteViewportHeight}
+              onResume={(id) =>
+                {
+                // confirm routes through the /resume command so the transition
+                // machinery (save -> resumeSessionById) stays the only path
+                setSessionPickerOpen(false)
+                void runSlashCommand(`/resume ${id}`)
+              }}
+              onClose={() => setSessionPickerOpen(false)}
+            />
+          ) : agent ? (
+            rawMode ? (
+              // native scrollback: the full plain dump renders once so terminal
+              // selection behaves like ordinary output; no inline viewport math
+              <Box flexDirection="column">
+                <Text>{rawDump}</Text>
+                <Text dimColor>
+                  {' '}
+                  {buildStatusLine(
+                    'raw mode',
+                    '/raw off returns to styled view',
+                    transcriptWidth
+                  )}
+                </Text>
+              </Box>
+            ) : (
+              <LineList
+                lines={output.length === 0 ? paddedWelcome : paddedTranscript}
+              />
+            )
+          ) : null}
+        </Box>
+        {showComposer && visibleTodoLines.length > 0 && (
+          <LineList lines={visibleTodoLines} />
         )}
-        <Box>
-          <Text bold color={yolo ? inkColor('warning') : inkColor('user')}>
-            {yolo ? ' ⚡ ' : ' ❯ '}
-          </Text>
-          <PromptInput
-            value={input}
-            focus={
-              !pickerVisible &&
-              !paletteVisible &&
-              !backtrackOpen &&
-              !sessionPickerVisible &&
-              Boolean(agent) &&
-              !promptActive
-            }
-            filesCacheKey={currentCwd}
-            completionCommands={completionCommands}
-            refreshFiles={refreshFiles}
-            onChange={handleInputChange}
-            onSubmit={handleSubmit}
-            onEscape={handleComposerEscape}
-            onInterrupt={abortOrExit}
-            onPageUp={onPageUp}
-            onPageDown={onPageDown}
-            onJumpTop={onJumpTop}
-            onJumpBottom={onJumpBottom}
-            onHalfPageUp={onHalfPageUp}
-            onHalfPageDown={onHalfPageDown}
-            onToggleToolOutput={onToggleToolOutput}
-            onOpenEditor={handleOpenEditor}
-            viMode={viMode}
-            chordOverrides={chordOverrides}
-            onScrollUp={onScrollUp}
-            onScrollDown={onScrollDown}
-            onToggleThinking={onToggleThinking}
-            onTogglePermissions={onTogglePermissions}
-            onOpenPalette={openPalette}
-            onHistoryUp={onHistoryUp}
-            onHistoryDown={onHistoryDown}
-            onQueueEdit={handleQueueEdit}
-            getHistoryEntries={getHistoryEntries}
-            placeholder={isRunning ? '' : 'ask coral anything'}
+
+        {!pickerVisible && !sessionPickerVisible && agent && promptActive && (
+          <LineList lines={promptBoxLines} />
+        )}
+
+        <LineList lines={activityLines} />
+        <LineList lines={metricLines} />
+        <Box flexDirection="column" display={showComposer ? 'flex' : 'none'}>
+          <LineList lines={queueLines} />
+          <LineList
+            lines={[
+              buildComposerRule(
+                transcriptWidth,
+                isRunning
+                  ? `Queue follow-up${queued.entries.length ? ` · ${queued.entries.length} queued` : ''}`
+                  : 'Message'
+              ),
+            ]}
+          />
+          <Box
+            height={Math.max(Math.min(promptHeight, promptMaxHeight), 1)}
+            flexShrink={0}
+            overflowY="hidden"
+          >
+            <Box width={4} flexShrink={0}>
+              <LineList
+                lines={Array.from(
+                  {
+                    length: Math.max(
+                      Math.min(promptHeight, promptMaxHeight),
+                      1
+                    ),
+                  },
+                  (_, index) =>
+                    style('muted')('│ ') +
+                    (index === 0 ? style('user')('› ') : '  ')
+                )}
+              />
+            </Box>
+            <PromptInput
+              width={Math.max(transcriptWidth - 6, 1)}
+              maxHeight={promptMaxHeight}
+              onHeightChange={setPromptHeight}
+              value={input}
+              focus={
+                !pickerVisible &&
+                !paletteVisible &&
+                !backtrackOpen &&
+                !sessionPickerVisible &&
+                Boolean(agent) &&
+                !promptActive &&
+                !terminalTooSmall
+              }
+              filesCacheKey={currentCwd}
+              completionCommands={completionCommands}
+              refreshFiles={refreshFiles}
+              onChange={handleInputChange}
+              onSubmit={handleSubmit}
+              onEscape={handleComposerEscape}
+              onInterrupt={abortOrExit}
+              onPageUp={onPageUp}
+              onPageDown={onPageDown}
+              onJumpTop={onJumpTop}
+              onJumpBottom={onJumpBottom}
+              onHalfPageUp={onHalfPageUp}
+              onHalfPageDown={onHalfPageDown}
+              onToggleToolOutput={onToggleToolOutput}
+              onOpenEditor={handleOpenEditor}
+              viMode={viMode}
+              chordOverrides={chordOverrides}
+              onScrollUp={onScrollUp}
+              onScrollDown={onScrollDown}
+              onToggleThinking={onToggleThinking}
+              onTogglePermissions={onTogglePermissions}
+              onOpenPalette={openPalette}
+              onHistoryUp={onHistoryUp}
+              onHistoryDown={onHistoryDown}
+              onQueueEdit={handleQueueEdit}
+              getHistoryEntries={getHistoryEntries}
+              placeholder={
+                isRunning ? 'queue a follow-up' : 'ask coral anything'
+              }
+            />
+            <Box width={2} flexShrink={0}>
+              <LineList
+                lines={Array.from(
+                  {
+                    length: Math.max(
+                      Math.min(promptHeight, promptMaxHeight),
+                      1
+                    ),
+                  },
+                  () => style('muted')(' │')
+                )}
+              />
+            </Box>
+          </Box>
+          <LineList
+            lines={[
+              style('muted')(
+                `╰${buildRule(Math.max(transcriptWidth - 2, 0))}╯`
+              ),
+              style('muted')(composerHint),
+            ]}
           />
         </Box>
       </Box>
-
-      <Text dimColor> {statusLine}</Text>
     </Box>
   )
 }

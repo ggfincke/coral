@@ -198,13 +198,13 @@ function renderBlock(token: Token, indent: number): string[]
     case 'code':
     {
       const code = token as Tokens.Code
-      const fence = pad + chalk.dim(code.lang ? `\`\`\` ${code.lang}` : '```')
+      const fence = pad + chalk.dim('┌─ ') + style('code')(code.lang || 'code')
       const codePrefix = pad + chalk.dim('│ ')
       const highlighted = highlightCode(code.text, code.lang)
       const codeLines = (highlighted || '')
         .split('\n')
         .map((line) => codePrefix + line)
-      return [fence, ...codeLines, pad + chalk.dim('```')]
+      return [fence, ...codeLines, pad + chalk.dim('└─')]
     }
     case 'table':
       return renderTable(token as Tokens.Table, indent)

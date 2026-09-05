@@ -2,6 +2,74 @@
 // shared token, throughput, and duration formatting for TUI surfaces
 
 import { pluralize } from '../../utils/pluralize.js'
+import chalk from 'chalk'
+import wrapAnsi from 'wrap-ansi'
+import { visibleWidth } from '../wrap.js'
+import { style } from '../theme.js'
+
+export interface MetricValues
+{
+  decodeTps: number
+  prefillTps: number
+  contextTokens: number
+  contextWindow: number
+  sessionTokens: number
+}
+
+// keep each measurement intact where possible, wrapping instead of dropping it
+export function buildMetricLines(
+  values: MetricValues,
+  width: number
+): string[]
+{
+  const rate = (tps: number): string =>
+    formatTokensPerSecond(tps).replace(/ tok\/s$/, '') || '—'
+  const value = (text: string): string => chalk.bold(text)
+  const label = (text: string): string => style('muted')(text)
+  const context =
+    values.contextWindow > 0
+      ? value(
+          `${formatTokenCount(values.contextTokens)}/${formatTokenCount(values.contextWindow)}`
+        ) +
+        label(
+          ` ctx (${percentOfWindow(values.contextTokens, values.contextWindow)}%)`
+        )
+      : value(formatTokenCount(values.contextTokens)) + label('/— ctx (—)')
+  const groups = [
+    value(rate(values.decodeTps)) + label(' tok/s'),
+    value(rate(values.prefillTps)) + label(' tok/s prefill'),
+    context,
+    value(formatTokenCount(values.sessionTokens)) + label(' tok session'),
+  ]
+  const budget = Math.max(width, 1)
+  const lines: string[] = []
+  let row = ''
+  for (const group of groups)
+  {
+    const next = row ? `${row}  ${group}` : group
+    if (row && visibleWidth(next) > budget)
+    {
+      lines.push(row)
+      row = ''
+    }
+    if (visibleWidth(group) > budget)
+    {
+      lines.push(
+        ...wrapAnsi(group, budget, {
+          hard: true,
+          trim: false,
+          wordWrap: true,
+        }).split('\n')
+      )
+    }
+    else
+    {
+      row = row ? `${row}  ${group}` : group
+    }
+  }
+  if (row) lines.push(row)
+  return lines
+}
 
 export function formatElapsed(ms: number): string
 {
