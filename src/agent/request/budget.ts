@@ -28,6 +28,7 @@ export interface RequestBudgetCategories
   activeAttachments: number
   toolDefinitions: number
   gitContext: number
+  fileChanges: number
   framing: number
 }
 
@@ -79,6 +80,7 @@ const REQUEST_BUDGET_CATEGORIES: readonly RequestBudgetCategory[] = [
   'activeAttachments',
   'toolDefinitions',
   'gitContext',
+  'fileChanges',
   'framing',
 ]
 

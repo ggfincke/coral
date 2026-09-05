@@ -55,6 +55,8 @@ export interface ToolExecutionContext
   subagentRunner?: SubagentRunner
   codeIntel?: CodeIntelService
   todoState?: TodoState
+  // exact successful file contents for Agent-local stale-context tracking
+  observeFile?: (path: string, content: string) => void
   signal?: AbortSignal
 }
 

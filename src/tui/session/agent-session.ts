@@ -62,6 +62,7 @@ export function buildPrimaryAgent(options: PrimaryAgentOptions): Agent
     mcpConfig: options.mcpConfig,
     todoState: new AgentTodoState(options.restored?.todos),
     inferenceClient: options.inferenceClient,
+    trackFileChanges: true,
   })
   if (options.restored)
   {

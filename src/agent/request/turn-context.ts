@@ -10,6 +10,7 @@ import {
   type AttachmentMaterialization,
 } from './attachments.js'
 import { buildGitContextMessage } from './git-context.js'
+import { FileChangeContext } from './file-changes.js'
 
 export interface TurnInput
 {
@@ -36,14 +37,20 @@ export interface TurnContextDependencies
 export class TurnContextAssembler
 {
   private readonly cwd: string
+  private readonly fileChanges?: FileChangeContext
   private readonly attachmentReader?: AttachmentReader
   private readonly gitBuilder: NonNullable<
     TurnContextDependencies['buildGitContext']
   >
 
-  constructor(cwd: string, dependencies: TurnContextDependencies = {})
+  constructor(
+    cwd: string,
+    dependencies: TurnContextDependencies = {},
+    trackFileChanges = false
+  )
   {
     this.cwd = cwd
+    this.fileChanges = trackFileChanges ? new FileChangeContext(cwd) : undefined
     this.attachmentReader = dependencies.attachmentReader
     this.gitBuilder = dependencies.buildGitContext ?? buildGitContextMessage
   }
@@ -62,6 +69,14 @@ export class TurnContextAssembler
       renderedCharAllowance,
     })
     signal?.throwIfAborted()
+    for (const entry of attachments.entries)
+    {
+      if (entry.status === 'captured')
+      {
+        // capture may be omitted later; retain earlier observations until commit
+        this.fileChanges?.observe(entry.path, entry.content, false)
+      }
+    }
     return Object.freeze({ input, attachments })
   }
 
@@ -73,8 +88,52 @@ export class TurnContextAssembler
     return materializeAttachments(captured.attachments, maxChars)
   }
 
+  commitAttachments(
+    captured: CapturedTurn,
+    materialization: AttachmentMaterialization
+  ): void
+  {
+    const completePaths = new Set(
+      materialization.attached
+        .filter((entry) => !entry.truncated)
+        .map((entry) => entry.path)
+    )
+    for (const entry of captured.attachments.entries)
+    {
+      if (entry.status === 'captured' && completePaths.has(entry.path))
+      {
+        this.observeFile(entry.path, entry.content)
+      }
+    }
+  }
+
   gatherGit(signal?: AbortSignal): Promise<OllamaMessage | null>
   {
     return this.gitBuilder(this.cwd, signal)
+  }
+
+  observeFile(path: string, content: string): void
+  {
+    this.fileChanges?.observe(path, content)
+  }
+
+  invalidateFiles(paths: readonly string[] | null): void
+  {
+    this.fileChanges?.invalidate(paths)
+  }
+
+  gatherFileChanges(signal?: AbortSignal): Promise<OllamaMessage | null>
+  {
+    return this.fileChanges?.gather(signal) ?? Promise.resolve(null)
+  }
+
+  clearFileObservations(): void
+  {
+    this.fileChanges?.clear()
+  }
+
+  dispose(): void
+  {
+    this.fileChanges?.dispose()
   }
 }

@@ -31,6 +31,7 @@ export const readTool: Tool = {
 
     const result = await readFileGuarded(allowed.path)
     if (!result.ok) return result.result
+    context?.observeFile?.(allowed.path, result.content)
     return { output: result.content }
   },
 }

@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../agent/agent.js'
+import { ProjectWatcher } from '../../agent/watcher.js'
 import { resolveMcpConfig } from '../../config/mcp.js'
 import { OllamaClient } from '../../ollama/client.js'
 import type { ActiveMcpMode } from '../../mcp/types.js'
@@ -168,6 +169,22 @@ export function useInteractiveSession(
   const closingRef = useRef(false)
   const closeRuntimeRef = useRef<Promise<void> | null>(null)
   const [projectFileCatalog] = useState(() => new ProjectFileCatalog())
+  const projectWatcherRef = useRef<ProjectWatcher | null>(null)
+  const watcherCleanups = useRef(new Set<Promise<void>>())
+  const retireProjectWatcher = useCallback(
+    (watcher = projectWatcherRef.current): Promise<void> =>
+    {
+      if (!watcher) return Promise.resolve()
+      if (projectWatcherRef.current === watcher)
+        projectWatcherRef.current = null
+      const cleanup = watcher.dispose()
+      watcherCleanups.current.add(cleanup)
+      const untrack = () => watcherCleanups.current.delete(cleanup)
+      void cleanup.then(untrack, untrack)
+      return cleanup
+    },
+    []
+  )
 
   const [runtime] = useState(
     () =>
@@ -255,6 +272,7 @@ export function useInteractiveSession(
       }
 
       const previous = runtime.getAgent()
+      const watcherCleanup = retireProjectWatcher()
       if (previous && previous.getCwd() !== nextAgent.getCwd())
       {
         projectFileCatalog.invalidate()
@@ -263,8 +281,9 @@ export function useInteractiveSession(
         preserveCommand,
       })
       runtime.markTransitionCommitted(transition)
-      const transitionTask =
-        previous && previous !== nextAgent ? cleanup : Promise.resolve()
+      const transitionTask = Promise.all([cleanup, watcherCleanup]).then(
+        () => undefined
+      )
       void runtime
         .trackTransition(transition, transitionTask)
         .catch(() => undefined)
@@ -276,7 +295,13 @@ export function useInteractiveSession(
       fetchContextWindow(nextAgent)
       return true
     },
-    [fetchContextWindow, projectFileCatalog, runtime, titleGenerator]
+    [
+      fetchContextWindow,
+      projectFileCatalog,
+      retireProjectWatcher,
+      runtime,
+      titleGenerator,
+    ]
   )
 
   const switchModel = useCallback(
@@ -534,17 +559,19 @@ export function useInteractiveSession(
   const closeRuntime = useCallback((): Promise<void> =>
   {
     closingRef.current = true
+    void retireProjectWatcher()
     closeRuntimeRef.current ??= Promise.allSettled([
       titleGenerator.cancel(),
       runtime.shutdown(),
       projectFileCatalog.dispose(),
+      ...watcherCleanups.current,
     ]).then((results) =>
     {
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason
     })
     return closeRuntimeRef.current
-  }, [projectFileCatalog, runtime, titleGenerator])
+  }, [projectFileCatalog, retireProjectWatcher, runtime, titleGenerator])
 
   const shutdownCoordinatorRef = useRef<(() => Promise<void>) | null>(null)
   const shutdown = useCallback(() =>
@@ -571,6 +598,29 @@ export function useInteractiveSession(
       if (runtime.isCurrentAgent(agent, generation)) setTodos(nextTodos)
     })
   }, [agent, runtime])
+
+  useEffect(() =>
+  {
+    if (!agent || closingRef.current || runtime.isClosing()) return
+    const generation = runtime.getGeneration()
+    const watcher = new ProjectWatcher(agent.getCwd(), {
+      onFilesChanged: (paths) =>
+      {
+        if (runtime.isCurrentAgent(agent, generation))
+          agent.notifyFileChanges(paths)
+      },
+      onProjectFilesChanged: () =>
+      {
+        if (runtime.isCurrentAgent(agent, generation))
+          projectFileCatalog.invalidate(agent.getCwd())
+      },
+    })
+    projectWatcherRef.current = watcher
+    return () =>
+    {
+      void retireProjectWatcher(watcher)
+    }
+  }, [agent, projectFileCatalog, retireProjectWatcher, runtime])
 
   useEffect(() =>
   {
