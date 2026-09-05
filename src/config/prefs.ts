@@ -9,6 +9,8 @@ export interface Prefs
   theme?: string
   // modal editing preference persisted by /vim
   vim?: boolean
+  // bell + OSC 9 nudges on turn settle / approval prompts (default on)
+  notifications?: boolean
   // raw {action, chord} overrides validated at consumption time
   keybindings?: unknown
 }

@@ -21,6 +21,17 @@ import { formatBlocksPlain } from './transcript/plain.js'
 import { toggleNewestToolResult } from './transcript/expansion.js'
 import { runInExternalEditor } from './prompt/editor-handoff.js'
 import { loadPrefs, savePrefs } from '../config/prefs.js'
+import {
+  buildBell,
+  buildDesktopNotification,
+  shouldNotifyFocusAware,
+} from './shell/notify.js'
+import {
+  buildTerminalTitle,
+  formatBlockedTitle,
+  formatIdleTitle,
+  formatRunningTitle,
+} from './shell/title.js'
 import { useTerminalModes } from './input/use-terminal-modes.js'
 
 // queued-message rows shown above the composer before an overflow summary
@@ -141,7 +152,7 @@ export default function App({
   const [showThinking, setShowThinking] = useState(true)
   // raw scrollback: styled transcript replaced by a plain full-history dump
   const [rawMode, setRawModeState] = useState(false)
-  const { suspendTerminal } = useTerminalModes({
+  const { focused: terminalFocused, suspendTerminal } = useTerminalModes({
     enableMouseTracking: !rawMode,
   })
   const rawModeRef = useRef(false)
@@ -1233,6 +1244,55 @@ export default function App({
   }
 
   const headerSep = buildRule(transcriptWidth)
+
+  // terminal title mirrors activity state; written on stage changes only so
+  // the braille frame stays static (animation would spam escape writes)
+  const promptActiveForTitle = Boolean(activePromptContent)
+  useEffect(() =>
+  {
+    const text = promptActiveForTitle
+      ? formatBlockedTitle(currentCwd)
+      : runStage === 'idle'
+        ? formatIdleTitle(currentCwd)
+        : formatRunningTitle(0, currentCwd)
+    process.stdout.write(buildTerminalTitle(text))
+  }, [currentCwd, promptActiveForTitle, runStage])
+
+  // notify on completion or approval only while focus is absent or unknown
+  const prevRunStageRef = useRef(runStage)
+  const prevPromptActiveRef = useRef(promptActiveForTitle)
+  useEffect(() =>
+  {
+    if (loadPrefs().notifications === false)
+    {
+      prevRunStageRef.current = runStage
+      prevPromptActiveRef.current = promptActiveForTitle
+      return
+    }
+
+    let message: string | null = null
+    if (
+      prevRunStageRef.current !== 'idle' &&
+      runStage === 'idle' &&
+      !promptActiveForTitle
+    )
+    {
+      message = 'turn complete'
+    }
+    else if (!prevPromptActiveRef.current && promptActiveForTitle)
+    {
+      message = 'action required'
+    }
+
+    if (message && shouldNotifyFocusAware(terminalFocused, true))
+    {
+      process.stdout.write(
+        buildBell() + buildDesktopNotification('coral', message)
+      )
+    }
+    prevRunStageRef.current = runStage
+    prevPromptActiveRef.current = promptActiveForTitle
+  }, [promptActiveForTitle, runStage, terminalFocused])
 
   // raw-mode payload: whole committed transcript as plain text
   const rawDump = useMemo(
