@@ -1,5 +1,5 @@
 // src/session/types.ts
-// public hydrated session value contracts
+// public session value contracts
 
 import type { OllamaMessage } from '../types/inference.js'
 import type { TodoItem } from '../types/todo.js'
@@ -40,6 +40,12 @@ export interface SessionData
   // turns undone from the live tail
   redo?: UndoTurn[]
 }
+
+// a raced snapshot remains displayable, but a null revision must not be cached
+export type SessionPreviewResult =
+  | { kind: 'loaded'; revision: string | null; messages: OllamaMessage[] }
+  | { kind: 'unchanged'; revision: string }
+  | { kind: 'missing' }
 
 export function isValidSessionId(id: string): boolean
 {

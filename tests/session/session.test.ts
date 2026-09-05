@@ -2,7 +2,7 @@
 // tests for session persistence
 
 import { strict as assert } from 'node:assert'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import fs, { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, beforeEach, test } from 'node:test'
 import type { OllamaMessage } from '../../src/types/inference.js'
@@ -17,10 +17,12 @@ import {
   saveSession,
   loadSession,
   listSessions,
+  loadSessionPreview,
   renameSession,
 } from '../../src/session/store.js'
 import type { SessionData, SessionMeta } from '../../src/session/types.js'
 import { resolveResumeSessionFromCandidates } from '../../src/session/resume.js'
+import { decodeSessionPreview } from '../../src/session/codec.js'
 import { toModelRequestMessage } from '../../src/agent/request/projection.js'
 import { attachmentReportFromMaterialization } from '../../src/agent/request/attachments.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
@@ -530,7 +532,7 @@ test('listSessions discovers files missing from a valid legacy index', async () 
     )
   )
 
-  const ids = new Set(listSessions().map((session) => session.id))
+  const ids = new Set((await listSessions()).map((session) => session.id))
 
   assert.deepEqual(ids, new Set(['11112222', '33334444']))
   assert.equal(await readFile(indexPath, 'utf-8'), legacyIndex)
@@ -550,7 +552,7 @@ test('loadSession and discovery ignore filename/meta id mismatch', async () =>
   assert.equal(loadSession('deadbeef'), undefined)
 
   assert.equal(
-    listSessions().some((session) => session.id === 'feedface'),
+    (await listSessions()).some((session) => session.id === 'feedface'),
     false
   )
 })
@@ -569,12 +571,174 @@ test('listSessions orders resume targets by newest update', async () =>
     { role: 'user', content: 'Session two' },
   ])
 
-  const ids = listSessions().map((session) => session.id)
+  const ids = (await listSessions()).map((session) => session.id)
 
   assert.ok(ids.indexOf(second.id) < ids.indexOf(first.id))
 })
 
-test('renameSession updates authoritative metadata without losing conversation data', () =>
+test('session metadata and previews reuse validated revisions without hiding authoritative changes', async (t) =>
+{
+  const firstHome = process.env.CORAL_HOME!
+  const dir = join(firstHome, 'sessions')
+  await mkdir(dir, { recursive: true })
+  const meta = makeMeta('deadcafe', 'Original title')
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'System' },
+    { role: 'user', content: 'Inspect the file' },
+    { role: 'assistant', content: 'Original response' },
+  ]
+  const snapshot = {
+    meta,
+    messages,
+    undo: [
+      {
+        startIndex: 1,
+        endIndex: 3,
+        userMessage: messages[1]!.content,
+        messages: messages.slice(1),
+        changes: [],
+      },
+    ],
+  }
+  const path = join(dir, `${meta.id}.json`)
+  await writeFile(path, JSON.stringify(snapshot))
+  const indexPath = join(dir, 'index.json')
+  const legacyIndex = JSON.stringify({ version: 1, sessions: [] })
+  await writeFile(indexPath, legacyIndex)
+  assert.deepEqual(decodeSessionPreview(snapshot), { meta, messages })
+
+  const opens = t.mock.method(fs, 'open')
+  const first = await listSessions()
+  assert.deepEqual(first, [meta])
+  assert.equal(opens.mock.callCount(), 1)
+  first[0]!.title = 'Caller mutation'
+  assert.deepEqual(await listSessions(), [meta])
+  assert.equal(opens.mock.callCount(), 1)
+
+  const preview = await loadSessionPreview(meta.id)
+  assert.equal(preview.kind, 'loaded')
+  if (preview.kind !== 'loaded') assert.fail('expected a loaded preview')
+  assert.ok(preview.revision)
+  assert.deepEqual(preview.messages, messages)
+  const knownRevision = preview.revision
+  const readCount = opens.mock.callCount()
+  assert.deepEqual(await loadSessionPreview(meta.id, { knownRevision }), {
+    kind: 'unchanged',
+    revision: knownRevision,
+  })
+  assert.equal(opens.mock.callCount(), readCount)
+
+  // another writer replaces the file while keeping the same metadata timestamp
+  const replacement = {
+    ...snapshot,
+    meta: { ...meta, title: 'Replacement title' },
+    messages: [
+      ...messages.slice(0, -1),
+      {
+        role: 'assistant',
+        content: 'Replacement response',
+      },
+    ],
+  }
+  const replacementPath = join(dir, '.replacement.tmp')
+  await writeFile(replacementPath, JSON.stringify(replacement))
+  const statFile = fs.stat.bind(fs)
+  let revisionChecks = 0
+  const replacingStat = t.mock.method(fs, 'stat', async (...args) =>
+  {
+    if (args[0] === path && ++revisionChecks === 2)
+    {
+      await fs.rename(replacementPath, path)
+    }
+    return statFile(...args)
+  })
+  const raced = await loadSessionPreview(meta.id)
+  assert.equal(raced.kind, 'loaded')
+  if (raced.kind !== 'loaded') assert.fail('expected the completed snapshot')
+  assert.equal(raced.revision, null)
+  assert.deepEqual(raced.messages, messages)
+  replacingStat.mock.restore()
+  assert.deepEqual(await listSessions(), [replacement.meta])
+  const updated = await loadSessionPreview(meta.id, { knownRevision })
+  assert.equal(updated.kind, 'loaded')
+  if (updated.kind !== 'loaded') assert.fail('expected the replacement')
+  assert.notEqual(updated.revision, knownRevision)
+  assert.deepEqual(updated.messages, replacement.messages)
+  assert.equal(await readFile(indexPath, 'utf-8'), legacyIndex)
+
+  await writeFile(path, JSON.stringify({ ...replacement, undo: [{}] }))
+  assert.deepEqual(await listSessions(), [])
+  assert.deepEqual(await loadSessionPreview(meta.id), { kind: 'missing' })
+  await fs.unlink(path)
+  assert.deepEqual(await listSessions(), [])
+  assert.deepEqual(await loadSessionPreview(meta.id), { kind: 'missing' })
+  opens.mock.restore()
+
+  await writeFile(path, JSON.stringify(snapshot))
+  const other = makeSession(makeMeta('feedface'))
+  await writeFile(join(dir, 'feedface.json'), JSON.stringify(other))
+  const open = fs.open.bind(fs)
+  const controller = new AbortController()
+  const aborted = new Error('stop listing')
+  const abortingOpen = t.mock.method(fs, 'open', async (...args) =>
+  {
+    const file = await open(...args)
+    controller.abort(aborted)
+    return file
+  })
+  await assert.rejects(
+    listSessions({ signal: controller.signal }),
+    (error) => error === aborted
+  )
+  assert.equal(abortingOpen.mock.callCount(), 1)
+  await assert.rejects(
+    loadSessionPreview(meta.id, { signal: controller.signal }),
+    (error) => error === aborted
+  )
+  abortingOpen.mock.restore()
+
+  // a completed scan for the previous home must not replace the new home's cache
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const pausedOpen = t.mock.method(fs, 'open', async (...args) =>
+  {
+    const file = await open(...args)
+    if (args[0] === path)
+    {
+      entered.resolve()
+      await release.promise
+    }
+    return file
+  })
+  const oldListing = listSessions()
+  await entered.promise
+  try
+  {
+    process.env.CORAL_HOME = await tempDir('coral-sessions-other-home-')
+    const nextDir = join(process.env.CORAL_HOME, 'sessions')
+    await mkdir(nextDir)
+    await writeFile(
+      join(nextDir, `${meta.id}.json`),
+      JSON.stringify(replacement)
+    )
+    assert.deepEqual(await listSessions(), [replacement.meta])
+    const nextPreview = await loadSessionPreview(meta.id, { knownRevision })
+    assert.equal(nextPreview.kind, 'loaded')
+    release.resolve()
+    assert.equal((await oldListing).length, 2)
+    const beforeCachedRead = pausedOpen.mock.callCount()
+    assert.deepEqual(await listSessions(), [replacement.meta])
+    assert.equal(pausedOpen.mock.callCount(), beforeCachedRead)
+  }
+  finally
+  {
+    release.resolve()
+    await oldListing
+    process.env.CORAL_HOME = firstHome
+  }
+})
+
+test('renameSession updates authoritative metadata without losing conversation data', async () =>
 {
   const meta = createSession('test-model', '/tmp/preserve', [
     { role: 'system', content: 'System' },
@@ -583,7 +747,9 @@ test('renameSession updates authoritative metadata without losing conversation d
   ])
 
   const renamed = renameSession(meta.id, 'New name')
-  const discovered = listSessions().find((session) => session.id === meta.id)
+  const discovered = (await listSessions()).find(
+    (session) => session.id === meta.id
+  )
   const loaded = loadSession(meta.id)
 
   assert.ok(renamed)

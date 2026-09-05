@@ -108,12 +108,14 @@ export function resolveResumeSessionFromCandidates({
   return { type: 'not_found', requestedId: normalizedId }
 }
 
-export function resolveResumeSession(
-  options: ResolveResumeSessionOptions = {}
-): ResumeSessionResolution
+export async function resolveResumeSession(
+  options: ResolveResumeSessionOptions & { signal?: AbortSignal } = {}
+): Promise<ResumeSessionResolution>
 {
+  const sessions = await listSessions({ signal: options.signal })
+  options.signal?.throwIfAborted()
   return resolveResumeSessionFromCandidates({
     ...options,
-    sessions: listSessions(),
+    sessions,
   })
 }
