@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Text, usePaste } from 'ink'
-import chalk from 'chalk'
+import { style } from '../theme.js'
 import { useCoralInput } from '../input/use-coral-input.js'
 import {
   buildKey,
@@ -60,9 +60,13 @@ import {
   type CommandSummary,
   type CompletionItem,
 } from './completion.js'
-import CompletionMenu from './completion-menu.js'
+import CompletionMenu, { buildCompletionMenuRows } from './completion-menu.js'
 import { resetPromptFileSuggestions } from './prompt-file-suggestions.js'
-import { renderPromptValueWithCursor } from './prompt-render.js'
+import {
+  buildPromptRenderModel,
+  fitPromptLine,
+  MAX_PROMPT_VIEW_ROWS,
+} from './prompt-render.js'
 
 export interface PromptInputProps
 {
@@ -70,6 +74,9 @@ export interface PromptInputProps
   placeholder?: string
   focus?: boolean
   showCursor?: boolean
+  width?: number
+  maxHeight?: number
+  onHeightChange?: (rows: number) => void
   filesCacheKey?: string
   completionCommands?: CommandSummary[]
   refreshFiles?: () => Promise<string[]>
@@ -117,6 +124,9 @@ export default function PromptInput({
   placeholder = '',
   focus = true,
   showCursor = true,
+  width = 80,
+  maxHeight = 17,
+  onHeightChange,
   filesCacheKey,
   completionCommands = [],
   refreshFiles,
@@ -203,21 +213,15 @@ export default function PromptInput({
   // controlled position
   const hasExternalValue = value !== cursor.value
   const resolvedCursor = useMemo(
-    () =>
-      focus && showCursor
-        ? {
-            value,
-            cursorOffset: Math.min(
-              Math.max(
-                hasExternalValue ? value.length : cursor.cursorOffset,
-                0
-              ),
-              value.length
-            ),
-            cursorWidth: 0,
-          }
-        : cursor,
-    [cursor, focus, hasExternalValue, showCursor, value]
+    () => ({
+      value,
+      cursorOffset: Math.min(
+        Math.max(hasExternalValue ? value.length : cursor.cursorOffset, 0),
+        value.length
+      ),
+      cursorWidth: 0,
+    }),
+    [cursor.cursorOffset, hasExternalValue, value]
   )
 
   // active completion span and ranked suggestions under the cursor
@@ -232,11 +236,13 @@ export default function PromptInput({
       return rankCommands(query.token, completionCommands)
     return rankFiles(query.token, files)
   }, [query, completionCommands, files])
-  const menuOpen =
+  const menuRequested =
     focus &&
     showCursor &&
     !dismissed &&
     !hasExternalValue &&
+    !search.active &&
+    !viMode &&
     query !== null &&
     items.length > 0
   const safeIndex = Math.min(selectedIndex, items.length - 1)
@@ -571,27 +577,72 @@ export default function PromptInput({
       )
     : null
   const displayValue = searchPreviewText ?? value
-
-  let renderedValue = displayValue
-  let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined
-
-  // render a fake cursor so Coral never writes raw cursor escapes
-  if (showCursor && focus)
+  const contentWidth = Math.max(1, Math.floor(width))
+  const rowBudget = Math.max(1, Math.floor(maxHeight))
+  const searchLabel = searchPreviewText === null ? 'no match' : 'find'
+  const searchActions =
+    contentWidth >= 70
+      ? ' · Enter use · Esc cancel · Ctrl+R older'
+      : ' · Enter use · Esc cancel'
+  const searchQuery = fitPromptLine(
+    search.query,
+    Math.max(1, contentWidth - searchLabel.length - searchActions.length - 3)
+  )
+  const hint = search.active
+    ? `${searchLabel} '${searchQuery}'${searchActions}`
+    : focus && pendingPasteConfirm && !viMode
+      ? 'pasted text armed · Enter confirms · next Enter sends'
+      : viMode && viStatusHint
+        ? viStatusHint
+        : null
+  const hintRows = hint && rowBudget > 1 ? 1 : 0
+  const displayPlaceholder = displayValue.length === 0 && placeholder.length > 0
+  const draft = useMemo(
+    () =>
+      buildPromptRenderModel(
+        displayPlaceholder
+          ? fitPromptLine(placeholder, contentWidth)
+          : displayValue,
+        displayPlaceholder
+          ? 0
+          : searchPreviewText !== null
+            ? displayValue.length
+            : resolvedCursor.cursorOffset,
+        0,
+        contentWidth,
+        Math.min(MAX_PROMPT_VIEW_ROWS, rowBudget - hintRows),
+        showCursor && focus
+      ),
+    [
+      contentWidth,
+      displayPlaceholder,
+      displayValue,
+      focus,
+      hintRows,
+      placeholder,
+      resolvedCursor.cursorOffset,
+      rowBudget,
+      searchPreviewText,
+      showCursor,
+    ]
+  )
+  const completionRows =
+    menuRequested && query
+      ? buildCompletionMenuRows(
+          items,
+          safeIndex,
+          query.kind,
+          contentWidth,
+          rowBudget - draft.rows.length - hintRows
+        )
+      : []
+  // a hidden suggestion must never consume Enter or navigation keys
+  const menuOpen = completionRows.some((row) => !row.detail)
+  const renderedHeight = draft.rows.length + hintRows + completionRows.length
+  useEffect(() =>
   {
-    renderedPlaceholder =
-      placeholder.length > 0
-        ? chalk.inverse(placeholder[0]) + chalk.grey(placeholder.slice(1))
-        : chalk.inverse(' ')
-
-    renderedValue =
-      search.active && searchPreviewText !== null
-        ? renderPromptValueWithCursor(displayValue, displayValue.length, 0)
-        : renderPromptValueWithCursor(
-            displayValue,
-            resolvedCursor.cursorOffset,
-            resolvedCursor.cursorWidth
-          )
-  }
+    onHeightChange?.(renderedHeight)
+  }, [onHeightChange, renderedHeight])
 
   const handleInput = useCallback(
     (input: string, key: CoralKey) =>
@@ -743,7 +794,7 @@ export default function PromptInput({
         }
 
         const next = applyVimInput(vimEngineRef.current, {
-          input: key.ctrl && input === 'j' ? '\n' : input,
+          input: key.return ? '' : key.ctrl && input === 'j' ? '\n' : input,
           escape: key.escape,
           return: key.return,
           backspace: key.backspace,
@@ -977,57 +1028,23 @@ export default function PromptInput({
 
   useCoralInput(handleInput, { isActive: focus })
 
-  const textLine = (
-    <Text>
-      {placeholder
-        ? displayValue.length > 0
-          ? renderedValue
-          : renderedPlaceholder
-        : renderedValue}
-    </Text>
-  )
-
-  const searchHint = search.active ? (
-    <Text>
-      {chalk.grey(
-        `reverse-search '${search.query}'` +
-          (searchPreviewText === null ? ' no match' : '') +
-          ' · Enter accept · Esc cancel · Ctrl+R older'
-      )}
-    </Text>
-  ) : null
-
-  const viHint =
-    viMode && viStatusHint ? <Text>{chalk.grey(viStatusHint)}</Text> : null
-
-  const pasteHint =
-    focus && pendingPasteConfirm && !search.active ? (
-      <Text>
-        {chalk.grey('pasted text armed — press Enter again to submit')}
-      </Text>
-    ) : null
-  const hintLine = searchHint ?? viHint ?? pasteHint
-
-  if (!menuOpen || !query)
-  {
-    if (!hintLine) return textLine
-    return (
-      <Box flexDirection="column">
-        {textLine}
-        {hintLine}
-      </Box>
-    )
-  }
-
   return (
-    <Box flexDirection="column">
-      {textLine}
-      {hintLine}
-      <CompletionMenu
-        items={items}
-        selectedIndex={safeIndex}
-        kind={query.kind}
-      />
+    <Box flexDirection="column" width={contentWidth} flexShrink={0}>
+      {draft.rows.map((row, index) => (
+        <Box key={index} height={1} flexShrink={0}>
+          <Text wrap="truncate-end">
+            {displayPlaceholder ? style('muted')(row) : row || ' '}
+          </Text>
+        </Box>
+      ))}
+      {hintRows > 0 && (
+        <Box height={1} flexShrink={0}>
+          <Text wrap="truncate-end">
+            {style('muted')(fitPromptLine(hint ?? '', contentWidth))}
+          </Text>
+        </Box>
+      )}
+      <CompletionMenu rows={completionRows} width={contentWidth} />
     </Box>
   )
 }

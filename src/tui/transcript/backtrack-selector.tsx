@@ -16,6 +16,7 @@ export interface BacktrackSelectorProps
   turns: BacktrackTurn[]
   width: number
   height: number
+  active?: boolean
   onSelect: (turn: BacktrackTurn) => void
   onClose: () => void
 }
@@ -29,6 +30,7 @@ export default function BacktrackSelector({
   turns,
   width,
   height,
+  active = true,
   onSelect,
   onClose,
 }: BacktrackSelectorProps)
@@ -49,30 +51,33 @@ export default function BacktrackSelector({
     [height, safeIndex, turns, width]
   )
 
-  useCoralInput((input, key) =>
-  {
-    if (key.escape || isCtrlLetter(input, key, 'c'))
+  useCoralInput(
+    (input, key) =>
     {
-      onClose()
-      return
-    }
-    if (key.return)
-    {
-      const selected = turns[safeIndex]
-      if (selected) onSelect(selected)
-      return
-    }
+      if (key.escape || isCtrlLetter(input, key, 'c'))
+      {
+        onClose()
+        return
+      }
+      if (key.return)
+      {
+        const selected = turns[safeIndex]
+        if (selected) onSelect(selected)
+        return
+      }
 
-    const next = reduceBacktrackInput(
-      { selectedIndex: safeIndex },
-      key,
-      turns.length
-    )
-    if (next.handled)
-    {
-      setSelectedIndex(next.state.selectedIndex)
-    }
-  })
+      const next = reduceBacktrackInput(
+        { selectedIndex: safeIndex },
+        key,
+        turns.length
+      )
+      if (next.handled)
+      {
+        setSelectedIndex(next.state.selectedIndex)
+      }
+    },
+    { isActive: active }
+  )
 
   return <LineList lines={lines} />
 }

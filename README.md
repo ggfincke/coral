@@ -116,6 +116,12 @@ still isolate workspaces and validate final filesystem or Git scope.
 
 ## Interactive use
 
+The header identifies the workspace, active model, and permission mode. Above
+the framed composer, separate rows show activity and elapsed time, the latest
+reported decode and prefill speeds, context usage, and cumulative session
+tokens. Statistics wrap onto additional rows in narrow terminals; unavailable
+measurements show a dash. `/status` includes the session ID and message count.
+
 - Type a normal prompt to start an agent turn.
 - Type `/` to autocomplete slash commands.
 - Type `@` to pick a project file. The picker refreshes a session-owned project
@@ -137,6 +143,9 @@ still isolate workspaces and validate final filesystem or Git scope.
   exits and pressing `Esc` twice opens the conversation backtrack picker.
 - Submit during a run to queue a follow-up. Coral sends it after the active
   turn settles; `Meta+Backspace` restores the newest queued message for editing.
+- The composer follows the cursor through up to eight wrapped draft rows.
+  Resizing preserves the draft; if the controls and statistics cannot fit,
+  Coral asks you to enlarge the terminal before accepting further input.
 - Multiline pastes stay in the composer and require a second Enter to send.
   `Ctrl+J` or `Meta+Enter` inserts a newline; `Shift+Enter` also works when the
   terminal reports it distinctly. `Ctrl+G` opens the draft in `$VISUAL` or

@@ -2,8 +2,8 @@
 // esc-esc backtrack turns, previews, and selector line rendering
 
 import chalk from 'chalk'
-import wrapAnsi from 'wrap-ansi'
-import { style } from '../theme.js'
+import { selectionStyle, style } from '../theme.js'
+import { padEnd, truncateLine } from '../wrap.js'
 import { sanitizeUntrustedText } from './sanitize.js'
 import type { OllamaMessage } from '../../types/inference.js'
 import { findUserTurnStarts, type UndoTurn } from '../../types/undo.js'
@@ -118,25 +118,23 @@ function formatTurnRow(
 {
   const marker = selected ? style('accent')('›') : chalk.dim(' ')
   const preview = previewBacktrackTurn(turn.content)
-  const text = selected ? style('accent').bold(preview) : style('user')(preview)
-  return wrapAnsi(` ${marker} ${text}`, Math.max(width - 5, 1), {
-    hard: true,
-    trim: false,
-    wordWrap: true,
-  })
-    .split('\n')
-    .map((line) => `   ${line}`)
+  const text = selected ? chalk.bold(preview) : preview
+  const row = truncateLine(` ${marker} ${text}`, width)
+  return [selected ? selectionStyle()(padEnd(row, width)) : row]
 }
 
 export function buildBacktrackLines(opts: BacktrackLinesOptions): string[]
 {
-  const width = Math.max(opts.width, 24)
-  const height = Math.max(opts.height, 4)
+  const width = Math.max(opts.width, 1)
+  const height = Math.max(opts.height, 0)
+  if (height === 0) return []
   const lines: string[] = [
     `${style('primary').bold('backtrack')} ${chalk.dim('rewind to an earlier prompt')}`,
     chalk.dim('enter restores · esc cancels'),
     '',
   ]
+    .slice(0, Math.max(height - 1, 0))
+    .map((line) => truncateLine(line, width))
 
   if (opts.turns.length === 0)
   {

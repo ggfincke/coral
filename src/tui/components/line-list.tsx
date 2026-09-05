@@ -12,11 +12,13 @@ interface LineListProps
 export function LineList({ lines, dim }: LineListProps)
 {
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" flexShrink={0}>
       {lines.map((line, index) => (
-        <Text key={index} dimColor={dim}>
-          {line}
-        </Text>
+        <Box key={index} height={1} flexShrink={0}>
+          <Text dimColor={dim} wrap="truncate-end">
+            {line || ' '}
+          </Text>
+        </Box>
       ))}
     </Box>
   )

@@ -17,6 +17,7 @@ export interface CommandPaletteProps
   entries: PaletteEntry[]
   width: number
   height: number
+  active?: boolean
   onSelect: (entry: PaletteEntry) => void
   onClose: () => void
 }
@@ -30,6 +31,7 @@ export default function CommandPalette({
   entries,
   width,
   height,
+  active = true,
   onSelect,
   onClose,
 }: CommandPaletteProps)
@@ -53,39 +55,42 @@ export default function CommandPalette({
     [height, matches, query, safeIndex, width]
   )
 
-  useCoralInput((input, key) =>
-  {
-    if (
-      key.escape ||
-      isCtrlLetter(input, key, 'c') ||
-      isCtrlLetter(input, key, 'p')
-    )
+  useCoralInput(
+    (input, key) =>
     {
-      onClose()
-      return
-    }
-    if (key.return)
-    {
-      const selected = matches[safeIndex]
-      if (selected?.command || selected?.action)
+      if (
+        key.escape ||
+        isCtrlLetter(input, key, 'c') ||
+        isCtrlLetter(input, key, 'p')
+      )
       {
-        onSelect(selected)
+        onClose()
+        return
       }
-      return
-    }
+      if (key.return)
+      {
+        const selected = matches[safeIndex]
+        if (selected?.command || selected?.action)
+        {
+          onSelect(selected)
+        }
+        return
+      }
 
-    const next = reducePaletteInput(
-      { query, selectedIndex: safeIndex },
-      input,
-      key,
-      matches.length
-    )
-    if (next.handled)
-    {
-      setQuery(next.state.query)
-      setSelectedIndex(next.state.selectedIndex)
-    }
-  })
+      const next = reducePaletteInput(
+        { query, selectedIndex: safeIndex },
+        input,
+        key,
+        matches.length
+      )
+      if (next.handled)
+      {
+        setQuery(next.state.query)
+        setSelectedIndex(next.state.selectedIndex)
+      }
+    },
+    { isActive: active }
+  )
 
   return <LineList lines={lines} />
 }

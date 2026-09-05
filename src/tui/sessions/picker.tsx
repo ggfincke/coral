@@ -6,10 +6,10 @@ import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import { listSessions, loadSession } from '../../session/store.js'
 import type { SessionMeta } from '../../session/types.js'
-import { ellipsize } from '../../utils/ellipsize.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import {
   filterPaletteEntries,
+  formatPickerQuery,
   movePaletteSelection,
   reducePaletteInput,
   type PaletteEntry,
@@ -18,7 +18,8 @@ import { formatBlocksPlain } from '../transcript/plain.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { buildRestoredBlocks } from '../transcript/restored-blocks.js'
 import { useCoralInput } from '../input/use-coral-input.js'
-import { style } from '../theme.js'
+import { selectionStyle, style } from '../theme.js'
+import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
 import { LineList } from '../components/line-list.js'
 
 // states mirror the model-picker machine; 'hidden' is expressed by the parent
@@ -30,9 +31,6 @@ const PAGE_ROWS = 10
 // minimum list rows kept for navigation before preview space is carved out
 const MIN_LIST_ROWS = 3
 const MAX_LIST_ROWS = 12
-// plain-text caps for one row; titles truncate before styling
-const ROW_TITLE_CHARS = 64
-const ROW_SUFFIX_CHARS = 32
 
 export interface SessionPickerLinesOptions
 {
@@ -152,42 +150,54 @@ export function buildSessionPreviewLines(
 function formatSessionRow(
   meta: SessionMeta,
   selected: boolean,
-  now: number
+  now: number,
+  width: number
 ): string
 {
   const titleText =
     sanitizeUntrustedText(meta.title || '(untitled)').replace(/\s+/g, ' ') ||
     '(untitled)'
   const suffixText = ` · ${formatRelativeAge(meta.updatedAt, now)} · ${meta.messageCount} msgs`
-  const shownTitle = ellipsize(titleText, ROW_TITLE_CHARS)
-  const marker = selected ? style('accent')('›') : chalk.dim(' ')
-  const styledTitle = selected
-    ? style('accent').bold(shownTitle)
-    : style('user')(shownTitle)
-  return ` ${marker} ${styledTitle}${chalk.dim(ellipsize(suffixText, ROW_SUFFIX_CHARS))}`
+  const suffix =
+    width >= 20 ? truncateLine(suffixText, Math.max(width - 10, 0)) : ''
+  const titleWidth = Math.max(width - 3 - visibleWidth(suffix), 0)
+  const shownTitle = padEnd(truncateLine(titleText, titleWidth), titleWidth)
+  const styledTitle = selected ? chalk.bold(shownTitle) : shownTitle
+  const row = truncateLine(
+    ` ${selected ? '›' : ' '} ${styledTitle}${selected ? suffix : chalk.dim(suffix)}`,
+    width
+  )
+  return selected ? selectionStyle()(padEnd(row, width)) : row
 }
 
 export function buildSessionPickerLines(
   opts: SessionPickerLinesOptions
 ): string[]
 {
-  const width = Math.max(opts.width, 24)
-  const height = Math.max(opts.height, 6)
+  const width = Math.max(Math.floor(opts.width), 0)
+  const height = Math.max(Math.floor(opts.height), 0)
+  if (width === 0 || height === 0) return []
   const now = Date.now()
-  const query = opts.query.trim()
   const sessions = opts.sessions
-  const lines: string[] = [
-    `${style('primary').bold('resume')} ${chalk.dim('saved sessions')}`,
-    chalk.dim(
-      query ? `query: ${query}` : 'type to filter · enter resumes · esc cancels'
-    ),
-    '',
-  ]
+  const lines: string[] = []
+  if (height >= 2)
+    lines.push(
+      `${style('primary').bold('resume')} ${chalk.dim('saved sessions')}`
+    )
+  if (height >= 3)
+    lines.push(
+      formatPickerQuery(
+        opts.query,
+        width,
+        'type to filter · enter resumes · esc cancels'
+      )
+    )
+  if (height >= 6) lines.push('')
 
   if (sessions.length === 0)
   {
     lines.push(chalk.dim('  no saved sessions'))
-    return lines.slice(0, height).map((line) => clipRow(line, width))
+    return lines.slice(0, height).map((line) => truncateLine(line, width))
   }
 
   const selectedIndex = Math.min(
@@ -200,7 +210,8 @@ export function buildSessionPickerLines(
   const listRows = Math.min(
     Math.max(Math.floor(availableHeight / 2), MIN_LIST_ROWS),
     MAX_LIST_ROWS,
-    sessions.length
+    sessions.length,
+    availableHeight
   )
   const start = Math.min(
     Math.max(selectedIndex - Math.floor(listRows / 2), 0),
@@ -210,10 +221,12 @@ export function buildSessionPickerLines(
 
   for (let index = start; index < end; index += 1)
   {
-    lines.push(formatSessionRow(sessions[index]!, index === selectedIndex, now))
+    lines.push(
+      formatSessionRow(sessions[index]!, index === selectedIndex, now, width)
+    )
   }
 
-  if (sessions.length > listRows)
+  if (sessions.length > listRows && lines.length < height)
   {
     lines.push(chalk.dim(`Showing ${start + 1}-${end} of ${sessions.length}`))
   }
@@ -221,7 +234,11 @@ export function buildSessionPickerLines(
   const remaining = height - lines.length
   if (remaining > 1)
   {
-    lines.push(chalk.dim('-'.repeat(Math.min(width, 40))))
+    const selected = sessions[selectedIndex]!
+    const context = sanitizeUntrustedText(`${selected.model} · ${selected.cwd}`)
+      .replace(/\s+/g, ' ')
+      .trim()
+    lines.push(`${chalk.bold('Preview')} ${chalk.dim(`· ${context}`)}`)
     lines.push(
       ...buildSessionPreviewLines(
         sessions[selectedIndex]?.id,
@@ -231,7 +248,7 @@ export function buildSessionPickerLines(
     )
   }
 
-  return lines.slice(0, height).map((line) => clipRow(line, width))
+  return lines.slice(0, height).map((line) => truncateLine(line, width))
 }
 
 // typing filters via the palette matcher; pages jump whole screens
@@ -263,6 +280,7 @@ export interface SessionPickerProps
 {
   width: number
   height: number
+  active?: boolean
   onResume: (sessionId: string) => void
   onClose: () => void
 }
@@ -270,6 +288,7 @@ export interface SessionPickerProps
 export default function SessionPicker({
   width,
   height,
+  active = true,
   onResume,
   onClose,
 }: SessionPickerProps)
@@ -320,42 +339,54 @@ export default function SessionPicker({
           })
         : state === 'loading'
           ? ['Loading saved sessions…']
-          : ['Failed to load saved sessions', error],
+          : [
+              'Failed to load saved sessions',
+              sanitizeUntrustedText(error).replace(/\s+/g, ' ').trim(),
+            ],
     [error, height, matches, query, safeIndex, state, width]
   )
 
-  useCoralInput((input, key) =>
-  {
-    if (key.escape || (key.ctrl && input.toLowerCase() === 'c'))
+  useCoralInput(
+    (input, key) =>
     {
-      onClose()
-      return
-    }
-    if (state === 'loading') return
-    if (state === 'error')
-    {
-      if (input.toLowerCase() === 'r') load()
-      return
-    }
-    if (key.return)
-    {
-      const selected = matches[safeIndex]
-      if (selected) onResume(selected.id)
-      return
-    }
+      if (key.escape || (key.ctrl && input.toLowerCase() === 'c'))
+      {
+        onClose()
+        return
+      }
+      if (state === 'loading') return
+      if (state === 'error')
+      {
+        if (input.toLowerCase() === 'r') load()
+        return
+      }
+      if (key.return)
+      {
+        const selected = matches[safeIndex]
+        if (selected) onResume(selected.id)
+        return
+      }
 
-    const next = reduceSessionPickerInput(
-      { query, selectedIndex: safeIndex },
-      input,
-      key,
-      matches.length
-    )
-    if (next.handled)
-    {
-      setQuery(next.state.query)
-      setSelectedIndex(next.state.selectedIndex)
-    }
-  })
+      const next = reduceSessionPickerInput(
+        { query, selectedIndex: safeIndex },
+        input,
+        key,
+        matches.length
+      )
+      if (next.handled)
+      {
+        setQuery(next.state.query)
+        setSelectedIndex(next.state.selectedIndex)
+      }
+    },
+    { isActive: active }
+  )
 
-  return <LineList lines={lines} />
+  return (
+    <LineList
+      lines={lines
+        .slice(0, Math.max(height, 0))
+        .map((line) => truncateLine(line, Math.max(width, 0)))}
+    />
+  )
 }
