@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-07
+
 ### Added
 
 - **Terminal editing and run control:** multiline paste protection, editor
@@ -34,8 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows, and clearer approval and transcript styling. Narrow terminals wrap
   statistics instead of dropping measurements.
 
+- **Long-session performance:** bound transcript highlighting and resize caches,
+  reuse captured context during prompt fitting, batch embeddings across files,
+  and limit retrieval result materialization to the best matches.
+- **Compaction:** prune stale reasoning while retaining conversation content
+  and the existing Ollama inference path.
+- **Dependencies:** update SQLite to 13.0.3, Chalk to 6.0.0, Markdown and terminal
+  wrapping libraries, development tooling, and CI/release actions. Node 24 remains
+  the supported minimum and the type-checking baseline.
+
 ### Fixed
 
+- **File edits:** preserve literal dollar replacement sequences and align repeated
+  unchanged lines correctly during whitespace-tolerant edits.
+- **Turn reliability:** preserve explicit thinking suppression in Ollama requests
+  and release the active operation when slash-command history persistence fails.
 - **Terminal row accounting:** retain intentional blank rows, size the composer
   using wrapped text and its cursor, hints, and completions, and preserve drafts
   behind a resize prompt when the terminal cannot fit its controls.
@@ -693,7 +708,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
-[Unreleased]: https://github.com/ggfincke/coral/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/ggfincke/coral/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/ggfincke/coral/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/ggfincke/coral/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/ggfincke/coral/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/ggfincke/coral/compare/v0.11.0...v0.12.0
