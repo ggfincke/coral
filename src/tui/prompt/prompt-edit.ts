@@ -3,6 +3,7 @@
 
 import type { CoralKey } from '../input/terminal-input.js'
 import { clamp } from '../../utils/clamp.js'
+import { buildLineStarts, locateOffset } from './line-index.js'
 
 const WORD_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' })
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, {
@@ -26,6 +27,8 @@ export interface PromptEditInput
 export interface PromptEditResult extends PromptCursorState
 {
   value: string
+  // text removed by a killing operation (ctrl+w/u/k) for kill-ring capture
+  killed?: string
 }
 
 interface WordBoundary
@@ -222,20 +225,50 @@ function deleteForward(value: string, cursorOffset: number): PromptEditResult
   )
 }
 
+// kill from the cursor back to its own line's start (multi-line aware)
 function deleteToLineStart(
   value: string,
   cursorOffset: number
 ): PromptEditResult
 {
-  return updateCursor(value.slice(cursorOffset), 0)
+  const starts = buildLineStarts(value)
+  const rowStart = starts[locateOffset(starts, cursorOffset).row] ?? 0
+  if (cursorOffset <= rowStart)
+  {
+    return updateCursor(value, cursorOffset)
+  }
+
+  return {
+    ...updateCursor(
+      value.slice(0, rowStart) + value.slice(cursorOffset),
+      rowStart
+    ),
+    killed: value.slice(rowStart, cursorOffset),
+  }
 }
 
+// kill from the cursor to its own line's end (multi-line aware)
 function deleteToLineEnd(
   value: string,
   cursorOffset: number
 ): PromptEditResult
 {
-  return updateCursor(value.slice(0, cursorOffset), cursorOffset)
+  const starts = buildLineStarts(value)
+  const index = locateOffset(starts, cursorOffset).row
+  const rowEnd =
+    index + 1 < starts.length ? (starts[index + 1] ?? 0) - 1 : value.length
+  if (cursorOffset >= rowEnd)
+  {
+    return updateCursor(value, cursorOffset)
+  }
+
+  return {
+    ...updateCursor(
+      value.slice(0, cursorOffset) + value.slice(rowEnd),
+      cursorOffset
+    ),
+    killed: value.slice(cursorOffset, rowEnd),
+  }
 }
 
 function deleteWordBefore(
@@ -244,10 +277,13 @@ function deleteWordBefore(
 ): PromptEditResult
 {
   const targetOffset = previousWordOffset(value, cursorOffset)
-  return updateCursor(
-    value.slice(0, targetOffset) + value.slice(cursorOffset),
-    targetOffset
-  )
+  return {
+    ...updateCursor(
+      value.slice(0, targetOffset) + value.slice(cursorOffset),
+      targetOffset
+    ),
+    killed: value.slice(targetOffset, cursorOffset),
+  }
 }
 
 function deleteWordAfter(
@@ -277,6 +313,34 @@ function insertText(
   )
 }
 
+// splice arbitrary text at an offset for yank & programmatic inserts
+export function insertTextAt(
+  value: string,
+  cursorOffset: number,
+  text: string
+): PromptEditResult
+{
+  return insertText(value, clamp(cursorOffset, 0, value.length), text)
+}
+
+// backslash-continuation: a trailing '\' becomes the newline instead of
+// submitting; null means the caller should treat Enter as submit
+export function continueWithNewline(
+  value: string,
+  cursorOffset: number
+): PromptEditResult | null
+{
+  if (cursorOffset <= 0 || value[cursorOffset - 1] !== '\\')
+  {
+    return null
+  }
+
+  return updateCursor(
+    value.slice(0, cursorOffset - 1) + '\n' + value.slice(cursorOffset),
+    cursorOffset
+  )
+}
+
 export function applyPromptEdit({
   value,
   input,
@@ -299,6 +363,16 @@ export function applyPromptEdit({
   if (key.end)
   {
     return updateCursor(value, value.length)
+  }
+  if ((key.ctrl && input === 'j') || (key.meta && key.return))
+  {
+    // readline binds ctrl+j to newline; meta+enter is the discoverable alias
+    return updateCursor(
+      value.slice(0, cursor.cursorOffset) +
+        '\n' +
+        value.slice(cursor.cursorOffset),
+      cursor.cursorOffset + 1
+    )
   }
   if (key.ctrl && input === 'b')
   {

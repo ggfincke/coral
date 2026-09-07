@@ -278,7 +278,7 @@ export function recordReliability(
   stats: ReliabilityStats,
   now: string = new Date().toISOString(),
   path: string = telemetryPath()
-): TelemetryStore
+): void
 {
   if (!model || !isIsoTimestamp(now))
   {
@@ -298,7 +298,6 @@ export function recordReliability(
     recordedAt: now,
   }
   writeJsonFile(join(telemetryEventsDir(path), `${id}.json`), event)
-  return loadTelemetry(path)
 }
 
 // render one newest-first block per model for /telemetry

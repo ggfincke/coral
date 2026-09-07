@@ -9,6 +9,8 @@ export interface StreamBuffer
 {
   text: string
   thinking: string
+  // wall clock of the last appended token chunk; null until one arrives
+  lastTokenAt: number | null
 }
 
 // convert buffered stream content into finalized transcript blocks
@@ -41,10 +43,12 @@ export function useStreamBuffer(flushInterval: number): {
   const [streamBuf, setStreamBuf] = useState<StreamBuffer>({
     text: '',
     thinking: '',
+    lastTokenAt: null,
   })
 
   const streamTextRef = useRef('')
   const streamThinkingRef = useRef('')
+  const lastTokenAtRef = useRef<number | null>(null)
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const flushStreaming = useCallback(() =>
@@ -53,6 +57,7 @@ export function useStreamBuffer(flushInterval: number): {
     setStreamBuf({
       text: streamTextRef.current,
       thinking: streamThinkingRef.current,
+      lastTokenAt: lastTokenAtRef.current,
     })
   }, [])
 
@@ -73,6 +78,7 @@ export function useStreamBuffer(flushInterval: number): {
     (chunk: string) =>
     {
       streamTextRef.current += chunk
+      lastTokenAtRef.current = Date.now()
       scheduleFlush()
     },
     [scheduleFlush]
@@ -82,6 +88,7 @@ export function useStreamBuffer(flushInterval: number): {
     (chunk: string) =>
     {
       streamThinkingRef.current += chunk
+      lastTokenAtRef.current = Date.now()
       scheduleFlush()
     },
     [scheduleFlush]
@@ -92,7 +99,8 @@ export function useStreamBuffer(flushInterval: number): {
     clearFlushTimer()
     streamTextRef.current = ''
     streamThinkingRef.current = ''
-    setStreamBuf({ text: '', thinking: '' })
+    lastTokenAtRef.current = null
+    setStreamBuf({ text: '', thinking: '', lastTokenAt: null })
   }, [clearFlushTimer])
 
   const consumeBufferedBlocks = useCallback((): OutputBlock[] =>
@@ -100,6 +108,7 @@ export function useStreamBuffer(flushInterval: number): {
     const blocks = buildBufferedOutputBlocks({
       text: streamTextRef.current,
       thinking: streamThinkingRef.current,
+      lastTokenAt: lastTokenAtRef.current,
     })
 
     clearBuffers()

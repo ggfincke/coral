@@ -4,7 +4,9 @@
 import { existsSync } from 'node:fs'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../agent/agent.js'
+import { ProjectWatcher } from '../../agent/watcher.js'
 import { resolveMcpConfig } from '../../config/mcp.js'
+import { OllamaClient } from '../../ollama/client.js'
 import type { ActiveMcpMode } from '../../mcp/types.js'
 import { loadSession, renameSession } from '../../session/store.js'
 import type { SessionData, SessionMeta } from '../../session/types.js'
@@ -22,10 +24,16 @@ import {
   type OperationCompletion,
   type OperationHandle,
   type PromptRequest,
+  type PromptSettlement,
   type SessionSaveResult,
+  type ToolApprovalRequest,
 } from './interactive-runtime.js'
 import { ProjectFileCatalog } from './project-file-catalog.js'
-import { buildPrimaryAgent, persistAgentSession } from './agent-session.js'
+import {
+  buildPrimaryAgent,
+  persistAgentSession,
+  SessionTitleGenerator,
+} from './agent-session.js'
 
 export interface InteractiveSessionView
 {
@@ -95,8 +103,13 @@ export interface InteractiveSession
   requestPrompt: (
     handle: OperationHandle<Agent>,
     prompt: PromptRequest
+  ) => Promise<PromptSettlement>
+  // grant-aware tool approval; consults & records session-scoped grants
+  requestToolApproval: (
+    handle: OperationHandle<Agent>,
+    request: ToolApprovalRequest
   ) => Promise<boolean>
-  settlePrompt: (id: number, answer: boolean) => boolean
+  settlePrompt: (id: number, settlement: PromptSettlement) => boolean
   completeTurn: (handle: OperationHandle<Agent>) => OperationCompletion
   finishCommand: (handle: OperationHandle<Agent>) => boolean
   runOperation: <T>(
@@ -121,6 +134,9 @@ export function useInteractiveSession(
 ): InteractiveSession
 {
   const [mcpConfig] = useState(resolveMcpConfig)
+  // one shared transport for every primary Agent this hook builds; the Agent
+  // owns it, subagents inherit it, and background titles reuse the same one
+  const [inferenceClient] = useState(() => new OllamaClient(options.host))
   const [initialAgent] = useState(() =>
   {
     if (!options.model) return null
@@ -132,6 +148,7 @@ export function useInteractiveSession(
       mcpMode: activeMcpMode(options.initialYolo),
       mcpConfig,
       restored: options.initialSession,
+      inferenceClient,
     })
   })
   const [agent, setAgent] = useState<Agent | null>(initialAgent)
@@ -152,6 +169,22 @@ export function useInteractiveSession(
   const closingRef = useRef(false)
   const closeRuntimeRef = useRef<Promise<void> | null>(null)
   const [projectFileCatalog] = useState(() => new ProjectFileCatalog())
+  const projectWatcherRef = useRef<ProjectWatcher | null>(null)
+  const watcherCleanups = useRef(new Set<Promise<void>>())
+  const retireProjectWatcher = useCallback(
+    (watcher = projectWatcherRef.current): Promise<void> =>
+    {
+      if (!watcher) return Promise.resolve()
+      if (projectWatcherRef.current === watcher)
+        projectWatcherRef.current = null
+      const cleanup = watcher.dispose()
+      watcherCleanups.current.add(cleanup)
+      const untrack = () => watcherCleanups.current.delete(cleanup)
+      void cleanup.then(untrack, untrack)
+      return cleanup
+    },
+    []
+  )
 
   const [runtime] = useState(
     () =>
@@ -166,6 +199,20 @@ export function useInteractiveSession(
         initialAgent,
         options.initialSession?.meta ?? null
       )
+  )
+
+  // one-shot background titles ride the shared client; failures stay silent
+  const [titleGenerator] = useState(
+    () =>
+      new SessionTitleGenerator({
+        client: inferenceClient,
+        isActiveSession: (id) => runtime.getSessionId() === id,
+        applyTitle: (id, title) =>
+        {
+          const renamed = renameSession(id, title)
+          if (renamed) runtime.updateCurrentSession(renamed)
+        },
+      })
   )
 
   const fetchContextWindow = useCallback(
@@ -211,6 +258,7 @@ export function useInteractiveSession(
         owner
       )
       if (!transition) return false
+      void titleGenerator.cancel()
 
       let nextAgent: Agent
       try
@@ -224,6 +272,7 @@ export function useInteractiveSession(
       }
 
       const previous = runtime.getAgent()
+      const watcherCleanup = retireProjectWatcher()
       if (previous && previous.getCwd() !== nextAgent.getCwd())
       {
         projectFileCatalog.invalidate()
@@ -232,8 +281,9 @@ export function useInteractiveSession(
         preserveCommand,
       })
       runtime.markTransitionCommitted(transition)
-      const transitionTask =
-        previous && previous !== nextAgent ? cleanup : Promise.resolve()
+      const transitionTask = Promise.all([cleanup, watcherCleanup]).then(
+        () => undefined
+      )
       void runtime
         .trackTransition(transition, transitionTask)
         .catch(() => undefined)
@@ -245,7 +295,13 @@ export function useInteractiveSession(
       fetchContextWindow(nextAgent)
       return true
     },
-    [fetchContextWindow, projectFileCatalog, runtime]
+    [
+      fetchContextWindow,
+      projectFileCatalog,
+      retireProjectWatcher,
+      runtime,
+      titleGenerator,
+    ]
   )
 
   const switchModel = useCallback(
@@ -274,6 +330,7 @@ export function useInteractiveSession(
         })
       }
       const generation = runtime.getGeneration()
+      void titleGenerator.cancel()
 
       const task: Promise<ModelTransitionResult> = (async () =>
       {
@@ -300,7 +357,7 @@ export function useInteractiveSession(
       })()
       return runtime.trackTransition(transition, task)
     },
-    [fetchContextWindow, persistCurrent, runtime]
+    [fetchContextWindow, persistCurrent, runtime, titleGenerator]
   )
 
   const activateModel = useCallback(
@@ -327,6 +384,7 @@ export function useInteractiveSession(
             mcpMode: activeMcpMode(yoloRef.current),
             mcpConfig,
             restored,
+            inferenceClient,
           }),
         restored
       )
@@ -336,7 +394,15 @@ export function useInteractiveSession(
           : { status: 'busy' }
       )
     },
-    [adoptAgent, mcpConfig, options.host, options.think, runtime, switchModel]
+    [
+      adoptAgent,
+      inferenceClient,
+      mcpConfig,
+      options.host,
+      options.think,
+      runtime,
+      switchModel,
+    ]
   )
 
   const renameCurrentSession = useCallback(
@@ -401,13 +467,21 @@ export function useInteractiveSession(
             mcpMode: activeMcpMode(yoloRef.current),
             mcpConfig,
             restored: target,
+            inferenceClient,
           }),
         target,
         true,
         owner
       )
     },
-    [adoptAgent, mcpConfig, options.host, options.think, runtime]
+    [
+      adoptAgent,
+      inferenceClient,
+      mcpConfig,
+      options.host,
+      options.think,
+      runtime,
+    ]
   )
 
   const setPermissionMode = useCallback(
@@ -485,16 +559,19 @@ export function useInteractiveSession(
   const closeRuntime = useCallback((): Promise<void> =>
   {
     closingRef.current = true
+    void retireProjectWatcher()
     closeRuntimeRef.current ??= Promise.allSettled([
+      titleGenerator.cancel(),
       runtime.shutdown(),
       projectFileCatalog.dispose(),
+      ...watcherCleanups.current,
     ]).then((results) =>
     {
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason
     })
     return closeRuntimeRef.current
-  }, [projectFileCatalog, runtime])
+  }, [projectFileCatalog, retireProjectWatcher, runtime, titleGenerator])
 
   const shutdownCoordinatorRef = useRef<(() => Promise<void>) | null>(null)
   const shutdown = useCallback(() =>
@@ -524,6 +601,29 @@ export function useInteractiveSession(
 
   useEffect(() =>
   {
+    if (!agent || closingRef.current || runtime.isClosing()) return
+    const generation = runtime.getGeneration()
+    const watcher = new ProjectWatcher(agent.getCwd(), {
+      onFilesChanged: (paths) =>
+      {
+        if (runtime.isCurrentAgent(agent, generation))
+          agent.notifyFileChanges(paths)
+      },
+      onProjectFilesChanged: () =>
+      {
+        if (runtime.isCurrentAgent(agent, generation))
+          projectFileCatalog.invalidate(agent.getCwd())
+      },
+    })
+    projectWatcherRef.current = watcher
+    return () =>
+    {
+      void retireProjectWatcher(watcher)
+    }
+  }, [agent, projectFileCatalog, retireProjectWatcher, runtime])
+
+  useEffect(() =>
+  {
     if (agent && contextWindow === 0) fetchContextWindow(agent)
   }, [agent, contextWindow, fetchContextWindow])
 
@@ -542,8 +642,13 @@ export function useInteractiveSession(
   }, [closeRuntime])
 
   const beginOperation = useCallback(
-    (kind: 'turn' | 'command') => runtime.beginOperation(kind),
-    [runtime]
+    (kind: 'turn' | 'command') =>
+    {
+      const operation = runtime.beginOperation(kind)
+      if (operation) void titleGenerator.cancel()
+      return operation
+    },
+    [runtime, titleGenerator]
   )
   const acceptsEvent = useCallback(
     (handle: OperationHandle<Agent>) => runtime.acceptsEvent(handle),
@@ -566,13 +671,34 @@ export function useInteractiveSession(
       runtime.requestPrompt(handle, prompt),
     [runtime]
   )
+  const requestToolApproval = useCallback(
+    (handle: OperationHandle<Agent>, request: ToolApprovalRequest) =>
+      runtime.requestToolApproval(handle, request),
+    [runtime]
+  )
   const settlePrompt = useCallback(
-    (id: number, answer: boolean) => runtime.settlePrompt(id, answer),
+    (id: number, settlement: PromptSettlement) =>
+      runtime.settlePrompt(id, settlement),
     [runtime]
   )
   const completeTurn = useCallback(
-    (handle: OperationHandle<Agent>) => runtime.completeTurn(handle),
-    [runtime]
+    (handle: OperationHandle<Agent>): OperationCompletion =>
+    {
+      const completion = runtime.completeTurn(handle)
+      // a settled non-aborted turn may earn its background title; the offer is
+      // fire-and-forget and can never affect the completion result
+      if (completion.accepted && !completion.aborted && completion.session)
+      {
+        titleGenerator.offer(
+          completion.session,
+          handle.agent.getModel(),
+          undefined,
+          handle.agent.getFrozenPrefix().contextWindow
+        )
+      }
+      return completion
+    },
+    [runtime, titleGenerator]
   )
   const finishCommand = useCallback(
     (handle: OperationHandle<Agent>) => runtime.finishCommand(handle),
@@ -638,6 +764,7 @@ export function useInteractiveSession(
     acceptsCommandTerminal,
     isCurrentOperation,
     requestPrompt,
+    requestToolApproval,
     settlePrompt,
     completeTurn,
     finishCommand,

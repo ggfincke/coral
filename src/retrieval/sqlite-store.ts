@@ -62,12 +62,24 @@ interface CurrentFileRow
 
 interface SearchRow
 {
+  id: number
   path: string
+  dims: number
+  vector: Buffer
+}
+
+interface SearchTextRow
+{
   start_line: number
   end_line: number
   text: string
-  dims: number
-  vector: Buffer
+}
+
+interface RankedChunk
+{
+  id: number
+  path: string
+  score: number
 }
 
 interface SqliteStoreOptions
@@ -849,7 +861,7 @@ export class SqliteIndexStore implements IndexStore
 
   search(projectId: number, queryVector: number[], limit: number): SearchHit[]
   {
-    return this.withBusyContext('searching the project index', () =>
+    const search = this.db.transaction((): SearchHit[] =>
     {
       const expectedDimensions = this.metadata().embedding_dimensions
       if (expectedDimensions === null) return []
@@ -871,50 +883,70 @@ export class SqliteIndexStore implements IndexStore
         )
       }
 
+      const maxHits = Math.max(0, Math.trunc(limit) || 0)
+      const winners: RankedChunk[] = []
       const rows = this.db
         .prepare(
           `
         SELECT
+          c.id AS id,
           f.path AS path,
-          c.start_line AS start_line,
-          c.end_line AS end_line,
-          c.text AS text,
           e.dims AS dims,
           e.vector AS vector
         FROM embeddings e
         JOIN chunks c ON c.id = e.chunk_id
         JOIN files f ON f.id = c.file_id
         WHERE f.project_id = ?
+        ORDER BY f.path COLLATE BINARY, c.chunk_index
       `
         )
-        .all(projectId) as SearchRow[]
+        .iterate(projectId) as IterableIterator<SearchRow>
 
-      return rows
-        .map((row) =>
+      for (const row of rows)
+      {
+        const vector = blobToVector(row.vector, row.dims)
+        if (
+          row.dims !== expectedDimensions ||
+          vector.length === 0 ||
+          vector.some((value) => !Number.isFinite(value))
+        )
         {
-          const vector = blobToVector(row.vector, row.dims)
-          if (
-            row.dims !== expectedDimensions ||
-            vector.length === 0 ||
-            vector.some((value) => !Number.isFinite(value))
+          throw new Error(
+            `Corrupt embedding vector in retrieval space ${this.space.id}`
           )
-          {
-            throw new Error(
-              `Corrupt embedding vector in retrieval space ${this.space.id}`
-            )
-          }
+        }
 
-          return {
-            path: row.path,
-            startLine: row.start_line,
-            endLine: row.end_line,
-            score: cosineSimilarity(queryVector, vector),
-            text: row.text,
-          }
-        })
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit)
+        const score = cosineSimilarity(queryVector, vector)
+        let rank = 0
+        // leave equal scores in the deterministic file/chunk encounter order
+        while (rank < winners.length && winners[rank].score >= score) rank++
+        if (rank >= maxHits) continue
+        if (winners.length === maxHits) winners.pop()
+        winners.splice(rank, 0, { id: row.id, path: row.path, score })
+      }
+
+      // keep winner hydration in the same snapshot as metadata and scoring
+      const readText = this.db.prepare(`
+        SELECT start_line, end_line, text
+        FROM chunks
+        WHERE id = ?
+      `)
+      return winners.map((winner) =>
+      {
+        const row = readText.get(winner.id) as SearchTextRow
+        return {
+          path: winner.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: winner.score,
+          text: row.text,
+        }
+      })
     })
+
+    return this.withBusyContext('searching the project index', () =>
+      search.deferred()
+    )
   }
 
   close(): void

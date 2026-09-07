@@ -44,6 +44,7 @@ export interface ToolRoundExecutorOptions
   subagentRunner: SubagentRunner
   codeIntel: CodeIntelService
   todoState: TodoState
+  observeFile?: ToolExecutionContext['observeFile']
 }
 
 export interface PreparedToolRound
@@ -270,6 +271,7 @@ export class ToolRoundExecutor
   private readonly subagentRunner: SubagentRunner
   private readonly codeIntel: CodeIntelService
   private readonly todoState: TodoState
+  private readonly observeFile?: ToolExecutionContext['observeFile']
 
   constructor(options: ToolRoundExecutorOptions)
   {
@@ -279,6 +281,7 @@ export class ToolRoundExecutor
     this.subagentRunner = options.subagentRunner
     this.codeIntel = options.codeIntel
     this.todoState = options.todoState
+    this.observeFile = options.observeFile
   }
 
   prepare(
@@ -718,6 +721,7 @@ export class ToolRoundExecutor
       subagentRunner: this.subagentRunner,
       codeIntel: this.codeIntel,
       todoState: this.todoState,
+      observeFile: this.observeFile,
       signal,
     }
   }

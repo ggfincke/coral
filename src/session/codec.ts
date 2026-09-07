@@ -264,6 +264,15 @@ export function decodeSessionData(value: unknown): SessionData | undefined
   }
 }
 
+// validate the complete snapshot without rebuilding undo state for discovery
+export function decodeSessionPreview(
+  value: unknown
+): Pick<SessionData, 'meta' | 'messages'> | undefined
+{
+  if (!isSessionFileData(value)) return undefined
+  return { meta: value.meta, messages: value.messages }
+}
+
 export function encodeSessionData(session: SessionData): object
 {
   const undoState = serializeUndoState(

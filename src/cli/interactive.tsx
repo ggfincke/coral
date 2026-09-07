@@ -10,6 +10,10 @@ import { listSessions } from '../session/store.js'
 import { resolveResumeSession } from '../session/resume.js'
 import { setTheme } from '../tui/theme.js'
 import { findTheme, THEMES } from '../tui/themes.js'
+import {
+  kittyKeyboardOptIn,
+  noColorRequested,
+} from '../tui/shell/terminal-prefs.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import {
   formatCliResumeError,
@@ -20,7 +24,9 @@ import { launchCliApp } from './app-launch.js'
 const require = createRequire(import.meta.url)
 const { version } = require('../../package.json') as { version: string }
 
-export function runInteractiveCli(argv: string[] = process.argv): void
+export async function runInteractiveCli(
+  argv: string[] = process.argv
+): Promise<void>
 {
   const program = new Command()
     .name('coral')
@@ -71,12 +77,18 @@ export function runInteractiveCli(argv: string[] = process.argv): void
       if (theme) setTheme(theme)
       else console.error(`Ignoring unknown theme in prefs.json: ${saved}`)
     }
+    // honor NO_COLOR / FORCE_COLOR=0 by forcing the ANSI-adaptive palette
+    if (noColorRequested())
+    {
+      const adaptive = findTheme('adaptive')
+      if (adaptive) setTheme(adaptive)
+    }
   }
 
   // handle --sessions by listing sessions and exiting
   if (opts.sessions)
   {
-    console.log(formatCliSessionList(listSessions()))
+    console.log(formatCliSessionList(await listSessions()))
     process.exit(0)
   }
 
@@ -85,7 +97,7 @@ export function runInteractiveCli(argv: string[] = process.argv): void
 
   if (opts.session)
   {
-    const resolution = resolveResumeSession({
+    const resolution = await resolveResumeSession({
       requestedId: opts.session,
       allowPrefix: false,
       requireExistingCwd: true,
@@ -101,7 +113,7 @@ export function runInteractiveCli(argv: string[] = process.argv): void
   }
   else if (opts.resume)
   {
-    const resolution = resolveResumeSession({ requireExistingCwd: true })
+    const resolution = await resolveResumeSession({ requireExistingCwd: true })
 
     if (resolution.type !== 'target')
     {
@@ -122,7 +134,12 @@ export function runInteractiveCli(argv: string[] = process.argv): void
     },
     (props) =>
     {
-      render(<App {...props} />, { exitOnCtrlC: false })
+      render(<App {...props} />, {
+        exitOnCtrlC: false,
+        // kitty keyboard protocol is opt-in; the tokenizer learns CSI-u
+        // shapes independently (src/tui/input/keypress.ts)
+        kittyKeyboard: kittyKeyboardOptIn() ? { mode: 'enabled' } : undefined,
+      })
     },
     (message) => console.error(message)
   )

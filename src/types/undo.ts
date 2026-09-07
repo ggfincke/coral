@@ -50,7 +50,7 @@ export interface UndoTurnAlignmentOptions
 
 // shared alignment for live undo (strict) and session hydration (relaxed)
 export function isUndoTurnAligned(
-  messages: OllamaMessage[],
+  messages: readonly OllamaMessage[],
   turn: Pick<UndoTurn, 'startIndex' | 'endIndex' | 'userMessage'>,
   options: UndoTurnAlignmentOptions = {}
 ): boolean
@@ -61,6 +61,43 @@ export function isUndoTurnAligned(
   if (turn.startIndex < (options.frozenPrefixLength ?? 0)) return false
   const first = messages[turn.startIndex]
   return first?.role === 'user' && first.content === turn.userMessage
+}
+
+// aligned undo intervals identify internal corrective prompts inside a turn;
+// older/pruned histories lack this provenance and retain the role-based view
+export function findUserTurnStarts(
+  messages: readonly OllamaMessage[],
+  turns: readonly UndoTurn[] = []
+): number[]
+{
+  const aligned = turns.filter(
+    (turn) =>
+      Number.isInteger(turn.startIndex) &&
+      Number.isInteger(turn.endIndex) &&
+      turn.endIndex > turn.startIndex &&
+      turn.messages.length === turn.endIndex - turn.startIndex &&
+      isUndoTurnAligned(messages, turn)
+  )
+  const intervals = aligned.filter(
+    (turn) =>
+      !aligned.some(
+        (other) =>
+          other !== turn &&
+          other.startIndex < turn.endIndex &&
+          turn.startIndex < other.endIndex
+      )
+  )
+  const starts: number[] = []
+  for (let index = 0; index < messages.length; index++)
+  {
+    if (messages[index]?.role !== 'user') continue
+    if (
+      intervals.some((turn) => index > turn.startIndex && index < turn.endIndex)
+    )
+      continue
+    starts.push(index)
+  }
+  return starts
 }
 
 export function cloneMessages(messages: OllamaMessage[]): OllamaMessage[]

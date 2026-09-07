@@ -20,6 +20,7 @@ import {
 } from '../../src/types/inference.js'
 import type { TodoItem } from '../../src/types/todo.js'
 import { GIT_CONTEXT_HEADING } from '../../src/agent/request/git-context.js'
+import { TurnContextAssembler } from '../../src/agent/request/turn-context.js'
 import type { CodeIntelService } from '../../src/lsp/contracts.js'
 import type { ToolCallPresentation } from '../../src/tools/tool.js'
 import {
@@ -315,6 +316,43 @@ test('Agent undo and redo restore a tool-use turn with file edits', async () =>
   assert.equal(redo.ok, true)
   assert.equal(await readFile(target, 'utf-8'), 'hello\n')
   assert.equal(agent.getMessageCount(), messageCount)
+})
+
+test('Agent.truncateToTurn drops later turns and refuses mid-turn admission', async () =>
+{
+  const dir = await tempDir('coral-agent-backtrack-')
+  const { agent } = makeFakeAgent(dir, [
+    [{ message: { role: 'assistant', content: 'one' }, done: true }],
+    [{ message: { role: 'assistant', content: 'two' }, done: true }],
+  ])
+
+  await agent.run('first question', makeAgentEvents())
+  await agent.run('second question', makeAgentEvents())
+  const secondStart = agent
+    .getMessages()
+    .findIndex(
+      (message) =>
+        message.role === 'user' && message.content === 'second question'
+    )
+  assert.ok(secondStart > 0)
+
+  const removed = agent.truncateToTurn(secondStart)
+  assert.ok(removed !== null && removed > 0)
+  assert.deepEqual(
+    agent
+      .getMessages()
+      .map((message) =>
+        message.role === 'user' ? message.content : message.role
+      ),
+    ['system', 'first question', 'assistant']
+  )
+  // an arbitrary cut destroys replay granularity the same way compaction does
+  assert.equal(agent.getUndoStack().length, 0)
+  assert.equal(agent.getRedoStack().length, 0)
+
+  // an accepted-but-unsettled turn blocks backtrack admission
+  agent.acceptTurn('in flight')
+  assert.equal(agent.truncateToTurn(1), null)
 })
 
 test('Agent undo and redo restore edited and created files together', async () =>
@@ -1037,10 +1075,11 @@ test('Agent.run keeps the accepted turn when context resolution aborts', async (
   await firstDispose
 })
 
-test('Agent.dispose aborts & joins a run before owned LSP cleanup w/o eviction', async () =>
+test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o eviction', async (t) =>
 {
   const dir = await tempDir('coral-agent-dispose-lifecycle-')
-  await writeFile(join(dir, 'example.ts'), 'const value = 1\n', 'utf-8')
+  const sourcePath = join(dir, 'example.ts')
+  await writeFile(sourcePath, 'const value: number = 1\n', 'utf-8')
 
   let streamStarted!: () => void
   const streamStartedPromise = new Promise<void>((resolve) =>
@@ -1083,15 +1122,48 @@ test('Agent.dispose aborts & joins a run before owned LSP cleanup w/o eviction',
     { numCtx: 8_192 }
   )
   const agent = testAgent as LifecycleAgent
+  t.after(async () =>
+  {
+    releaseStream()
+    await agent.dispose()
+  })
 
-  await agent.codeIntel.query({
+  const initialHover = await agent.codeIntel.query({
     operation: 'hover',
     path: 'example.ts',
     line: 1,
     character: 7,
   })
+  assert.match(initialHover, /const value: number/)
   const languageServer = agent.codeIntel.child
   assert.ok(languageServer)
+  assert.equal(languageServer.exitCode, null)
+  assert.equal(languageServer.signalCode, null)
+
+  await writeFile(sourcePath, 'const value: string = 1\n', 'utf-8')
+  const invalidDiagnostics = await agent.codeIntel.query({
+    operation: 'diagnostics',
+    path: 'example.ts',
+  })
+  assert.match(invalidDiagnostics, /ERROR example\.ts:1:7 \[typescript 2322\]/)
+  assert.match(
+    invalidDiagnostics,
+    /Type 'number' is not assignable to type 'string'/
+  )
+  await writeFile(sourcePath, "const value: string = 'ok'\n", 'utf-8')
+  const correctedDiagnostics = await agent.codeIntel.query({
+    operation: 'diagnostics',
+    path: 'example.ts',
+  })
+  assert.equal(correctedDiagnostics, 'No diagnostics reported for this file.')
+  const correctedHover = await agent.codeIntel.query({
+    operation: 'hover',
+    path: 'example.ts',
+    line: 1,
+    character: 7,
+  })
+  assert.match(correctedHover, /const value: string/)
+  assert.equal(agent.codeIntel.child, languageServer)
   assert.equal(languageServer.exitCode, null)
   assert.equal(languageServer.signalCode, null)
 
@@ -2284,6 +2356,113 @@ test('Agent.run leaves history untouched when automatic compaction is aborted', 
   assert.equal(messages.at(-1)?.content, 'next request')
   // run() still completed cleanly
   assert.ok(doneCalled)
+})
+
+test('Agent reuses ordinary file observations and refreshes after awaited summaries', async (t) =>
+{
+  for (const outcome of [
+    'ordinary',
+    'summary',
+    'failed-summary',
+    'hard-fit',
+  ] as const)
+  {
+    await t.test(outcome, async (t) =>
+    {
+      const dir = await tempDir('coral-file-refresh-')
+      const target = join(dir, 'observed.txt')
+      await writeFile(target, 'original file content\n')
+      const gathers = t.mock.method(
+        TurnContextAssembler.prototype,
+        'gatherFileChanges'
+      )
+      let summaries = 0
+      const requests: ChatRequest[] = []
+      const { agent } = makeFakeAgent(
+        dir,
+        async function* (request)
+        {
+          assert.ok(request)
+          if (
+            request.messages[0]?.content.startsWith(
+              'You are a helpful assistant.'
+            )
+          )
+          {
+            summaries++
+            await writeFile(
+              target,
+              'external edit while summary inference was awaited\n'
+            )
+            if (outcome === 'failed-summary' && summaries === 1)
+            {
+              throw new Error('summary inference failed')
+            }
+            yield {
+              message: {
+                role: 'assistant',
+                content: 'Earlier work was inspected.',
+              },
+              done: true,
+            }
+            return
+          }
+          requests.push(structuredClone(request))
+          yield { message: { role: 'assistant', content: 'done' }, done: true }
+        },
+        { numCtx: 8_192, trackFileChanges: true }
+      )
+      t.after(() => agent.dispose())
+      if (outcome !== 'ordinary')
+      {
+        agent.restoreMessages(
+          Array.from(
+            { length: outcome === 'hard-fit' ? 6 : 120 },
+            (_unused, index) => ({
+              role:
+                index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+              content: `msg ${index + 1} ${'x'.repeat(outcome === 'hard-fit' ? 4_000 : 40)}`,
+            })
+          )
+        )
+      }
+
+      await agent.run(
+        {
+          content: 'inspect the observed file',
+          attachmentPaths: ['observed.txt'],
+        },
+        makeAgentEvents()
+      )
+
+      assert.equal(requests.length, 1)
+      if (outcome === 'ordinary')
+      {
+        assert.equal(summaries, 0)
+        assert.equal(gathers.mock.callCount(), 1)
+      }
+      else
+      {
+        assert.ok(summaries >= 1)
+        assert.equal(gathers.mock.callCount(), summaries + 1)
+        const serialized = JSON.stringify(requests[0]!.messages)
+        assert.match(
+          serialized,
+          /Workspace file changes since their last read or edit/
+        )
+        assert.match(serialized, /observed\.txt\\": changed/)
+        assert.ok(
+          !agent
+            .getMessages()
+            .some((message) =>
+              message.content.includes(
+                'Workspace file changes since their last read or edit'
+              )
+            )
+        )
+      }
+    })
+  }
 })
 
 test('Agent injects one read-only runner into task execution while borrowed LSP stays usable', async () =>

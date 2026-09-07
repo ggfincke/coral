@@ -2,7 +2,7 @@
 // application-runtime and configuration commands
 
 import chalk from 'chalk'
-import { savePrefs } from '../../config/prefs.js'
+import { loadPrefs, savePrefs } from '../../config/prefs.js'
 import { OllamaClient } from '../../ollama/client.js'
 import { formatTelemetry, loadTelemetry } from '../../telemetry/store.js'
 import { toErrorMessage } from '../../utils/errors.js'
@@ -18,6 +18,11 @@ import { getTheme, setTheme, style } from '../theme.js'
 import { findTheme } from '../themes.js'
 import type { Command } from './contracts.js'
 import { committedSaveWarning, coralHeader, systemBlock } from './output.js'
+import {
+  keybindingInfos,
+  resolveKeybindingConfig,
+} from '../input/keybindings.js'
+import { padEnd } from '../wrap.js'
 import {
   describePermissionMode,
   formatMcpStatus,
@@ -436,6 +441,65 @@ const themeCommand: Command = {
   },
 }
 
+// /keybindings command
+
+const PREFS_HINT =
+  '~/.coral/prefs.json -> "keybindings": [{ "action", "chord" }]'
+
+const keybindingsCommand: Command = {
+  name: 'keybindings',
+  description: 'Show effective keybindings & chord overrides',
+  execute(_args, ctx)
+  {
+    const parsed = resolveKeybindingConfig(loadPrefs().keybindings)
+    const { conflicts } = parsed
+    const overrideByAction = new Map<string, string>()
+    for (const { action, chord } of parsed.overrides)
+    {
+      overrideByAction.set(action, chord)
+    }
+
+    const lines = [coralHeader('keybindings'), '']
+    for (const info of keybindingInfos())
+    {
+      const canonical = info.action
+        ? overrideByAction.get(info.action)
+        : undefined
+      const shown =
+        info.action && canonical ? `${canonical} (was ${info.keys})` : info.keys
+      lines.push(`  ${style('code')(padEnd(shown, 30))}${info.description}`)
+    }
+
+    lines.push('', style('muted')(`overrides — ${PREFS_HINT}`))
+    if (overrideByAction.size === 0)
+    {
+      lines.push('  none')
+    }
+    else
+    {
+      for (const [action, chord] of overrideByAction)
+      {
+        lines.push(`  ${chord} -> ${action}`)
+      }
+    }
+    if (conflicts.length > 0)
+    {
+      lines.push('', style('warning')('conflicts:'))
+      for (const conflict of conflicts) lines.push(`  ! ${conflict}`)
+    }
+    if (parsed.errors.length > 0)
+    {
+      lines.push('', style('warning')('parse errors:'))
+      for (const error of parsed.errors) lines.push(`  ! ${error}`)
+    }
+    lines.push(
+      '',
+      style('muted')('defaults stay active unless a chord replaces them')
+    )
+    ctx.pushOutput(systemBlock(lines.join('\n')))
+  },
+}
+
 // /telemetry command
 
 const telemetryCommand: Command = {
@@ -468,6 +532,7 @@ export const runtimeCommands = {
   permissions: permissionsCommand,
   verify: verifyCommand,
   theme: themeCommand,
+  keybindings: keybindingsCommand,
   telemetry: telemetryCommand,
   exit: exitCommand,
 } satisfies Record<string, Command>

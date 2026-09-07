@@ -3,7 +3,12 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
+import chalk from 'chalk'
+import highlighter from 'cli-highlight'
 import stripAnsi from 'strip-ansi'
+import { highlightCode } from '../../src/tui/transcript/code-highlight.js'
+import { renderMarkdownToAnsi } from '../../src/tui/transcript/markdown.js'
+import { getTheme, setTheme } from '../../src/tui/theme.js'
 import {
   buildTranscriptLines,
   failPendingToolCalls,
@@ -13,6 +18,14 @@ import {
 } from '../../src/tui/transcript/transcript.js'
 import type { OutputBlock } from '../../src/tui/transcript/types.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
+import {
+  renderStreamingMarkdown,
+  splitStableMarkdown,
+} from '../../src/tui/transcript/stream-markdown.js'
+import {
+  resolveToolResultView,
+  toggleNewestToolResult,
+} from '../../src/tui/transcript/expansion.js'
 import {
   buildApprovalContent,
   buildMcpApprovalContent,
@@ -39,7 +52,7 @@ import { RetrievalBuildError } from '../../src/retrieval/build.js'
 import { OllamaModelIdentityError } from '../../src/ollama/errors.js'
 import { buildTodoPanel } from '../../src/tui/transcript/todo-panel.js'
 import { AgentTodoState } from '../../src/agent/state/todos.js'
-import { visibleWidth } from '../../src/tui/wrap.js'
+import { visibleWidth, wrapLines } from '../../src/tui/wrap.js'
 import { makeFakeAgent } from '../helpers/agent-harness.js'
 import { makeSessionMeta } from '../helpers/session.js'
 import { makeTempDirPool } from '../helpers/temp.js'
@@ -98,10 +111,14 @@ test('command registry preserves order, aliases, help, and dispatch', async () =
     'permissions',
     'verify',
     'theme',
+    'keybindings',
     'undo',
     'redo',
     'diff',
     'copy',
+    'export',
+    'raw',
+    'vim',
     'todo',
     'index',
     'sessions',
@@ -194,6 +211,65 @@ test('buildTranscriptLines renders conversation and tool results in scrollable o
   assert.ok(lines.some((line) => line.includes('file contents here')))
   assert.equal(topViewport[0], lines[0])
   assert.equal(liveViewport.at(-1), lines.at(-1))
+})
+
+test('tool results collapse at render time & expand on toggle', () =>
+{
+  const lines = Array.from({ length: 40 }, (_, i) => `out-${i}`)
+  const block: OutputBlock = {
+    type: 'tool_result',
+    toolName: 'bash',
+    content: lines.join('\n'),
+  }
+
+  const collapsed = buildTranscriptLines({
+    blocks: [block],
+    streaming: '',
+    width: 80,
+  }).map((line) => stripAnsi(line))
+  assert.ok(!collapsed.some((line) => line.includes('out-35')))
+  assert.ok(collapsed.some((line) => line.includes('10 more lines')))
+  assert.ok(collapsed.some((line) => line.includes('ctrl+o expands')))
+
+  // toggling the same block instance reveals the tail (identity-keyed state)
+  toggleNewestToolResult([block])
+  const expanded = buildTranscriptLines({
+    blocks: [block],
+    streaming: '',
+    width: 80,
+  }).map((line) => stripAnsi(line))
+  assert.ok(expanded.some((line) => line.includes('out-39')))
+  // and the cache did not bleed between expansion states
+  assert.equal(expanded.length > collapsed.length, true)
+
+  toggleNewestToolResult([block])
+  const recollapsed = buildTranscriptLines({
+    blocks: [block],
+    streaming: '',
+    width: 80,
+  }).map((line) => stripAnsi(line))
+  assert.deepEqual(recollapsed, collapsed)
+})
+
+test('mcp results collapse tighter than local tools', () =>
+{
+  const content = Array.from({ length: 30 }, (_, i) => `row-${i}`).join('\n')
+  const mcpBlock: OutputBlock = {
+    type: 'tool_result',
+    toolName: 'mcp__fs__read',
+    content,
+  }
+  const localBlock: OutputBlock = {
+    type: 'tool_result',
+    toolName: 'read_file',
+    content,
+  }
+
+  const mcpView = resolveToolResultView(mcpBlock)
+  const localView = resolveToolResultView(localBlock)
+
+  assert.equal(mcpView.hiddenLines, 15)
+  assert.equal(localView.hiddenLines, 0)
 })
 
 test('terminal cleanup fails pending tool calls and preserves their elapsed duration', () =>
@@ -370,19 +446,258 @@ test('buildTranscriptLines keeps app SGR styling in system blocks but strips con
   assert.ok(plain(rendered).includes('plain colored end'))
 })
 
-test('buildTranscriptLines leaves streaming markdown unparsed until finalized', () =>
+test('buildTranscriptLines styles settled streaming blocks & keeps the tail plain', () =>
 {
   const rendered = plain(
     buildTranscriptLines({
       blocks: [],
-      streaming: '## Live\n\n```ts\nconst value = 1\n```',
+      // '## Live' paragraph is complete (blank line follows); the fenced
+      // block is still open, so it must render as raw text
+      streaming: '## Live\n\n```ts\nconst value = 1',
       width: 80,
     })
   )
 
-  assert.ok(rendered.includes('## Live'))
+  assert.ok(rendered.includes('Live'))
+  assert.ok(!rendered.includes('## Live'))
   assert.ok(rendered.includes('```ts'))
   assert.ok(rendered.includes('const value = 1'))
+})
+
+test('streaming markdown never styles an unclosed fence mid-block', () =>
+{
+  const split = splitStableMarkdown('# Done\n\ntext after\n\n```ts\nopen')
+  assert.equal(split.stableText, '# Done\n\ntext after\n')
+  assert.equal(split.unstableTail, '```ts\nopen')
+
+  const tableSplit = splitStableMarkdown('intro\n\n| a | b |\n| - | - |')
+  assert.equal(tableSplit.stableText, '')
+})
+
+test('renderStreamingMarkdown caches the stable region between boundaries', () =>
+{
+  const first = renderStreamingMarkdown('para one\n\ntail', 80, 3)
+  const second = renderStreamingMarkdown('para one\n\nmore tail text', 80, 3)
+
+  // the styled prefix is byte-identical across frames while the tail grows
+  const shared = first.filter((line) => second.includes(line))
+  assert.ok(shared.length > 0)
+  assert.ok(second.join('').length >= first.join('').length)
+})
+
+test('streaming Markdown reuses highlighting while later references update earlier paragraphs', (t) =>
+{
+  setTheme(getTheme())
+  const highlighted = t.mock.method(highlighter, 'highlight')
+  const prefix = '[guide][manual]\n\n```ts\nconst cachedValue = 1\n```\n\n'
+  renderStreamingMarkdown(prefix, 80)
+  for (let index = 0; index < 5; index++)
+  {
+    renderStreamingMarkdown(`${prefix}paragraph ${index}\n\n`, 80)
+  }
+  const complete = `${prefix}[manual]: https://example.com/docs\n\n`
+  const rendered = renderStreamingMarkdown(complete, 80)
+  assert.deepEqual(
+    rendered,
+    wrapLines(renderMarkdownToAnsi(complete), 77, '   ')
+  )
+  assert.match(plain(rendered), /guide \(https:\/\/example.com\/docs\)/)
+  assert.equal(highlighted.mock.callCount(), 1)
+})
+
+test('code highlighting bounds retention and invalidates presentation without caching failures', (t) =>
+{
+  const previousLevel = chalk.level
+  t.after(() =>
+  {
+    chalk.level = previousLevel
+    setTheme(getTheme())
+  })
+  const highlighted = t.mock.method(
+    highlighter,
+    'highlight',
+    (text: string) => text
+  )
+  setTheme(getTheme())
+  for (let index = 0; index < 32; index++) highlightCode(`entry ${index}`, 'ts')
+  highlightCode('entry 0', 'ts')
+  highlightCode('entry 32', 'ts')
+  highlightCode('entry 0', 'ts')
+  assert.equal(highlighted.mock.callCount(), 33)
+  highlightCode('entry 1', 'ts')
+  assert.equal(highlighted.mock.callCount(), 34)
+  chalk.level = previousLevel === 0 ? 1 : 0
+  highlightCode('entry 1', 'ts')
+  setTheme(getTheme())
+  highlightCode('entry 1', 'ts')
+  assert.equal(highlighted.mock.callCount(), 36)
+
+  const large = 'a'.repeat(550_000)
+  highlightCode(large, 'ts')
+  highlightCode('b'.repeat(550_000), 'ts')
+  highlightCode(large, 'ts')
+  assert.equal(highlighted.mock.callCount(), 39)
+  const oversized = 'z'.repeat(2_200_000)
+  highlightCode(oversized, 'ts')
+  highlightCode(oversized, 'ts')
+  assert.equal(highlighted.mock.callCount(), 41)
+
+  highlighted.mock.mockImplementationOnce(() =>
+  {
+    throw new Error('highlight failed')
+  })
+  assert.equal(highlightCode('retry this code', 'ts'), 'retry this code')
+  highlightCode('retry this code', 'ts')
+  assert.equal(highlighted.mock.callCount(), 43)
+})
+
+test('finalized blocks retain only four recent width variants and refresh presentation', (t) =>
+{
+  const previousLevel = chalk.level
+  t.after(() =>
+  {
+    chalk.level = previousLevel
+    setTheme(getTheme())
+  })
+  let renders = 0
+  const block: OutputBlock = {
+    type: 'system',
+    get content()
+    {
+      renders++
+      return 'cached system output'
+    },
+  }
+  const render = (width: number) =>
+    buildTranscriptLines({ blocks: [block], streaming: '', width })
+  for (const width of [80, 81, 82, 83, 80, 84, 80]) render(width)
+  assert.equal(renders, 5)
+  render(81)
+  assert.equal(renders, 6)
+  chalk.level = previousLevel === 0 ? 1 : 0
+  render(81)
+  setTheme(getTheme())
+  render(81)
+  assert.equal(renders, 8)
+})
+
+test('streaming thinking preserves ANSI rows and only wraps newly completed lines and the tail', (t) =>
+{
+  const previousLevel = chalk.level
+  t.after(() =>
+  {
+    chalk.level = previousLevel
+    setTheme(getTheme())
+  })
+  chalk.level = 1
+  const prefix = `completed-work-marker ${'wide 界 🙂 words '.repeat(30)}\n\n`
+  const inputs = [
+    prefix + 'tail',
+    prefix + 'tail grows',
+    prefix + 'tail grows\n\tnew line',
+    prefix + 'tail grows\n\tnew line\x1b]52;c;payload',
+    prefix + 'tail grows\n\tnew line\x1b]52;c;payload\x07safe',
+    'replacement\nshort',
+    '',
+    'after reset\nnext',
+  ]
+  const reference = (content: string, width: number) =>
+    buildTranscriptLines({
+      blocks: content ? [{ type: 'thinking', content }] : [],
+      streaming: '',
+      width,
+    })
+  const expected = inputs.map((content) => reference(content, 40))
+  const split = String.prototype.split
+  let completedWraps = 0
+  t.mock.method(
+    String.prototype,
+    'split',
+    function (this: string, separator: string | RegExp, limit?: number)
+    {
+      if (String(this).includes('completed-work-marker')) completedWraps++
+      return split.call(String(this), separator, limit)
+    }
+  )
+  let initialWraps = 0
+  for (let index = 0; index < inputs.length; index++)
+  {
+    const actual = buildTranscriptLines({
+      blocks: [],
+      streaming: '',
+      streamingThinking: inputs[index]!,
+      width: 40,
+    })
+    assert.deepEqual(actual, expected[index])
+    if (index === 0) initialWraps = completedWraps
+    if (index > 0 && index < 5) assert.equal(completedWraps, initialWraps)
+  }
+  assert.ok(initialWraps > 0)
+  for (const width of [18, 80])
+  {
+    const expectedResize = reference(prefix, width)
+    buildTranscriptLines({
+      blocks: [],
+      streaming: '',
+      streamingThinking: prefix,
+      width: 40,
+    })
+    const beforeResize = completedWraps
+    assert.deepEqual(
+      buildTranscriptLines({
+        blocks: [],
+        streaming: '',
+        streamingThinking: prefix,
+        width,
+      }),
+      expectedResize
+    )
+    assert.ok(completedWraps > beforeResize)
+  }
+  chalk.level = 0
+  const uncolored = reference(prefix, 40)
+  chalk.level = 1
+  buildTranscriptLines({
+    blocks: [],
+    streaming: '',
+    streamingThinking: prefix,
+    width: 40,
+  })
+  chalk.level = 0
+  assert.deepEqual(
+    buildTranscriptLines({
+      blocks: [],
+      streaming: '',
+      streamingThinking: prefix,
+      width: 40,
+    }),
+    uncolored
+  )
+  const beforeThemeChange = completedWraps
+  setTheme(getTheme())
+  buildTranscriptLines({
+    blocks: [],
+    streaming: '',
+    streamingThinking: prefix,
+    width: 40,
+  })
+  assert.ok(completedWraps > beforeThemeChange)
+
+  const oversized = `completed-work-marker ${'v'.repeat(550_000)}\n`
+  buildTranscriptLines({
+    blocks: [],
+    streaming: '',
+    streamingThinking: oversized,
+    width: 80,
+  })
+  const firstOversized = completedWraps
+  buildTranscriptLines({
+    blocks: [],
+    streaming: '',
+    streamingThinking: oversized,
+    width: 80,
+  })
+  assert.ok(completedWraps > firstOversized)
 })
 
 test('session list formatters sanitize session identifiers and models', () =>
@@ -539,6 +854,28 @@ test('approval and confirm boxes share framed prompt rendering', () =>
     (_, offset) => plain(renderPromptBox(narrow, 20, 10, offset).lines)
   ).some((rendered) => rendered.includes('f'.repeat(8)))
   assert.equal(fingerprintReachable, true)
+
+  // tool approvals offer a session-scoped allow-always action; MCP launch
+  // trust keeps its y/n-only actions because grants never cover launches
+  const approvalActions = buildApprovalContent('bash', {}, 60).actionLine
+  assert.ok(approvalActions.includes('(y) approve'))
+  assert.ok(approvalActions.includes('(a) allow always (session)'))
+  assert.ok(approvalActions.includes('(n) reject'))
+  const mcpActions = buildMcpApprovalContent(
+    {
+      alias: 'fixture',
+      command: 'node',
+      executable: '/usr/bin/node',
+      args: [],
+      launchCwd: '/tmp',
+      passEnv: [],
+      enabledTools: ['echo'],
+      yoloTools: [],
+      fingerprint: 'f'.repeat(64),
+    },
+    60
+  ).actionLine
+  assert.ok(!mcpActions.includes('allow always'))
 })
 
 test('todo panel and commands follow the active Agent session lifecycle', async () =>

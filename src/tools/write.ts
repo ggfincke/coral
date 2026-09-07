@@ -45,6 +45,7 @@ export const writeTool: Tool = {
       {
         await mkdir(dirname(path), { recursive: true })
         await writeFile(path, content, 'utf-8')
+        context?.observeFile?.(path, content)
         return {
           output:
             `Wrote ${formatBytes(contentBytes)} to ${path} ` +
@@ -77,6 +78,7 @@ export const writeTool: Tool = {
 
       await mkdir(dirname(path), { recursive: true })
       await writeFile(path, content, 'utf-8')
+      context?.observeFile?.(path, content)
       return {
         output: `Wrote ${formatBytes(contentBytes)} to ${path}`,
         diff: computeDiff(before.content, content) ?? undefined,

@@ -216,6 +216,132 @@ test('ProjectIndexer.ensureIndexed reports progress, stats, and idempotency', as
   }
 })
 
+test('ProjectIndexer batches across files and preserves vector ownership through a source race', async () =>
+{
+  const dir = await tempDir('coral-retrieval-cross-file-batches-')
+  const sources = new Map([
+    [
+      'a-large.ts',
+      Array.from(
+        { length: 1_300 },
+        (_, index) => `export const value${index} = ${index}`
+      ).join('\n'),
+    ],
+    ['b-small.ts', 'export const stable = "stable content"\n'],
+    ['c-changing.ts', 'export const changing = "old content"\n'],
+    ['d-small.ts', 'export const final = "final content"\n'],
+  ])
+  for (const [path, content] of sources)
+  {
+    await writeFile(join(dir, path), content)
+  }
+
+  class BatchedEmbedder extends PausedEmbedder
+  {
+    batches: string[][] = []
+    vectors = new Map<string, number[]>()
+    activeRequests = 0
+    maxActiveRequests = 0
+
+    override async embed(texts: string[]): Promise<number[][]>
+    {
+      this.activeRequests++
+      this.maxActiveRequests = Math.max(
+        this.maxActiveRequests,
+        this.activeRequests
+      )
+      this.batches.push([...texts])
+      try
+      {
+        // the second batch finishes the large file and includes other files
+        if (this.batches.length === 2) await super.embed(texts)
+        return texts.map((text) =>
+        {
+          const vector = [this.vectors.size + 1, 1]
+          this.vectors.set(text, vector)
+          return vector
+        })
+      }
+      finally
+      {
+        this.activeRequests--
+      }
+    }
+  }
+
+  const space = makeSpace()
+  const store = new SqliteIndexStore(space, join(dir, 'index.sqlite'))
+  const embedder = new BatchedEmbedder(space)
+  const indexer = new ProjectIndexer(dir, embedder, store)
+  const saved: IndexedFile[] = []
+  const upsertFile = store.upsertFile.bind(store)
+  store.upsertFile = (projectId, file, expected) =>
+  {
+    const stored = upsertFile(projectId, file, expected)
+    if (stored) saved.push(file)
+    return stored
+  }
+
+  try
+  {
+    const progress: string[] = []
+    const indexing = indexer.ensureIndexed({
+      onProgress: ({ path }) => progress.push(path),
+    })
+    await embedder.entered
+    assert.deepEqual(
+      embedder.batches.map((batch) => batch.length),
+      [16, 6]
+    )
+    assert.equal(saved.length, 0)
+
+    const fresh = 'export const changing = "fresh content"\n'
+    sources.set('c-changing.ts', fresh)
+    await writeFile(join(dir, 'c-changing.ts'), fresh)
+    embedder.release()
+    await indexing
+
+    assert.deepEqual(
+      embedder.batches.map((batch) => batch.length),
+      [16, 6, 1]
+    )
+    assert.equal(embedder.maxActiveRequests, 1)
+    assert.deepEqual(progress, [...sources.keys(), 'c-changing.ts'])
+    assert.deepEqual(
+      saved.map((file) => file.path),
+      ['a-large.ts', 'b-small.ts', 'd-small.ts', 'c-changing.ts']
+    )
+    for (const file of saved)
+    {
+      const expectedChunks = chunkText(sources.get(file.path)!)
+      assert.deepEqual(
+        file.chunks,
+        expectedChunks.map((chunk) => ({
+          ...chunk,
+          embedding: embedder.vectors.get(chunk.text),
+        }))
+      )
+    }
+
+    // a malformed batch cannot commit partially assigned file vectors
+    const malformed = new ProjectIndexer(
+      dir,
+      { space, embed: async () => [] },
+      store
+    )
+    await assert.rejects(
+      malformed.ensureIndexed({ force: true }),
+      /Embedding count mismatch for batch: expected 16, got 0/
+    )
+    assert.equal(saved.length, sources.size)
+  }
+  finally
+  {
+    embedder.release()
+    store.close()
+  }
+})
+
 test('collectIndexableFiles respects git excludes before fallback ignores', async (t) =>
 {
   if (!HAS_GIT)

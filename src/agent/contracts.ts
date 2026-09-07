@@ -117,6 +117,8 @@ export interface AgentOptions
   todoState?: TodoState
   // deterministic context I/O seam for the turn assembler
   turnContext?: TurnContextDependencies
+  // primary interactive sessions observe files; exec and subagents stay opt-in
+  trackFileChanges?: boolean
   // narrow transport seam; production uses the Ollama client by default
   inferenceClient?: AgentInferenceClient
   // share one runner between the task tool and post-edit verification

@@ -4,11 +4,18 @@
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import { renderUnifiedDiff } from './diff.js'
+import { resolveToolResultView, toolResultExpansionKey } from './expansion.js'
 import { renderMarkdownToAnsi } from './markdown.js'
+import { renderStreamingMarkdown } from './stream-markdown.js'
+import {
+  hyperlinksRequested,
+  prefersReducedMotion,
+} from '../shell/terminal-prefs.js'
+import { buildFileLink } from '../shell/links.js'
 import { formatElapsed } from '../shell/metrics.js'
 import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from '../theme.js'
-import { SOFT_WRAP_OPTIONS, wrapLines } from '../wrap.js'
+import { physicalLines, SOFT_WRAP_OPTIONS, wrapLines } from '../wrap.js'
 import type { ToolCallPresentation } from '../../tools/tool.js'
 import { ellipsize } from '../../utils/ellipsize.js'
 import { stringifyForDisplay } from '../../utils/untrusted-text.js'
@@ -38,10 +45,13 @@ export function failPendingToolCalls(
 // braille spinner frames for in-progress tools
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
-// cached lines are only valid for the theme generation they were styled under
+// cached lines are only valid for the theme generation & expansion state they
+// were rendered under; width and expansion share one composite inner key
 interface CachedLines
 {
   generation: number
+  colorLevel: number
+  cwd?: string
   lines: string[]
 }
 const FINALIZED_BLOCK_CACHE = new WeakMap<
@@ -49,8 +59,15 @@ const FINALIZED_BLOCK_CACHE = new WeakMap<
   Map<number, CachedLines>
 >()
 
+function blockCacheKey(width: number, expansion: number): number
+{
+  return width * 2 + expansion
+}
+
 function getSpinnerFrame(tick: number): string
 {
+  // reduced motion pins the first frame instead of animating
+  if (prefersReducedMotion()) return SPINNER_FRAMES[0]!
   return SPINNER_FRAMES[tick % SPINNER_FRAMES.length]!
 }
 
@@ -71,19 +88,33 @@ function getCachedBlockLines(
   block: OutputBlock,
   width: number,
   generation: number,
-  render: () => string[]
+  render: () => string[],
+  cwd?: string
 ): string[]
 {
+  const key = blockCacheKey(width, toolResultExpansionKey(block))
   const widthCache = FINALIZED_BLOCK_CACHE.get(block)
-  const cached = widthCache?.get(width)
-  if (cached && cached.generation === generation)
+  const cached = widthCache?.get(key)
+  if (
+    cached &&
+    cached.generation === generation &&
+    cached.colorLevel === chalk.level &&
+    cached.cwd === cwd
+  )
   {
+    widthCache!.delete(key)
+    widthCache!.set(key, cached)
     return cached.lines
   }
 
-  const lines = render()
+  const lines = physicalLines(render(), width)
   const nextWidthCache = widthCache ?? new Map<number, CachedLines>()
-  nextWidthCache.set(width, { generation, lines })
+  nextWidthCache.delete(key)
+  nextWidthCache.set(key, { generation, colorLevel: chalk.level, lines, cwd })
+  if (nextWidthCache.size > 4)
+  {
+    nextWidthCache.delete(nextWidthCache.keys().next().value!)
+  }
   FINALIZED_BLOCK_CACHE.set(block, nextWidthCache)
 
   return lines
@@ -102,7 +133,8 @@ function toolDisplayLabel(
 function formatPendingToolCall(
   block: ToolCallBlock,
   width: number,
-  spinnerTick: number
+  spinnerTick: number,
+  cwd?: string
 ): string[]
 {
   const spinner = style('primary')(getSpinnerFrame(spinnerTick))
@@ -110,10 +142,11 @@ function formatPendingToolCall(
   const argDisplay = formatToolArgDisplay(
     block.toolName,
     block.args,
-    block.display
+    block.display,
+    cwd
   )
 
-  const header = `   ${style('code')('│')} ${spinner} ${style('code')(label)} ${argDisplay}`
+  const header = `   ${chalk.dim('│')} ${spinner} ${chalk.bold(label)} ${argDisplay}`
 
   return wrapLines(header, width)
 }
@@ -123,39 +156,166 @@ function formatAssistantText(content: string, width: number): string[]
 {
   return [
     '',
-    ` ${style('primary').bold('●')} ${style('muted')('Coral')}`,
+    ` ${style('primary').bold('●')} ${chalk.bold('Coral')}`,
     ...wrapLines(renderMarkdownToAnsi(content), width - 3, '   '),
   ]
 }
 
-// live text updates every frame; keep it cheap until finalized
+// live text: completed paragraphs style progressively while the unterminated
+// tail stays plain until it settles (see stream-markdown.ts)
 function formatStreamingAssistantText(
   content: string,
-  width: number
+  width: number,
+  themeGeneration: number
 ): string[]
 {
   return [
     '',
-    ` ${style('primary').bold('●')} ${style('muted')('Coral')}`,
-    ...wrapLines(sanitizeUntrustedText(content), width - 3, '   '),
+    ` ${style('primary').bold('●')} ${chalk.bold('Coral')}`,
+    ...renderStreamingMarkdown(content, width, themeGeneration),
+  ]
+}
+
+interface ThinkingCache
+{
+  raw: string
+  completed: string
+  width: number
+  generation: number
+  colorLevel: number
+  lines: string[]
+  lineChars: number
+}
+
+const MAX_THINKING_CACHE_BYTES = 2 * 1_024 * 1_024
+let thinkingCache: ThinkingCache | undefined
+
+// only completed lines are reusable; sanitize the whole input before comparing
+// prefixes because a later control-sequence terminator can change earlier text
+function formatStreamingThinking(
+  content: string,
+  width: number,
+  generation: number
+): string[]
+{
+  if (!content)
+  {
+    thinkingCache = undefined
+    return []
+  }
+  const sanitized = sanitizeUntrustedText(content)
+  const border = style('thinking')('│')
+  const cached = thinkingCache
+  const reusable =
+    cached &&
+    cached.width === width &&
+    cached.generation === generation &&
+    cached.colorLevel === chalk.level &&
+    content.startsWith(cached.raw) &&
+    sanitized.startsWith(cached.completed)
+  const completed = sanitized.slice(0, sanitized.lastIndexOf('\n') + 1)
+  const lines = reusable ? cached.lines : []
+  let lineChars = reusable ? cached.lineChars : 0
+  const previousLength = reusable ? cached.completed.length : 0
+  const formatLine = (line: string): string[] =>
+  {
+    // chalk styles empty interior lines when dimming a multiline string
+    const styled = line
+      ? chalk.dim(line)
+      : sanitized
+        ? chalk.dim('\n').split('\n')[0]!
+        : ''
+    return physicalLines(
+      wrapLines(styled, width - 6, '').map((row) => `   ${border} ${row}`),
+      width
+    )
+  }
+  if (completed.length > previousLength)
+  {
+    for (const line of completed.slice(previousLength, -1).split('\n'))
+    {
+      const rows = formatLine(line)
+      lines.push(...rows)
+      lineChars += rows.reduce((total, row) => total + row.length, 0)
+    }
+  }
+  const bytes = (content.length + completed.length + lineChars) * 2
+  thinkingCache =
+    bytes <= MAX_THINKING_CACHE_BYTES
+      ? {
+          raw: content,
+          completed,
+          width,
+          generation,
+          colorLevel: chalk.level,
+          lines,
+          lineChars,
+        }
+      : undefined
+  return [
+    ...physicalLines(
+      ['', `   ${border} ${style('thinking').dim('Thinking')}`],
+      width
+    ),
+    ...lines,
+    ...formatLine(sanitized.slice(completed.length)),
   ]
 }
 
 // styled tool-arg summary — bash gets a '$ ' prefix, others dimmed
+// format a tool call's arg summary; with CORAL_HYPERLINKS=1 a recognized
+// path field is wrapped in an OSC 8 link after sanitization (the sanitizer
+// would strip the escape sequence, so linking happens last)
 function formatToolArgDisplay(
   toolName: string,
   args: Record<string, unknown>,
-  display?: ToolCallPresentation
+  display?: ToolCallPresentation,
+  cwd?: string
 ): string
 {
   const argSummary = summarizeToolArgs(args, display)
-  return toolName === 'bash'
-    ? chalk.dim('$ ') + chalk.white(argSummary)
-    : chalk.dim(argSummary)
+  if (toolName === 'bash')
+  {
+    return chalk.dim('$ ') + argSummary
+  }
+
+  const linked = maybeLinkifyPathArg(args, argSummary, display, cwd)
+  return chalk.dim(linked)
+}
+
+const PATH_ARG_FIELDS = ['path', 'file_path', 'notebook_path'] as const
+
+function maybeLinkifyPathArg(
+  args: Record<string, unknown>,
+  argSummary: string,
+  display?: ToolCallPresentation,
+  cwd?: string
+): string
+{
+  if (!hyperlinksRequested() || display?.mcp) return argSummary
+
+  for (const field of PATH_ARG_FIELDS)
+  {
+    const value = args[field]
+    if (typeof value !== 'string' || value === '') continue
+
+    const shown = sanitizeUntrustedText(value)
+    if (!argSummary.includes(shown)) continue
+
+    return argSummary.replace(
+      shown,
+      buildFileLink(value, shown, { enabled: true, cwd })
+    )
+  }
+  return argSummary
 }
 
 // format a finalized output block into styled terminal lines
-function formatFinalizedBlock(block: OutputBlock, width: number): string[]
+function formatFinalizedBlock(
+  block: OutputBlock,
+  width: number,
+  cwd?: string
+): string[]
 {
   switch (block.type)
   {
@@ -164,12 +324,10 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
       const contentLines = sanitizeUntrustedText(block.content).split('\n')
       const lines: string[] = []
       lines.push('')
-      lines.push(
-        ` ${style('user').bold('›')} ${style('user')(contentLines[0] ?? '')}`
-      )
+      lines.push(` ${style('user').bold('›')} ${contentLines[0] ?? ''}`)
       for (let i = 1; i < contentLines.length; i++)
       {
-        lines.push(`   ${style('user')(contentLines[i]!)}`)
+        lines.push(`   ${contentLines[i]!}`)
       }
       return lines
     }
@@ -204,21 +362,25 @@ function formatFinalizedBlock(block: OutputBlock, width: number): string[]
         block.duration != null
           ? chalk.dim(` ${formatElapsed(block.duration)}`)
           : ''
-      const border = isError ? style('error')('│') : style('code')('│')
+      const border = isError ? style('error')('│') : chalk.dim('│')
       const argDisplay = formatToolArgDisplay(
         block.toolName,
         block.args,
-        block.display
+        block.display,
+        cwd
       )
 
-      const header = `   ${border} ${statusMark} ${style('code')(label)} ${argDisplay}${duration}`
+      const header = `   ${border} ${statusMark} ${chalk.bold(label)} ${argDisplay}${duration}`
       return wrapLines(header, width)
     }
 
     case 'tool_result':
     {
-      if (!block.content) return []
-      return formatToolResultLines(block.content, block.isError ?? false, width)
+      // collapse is decided here, not at construction, so ctrl+o reaches the
+      // full (bounded) content the block retained
+      const view = resolveToolResultView(block)
+      if (!view.text) return []
+      return formatToolResultLines(view.text, block.isError ?? false, width)
     }
 
     case 'diff':
@@ -263,16 +425,24 @@ function formatBlock(
   block: OutputBlock,
   width: number,
   spinnerTick: number,
-  themeGeneration: number
+  themeGeneration: number,
+  cwd?: string
 ): string[]
 {
   if (block.type === 'tool_call' && !block.status)
   {
-    return formatPendingToolCall(block, width, spinnerTick)
+    return physicalLines(
+      formatPendingToolCall(block, width, spinnerTick, cwd),
+      width
+    )
   }
 
-  return getCachedBlockLines(block, width, themeGeneration, () =>
-    formatFinalizedBlock(block, width)
+  return getCachedBlockLines(
+    block,
+    width,
+    themeGeneration,
+    () => formatFinalizedBlock(block, width, cwd),
+    cwd
   )
 }
 
@@ -310,6 +480,7 @@ function formatToolResultLines(
 
 export interface TranscriptOptions
 {
+  cwd?: string
   blocks: OutputBlock[]
   streaming: string
   width: number
@@ -343,42 +514,52 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
     {
       continue
     }
-    transcript.push(...formatBlock(block, width, spinnerTick, themeGeneration))
+    transcript.push(
+      ...formatBlock(block, width, spinnerTick, themeGeneration, opts.cwd)
+    )
   }
 
-  if (showThinking && streamingThinking)
+  if (showThinking)
   {
     transcript.push(
-      ...formatBlock(
-        { type: 'thinking', content: streamingThinking },
-        width,
-        spinnerTick,
-        themeGeneration
-      )
+      ...formatStreamingThinking(streamingThinking, width, themeGeneration)
     )
   }
-  else if (streamingThinking)
+  else
   {
-    const border = style('thinking')('│')
-    transcript.push('')
-    transcript.push(
-      `   ${border} ${style('thinking').dim('Thinking')} ${chalk.dim('· ctrl+t to show')}`
-    )
+    thinkingCache = undefined
+    if (streamingThinking)
+    {
+      const border = style('thinking')('│')
+      transcript.push(
+        ...physicalLines(
+          [
+            '',
+            `   ${border} ${style('thinking').dim('Thinking')} ${chalk.dim('· ctrl+t to show')}`,
+          ],
+          width
+        )
+      )
+    }
   }
 
   // render streaming assistant text after reasoning
+  const live: string[] = []
   if (streaming)
   {
-    transcript.push(...formatStreamingAssistantText(streaming, width))
+    live.push(
+      ...formatStreamingAssistantText(streaming, width, themeGeneration)
+    )
   }
   else if (showWaitingIndicator)
   {
-    transcript.push('')
-    transcript.push(
+    live.push('')
+    live.push(
       ` ${style('primary').bold('●')} ${shimmerText('thinking...', waitingElapsed)}`
     )
   }
 
+  transcript.push(...physicalLines(live, width))
   return transcript
 }
 

@@ -48,6 +48,7 @@ export interface PendingAttachmentPlan
 export interface ModelRequestPlanInput extends RequestPlanningSnapshot
 {
   gitContext: OllamaMessage | null
+  fileChanges?: OllamaMessage | null
   pendingAttachments?: PendingAttachmentPlan
   historyCompactionAvailable: boolean
 }
@@ -76,6 +77,7 @@ export type ModelRequestPlan =
       budget: RequestBudgetBreakdown
       systemContent: string
       gitContext: OllamaMessage | null
+      fileChanges?: OllamaMessage | null
     }
 
 export interface RequestMeasurementInput
@@ -87,6 +89,7 @@ export interface RequestMeasurementInput
   baseSystemContent: string
   tools: readonly OllamaTool[]
   gitContext: OllamaMessage | null
+  fileChanges?: OllamaMessage | null
 }
 
 export interface SystemPromptFitInput
@@ -279,10 +282,12 @@ export class RequestPlanner
       : undefined
     let systemContent = currentSystem.content
     let gitContext = input.gitContext
+    let fileChanges = input.fileChanges ?? null
     let candidate = this.requestCandidate(
       input,
       systemContent,
       gitContext,
+      fileChanges,
       input.pendingAttachments ? fullMaterialization!.context : undefined
     )
 
@@ -294,6 +299,7 @@ export class RequestPlanner
         input,
         systemContent,
         gitContext,
+        fileChanges,
         input.pendingAttachments ? fullMaterialization!.context : undefined
       )
     }
@@ -304,6 +310,24 @@ export class RequestPlanner
         input,
         systemContent,
         gitContext,
+        fileChanges,
+        input.pendingAttachments ? fullMaterialization!.context : undefined
+      )
+    }
+
+    // keep a minimal stale-file warning before shedding durable context
+    if (!candidate.budget.fits && fileChanges)
+    {
+      fileChanges = {
+        role: 'user',
+        content:
+          'Previously observed workspace files changed on disk. Reread relevant files before relying on earlier contents or editing them.',
+      }
+      candidate = this.requestCandidate(
+        input,
+        systemContent,
+        gitContext,
+        fileChanges,
         input.pendingAttachments ? fullMaterialization!.context : undefined
       )
     }
@@ -316,6 +340,7 @@ export class RequestPlanner
         input,
         systemContent,
         gitContext,
+        fileChanges,
         input.pendingAttachments ? fullMaterialization!.context : undefined
       )
     }
@@ -327,6 +352,7 @@ export class RequestPlanner
         budget: candidate.budget,
         systemContent,
         gitContext,
+        fileChanges,
       }
     }
 
@@ -337,14 +363,48 @@ export class RequestPlanner
         input.pendingAttachments.capture,
         input.pendingAttachments.maxChars,
         (context) =>
-          this.requestCandidate(input, systemContent, gitContext, context)
-            .budget.fits
+          this.requestCandidate(
+            input,
+            systemContent,
+            gitContext,
+            fileChanges,
+            context
+          ).budget.fits
       )
       candidate = this.requestCandidate(
         input,
         systemContent,
         gitContext,
+        fileChanges,
         finalMaterialization.context
+      )
+    }
+
+    // notices stay pending in turn context when even the warning cannot fit
+    if (!candidate.budget.fits && fileChanges)
+    {
+      fileChanges = null
+      if (input.pendingAttachments)
+      {
+        finalMaterialization = materializeAttachmentsToFit(
+          input.pendingAttachments.capture,
+          input.pendingAttachments.maxChars,
+          (context) =>
+            this.requestCandidate(
+              input,
+              systemContent,
+              gitContext,
+              fileChanges,
+              context
+            ).budget.fits
+        )
+      }
+      candidate = this.requestCandidate(
+        input,
+        systemContent,
+        gitContext,
+        fileChanges,
+        input.pendingAttachments ? finalMaterialization!.context : undefined
       )
     }
 
@@ -480,14 +540,22 @@ export class RequestPlanner
       content: input.cleanActiveContent,
     }
     const gitContextTokens = input.gitContext
-      ? estimateModelRequestMessageTokens(input.messages.at(-1)!)
+      ? estimateModelRequestMessageTokens(
+          toModelRequestMessage(input.gitContext)
+        )
+      : 0
+    const fileChangeTokens = input.fileChanges
+      ? estimateModelRequestMessageTokens(
+          toModelRequestMessage(input.fileChanges)
+        )
       : 0
     const messageTokens = estimateModelRequestMessagesTokens(input.messages)
     const storedHistory = Math.max(
       messageTokens -
         estimateModelRequestMessageTokens(system) -
         estimateModelRequestMessageTokens(active) -
-        gitContextTokens,
+        gitContextTokens -
+        fileChangeTokens,
       0
     )
 
@@ -505,6 +573,7 @@ export class RequestPlanner
       ),
       toolDefinitions: estimateModelRequestToolTokens(input.tools),
       gitContext: gitContextTokens,
+      fileChanges: fileChangeTokens,
       framing: estimateRequestFramingTokens(input.messages.length),
     })
   }
@@ -544,6 +613,7 @@ export class RequestPlanner
     input: RequestPlanningSnapshot,
     systemContent: string,
     gitContext: OllamaMessage | null,
+    fileChanges: OllamaMessage | null,
     attachmentContext?: string | null
   ): RequestCandidate
   {
@@ -560,6 +630,7 @@ export class RequestPlanner
       }
     }
     if (gitContext) messages.push(toModelRequestMessage(gitContext))
+    if (fileChanges) messages.push(toModelRequestMessage(fileChanges))
 
     return {
       messages,
@@ -571,6 +642,7 @@ export class RequestPlanner
         baseSystemContent: input.baseSystemContent,
         tools: input.tools,
         gitContext,
+        fileChanges,
       }),
     }
   }

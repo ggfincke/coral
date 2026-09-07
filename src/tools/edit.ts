@@ -99,6 +99,7 @@ export const editTool: Tool = {
     try
     {
       await writeFile(path, updated, 'utf-8')
+      context?.observeFile?.(path, updated)
     }
     catch (err)
     {

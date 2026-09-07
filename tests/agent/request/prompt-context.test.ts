@@ -2,14 +2,19 @@
 // project context gather and system prompt assembly
 
 import { strict as assert } from 'node:assert'
+import fs from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { join } from 'node:path'
 import { describe, test } from 'node:test'
 import {
+  captureProjectContext,
   gatherProjectContext,
   projectContextBudgetForWindow,
+  renderProjectContext,
 } from '../../../src/agent/request/project-context.js'
 import { buildSystemPrompt } from '../../../src/agent/request/system-prompt.js'
+import { RequestPlanner } from '../../../src/agent/loop/request-planner.js'
 import {
   builtInToolRegistrations,
   ToolCatalog,
@@ -77,6 +82,99 @@ describe('project-context', () =>
 
     assert.match(ctx, /truncated to fit budget/)
     assert.ok(ctx.length <= 300)
+  })
+
+  test('one bounded snapshot supports every fit budget without filesystem rereads', async (t) =>
+  {
+    const dir = await tempProject()
+    await writeFile(
+      join(dir, '.coral.md'),
+      'i'.repeat(8_191) + '🙂'.repeat(8_000)
+    )
+    await writeFile(join(dir, 'AGENTS.md'), 'a'.repeat(20_000))
+    await writeFile(join(dir, 'package.json'), '{"name":"fixture"}')
+    await mkdir(join(dir, 'README.md'))
+    await mkdir(join(dir, '.hidden'))
+    const opens = t.mock.method(fs, 'openSync')
+    const reads = t.mock.method(fs, 'readSync')
+    const directories = t.mock.method(fs, 'readdirSync')
+    syncBuiltinESMExports()
+    t.after(() =>
+    {
+      t.mock.restoreAll()
+      syncBuiltinESMExports()
+    })
+
+    assert.equal(gatherProjectContext(dir, { maxTotalChars: 0 }), '')
+    assert.equal(opens.mock.callCount(), 0)
+    assert.equal(directories.mock.callCount(), 0)
+    const snapshot = captureProjectContext(dir)
+    assert.equal(opens.mock.callCount(), 17)
+    assert.equal(
+      directories.mock.calls.filter((call) => call.arguments[0] === dir).length,
+      1
+    )
+    assert.deepEqual(
+      snapshot.files.map((file) => file.name),
+      ['.coral.md', 'AGENTS.md', 'package.json']
+    )
+    assert.equal(
+      snapshot.files[0]!.content,
+      'i'.repeat(8_191) + '\n… (truncated)'
+    )
+    assert.match(snapshot.rootSummary, /\.hidden\//)
+    assert.ok(!snapshot.directoryTree.includes('.hidden'))
+    assert.ok(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.files))
+    assert.ok(snapshot.files.every(Object.isFrozen))
+    assert.equal(
+      reads.mock.calls.reduce((total, call) => total + Number(call.result), 0),
+      8_193 * 2 + Buffer.byteLength('{"name":"fixture"}')
+    )
+    for (const call of reads.mock.calls)
+    {
+      assert.ok(Number(call.arguments[3]) <= 8_193)
+    }
+    const counts = [
+      opens.mock.callCount(),
+      reads.mock.callCount(),
+      directories.mock.callCount(),
+    ]
+    await writeFile(join(dir, '.coral.md'), 'new content after capture')
+    let builds = 0
+    const plan = new RequestPlanner().fitSystemPrompt({
+      contextWindow: 4_096,
+      activeContent: 'inspect this project',
+      tools: [],
+      desiredProjectContextBudget: 32_768,
+      systemContentAt(projectContextBudget)
+      {
+        builds++
+        const rendered = renderProjectContext(snapshot, {
+          maxTotalChars: projectContextBudget,
+        })
+        assert.ok(rendered.length <= projectContextBudget)
+        return buildSystemPrompt({
+          model: 'test-model',
+          cwd: dir,
+          catalog: new ToolCatalog({ trustedTools: [] }),
+          projectContextBudget,
+          projectContextSnapshot: snapshot,
+        })
+      },
+    })
+    assert.ok(builds > 2)
+    assert.equal(plan.budget.fits, true)
+    assert.match(plan.content, /Detected project type: Node\.js\/JavaScript/)
+    assert.ok(!plan.content.includes('new content after capture'))
+    assert.deepEqual(
+      [
+        opens.mock.callCount(),
+        reads.mock.callCount(),
+        directories.mock.callCount(),
+      ],
+      counts
+    )
+    assert.match(gatherProjectContext(dir), /new content after capture/)
   })
 })
 

@@ -53,8 +53,9 @@ export function detectCompletion(
   const before = value.slice(0, cursorOffset)
 
   // slash command: '/' + a single unbroken word, allowing leading whitespace
-  // (dispatch trims, so '  /help' is a real command — keep the menu in sync)
-  const command = /^(\s*)\/(\S*)$/.exec(before)
+  // on the same line (dispatch trims, so '  /help' is a real command — keep
+  // the menu in sync; newlines must not satisfy the anchor)
+  const command = /^([\t ]*)\/(\S*)$/.exec(before)
   if (command)
   {
     return {

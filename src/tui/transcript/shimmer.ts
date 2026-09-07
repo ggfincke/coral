@@ -3,6 +3,7 @@
 
 import chalk from 'chalk'
 import { lerpRgb, roleRgb, style } from '../theme.js'
+import { prefersReducedMotion } from '../shell/terminal-prefs.js'
 
 // shimmer band half-width in characters
 const BAND_HALF_WIDTH = 5
@@ -15,6 +16,9 @@ const CYCLE_SECONDS = 1.8
 // elapsed is in milliseconds
 export function shimmerText(text: string, elapsed: number): string
 {
+  // reduced motion renders the static muted style, never a sweep
+  if (prefersReducedMotion()) return style('muted')(text)
+
   // sweep from muted (dim neutral) to primary (highlight)
   const base = roleRgb('muted')
   const highlight = roleRgb('primary')

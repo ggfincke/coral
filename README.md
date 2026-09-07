@@ -116,20 +116,40 @@ still isolate workspaces and validate final filesystem or Git scope.
 
 ## Interactive use
 
+The header identifies the workspace, active model, and permission mode. Above
+the framed composer, separate rows show activity and elapsed time, the latest
+reported decode and prefill speeds, context usage, and cumulative session
+tokens. Statistics wrap onto additional rows in narrow terminals; unavailable
+measurements show a dash. `/status` includes the session ID and message count.
+
 - Type a normal prompt to start an agent turn.
 - Type `/` to autocomplete slash commands.
 - Type `@` to pick a project file. The picker refreshes a session-owned project
   file catalog, and the Agent captures mentioned text only after it knows the
   final context/tool budget. Attachments are fitted in mention order within the
   same whole-request limit as history, tools, Git context, and the response.
+- Interactive sessions refresh the file picker after file creation or deletion.
+  When a recently read, attached, or edited workspace file changes on disk,
+  Coral gives the model a bounded notice before its next request so it can
+  reread the file. Notices are temporary context and reset with the session;
+  they do not prevent concurrent edits or refresh the semantic index.
 - Press `Ctrl+P` to search commands and keybindings in the command palette.
 - Approval boxes show pending write/edit diffs when a preview is available.
 - In ask mode, the first or changed launch of each MCP server shows its full
   launch identity in a separate trust prompt before Coral starts the process.
   Yolo never opens or persists launch trust; commission the identity in ask
   first.
-- Press `Ctrl+C` or `Esc` during a run to interrupt it. The same keys exit when
-  Coral is idle.
+- Press `Ctrl+C` or `Esc` during a run to interrupt it. While idle, `Ctrl+C`
+  exits and pressing `Esc` twice opens the conversation backtrack picker.
+- Submit during a run to queue a follow-up. Coral sends it after the active
+  turn settles; `Meta+Backspace` restores the newest queued message for editing.
+- The composer follows the cursor through up to eight wrapped draft rows.
+  Resizing preserves the draft; if the controls and statistics cannot fit,
+  Coral asks you to enlarge the terminal before accepting further input.
+- Multiline pastes stay in the composer and require a second Enter to send.
+  `Ctrl+J` or `Meta+Enter` inserts a newline; `Shift+Enter` also works when the
+  terminal reports it distinctly. `Ctrl+G` opens the draft in `$VISUAL` or
+  `$EDITOR`, and `/vim` toggles modal editing.
 - Use `PageUp`/`PageDown` to move through the transcript and Up/Down to recall
   input history. Completion menus temporarily own arrows, Tab, Enter, and Esc.
 
@@ -153,23 +173,46 @@ still isolate workspaces and validate final filesystem or Git scope.
 | `/todo [clear]`                                | Show or clear the model-maintained task list                         |
 | `/index [rebuild]`                             | Refresh or fully rebuild the semantic code index                     |
 | `/sessions [count]` (`/ls`)                    | List recent saved sessions                                           |
-| `/resume [id]`                                 | Resume a saved session; no ID selects the latest usable one          |
+| `/resume [id]`                                 | Resume by ID, or open the searchable session picker                  |
 | `/rename <title>`                              | Rename the current saved session                                     |
 | `/new`                                         | Save the current session and start a new conversation                |
 | `/telemetry`                                   | Show local lifetime reliability counters per model                   |
 | `/exit` (`/quit`)                              | Exit Coral                                                           |
+| `/export [file] [tools]`                       | Export Markdown to clipboard or a new workspace file                 |
+| `/raw [on\|off]`                               | Switch to plain transcript output for native terminal selection      |
+| `/vim [on\|off]`                               | Toggle modal editing in the composer                                 |
+| `/keybindings`                                 | Show effective keybinding overrides and configuration errors         |
 
 ### Keybindings
 
-| Keys            | Behavior                              |
-| --------------- | ------------------------------------- |
-| `Ctrl+P`        | Open the command palette              |
-| `Ctrl+Y`        | Toggle `ask` / `yolo` permission mode |
-| `Ctrl+T`        | Toggle streamed reasoning visibility  |
-| `Ctrl+C`        | Interrupt a run, or exit while idle   |
-| `Esc`           | Interrupt a run, or exit while idle   |
-| Up/Down         | Navigate persistent input history     |
-| PageUp/PageDown | Page through the transcript           |
+| Keys                   | Behavior                                          |
+| ---------------------- | ------------------------------------------------- |
+| `Ctrl+P`               | Open the command palette                          |
+| `Ctrl+Y`               | Toggle `ask` / `yolo` permission mode             |
+| `Ctrl+T`               | Toggle streamed reasoning visibility              |
+| `Ctrl+C`               | Interrupt a run, or exit while idle               |
+| `Esc`                  | Interrupt a run; twice while idle opens backtrack |
+| Up/Down                | Navigate persistent input history                 |
+| PageUp/PageDown        | Page through the transcript                       |
+| `Ctrl+J`, `Meta+Enter` | Insert a newline                                  |
+| `Ctrl+R`               | Search prompt history                             |
+| `Ctrl+G`               | Edit the draft in an external editor              |
+| `Ctrl+V`               | Yank the most recently killed text                |
+| `Meta+Y`               | Cycle the previous yank through the kill ring     |
+| `Ctrl+O`               | Expand or collapse the newest tool result         |
+| `Ctrl+Z`               | Suspend on Unix; use the shell's `fg` to resume   |
+
+User keybinding overrides are an array of `{ "action": "open-editor",
+"chord": "ctrl+e" }` entries in `keybindings` in `~/.coral/prefs.json`
+(or `$CORAL_HOME/prefs.json`). Restart Coral after editing this file.
+`/keybindings` reports unsupported actions, reserved shortcuts, and conflicts.
+
+Completion and approval notifications are quiet while the terminal reports
+that it is focused. Terminals without focus reporting retain notifications;
+set `notifications` to `false` in the same preferences file to disable them.
+`CORAL_KITTY_KEYBOARD=1` enables the optional extended keyboard protocol,
+`CORAL_HYPERLINKS=1` enables file hyperlinks, and
+`CORAL_REDUCED_MOTION=1` disables animated shimmer and spinner frames.
 
 ## Agent capabilities
 
