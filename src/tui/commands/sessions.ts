@@ -18,11 +18,14 @@ const sessionsCommand: Command = {
   name: 'sessions',
   aliases: ['ls'],
   description: 'List recent saved sessions',
-  execute(args, ctx)
+  async execute(args, ctx)
   {
     const count = args ? parseInt(args, 10) : 10
     const limit = Number.isFinite(count) && count > 0 ? count : 10
-    const sessions = listSessions().slice(0, limit)
+    const sessions = (await listSessions({ signal: ctx.signal })).slice(
+      0,
+      limit
+    )
 
     ctx.pushOutput(
       systemBlock(formatTuiSessionList(sessions, ctx.sessionLabelId))
@@ -37,14 +40,16 @@ const sessionsCommand: Command = {
 const resumeCommand: Command = {
   name: 'resume',
   description: 'Resume a saved session (bare opens picker)',
-  execute(args, ctx)
+  async execute(args, ctx)
   {
-    const target = resolveResumeSession({
+    const target = await resolveResumeSession({
+      signal: ctx.signal,
       requestedId: args,
       currentSessionId: ctx.sessionLabelId,
       allowPrefix: true,
       requireExistingCwd: true,
     })
+    ctx.signal?.throwIfAborted()
 
     if (target.type !== 'target')
     {
@@ -76,7 +81,7 @@ const resumeCommand: Command = {
 const renameCommand: Command = {
   name: 'rename',
   description: 'Rename the current session',
-  execute(args, ctx)
+  async execute(args, ctx)
   {
     if (!ctx.sessionLabelId)
     {
@@ -88,7 +93,7 @@ const renameCommand: Command = {
 
     if (!args.trim())
     {
-      const sessions = listSessions()
+      const sessions = await listSessions({ signal: ctx.signal })
       const current = sessions.find((s) => s.id === ctx.sessionLabelId)
       const title = current?.title ?? '(unknown)'
       ctx.pushOutput(

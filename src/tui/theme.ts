@@ -102,6 +102,12 @@ export function codeSpanStyle(): ChalkInstance
   return applyBg(style('code'), active.roles.codeBg)
 }
 
+// selected text uses a paired accent so light terminal foregrounds stay legible
+export function selectionStyle(): ChalkInstance
+{
+  return applyBg(style('accent'), active.roles.selection)
+}
+
 // color value for Ink <Text> props: hex string or ansi name
 export function inkColor(role: Role): string
 {

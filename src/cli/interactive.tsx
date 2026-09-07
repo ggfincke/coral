@@ -24,7 +24,9 @@ import { launchCliApp } from './app-launch.js'
 const require = createRequire(import.meta.url)
 const { version } = require('../../package.json') as { version: string }
 
-export function runInteractiveCli(argv: string[] = process.argv): void
+export async function runInteractiveCli(
+  argv: string[] = process.argv
+): Promise<void>
 {
   const program = new Command()
     .name('coral')
@@ -86,7 +88,7 @@ export function runInteractiveCli(argv: string[] = process.argv): void
   // handle --sessions by listing sessions and exiting
   if (opts.sessions)
   {
-    console.log(formatCliSessionList(listSessions()))
+    console.log(formatCliSessionList(await listSessions()))
     process.exit(0)
   }
 
@@ -95,7 +97,7 @@ export function runInteractiveCli(argv: string[] = process.argv): void
 
   if (opts.session)
   {
-    const resolution = resolveResumeSession({
+    const resolution = await resolveResumeSession({
       requestedId: opts.session,
       allowPrefix: false,
       requireExistingCwd: true,
@@ -111,7 +113,7 @@ export function runInteractiveCli(argv: string[] = process.argv): void
   }
   else if (opts.resume)
   {
-    const resolution = resolveResumeSession({ requireExistingCwd: true })
+    const resolution = await resolveResumeSession({ requireExistingCwd: true })
 
     if (resolution.type !== 'target')
     {

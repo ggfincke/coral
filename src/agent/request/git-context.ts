@@ -2,7 +2,7 @@
 // volatile git context for model turns
 
 import { existsSync } from 'node:fs'
-import { relative, resolve } from 'node:path'
+import { basename, isAbsolute, relative, resolve } from 'node:path'
 import type { OllamaMessage } from '../../types/inference.js'
 import { runGitCommand, currentBranchLabel } from '../../utils/git.js'
 import { excerpt } from '../../utils/ellipsize.js'
@@ -131,15 +131,29 @@ async function operationState(
     ['rebase-merge', 'rebase'],
     ['rebase-apply', 'rebase'],
   ]
-  // resolve git markers against the repository because --git-path is repo-relative
+  const batched = await gitOutput(
+    cwd,
+    [
+      'rev-parse',
+      '--path-format=absolute',
+      ...checks.flatMap(([gitPath]) => ['--git-path', gitPath]),
+    ],
+    signal
+  )
+  const paths = batched?.split('\n')
+  const batchResolved =
+    paths?.length === checks.length &&
+    paths.every(
+      (path, index) => isAbsolute(path) && basename(path) === checks[index]![0]
+    )
+
+  // older git or newline-bearing paths need individually resolved markers
   const found = await Promise.all(
-    checks.map(async ([gitPath, label]) =>
+    checks.map(async ([gitPath, label], index) =>
     {
-      const path = await gitOutput(
-        cwd,
-        ['rev-parse', '--git-path', gitPath],
-        signal
-      )
+      const path = batchResolved
+        ? paths[index]!
+        : await gitOutput(cwd, ['rev-parse', '--git-path', gitPath], signal)
       return path && existsSync(resolve(cwd, path)) ? label : null
     })
   )

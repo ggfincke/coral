@@ -10,5 +10,5 @@ if (process.argv[2] === 'exec')
 else
 {
   const { runInteractiveCli } = await import('./interactive.js')
-  runInteractiveCli(process.argv)
+  await runInteractiveCli(process.argv)
 }

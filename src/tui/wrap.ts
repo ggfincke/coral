@@ -16,6 +16,25 @@ export function padEnd(value: string, width: number): string
   return value + ' '.repeat(Math.max(width - visibleWidth(value), 0))
 }
 
+// fit a physical row without cutting ANSI sequences or hiding truncation
+export function truncateLine(
+  text: string,
+  width: number,
+  ellipsis = '…'
+): string
+{
+  if (width <= 0) return ''
+  if (visibleWidth(text) <= width) return text
+  const suffix = visibleWidth(ellipsis) <= width ? ellipsis : ''
+  const budget = width - visibleWidth(suffix)
+  if (budget <= 0) return suffix
+  const first =
+    wrapAnsi(text, budget, { hard: true, trim: false, wordWrap: false }).split(
+      '\n'
+    )[0] ?? ''
+  return (visibleWidth(first) <= budget ? first : '') + suffix
+}
+
 // center a possibly ANSI-styled line within a visible width
 export function center(line: string, width: number): string
 {
@@ -47,4 +66,16 @@ export function wrapLines(text: string, width: number, indent = ''): string[]
       .split('\n')
       .map((wrappedLine) => indent + wrappedLine)
   })
+}
+
+// normalize formatted content before viewport slicing so every row is counted
+export function physicalLines(lines: string[], width: number): string[]
+{
+  return lines.flatMap((line) =>
+    wrapAnsi(line, Math.max(width, 1), {
+      hard: true,
+      trim: false,
+      wordWrap: true,
+    }).split('\n')
+  )
 }

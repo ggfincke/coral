@@ -236,6 +236,11 @@ export class ConversationState
     return cloneMessages(this.messages)
   }
 
+  getSystemContent(): string
+  {
+    return this.messages[0]!.content
+  }
+
   getEstimatedTokens(): number
   {
     return this.estimatedTokenCount

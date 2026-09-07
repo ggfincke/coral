@@ -2,8 +2,9 @@
 // command palette entries, ranking, and terminal-line rendering
 
 import chalk from 'chalk'
-import { style } from '../theme.js'
-import { wrapLines } from '../wrap.js'
+import { selectionStyle, style } from '../theme.js'
+import { sanitizeUntrustedText } from '../transcript/sanitize.js'
+import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
 import type { CommandInfo } from '../commands/contracts.js'
 import type {
   KeybindingAction,
@@ -204,41 +205,70 @@ export function reducePaletteInput(
   return { handled: false, state }
 }
 
+// preserve the complete filter while keeping its newest text visible
+export function formatPickerQuery(
+  query: string,
+  width: number,
+  placeholder: string
+): string
+{
+  const clean = sanitizeUntrustedText(query).replace(/\s+/g, ' ').trim()
+  if (!clean) return chalk.dim(truncateLine(placeholder, width))
+  const full = `query: ${clean}`
+  if (visibleWidth(full) <= width) return chalk.dim(full)
+  const tail = Array.from(clean).slice(-Math.max(width, 1))
+  while (tail.length > 0 && visibleWidth(`query: …${tail.join('')}`) > width)
+  {
+    tail.shift()
+  }
+  return chalk.dim(truncateLine(`query: …${tail.join('')}`, width))
+}
+
 function formatEntry(
   entry: PaletteEntry,
   selected: boolean,
   width: number
-): string[]
+): string
 {
-  const marker = selected ? style('accent')('›') : chalk.dim(' ')
-  const title = selected
-    ? style('accent').bold(entry.title)
-    : style('user')(entry.title)
-  const detail = chalk.dim(entry.detail)
+  const clean = (text: string) =>
+    sanitizeUntrustedText(text).replace(/\s+/g, ' ').trim()
+  const marker = selected ? '›' : ' '
+  const title = selected ? chalk.bold(clean(entry.title)) : clean(entry.title)
+  const detail = selected ? clean(entry.detail) : chalk.dim(clean(entry.detail))
   const disabled = entry.kind === 'keybinding' && !entry.action
-  const suffix = disabled ? chalk.dim(' · press key') : ''
-  return wrapLines(
-    ` ${marker} ${title}  ${detail}${suffix}`,
-    Math.max(width - 2, 20),
-    '   '
-  )
+  const suffix = disabled
+    ? selected
+      ? ' · press key'
+      : chalk.dim(' · press key')
+    : ''
+  const row = truncateLine(` ${marker} ${title}${suffix}  ${detail}`, width)
+  return selected ? selectionStyle()(padEnd(row, width)) : row
 }
 
 export function buildPaletteLines(opts: PaletteLinesOptions): string[]
 {
-  const width = Math.max(opts.width, 24)
-  const height = Math.max(opts.height, 4)
-  const query = opts.query.trim()
-  const lines: string[] = [
-    `${style('primary').bold('command palette')} ${chalk.dim('ctrl+p')}`,
-    chalk.dim(query ? `query: ${query}` : 'type to filter, enter to run'),
-    '',
-  ]
+  const width = Math.max(Math.floor(opts.width), 0)
+  const height = Math.max(Math.floor(opts.height), 0)
+  if (width === 0 || height === 0) return []
+  const lines: string[] = []
+  if (height >= 2)
+    lines.push(
+      `${style('primary').bold('command palette')} ${chalk.dim('ctrl+p')}`
+    )
+  if (height >= 3)
+    lines.push(
+      formatPickerQuery(
+        opts.query,
+        width,
+        'type to filter · enter to run · esc cancels'
+      )
+    )
+  if (height >= 6) lines.push('')
 
   if (opts.entries.length === 0)
   {
     lines.push(chalk.dim('  no matches'))
-    return lines.slice(0, height)
+    return lines.slice(0, height).map((line) => truncateLine(line, width))
   }
 
   const availableHeight = height - lines.length
@@ -246,35 +276,28 @@ export function buildPaletteLines(opts: PaletteLinesOptions): string[]
     Math.max(opts.selectedIndex, 0),
     opts.entries.length - 1
   )
-  const formattedEntries = opts.entries.map((entry, index) =>
-    formatEntry(entry, index === selectedIndex, width)
+  const detailRows = availableHeight >= 5 ? 2 : 0
+  const listRows = availableHeight - detailRows
+  const start = Math.min(
+    Math.max(selectedIndex - Math.floor(listRows / 2), 0),
+    Math.max(opts.entries.length - listRows, 0)
   )
-
-  let startIndex = 0
-  let usedHeight = formattedEntries
-    .slice(0, selectedIndex + 1)
-    .reduce((total, entryLines) => total + entryLines.length, 0)
-
-  while (usedHeight > availableHeight && startIndex < selectedIndex)
+  const end = Math.min(start + listRows, opts.entries.length)
+  for (let index = start; index < end; index++)
   {
-    usedHeight -= formattedEntries[startIndex]!.length
-    startIndex++
+    lines.push(
+      formatEntry(opts.entries[index]!, index === selectedIndex, width)
+    )
   }
-
-  let endIndex = selectedIndex + 1
-  while (
-    endIndex < formattedEntries.length &&
-    usedHeight + formattedEntries[endIndex]!.length <= availableHeight
-  )
+  if (detailRows)
   {
-    usedHeight += formattedEntries[endIndex]!.length
-    endIndex++
+    const selected = opts.entries[selectedIndex]!
+    lines.push(
+      '',
+      chalk.dim(
+        sanitizeUntrustedText(selected.detail).replace(/\s+/g, ' ').trim()
+      )
+    )
   }
-
-  const visibleLines = formattedEntries
-    .slice(startIndex, endIndex)
-    .flat()
-    .slice(0, availableHeight)
-  lines.push(...visibleLines)
-  return lines
+  return lines.slice(0, height).map((line) => truncateLine(line, width))
 }

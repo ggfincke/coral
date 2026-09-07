@@ -1,8 +1,16 @@
 // src/agent/request/project-context.ts
 // project context loading for conversation starts
 
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readSync,
+  readdirSync,
+} from 'node:fs'
+import { basename, join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { createIgnoredEntrySet } from '../../shared/ignored-entries.js'
 import {
   compareProjectTreeEntries,
@@ -49,9 +57,24 @@ const IGNORED_DIRS = createIgnoredEntrySet()
 // loaded project context
 interface ContextFile
 {
-  label: string
+  readonly label: string
+  readonly name: string
+  readonly content: string
+}
+
+interface RootEntry
+{
   name: string
-  content: string
+  isDir: boolean
+  isSymlink: boolean
+}
+
+/** Immutable filesystem observations reused throughout one prompt fit. */
+export interface ProjectContextSnapshot
+{
+  readonly rootSummary: string
+  readonly files: readonly ContextFile[]
+  readonly directoryTree: string
 }
 
 export interface ProjectContextOptions
@@ -75,16 +98,56 @@ export function projectContextBudgetForWindow(contextWindow: number): number
 // read one context file within the byte limit
 function readContextFile(path: string): string | null
 {
+  let descriptor: number | undefined
   try
   {
-    const content = readFileSync(path, 'utf-8')
-    if (!content) return null
-
-    if (content.length > MAX_CONTEXT_FILE_BYTES)
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK)
+    if (!fstatSync(descriptor).isFile()) return null
+    const buffer = Buffer.allocUnsafe(MAX_CONTEXT_FILE_BYTES + 1)
+    let bytes = 0
+    while (bytes < buffer.length)
     {
-      return content.slice(0, MAX_CONTEXT_FILE_BYTES) + '\n… (truncated)'
+      const count = readSync(
+        descriptor,
+        buffer,
+        bytes,
+        buffer.length - bytes,
+        bytes
+      )
+      if (count === 0) break
+      bytes += count
     }
-    return content
+    if (bytes === 0) return null
+    if (bytes > MAX_CONTEXT_FILE_BYTES)
+    {
+      // leave a partial trailing UTF-8 code point out of the retained prefix
+      return (
+        new StringDecoder('utf8').write(
+          buffer.subarray(0, MAX_CONTEXT_FILE_BYTES)
+        ) + '\n… (truncated)'
+      )
+    }
+    return buffer.toString('utf8', 0, bytes)
+  }
+  catch
+  {
+    return null
+  }
+  finally
+  {
+    if (descriptor !== undefined) closeSync(descriptor)
+  }
+}
+
+function readDirectory(dir: string): RootEntry[] | null
+{
+  try
+  {
+    return readdirSync(dir, { withFileTypes: true }).map((entry) => ({
+      name: entry.name,
+      isDir: entry.isDirectory(),
+      isSymlink: entry.isSymbolicLink(),
+    }))
   }
   catch
   {
@@ -92,33 +155,45 @@ function readContextFile(path: string): string | null
   }
 }
 
+// root summaries include hidden entries; the deeper tree keeps its own policy
+function formatRootSummary(cwd: string, root: RootEntry[] | null): string
+{
+  if (!root)
+  {
+    return `Project name: ${basename(cwd)}\nTop-level entries: unavailable`
+  }
+  const entries = root
+    .filter((entry) => shouldIncludeProjectTreeEntry(entry.name, IGNORED_DIRS))
+    .sort(compareProjectTreeEntries)
+    .slice(0, 12)
+    .map(formatProjectTreeEntryName)
+  const suffix = entries.length === 12 ? ' (truncated)' : ''
+  const summary = entries.length > 0 ? entries.join(', ') : '(empty)'
+  return `Project name: ${basename(cwd)}\nTop-level entries${suffix}: ${summary}`
+}
+
 // build a compact two-level project tree
-function buildDirectoryTree(cwd: string, maxDepth = 2): string
+function buildDirectoryTree(cwd: string, root: RootEntry[] | null): string
 {
   const lines: string[] = []
+  const maxDepth = 2
 
   function walk(dir: string, prefix: string, depth: number): void
   {
     if (depth > maxDepth) return
 
-    let entries: { name: string; isDir: boolean }[]
-    try
-    {
-      entries = readdirSync(dir, { withFileTypes: true })
-        .filter((e) =>
-          shouldIncludeProjectTreeEntry(e.name, IGNORED_DIRS, {
-            includeHidden: false,
-          })
-        )
-        .map((e) => ({ name: e.name, isDir: e.isDirectory() }))
-        .sort((a, b) =>
-          compareProjectTreeEntries(a, b, { directoriesFirst: true })
-        )
-    }
-    catch
-    {
-      return
-    }
+    const captured = depth === 1 ? root : readDirectory(dir)
+    if (!captured) return
+    const entries = captured
+      .filter((e) =>
+        shouldIncludeProjectTreeEntry(e.name, IGNORED_DIRS, {
+          includeHidden: false,
+        })
+      )
+      .map((e) => ({ name: e.name, isDir: e.isDir }))
+      .sort((a, b) =>
+        compareProjectTreeEntries(a, b, { directoriesFirst: true })
+      )
 
     // cap entries at each level to keep the tree compact
     const maxEntries = 25
@@ -146,7 +221,7 @@ function buildDirectoryTree(cwd: string, maxDepth = 2): string
 }
 
 // detect the project type from available context files
-function detectProjectType(files: ContextFile[]): string | null
+function detectProjectType(files: readonly ContextFile[]): string | null
 {
   const names = new Set(files.map((f) => f.name))
 
@@ -160,27 +235,42 @@ function detectProjectType(files: ContextFile[]): string | null
   return null
 }
 
-// gather available project context into one bounded block
-export function gatherProjectContext(
+// capture filesystem state once; rendering different budgets never rereads it
+export function captureProjectContext(
   cwd: string,
+  options: ProjectContextOptions = {}
+): ProjectContextSnapshot
+{
+  const root = readDirectory(cwd)
+  const loaded: ContextFile[] = []
+  if (Math.floor(options.maxTotalChars ?? DEFAULT_TOTAL_CHARS) > 0)
+  {
+    for (const { name, label } of CONTEXT_FILES)
+    {
+      const content = readContextFile(join(cwd, name))
+      if (!content) continue
+      loaded.push(Object.freeze({ label, name, content }))
+    }
+  }
+  return Object.freeze({
+    rootSummary: formatRootSummary(cwd, root),
+    files: Object.freeze(loaded),
+    directoryTree: loaded.length > 0 ? buildDirectoryTree(cwd, root) : '',
+  })
+}
+
+export function renderProjectContext(
+  snapshot: ProjectContextSnapshot,
   options: ProjectContextOptions = {}
 ): string
 {
-  const loaded: ContextFile[] = []
   const maxTotalChars = Math.max(
     0,
     Math.floor(options.maxTotalChars ?? DEFAULT_TOTAL_CHARS)
   )
   if (maxTotalChars === 0) return ''
 
-  // read candidates in priority order while honoring the total rendered budget
-  for (const { name, label } of CONTEXT_FILES)
-  {
-    const content = readContextFile(join(cwd, name))
-    if (!content) continue
-    loaded.push({ label, name, content })
-  }
-
+  const loaded = snapshot.files
   if (loaded.length === 0)
   {
     return ''
@@ -209,7 +299,7 @@ export function gatherProjectContext(
   }
 
   // append the directory tree
-  const tree = buildDirectoryTree(cwd)
+  const tree = snapshot.directoryTree
   if (tree)
   {
     appendIfFits(`Directory structure:\n${tree}`)
@@ -242,4 +332,14 @@ export function gatherProjectContext(
   }
 
   return sections.join('\n\n')
+}
+
+// gather available project context into one bounded block
+export function gatherProjectContext(
+  cwd: string,
+  options: ProjectContextOptions = {}
+): string
+{
+  if (Math.floor(options.maxTotalChars ?? DEFAULT_TOTAL_CHARS) <= 0) return ''
+  return renderProjectContext(captureProjectContext(cwd, options), options)
 }

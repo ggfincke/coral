@@ -1,6 +1,7 @@
 // src/tui/transcript/stream-markdown.ts
 // progressive markdown styling for streaming assistant text
 
+import chalk from 'chalk'
 import { renderMarkdownToAnsi } from './markdown.js'
 import { sanitizeUntrustedText } from './sanitize.js'
 import { getThemeGeneration } from '../theme.js'
@@ -99,7 +100,7 @@ function renderStableRegion(
 {
   if (!stableText.trim()) return []
 
-  const key = `${themeGeneration}:${width}`
+  const key = `${themeGeneration}:${chalk.level}:${width}`
   const cached = STABLE_RENDER_CACHES.get(key)
   if (cached && cached.key === stableText) return cached.lines
 

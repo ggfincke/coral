@@ -55,6 +55,15 @@ function findCommand(
   )
 }
 
+// headings follow contiguous command groups without changing registry order
+const helpSections: Record<string, string> = {
+  help: 'Conversation',
+  status: 'Runtime',
+  undo: 'History and output',
+  index: 'Project and sessions',
+  telemetry: 'Diagnostics',
+}
+
 // /help reflects this module's canonical order
 const helpCommand: Command = {
   name: 'help',
@@ -65,6 +74,12 @@ const helpCommand: Command = {
 
     for (const command of commands)
     {
+      const section = helpSections[command.name]
+      if (section)
+      {
+        if (command !== commands[0]) lines.push('')
+        lines.push(`  ${chalk.bold(section)}`)
+      }
       const aliases = command.aliases?.length
         ? chalk.dim(
             ` (${command.aliases.map((alias) => `/${alias}`).join(', ')})`

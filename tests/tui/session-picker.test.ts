@@ -2,25 +2,37 @@
 // saved-session picker filtering, rendering, input, & /resume routing tests
 
 import { strict as assert } from 'node:assert'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
+import { createElement } from 'react'
+import { render } from 'ink'
 import { after, beforeEach, test } from 'node:test'
 import stripAnsi from 'strip-ansi'
 import { dispatchCommand } from '../../src/tui/commands/registry.js'
 import type { CommandContext } from '../../src/tui/commands/contracts.js'
 import type { Agent } from '../../src/agent/agent.js'
 import type { OutputBlock } from '../../src/tui/transcript/types.js'
-import {
+import SessionPicker, {
   buildSessionPickerLines,
+  buildSessionPreviewTail,
+  SessionPreviewLoader,
   buildSessionPreviewLines,
   filterSessions,
   formatRelativeAge,
   reduceSessionPickerInput,
 } from '../../src/tui/sessions/picker.js'
 import { encodeSessionData } from '../../src/session/codec.js'
+import { loadSessionPreview } from '../../src/session/store.js'
+import { formatBlocksPlain } from '../../src/tui/transcript/plain.js'
+import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
 import { coralHomePath } from '../../src/utils/coral-home.js'
 import type { OllamaMessage } from '../../src/types/inference.js'
-import type { SessionData, SessionMeta } from '../../src/session/types.js'
+import type {
+  SessionData,
+  SessionMeta,
+  SessionPreviewResult,
+} from '../../src/session/types.js'
 import { makeSessionMeta } from '../helpers/session.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
@@ -153,6 +165,10 @@ test('ready-state lines list newest first with age, count, & preview pane', asyn
     title: 'Older work',
   })
 
+  const loaded = await loadSessionPreview(newer.id)
+  assert.equal(loaded.kind, 'loaded')
+  if (loaded.kind !== 'loaded') assert.fail('fixture must load')
+  const previewLines = buildSessionPreviewTail(loaded.messages, 24).lines
   const rendered = plain(
     buildSessionPickerLines({
       sessions: [newer, older],
@@ -160,6 +176,7 @@ test('ready-state lines list newest first with age, count, & preview pane', asyn
       selectedIndex: 0,
       width: 80,
       height: 24,
+      previewLines,
     }).map((line) => stripAnsi(line))
   )
 
@@ -203,14 +220,354 @@ test('buildSessionPreviewLines windows the newest lines within maxRows', async (
     { role: 'assistant', content: 'tail line one\ntail line two' },
   ])
 
-  const preview = buildSessionPreviewLines('dddd3333', 2, 80).map(stripAnsi)
+  const loaded = await loadSessionPreview('dddd3333')
+  assert.equal(loaded.kind, 'loaded')
+  if (loaded.kind !== 'loaded') assert.fail('fixture must load')
+  const lines = buildSessionPreviewTail(loaded.messages, 10).lines
+  const preview = buildSessionPreviewLines(lines, 2, 80).map(stripAnsi)
   assert.equal(preview.length, 2)
   assert.ok(!plain(preview).includes('first prompt'))
   assert.ok(preview[1]!.includes('tail line two'))
 
   // plain text is truncated to the width budget before styling
-  const narrow = buildSessionPreviewLines('dddd3333', 10, 12).map(stripAnsi)
+  const narrow = buildSessionPreviewLines(lines, 10, 12).map(stripAnsi)
   assert.ok(narrow.every((line) => line.length <= 10))
+})
+
+test('backward preview tails preserve plain transcript policy without formatting older messages', () =>
+{
+  const messages: OllamaMessage[] = [
+    { role: 'system', content: 'hidden instructions' },
+    {
+      role: 'user',
+      content: 'expanded attachment body',
+      displayContent: 'inspect @missing.ts',
+      attachmentReport: {
+        attached: [],
+        skipped: [{ path: 'missing.ts', reason: 'not found' }],
+      },
+    },
+    {
+      role: 'assistant',
+      content: 'answer\nwith a second line',
+      thinking: 'reasoning\ncontinued',
+    },
+    {
+      role: 'tool',
+      tool_name: 'bash',
+      content: 'output\n\u001b[2Jstill plain',
+    },
+    { role: 'assistant', content: 'final answer' },
+  ]
+  const all = formatBlocksPlain(buildRestoredBlocks(messages))
+  for (const budget of [1, 8, 100])
+  {
+    const tail = buildSessionPreviewTail(messages, budget)
+    assert.deepEqual(tail.lines, all.slice(-budget))
+    assert.equal(tail.complete, all.length <= budget)
+  }
+  assert.ok(plain(all).includes('inspect @missing.ts'))
+  assert.ok(plain(all).includes('Skipped @-mention'))
+  assert.ok(!plain(all).includes('expanded attachment body'))
+
+  const visited = new Set<number>()
+  const history: OllamaMessage[] = Array.from({ length: 1000 }, (_, index) => ({
+    role: 'assistant',
+    get content()
+    {
+      visited.add(index)
+      return `line ${index}`
+    },
+  }))
+  assert.deepEqual(buildSessionPreviewTail(history, 3).lines, [
+    'line 997',
+    'line 998',
+    'line 999',
+  ])
+  assert.equal(visited.size, 3)
+})
+
+test('preview loader revalidates replacements and bounds cache admission without clipping display', async () =>
+{
+  const meta = await seedSession(
+    { id: 'abcd4444', updatedAt: '2026-08-21T09:00:00.000Z' },
+    [{ role: 'assistant', content: 'one\ntwo\nthree\nfour' }]
+  )
+  const revisions: Array<string | undefined> = []
+  const loader = new SessionPreviewLoader((id, options) =>
+  {
+    revisions.push(options?.knownRevision)
+    return loadSessionPreview(id, options)
+  })
+  const first = await loader.load(meta.id, 2)
+  assert.deepEqual(first?.lines, ['three', 'four'])
+  const unchanged = await loader.load(meta.id, 2)
+  assert.equal(unchanged, first)
+  assert.ok(revisions[1])
+  assert.ok(
+    buildSessionPreviewLines(unchanged!.lines, 2, 10).every(
+      (line) => stripAnsi(line).length <= 8
+    )
+  )
+  const larger = await loader.load(meta.id, 10)
+  assert.deepEqual(larger?.lines, ['one', 'two', 'three', 'four'])
+  assert.equal(
+    revisions[2],
+    undefined,
+    'a larger uncovered tail reloads messages'
+  )
+
+  const target = coralHomePath('sessions', `${meta.id}.json`)
+  const replacement = target + '.replacement'
+  await writeFile(
+    replacement,
+    JSON.stringify(
+      encodeSessionData({
+        meta,
+        messages: [
+          { role: 'assistant', content: 'atomic replacement preview' },
+        ],
+      })
+    )
+  )
+  await rename(replacement, target)
+  assert.deepEqual((await loader.load(meta.id, 10))?.lines, [
+    'atomic replacement preview',
+  ])
+  assert.ok(
+    revisions[3],
+    'replacement checks still start with the known revision'
+  )
+  loader.dispose()
+  await loader.load(meta.id, 10)
+  assert.equal(revisions[4], undefined, 'unmount clears retained preview data')
+  loader.dispose()
+
+  let result: SessionPreviewResult = {
+    kind: 'loaded',
+    revision: 'fixture',
+    messages: [{ role: 'assistant', content: 'x'.repeat(256 * 1024) }],
+  }
+  const admitted: Array<string | undefined> = []
+  const bounded = new SessionPreviewLoader(async (_id, options) =>
+  {
+    admitted.push(options?.knownRevision)
+    return result
+  })
+  const oversized = await bounded.load('oversized', 1)
+  assert.equal(oversized?.lines[0]?.length, 256 * 1024)
+  await bounded.load('oversized', 1)
+  assert.equal(
+    admitted.at(-1),
+    undefined,
+    'oversized bytes remain displayable but uncached'
+  )
+  result = {
+    kind: 'loaded',
+    revision: 'many rows',
+    messages: [
+      { role: 'assistant', content: Array(300).fill('row').join('\n') },
+    ],
+  }
+  assert.equal((await bounded.load('rows', 300))?.lines.length, 300)
+  await bounded.load('rows', 300)
+  assert.equal(
+    admitted.at(-1),
+    undefined,
+    'oversized row counts are not retained'
+  )
+  result = {
+    kind: 'loaded',
+    revision: null,
+    messages: [{ role: 'assistant', content: 'raced but valid' }],
+  }
+  assert.deepEqual((await bounded.load('raced', 1))?.lines, ['raced but valid'])
+  await bounded.load('raced', 1)
+  assert.equal(
+    admitted.at(-1),
+    undefined,
+    'a raced snapshot cannot establish a revision'
+  )
+  bounded.dispose()
+})
+
+test('preview selection and unmount abort work and reject late results', async () =>
+{
+  const requests: Array<{
+    signal: AbortSignal | undefined
+    resolve: (result: SessionPreviewResult) => void
+    knownRevision: string | undefined
+  }> = []
+  const loader = new SessionPreviewLoader(
+    (_id, options) =>
+      new Promise((resolve) =>
+      {
+        requests.push({
+          signal: options?.signal,
+          resolve,
+          knownRevision: options?.knownRevision,
+        })
+      })
+  )
+  const oldSelection = loader.load('old', 3)
+  const currentSelection = loader.load('current', 3)
+  assert.equal(requests[0]!.signal?.aborted, true)
+  requests[1]!.resolve({
+    kind: 'loaded',
+    revision: 'current',
+    messages: [{ role: 'assistant', content: 'current preview' }],
+  })
+  assert.deepEqual((await currentSelection)?.lines, ['current preview'])
+  requests[0]!.resolve({
+    kind: 'loaded',
+    revision: 'old',
+    messages: [{ role: 'assistant', content: 'stale preview' }],
+  })
+  assert.equal(await oldSelection, undefined)
+  const refresh = loader.load('current', 3)
+  assert.equal(
+    requests[2]!.knownRevision,
+    'current',
+    'late data did not replace the selected cache'
+  )
+  loader.dispose()
+  assert.equal(requests[2]!.signal?.aborted, true)
+  requests[2]!.resolve({ kind: 'unchanged', revision: 'current' })
+  assert.equal(await refresh, undefined)
+})
+
+test('picker clears changing selections immediately and preserves previews at navigation boundaries', async (t) =>
+{
+  await seedSession({
+    id: 'aaaa5555',
+    updatedAt: '2026-08-21T09:00:00.000Z',
+    title: 'Newest',
+  })
+  await seedSession({
+    id: 'bbbb5555',
+    updatedAt: '2026-08-20T09:00:00.000Z',
+    title: 'Older',
+  })
+  const requests: Array<{
+    id: string
+    resolve: (tail: { lines: string[]; complete: boolean }) => void
+  }> = []
+  t.mock.method(
+    SessionPreviewLoader.prototype,
+    'load',
+    (id: string) =>
+      new Promise((resolve) =>
+      {
+        requests.push({ id, resolve })
+      })
+  )
+  const idle = () => undefined
+  const stdout = Object.assign(new PassThrough(), {
+    columns: 80,
+    rows: 24,
+    isTTY: false,
+  })
+  const stdin = Object.assign(new PassThrough(), {
+    isTTY: true,
+    setRawMode: idle,
+    ref: idle,
+    unref: idle,
+  })
+  const frames: string[] = []
+  stdout.on('data', (chunk: Buffer) =>
+  {
+    if (stripAnsi(chunk.toString()).trim())
+      frames.push(stripAnsi(chunk.toString()))
+  })
+  const resumed: string[] = []
+  const pickerProps = {
+    width: 80,
+    height: 24,
+    onResume: (id: string) => resumed.push(id),
+    onClose: idle,
+  }
+  const instance = render(createElement(SessionPicker, pickerProps), {
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    stderr: stdout as unknown as NodeJS.WriteStream,
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    debug: true,
+    patchConsole: false,
+    exitOnCtrlC: false,
+    interactive: false,
+  })
+  async function flush()
+  {
+    for (let pass = 0; pass < 3; pass++)
+    {
+      await instance.waitUntilRenderFlush()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+  }
+  try
+  {
+    const deadline = Date.now() + 2000
+    while (requests.length === 0 && Date.now() < deadline)
+    {
+      await flush()
+      if (requests.length === 0)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+    }
+    assert.equal(requests[0]?.id, 'aaaa5555')
+    requests[0]!.resolve({ lines: ['NEWEST PREVIEW'], complete: true })
+    await flush()
+    assert.ok(frames.at(-1)?.includes('NEWEST PREVIEW'))
+    stdin.write('\u001b[A')
+    await flush()
+    assert.equal(requests.length, 1)
+    assert.ok(
+      frames.at(-1)?.includes('NEWEST PREVIEW'),
+      'a clamped arrow keeps the loaded preview'
+    )
+
+    stdin.write('\u001b[B')
+    await flush()
+    assert.equal(requests[1]?.id, 'bbbb5555')
+    assert.ok(!frames.at(-1)?.includes('NEWEST PREVIEW'))
+    stdin.write('\u001b[A')
+    await flush()
+    assert.equal(requests[2]?.id, 'aaaa5555')
+    requests[1]!.resolve({ lines: ['STALE OLDER PREVIEW'], complete: true })
+    await flush()
+    assert.ok(!frames.at(-1)?.includes('STALE OLDER PREVIEW'))
+    requests[2]!.resolve({ lines: ['CURRENT NEWEST PREVIEW'], complete: true })
+    await flush()
+    assert.ok(frames.at(-1)?.includes('CURRENT NEWEST PREVIEW'))
+    instance.rerender(
+      createElement(SessionPicker, { ...pickerProps, width: 40 })
+    )
+    await flush()
+    assert.equal(
+      requests[3]?.id,
+      'aaaa5555',
+      'geometry changes revalidate the selected file'
+    )
+    requests[3]!.resolve({ lines: ['CURRENT NEWEST PREVIEW'], complete: true })
+    await flush()
+    stdin.write('N')
+    await flush()
+    assert.equal(
+      requests[4]?.id,
+      'aaaa5555',
+      'query changes revalidate even when selection stays the same'
+    )
+    requests[4]!.resolve({ lines: ['CURRENT NEWEST PREVIEW'], complete: true })
+    await flush()
+    stdin.write('\r')
+    await flush()
+    assert.deepEqual(resumed, ['aaaa5555'])
+  }
+  finally
+  {
+    instance.unmount()
+    await instance.waitUntilExit()
+    stdin.destroy()
+    stdout.destroy()
+  }
 })
 
 test('reduceSessionPickerInput pages, filters, & backspaces like the palette', () =>

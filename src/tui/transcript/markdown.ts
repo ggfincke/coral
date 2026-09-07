@@ -2,8 +2,8 @@
 // render markdown to ANSI-styled terminal text
 
 import chalk from 'chalk'
-import { highlight, supportsLanguage } from 'cli-highlight'
 import { lexer, type Token, type Tokens } from 'marked'
+import { highlightCode } from './code-highlight.js'
 import { codeSpanStyle, headingStyle, style } from '../theme.js'
 import { padEnd, visibleWidth } from '../wrap.js'
 import { sanitizeUntrustedText } from './sanitize.js'
@@ -19,27 +19,6 @@ function prefixLines(
     if (!line) return ''
     return (index === 0 ? firstPrefix : restPrefix) + line
   })
-}
-
-function highlightCode(text: string, language?: string): string
-{
-  const trimmed = text.replace(/\n$/, '')
-
-  if (!trimmed) return ''
-
-  try
-  {
-    if (language && supportsLanguage(language))
-    {
-      return highlight(trimmed, { language, ignoreIllegals: true })
-    }
-
-    return language ? trimmed : highlight(trimmed, { ignoreIllegals: true })
-  }
-  catch
-  {
-    return trimmed
-  }
 }
 
 function renderInline(tokens: Token[] | undefined): string
@@ -198,13 +177,13 @@ function renderBlock(token: Token, indent: number): string[]
     case 'code':
     {
       const code = token as Tokens.Code
-      const fence = pad + chalk.dim(code.lang ? `\`\`\` ${code.lang}` : '```')
+      const fence = pad + chalk.dim('┌─ ') + style('code')(code.lang || 'code')
       const codePrefix = pad + chalk.dim('│ ')
       const highlighted = highlightCode(code.text, code.lang)
       const codeLines = (highlighted || '')
         .split('\n')
         .map((line) => codePrefix + line)
-      return [fence, ...codeLines, pad + chalk.dim('```')]
+      return [fence, ...codeLines, pad + chalk.dim('└─')]
     }
     case 'table':
       return renderTable(token as Tokens.Table, indent)

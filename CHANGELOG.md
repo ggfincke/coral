@@ -27,6 +27,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow. It repeats the CI gates, requires the tag to match `package.json`,
   and publishes a GitHub Release from that version's changelog section.
 
+### Changed
+
+- **Refined Reef terminal layout:** a workspace-focused header, framed composer,
+  separate activity and complete statistics rows, consistent selected picker
+  rows, and clearer approval and transcript styling. Narrow terminals wrap
+  statistics instead of dropping measurements.
+
+### Fixed
+
+- **Terminal row accounting:** retain intentional blank rows, size the composer
+  using wrapped text and its cursor, hints, and completions, and preserve drafts
+  behind a resize prompt when the terminal cannot fit its controls.
+
 ### Security
 
 - Refresh transitive Browserslist, fast-uri, and qs dependencies to resolve

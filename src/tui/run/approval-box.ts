@@ -32,7 +32,7 @@ interface ContentBuilder
 {
   innerWidth: number
   warn: (text: string) => string
-  title: (content: string) => void
+  title: (content: string, decorate?: (line: string) => string) => void
   push: (content: string, decorate?: (line: string) => string) => void
   raw: (line: string) => void
   blank: () => void
@@ -61,7 +61,8 @@ function contentBuilder(width: number, label: string): ContentBuilder
   return {
     innerWidth,
     warn,
-    title: (content) => appendInto(titleLines, content, warn),
+    title: (content, decorate = chalk.bold) =>
+      appendInto(titleLines, content, decorate),
     push: (content, decorate) => appendInto(bodyLines, content, decorate),
     raw: (line) => bodyLines.push(line),
     blank: () => bodyLines.push(''),
@@ -108,8 +109,11 @@ export function buildApprovalContent(
     MAX_APPROVAL_TOOL_NAME_CHARS
   )
   box.title(`Allow ${cleanToolName}?`)
-  box.title('(a) grants this tool with any arguments for this session.')
-  box.push(formatApprovalArgs(toolName, args, presentation), box.warn)
+  box.title(
+    '(a) grants this tool with any arguments for this session.',
+    box.warn
+  )
+  box.push(formatApprovalArgs(toolName, args, presentation))
 
   if (diff)
   {
@@ -131,9 +135,12 @@ export function buildApprovalContent(
   }
 
   return box.finish(
-    box.warn(
-      '(y) approve  (a) allow always (session)  (n) reject  (esc) cancel'
-    )
+    [
+      chalk.bold('(y) approve'),
+      box.warn('(a) allow always (session)'),
+      '(n) reject',
+      chalk.dim('(esc) cancel'),
+    ].join('  ')
   )
 }
 
@@ -180,7 +187,9 @@ export function buildMcpApprovalContent(
     )
   }
 
-  return box.finish(box.warn('(y) trust & launch  (n) reject  (esc) cancel'))
+  return box.finish(
+    `${chalk.bold('(y) trust & launch')}  (n) reject  ${chalk.dim('(esc) cancel')}`
+  )
 }
 
 // bordered yes/no prompt reused for the doom-loop pause
@@ -191,8 +200,8 @@ export function buildConfirmContent(
 ): PromptBoxContent
 {
   const box = contentBuilder(width, label)
-  box.push(sanitizeUntrustedText(message), box.warn)
-  return box.finish(box.warn('(y) continue  (n) stop'))
+  box.push(sanitizeUntrustedText(message))
+  return box.finish(`${chalk.bold('(y) continue')}  (n) stop`)
 }
 
 export interface PromptBoxRender
@@ -255,8 +264,7 @@ export function renderPromptBox(
   scrollOffset: number
 ): PromptBoxRender
 {
-  const warn = style('warning')
-  const frame = boxFrame(width, content.label, warn)
+  const frame = boxFrame(width, content.label, style('muted'))
   const rowLimit = Math.max(Math.floor(maxRows), 0)
   if (rowLimit === 0) return { lines: [], maxOffset: 0, pageSize: 1 }
 
@@ -287,18 +295,25 @@ export function renderPromptBox(
     }
   }
 
-  // constrained mode drops decorative blanks and moves title overflow into the
-  // scrollable body so complete identities remain reachable
+  // the app admits prompts only when full titles, actions, and one body row fit;
+  // direct smaller renders retain scrolling titles for inspectable fallback
+  const pinFullTitle = rowLimit >= titleLines.length + actionLines.length + 3
   const insideRows = Math.max(rowLimit - 2, 0)
   const visibleActions = actionLines.slice(0, insideRows)
   const contentRows = Math.max(insideRows - visibleActions.length, 0)
-  const indicatorRows = contentRows >= 2 ? 1 : 0
+  const availableBodyRows = contentRows - titleLines.length
+  const indicatorRows = pinFullTitle
+    ? availableBodyRows >= 2 && bodyLines.length > availableBodyRows
+      ? 1
+      : 0
+    : contentRows >= 2
+      ? 1
+      : 0
   const viewportRows = Math.max(contentRows - indicatorRows, 0)
   const reserveBody = bodyLines.length > 0 && viewportRows > 1 ? 1 : 0
-  const pinnedTitleCount = Math.min(
-    titleLines.length,
-    Math.max(viewportRows - reserveBody, 0)
-  )
+  const pinnedTitleCount = pinFullTitle
+    ? titleLines.length
+    : Math.min(titleLines.length, Math.max(viewportRows - reserveBody, 0))
   const pinnedTitle = titleLines.slice(0, pinnedTitleCount)
   const scrollable = [...titleLines.slice(pinnedTitleCount), ...bodyLines]
   const bodyRows = Math.max(viewportRows - pinnedTitle.length, 0)
