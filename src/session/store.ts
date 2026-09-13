@@ -1,7 +1,16 @@
 // src/session/store.ts
 // session persistence and resume
 
-import type { BigIntStats } from 'node:fs'
+import { existsSync, type BigIntStats } from 'node:fs'
+import {
+  acquireSessionLease,
+  releaseSessionLease,
+  withSessionWriteLock,
+  type SessionLease,
+  type SessionLeaseOwnership,
+} from './lease.js'
+import { SessionPersistenceError } from './errors.js'
+import type { ProcessSessionRuntimeIdentity } from './types.js'
 import fs from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -195,7 +204,19 @@ function countConversationMessages(messages: OllamaMessage[]): number
 }
 
 // replace one complete snapshot so concurrent saves keep whole-file semantics
-function writeSessionData(session: SessionData): void
+function writeSessionData(
+  session: SessionData,
+  lease?: SessionLeaseOwnership
+): void
+{
+  withSessionWriteLock(
+    lease,
+    () => writeSessionDataUnlocked(session),
+    session.meta.id
+  )
+}
+
+function writeSessionDataUnlocked(session: SessionData): void
 {
   ensureDir()
   const path = sessionPath(session.meta.id)
@@ -412,4 +433,134 @@ export function renameSession(
   writeSessionData(session)
 
   return session.meta
+}
+
+export interface ProviderSessionSaveInput
+{
+  sessionId: string
+  lease: SessionLeaseOwnership
+  snapshot: SessionData
+}
+
+export interface ProviderSessionMetadataSaveInput
+{
+  sessionId: string
+  lease: SessionLeaseOwnership
+  runtime: ProcessSessionRuntimeIdentity
+  model: string
+  cwd: string
+  metaHint: SessionMetaHint
+}
+
+// acquire ownership before publishing a new native snapshot
+export function createProviderSession(input: {
+  model: string
+  cwd: string
+  runtime: ProcessSessionRuntimeIdentity
+}): { session: SessionData; lease: SessionLease }
+{
+  const id = generateId()
+  const lease = acquireSessionLease(id, input.runtime)
+  try
+  {
+    const now = new Date().toISOString()
+    const session: SessionData = {
+      meta: {
+        id,
+        model: input.model,
+        cwd: input.cwd,
+        createdAt: now,
+        updatedAt: now,
+        title: '(empty session)',
+        messageCount: 0,
+      },
+      messages: [],
+      todos: [],
+      undo: [],
+      redo: [],
+    }
+    withSessionWriteLock(lease, () =>
+    {
+      if (existsSync(sessionPath(id)))
+        throw new SessionPersistenceError(
+          'create_failed',
+          'Session ID already exists',
+          { sessionId: id }
+        )
+      writeSessionDataUnlocked(session)
+    })
+    return { session, lease }
+  }
+  catch (error)
+  {
+    releaseSessionLease(lease)
+    throw error
+  }
+}
+
+// retries write the same captured whole snapshot under the same exclusive lease
+export function saveProviderSession(
+  input: ProviderSessionSaveInput
+): SessionData
+{
+  if (
+    input.sessionId !== input.snapshot.meta.id ||
+    input.sessionId !== input.lease.sessionId
+  )
+  {
+    throw new SessionPersistenceError(
+      'invalid_snapshot',
+      'Snapshot does not match its leased session'
+    )
+  }
+  const encoded = encodeSessionData(input.snapshot)
+  if (!decodeSessionData(encoded))
+    throw new SessionPersistenceError(
+      'invalid_snapshot',
+      'Invalid provider snapshot'
+    )
+  withSessionWriteLock(input.lease, () =>
+  {
+    if (!loadSession(input.sessionId))
+      throw new SessionPersistenceError(
+        'session_not_found',
+        'Session disappeared before save'
+      )
+    writeSessionDataUnlocked(input.snapshot)
+  })
+  return input.snapshot
+}
+
+export const retryProviderSessionSave = saveProviderSession
+
+export function saveProviderSessionMetadata(
+  input: ProviderSessionMetadataSaveInput
+): SessionData
+{
+  if (input.sessionId !== input.lease.sessionId)
+    throw new SessionPersistenceError(
+      'lease_not_owned',
+      'Metadata does not match its lease'
+    )
+  return withSessionWriteLock(input.lease, () =>
+  {
+    const session = loadSession(input.sessionId)
+    if (!session)
+      throw new SessionPersistenceError(
+        'session_not_found',
+        'Session disappeared before metadata save'
+      )
+    const saved = {
+      ...session,
+      meta: {
+        ...session.meta,
+        ...input.metaHint,
+        model: input.model,
+        cwd: input.cwd,
+        updatedAt: new Date().toISOString(),
+      },
+    }
+    writeSessionDataUnlocked(saved)
+    return saved
+  })
 }

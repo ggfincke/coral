@@ -67,7 +67,7 @@ coral exec \
 | `--prompt-file <path>`           | read the prompt from a UTF-8 file            | —                             | Max **1,048,576** bytes                                          |
 | `--cwd <path>`                   | workspace directory                          | `process.cwd()` at parse time | Must be a directory                                              |
 | `--host <url>`                   | Ollama host URL                              | `http://localhost:11434`      | Same canonicalize rules                                          |
-| `--permission-profile <profile>` | headless tool profile                        | `read-only`                   | Choices: `read-only`, `workspace-write`                          |
+| `--permission-profile <profile>` | headless tool profile                        | `read-only`                   | Choices: `none`, `read-only`, `workspace-write`                  |
 | `--output-format <format>`       | stdout format                                | `text`                        | Choices: `text`, `json`, `stream-json`                           |
 | `--result-file <path>`           | atomically write the structured result       | —                             | Same JSON as the final result object                             |
 | `--ephemeral`                    | do not persist a Coral conversation          | —                             | **Accepted and unused.** Exec never persists sessions either way |
@@ -79,18 +79,21 @@ Prompt errors: `provide either a prompt argument or --prompt-file, not both`; `a
 
 ### Exit codes
 
-| Status                                            | Code                   |
-| ------------------------------------------------- | ---------------------- |
-| completed                                         | 0                      |
-| failed (Agent error or result-file write failure) | 1                      |
-| cancelled SIGINT                                  | 130                    |
-| cancelled SIGTERM                                 | 143                    |
-| Commander parse/help/version-style errors         | commander's `exitCode` |
-| other thrown errors                               | 2                      |
+| Status                                                                         | Code                   |
+| ------------------------------------------------------------------------------ | ---------------------- |
+| completed                                                                      | 0                      |
+| failed or iteration_limited (Agent error, limit, or result-file write failure) | 1                      |
+| cancelled SIGINT                                                               | 130                    |
+| cancelled SIGTERM                                                              | 143                    |
+| Commander parse/help/version-style errors                                      | commander's `exitCode` |
+| other thrown errors                                                            | 2                      |
 
 ### Permission profiles
 
 Every listed tool is set to `always_allow` inside the profile. Approvals still **always return false**, so anything that still requires a prompt (including MCP launch, doom-loop continue, and tools not in the profile) is rejected.
+
+**`none`:** no tools, no MCP startup, and no conversation writes. This profile
+overrides `--mcp`.
 
 **`read-only`** (same set as read-only subagents):
 
@@ -118,7 +121,7 @@ Result object:
 
 - `version`: `1`
 - `run_id`: UUID
-- `status`: `completed` \| `failed` \| `cancelled`
+- `status`: `completed` \| `failed` \| `cancelled` \| `iteration_limited`
 - `model`, `response`
 - `usage`: `prompt_tokens`, `completion_tokens`, `prompt_eval_duration_ns`, `eval_duration_ns`
 - optional `error`
@@ -128,6 +131,11 @@ Result-file write failures set `error` to `failed to write result file: …`, or
 `stream-json` `usage` events carry Agent `TokenUsage` (**camelCase**: `promptTokens`, `completionTokens`, `promptEvalDurationNs`, `evalDurationNs`, …). The final result object's `usage` field is **snake_case** as listed above.
 
 ---
+
+## ACP
+
+`coral acp [--host <url>] [-m, --model <model>]` runs an ACP agent over stdio.
+It does not open the TUI. See [ACP setup and recovery](acp.md).
 
 ## Related
 
