@@ -47,22 +47,22 @@ Discovery lists `sessions/*.json`. A legacy `sessions/index.json` is not read or
 
 ## List, resume, rename, new
 
-| Action                  | Prefix id?     | Cwd must exist? | Notes                                                                                                                                                     |
-| ----------------------- | -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `coral --sessions`      | n/a            | n/a             | All sessions, newest `updatedAt` first, then exit. Hint: `coral --session <id>`                                                                           |
-| `/sessions [n]` (`/ls`) | n/a            | n/a             | Default **10**. Hint: `/resume <id>`                                                                                                                      |
-| `coral --resume`        | n/a            | **yes**         | Newest session only. Missing cwd → **exit 1**, no fallback to the next session                                                                            |
-| `coral --session <id>`  | **no** (exact) | **yes**         | Wins over `--resume`                                                                                                                                      |
-| `/resume [id]`          | **yes**        | **yes**         | No args: newest **other** than current. Saves current first; save error cancels resume                                                                    |
-| `/rename <title>`       | n/a            | n/a             | Needs a bound session                                                                                                                                     |
-| `/new`                  | n/a            | n/a             | Save first; on save error/stale **abort** (`Current session could not be saved; the new conversation was not started.`). Success: `clearHistory` + unbind |
-| `/clear` (`/reset`)     | n/a            | n/a             | Clear history/todos/undo/metrics, unbind. Does not rewrite or delete the old file                                                                         |
+| Action                  | Prefix id? | Cwd must exist? | Notes                                                                                                                                                     |
+| ----------------------- | ---------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coral --sessions`      | n/a        | n/a             | All sessions, newest `updatedAt` first, then exit. Hint: `coral --session <id>`                                                                           |
+| `/sessions [n]` (`/ls`) | n/a        | n/a             | Default **10**. Hint: `/resume <id>`                                                                                                                      |
+| `coral --resume`        | n/a        | **yes**         | Newest usable session; skips unavailable directories; `-C` filters workspace                                                                              |
+| `coral --session <id>`  | **yes**    | **yes**         | Wins over `--resume`                                                                                                                                      |
+| `/resume [id]`          | **yes**    | **yes**         | No args: searchable global picker; Tab filters the current project. Saves current first; save error cancels resume                                        |
+| `/rename <title>`       | n/a        | n/a             | Needs a bound session                                                                                                                                     |
+| `/new`                  | n/a        | n/a             | Save first; on save error/stale **abort** (`Current session could not be saved; the new conversation was not started.`). Success: `clearHistory` + unbind |
+| `/clear` (`/reset`)     | n/a        | n/a             | Clear history/todos/undo/metrics, unbind. Does not rewrite or delete the old file                                                                         |
 
 `--model` plus `--resume` / `--session`: Agent is built with the **CLI model** and restored messages (picker skipped). `/resume` uses the **session file's** `meta.model`.
 
 There is **no delete-session command**. `/clear` and `/new` leave the old file on disk. “Retirement” in the runtime means MCP managers and Agent dispose, not garbage-collecting session JSON.
 
-If the stored cwd is gone: CLI prints `Cannot resume session {id}.` / `Working directory no longer exists: {cwd}`; TUI shows `Session unavailable: {id}`.
+If an explicitly selected stored cwd is unavailable: CLI prints `Cannot resume session {id}.` / `Working directory no longer exists: {cwd}`; TUI shows `Session unavailable: {id}`.
 
 ---
 
@@ -87,3 +87,13 @@ Relocate everything in this table (and other `CORAL_HOME` files) with `CORAL_HOM
 ## Related
 
 [CLI](cli.md) · [TUI](tui.md) · [Context](context.md) · [Architecture](architecture.md) · [Troubleshooting](troubleshooting.md)
+
+## Fork from an earlier prompt
+
+Press Esc twice while idle, select a user prompt, and press Enter. Coral saves the complete original conversation first. A failed or stale save cancels the fork. A separate session named `<original title> (fork)` contains messages before that prompt, current todos, and empty undo/redo stacks. Files stay current. Model, workspace, thinking, and permission mode are retained; session approval grants are reset. The selected prompt returns to the composer without being sent.
+
+If the child is saved but cannot be activated, Coral reports its ID for recovery through `/resume`. Compacted-away boundaries cannot be selected. Forking does not change the session-file schema or add lineage metadata.
+
+Resumed/forked transcripts reconstruct recorded tool names and arguments without claiming a historical success, duration, or active spinner. Context occupancy has a `~` estimate until fresh measured usage arrives; cumulative tokens count only since the session was opened.
+
+Session search matches title, ID, cwd, and model, with every ranked match navigable. Previews prioritize prompts and assistant answers over reasoning and tool payloads.

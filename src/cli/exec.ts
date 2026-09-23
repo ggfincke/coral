@@ -2,9 +2,17 @@
 // run one deterministic headless Agent turn and emit machine-readable evidence
 
 import { randomUUID } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import type { Readable } from 'node:stream'
 import { resolve } from 'node:path'
-import { Command, CommanderError, Option } from 'commander'
+import {
+  parseCliArgs,
+  type CliOptions,
+  type ExecPermissionProfile,
+  type ExecOutputFormat,
+} from './args.js'
+export type { ExecPermissionProfile, ExecOutputFormat } from './args.js'
 import { Agent } from '../agent/agent.js'
 import type { AgentInferenceClient, TokenUsage } from '../agent/agent.js'
 import { resolveMcpConfig } from '../config/mcp.js'
@@ -12,19 +20,19 @@ import {
   resolvePermissions,
   type ToolPermissions,
 } from '../config/permissions.js'
-import { DEFAULT_OLLAMA_HOST, normalizeOllamaHost } from '../ollama/host.js'
+import { normalizeOllamaHost } from '../ollama/host.js'
 import { allTools, subagentTools } from '../tools/registry.js'
 import type { Tool } from '../tools/tool.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { writeJsonFile } from '../utils/json.js'
 
-export type ExecPermissionProfile = 'read-only' | 'workspace-write'
-export type ExecOutputFormat = 'text' | 'json' | 'stream-json'
-export type ExecStatus = 'completed' | 'failed' | 'cancelled'
+export type ExecStatus =
+  'completed' | 'failed' | 'cancelled' | 'iteration_limited'
 
 export interface CoralExecOptions
 {
   prompt: string
+  think?: boolean
   cwd: string
   model: string
   host: string
@@ -78,9 +86,11 @@ export function resolveHeadlessProfile(
 ): HeadlessProfile
 {
   const tools =
-    profile === 'read-only'
-      ? subagentTools
-      : allTools.filter((tool) => WORKSPACE_WRITE_TOOL_NAMES.has(tool.name))
+    profile === 'none'
+      ? []
+      : profile === 'read-only'
+        ? subagentTools
+        : allTools.filter((tool) => WORKSPACE_WRITE_TOOL_NAMES.has(tool.name))
   const permissions = Object.fromEntries(
     tools.map((tool) => [tool.name, 'always_allow'] as const)
   ) as ToolPermissions
@@ -158,18 +168,21 @@ export async function runCoralExec(
   }
   const runId = dependencies.createRunId?.() ?? randomUUID()
   const profile = resolveHeadlessProfile(options.permissionProfile)
+  const mcp = options.mcp && options.permissionProfile !== 'none'
   const agent = new Agent(options.model, options.host, options.cwd, {
     tools: profile.tools,
-    permissions: resolveHeadlessPermissions(profile, options.cwd, options.mcp),
-    mcpMode: options.mcp ? 'ask' : 'off',
-    mcpConfig: options.mcp ? resolveMcpConfig() : { servers: [], issues: [] },
+    permissions: resolveHeadlessPermissions(profile, options.cwd, mcp),
+    mcpMode: mcp ? 'ask' : 'off',
+    mcpConfig: mcp ? resolveMcpConfig() : { servers: [], issues: [] },
     verifyEdits: false,
+    think: options.think ?? true,
     ...(dependencies.inferenceClient
       ? { inferenceClient: dependencies.inferenceClient }
       : {}),
   })
   let streamedResponse = ''
   let runError: Error | undefined
+  let iterationLimited = false
 
   try
   {
@@ -235,6 +248,10 @@ export async function runCoralExec(
         {
           emit({ type: 'done', run_id: runId })
         },
+        onIterationLimit()
+        {
+          iterationLimited = true
+        },
         onError(error)
         {
           runError = error
@@ -265,7 +282,9 @@ export async function runCoralExec(
     ? 'failed'
     : signal?.aborted
       ? 'cancelled'
-      : 'completed'
+      : iterationLimited
+        ? 'iteration_limited'
+        : 'completed'
   const finalResponse = latestAssistantResponse(agent) ?? streamedResponse
   let result: CoralExecResult = {
     version: 1,
@@ -297,140 +316,191 @@ export async function runCoralExec(
   return result
 }
 
-async function resolveExecPrompt(
-  prompt: string | undefined,
-  promptFile: string | undefined
+// bound bytes as they arrive and detach every listener on completion or cancellation
+export function readPromptStream(
+  stream: Readable,
+  signal?: AbortSignal
 ): Promise<string>
 {
-  if (prompt && promptFile)
+  return new Promise((resolveText, reject) =>
   {
+    const chunks: Buffer[] = []
+    let bytes = 0
+    const cleanup = () =>
+    {
+      stream.pause()
+      stream.off('data', onData)
+      stream.off('end', onEnd)
+      stream.off('error', onError)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const onError = (error: unknown) =>
+    {
+      cleanup()
+      reject(error)
+    }
+    const onAbort = () => onError(new Error('Prompt input cancelled'))
+    const onEnd = () =>
+    {
+      cleanup()
+      resolveText(Buffer.concat(chunks).toString('utf8'))
+    }
+    const onData = (chunk: Buffer | string) =>
+    {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+      bytes += buffer.byteLength
+      if (bytes > MAX_PROMPT_BYTES)
+      {
+        onError(new Error(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`))
+        return
+      }
+      chunks.push(buffer)
+    }
+    stream.on('data', onData)
+    stream.once('end', onEnd)
+    stream.once('error', onError)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) onAbort()
+  })
+}
+
+async function resolveExecPrompt(
+  prompt: string | undefined,
+  promptFile: string | undefined,
+  signal: AbortSignal
+): Promise<string>
+{
+  if (prompt !== undefined && promptFile !== undefined)
     throw new Error(
       'provide either a prompt argument or --prompt-file, not both'
     )
-  }
   let value = prompt
   if (promptFile)
   {
-    const buffer = await readFile(resolve(promptFile))
-    if (buffer.byteLength > MAX_PROMPT_BYTES)
+    if (promptFile === '-' && process.stdin.isTTY)
+      throw new Error('--prompt-file - requires piped stdin')
+    const stream =
+      promptFile === '-' ? process.stdin : createReadStream(resolve(promptFile))
+    try
     {
-      throw new Error(`prompt file exceeds ${MAX_PROMPT_BYTES} bytes`)
+      value = await readPromptStream(stream, signal)
     }
-    value = buffer.toString('utf-8')
+    finally
+    {
+      if (stream !== process.stdin) stream.destroy()
+    }
   }
   if (!value?.trim()) throw new Error('a nonempty prompt is required')
+  if (Buffer.byteLength(value) > MAX_PROMPT_BYTES)
+    throw new Error(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`)
   return value
 }
 
-export async function runExecCli(argv: string[]): Promise<number>
+export async function runExecCli(
+  input: string[] | CliOptions
+): Promise<number>
 {
-  let exitCode = 0
-  const command = new Command()
-    .name('coral exec')
-    .description('Run one noninteractive Coral agent turn')
-    .argument('[prompt]', 'prompt text; quote multiword prompts')
-    .requiredOption('-m, --model <model>', 'Ollama model to use')
-    .option('--prompt-file <path>', 'read the prompt from a UTF-8 file')
-    .option('--cwd <path>', 'workspace directory', process.cwd())
-    .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
-    .addOption(
-      new Option('--permission-profile <profile>', 'headless tool profile')
-        .choices(['read-only', 'workspace-write'])
-        .default('read-only')
-    )
-    .addOption(
-      new Option('--output-format <format>', 'stdout format')
-        .choices(['text', 'json', 'stream-json'])
-        .default('text')
-    )
-    .option('--result-file <path>', 'atomically write the structured result')
-    .option('--ephemeral', 'do not persist a Coral conversation')
-    .addOption(
-      new Option(
-        '--mcp',
-        'enable pre-trusted, always-allowed MCP tools'
-      ).default(false)
-    )
-    .option('--no-mcp', 'explicitly disable configured MCP servers')
-    .exitOverride()
-    .action(
-      async (
-        prompt: string | undefined,
-        opts: {
-          model: string
-          promptFile?: string
-          cwd: string
-          host: string
-          permissionProfile: ExecPermissionProfile
-          outputFormat: ExecOutputFormat
-          resultFile?: string
-          mcp: boolean
-        }
-      ) =>
-      {
-        const cwd = resolve(opts.cwd)
-        const cwdStat = await stat(cwd)
-        if (!cwdStat.isDirectory()) throw new Error(`not a directory: ${cwd}`)
-        const model = opts.model.trim()
-        if (!model) throw new Error('model must be nonempty')
-        const controller = new AbortController()
-        let receivedSignal: 'SIGINT' | 'SIGTERM' | undefined
-        const abortFor = (signal: 'SIGINT' | 'SIGTERM') => (): void =>
-        {
-          receivedSignal ??= signal
-          controller.abort(signal)
-        }
-        const abortOnSigint = abortFor('SIGINT')
-        const abortOnSigterm = abortFor('SIGTERM')
-        process.once('SIGINT', abortOnSigint)
-        process.once('SIGTERM', abortOnSigterm)
-        try
-        {
-          const result = await runCoralExec(
-            {
-              prompt: await resolveExecPrompt(prompt, opts.promptFile),
-              cwd,
-              model,
-              host: normalizeOllamaHost(opts.host),
-              permissionProfile: opts.permissionProfile,
-              outputFormat: opts.outputFormat,
-              ...(opts.resultFile
-                ? { resultFile: resolve(opts.resultFile) }
-                : {}),
-              mcp: opts.mcp,
-            },
-            {},
-            controller.signal
-          )
-          exitCode =
-            result.status === 'completed'
-              ? 0
-              : result.status === 'cancelled'
-                ? receivedSignal === 'SIGTERM'
-                  ? 143
-                  : 130
-                : 1
-        }
-        finally
-        {
-          process.off('SIGINT', abortOnSigint)
-          process.off('SIGTERM', abortOnSigterm)
-        }
-      }
-    )
+  const parsed = Array.isArray(input)
+    ? parseCliArgs(['exec', ...input])
+    : { kind: 'exec' as const, options: input }
+  if (parsed.kind === 'exit') return parsed.code
+  const opts = parsed.options
+  const controller = new AbortController()
+  let receivedSignal: 'SIGINT' | 'SIGTERM' | undefined
+  const abortFor = (signal: 'SIGINT' | 'SIGTERM') => () =>
+  {
+    receivedSignal ??= signal
+    controller.abort(signal)
+  }
+  const interrupt = abortFor('SIGINT')
+  const terminate = abortFor('SIGTERM')
+  process.once('SIGINT', interrupt)
+  process.once('SIGTERM', terminate)
+  let started = false
 
   try
   {
-    await command.parseAsync(argv, { from: 'user' })
+    const cwd = resolve(opts.cwd ?? process.cwd())
+    if (!(await stat(cwd)).isDirectory())
+      throw new Error(`not a directory: ${cwd}`)
+    const model = opts.model?.trim()
+    if (!model) throw new Error('model must be nonempty; use -m <Ollama model>')
+    const host = normalizeOllamaHost(opts.host)
+    const prompt = await resolveExecPrompt(
+      opts.prompt,
+      opts.promptFile,
+      controller.signal
+    )
+    controller.signal.throwIfAborted()
+    started = true
+    const result = await runCoralExec(
+      {
+        prompt,
+        cwd,
+        model,
+        host,
+        think: opts.think,
+        permissionProfile: opts.permissionProfile,
+        outputFormat: opts.outputFormat,
+        resultFile: opts.resultFile ? resolve(opts.resultFile) : undefined,
+        mcp: opts.mcp,
+      },
+      {},
+      controller.signal
+    )
+    return receivedSignal
+      ? receivedSignal === 'SIGTERM'
+        ? 143
+        : 130
+      : result.status === 'completed'
+        ? 0
+        : 1
   }
   catch (error)
   {
-    if (error instanceof CommanderError)
-    {
-      return error.exitCode
+    let resultWriteFailed = false
+    let result: CoralExecResult = {
+      version: 1,
+      run_id: randomUUID(),
+      status: controller.signal.aborted ? 'cancelled' : 'failed',
+      model: opts.model ?? '',
+      response: '',
+      usage: {
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        prompt_eval_duration_ns: 0,
+        eval_duration_ns: 0,
+      },
+      error: toErrorMessage(error),
     }
-    process.stderr.write(`${toErrorMessage(error)}\n`)
-    return 2
+    if (opts.resultFile)
+    {
+      try
+      {
+        writeJsonFile(resolve(opts.resultFile), result)
+      }
+      catch (writeError)
+      {
+        resultWriteFailed = true
+        result = {
+          ...result,
+          error: `${result.error}; failed to write result file: ${toErrorMessage(writeError)}`,
+        }
+      }
+    }
+    emitResult(result, opts.outputFormat, (text) => process.stdout.write(text))
+    process.stderr.write(`${result.error}\n`)
+    return receivedSignal
+      ? receivedSignal === 'SIGTERM'
+        ? 143
+        : 130
+      : started || resultWriteFailed
+        ? 1
+        : 2
   }
-  return exitCode
+  finally
+  {
+    process.off('SIGINT', interrupt)
+    process.off('SIGTERM', terminate)
+  }
 }

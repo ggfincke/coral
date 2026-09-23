@@ -11,6 +11,7 @@ import {
   formatQueueLines,
   MAX_QUEUED_MESSAGES,
   promoteNewestForEdit,
+  removeQueuedMessage,
 } from '../../src/tui/run/message-queue.js'
 
 test('enqueue keeps insertion order & assigns monotonic ids', () =>
@@ -101,4 +102,30 @@ test('formatQueueLines collapses whitespace & truncates long entries', () =>
   assert.equal(lines[0], 'queued #4: multi line text')
   assert.ok(lines[1]!.length <= 'queued #5: '.length + 120)
   assert.ok(lines[1]?.endsWith('…'))
+})
+
+test('interrupted queues preserve FIFO identity until explicitly resumed', () =>
+{
+  const queued = enqueueMessage(
+    enqueueMessage(emptyMessageQueue(), 'first'),
+    'second'
+  )
+  const paused = { ...queued, paused: true }
+  assert.equal(dequeueOldestMessage(paused), null)
+  const edited = editQueuedMessage(paused, 2, 'updated second')
+  assert.equal(dequeueOldestMessage(edited), null)
+  assert.deepEqual(
+    edited.entries.map((entry) => entry.id),
+    [1, 2]
+  )
+  const resumed = dequeueOldestMessage({ ...edited, paused: false })!
+  assert.equal(resumed.message.text, 'first')
+  assert.equal(
+    dequeueOldestMessage(resumed.state)?.message.text,
+    'updated second'
+  )
+  const removed = removeQueuedMessage(edited, 1)
+  assert.equal(removed.paused, true)
+  assert.equal(removed.entries[0]?.id, 2)
+  assert.equal(promoteNewestForEdit(queued)?.state.paused, true)
 })

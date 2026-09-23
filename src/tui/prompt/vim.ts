@@ -919,6 +919,18 @@ export function createVimEngine(value: string): VimEngine
   return state as unknown as VimEngine
 }
 
+// synchronize insert-mode edits made by the shared composer without losing registers
+export function syncVimDraft(
+  engine: VimEngine,
+  value: string,
+  cursorOffset: number
+): void
+{
+  const state = engine as unknown as VimState
+  state.value = value
+  state.cursor = Math.min(Math.max(cursorOffset, 0), value.length)
+}
+
 export function vimView(engine: VimEngine): VimView
 {
   const state = engine as unknown as VimState
@@ -957,6 +969,7 @@ export function vimView(engine: VimEngine): VimView
 export function applyVimInput(engine: VimEngine, key: VimKey): VimView
 {
   const state = engine as unknown as VimState
+  if (!key.return) state.submitRequested = false
   // any incoming keypress dismisses a transient ex-command error hint
   state.stickyHint = null
   if (state.mode === 'insert')

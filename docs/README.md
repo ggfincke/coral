@@ -7,7 +7,7 @@ Coral is pre-1.0. Interfaces, session files, and configuration can still change 
 ## Start here
 
 1. [Getting started](getting-started.md) — install, first session, default model and host.
-2. [CLI reference](cli.md) — interactive flags and `coral exec`.
+2. [CLI reference](cli.md) — interactive flags, `coral exec`, and `coral acp`.
 3. [TUI](tui.md) — slash commands, keys, pickers, approvals, `@` mentions.
 
 ## Configure and stay safe
@@ -26,6 +26,8 @@ Coral is pre-1.0. Interfaces, session files, and configuration can still change 
 
 10. [Architecture](architecture.md) — layers, turn loop, ownership, compaction modes, constructor seams, and non-goals. This is the systems document, not a how-to.
 11. [Troubleshooting](troubleshooting.md) — Ollama, context, MCP, sessions, common failures.
+
+[ACP setup and recovery](acp.md) covers connecting app clients and native session ownership.
 
 ## Reading order
 

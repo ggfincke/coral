@@ -29,13 +29,12 @@ export function sanitizePastedText(raw: string): string
     .replace(CONTROL_PATTERN_RE, '')
 }
 
-// single-line pastes up to this size insert literally; anything longer or any
-// multi-line paste becomes a one-line placeholder w/ second-Enter confirmation
+// short pastes stay inline; confirmation is independent of this display choice
 export const PLACEHOLDER_MIN_CHARS = 1_000
 
 export function shouldPlaceholderize(text: string): boolean
 {
-  return text.includes('\n') || text.length > PLACEHOLDER_MIN_CHARS
+  return text.length > PLACEHOLDER_MIN_CHARS
 }
 
 // newline count + 1, matching how terminals number pasted lines

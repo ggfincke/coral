@@ -129,9 +129,9 @@ export function buildBacktrackLines(opts: BacktrackLinesOptions): string[]
   const height = Math.max(opts.height, 0)
   if (height === 0) return []
   const lines: string[] = [
-    `${style('primary').bold('backtrack')} ${chalk.dim('rewind to an earlier prompt')}`,
-    chalk.dim('enter restores · esc cancels'),
-    '',
+    `${style('primary').bold('backtrack')} ${chalk.dim('fork from this prompt')}`,
+    chalk.dim('enter forks · esc cancels'),
+    chalk.dim('Original saved; files and todo board stay current.'),
   ]
     .slice(0, Math.max(height - 1, 0))
     .map((line) => truncateLine(line, width))
