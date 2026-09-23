@@ -491,19 +491,23 @@ The command is observational and never launches a server. Common states:
 
 By default Coral stores:
 
-| Path                                      | Contents                                                               |
-| ----------------------------------------- | ---------------------------------------------------------------------- |
-| `~/.coral/sessions/*.json`                | Authoritative saved conversations, todos, and bounded undo/redo        |
-| `~/.coral/history.jsonl`                  | Append-only prompt history; navigation loads the newest 500 valid rows |
-| `~/.coral/prefs.json`                     | Mutable UI preferences such as the selected theme                      |
-| `~/.coral/telemetry.json` + `telemetry.d` | Legacy baseline plus immutable per-Agent-lifetime counter deltas       |
-| `~/.coral/eval-telemetry.json` + `.d`     | Legacy eval baseline plus optional immutable eval counter deltas       |
-| `~/.coral/retrieval/v2/spaces/*.sqlite`   | Versioned semantic indexes, one per verified embedding space           |
-| `~/.coral/retrieval/index.sqlite`         | Preserved legacy retrieval cache; current Coral does not open it       |
-| `~/.coral/mcp-trust.json` + `.d`          | Legacy trust baseline plus atomic per-alias approval records           |
+| Path                                              | Contents                                                               |
+| ------------------------------------------------- | ---------------------------------------------------------------------- |
+| `~/.coral/sessions/*.json`                        | Authoritative saved conversations, todos, and bounded undo/redo        |
+| `~/.coral/history.jsonl`                          | Append-only prompt history; navigation loads the newest 500 valid rows |
+| `~/.coral/prefs.json`                             | Mutable UI preferences such as the selected theme                      |
+| `~/.coral/telemetry.json` + `telemetry.d`         | Legacy baseline plus immutable per-Agent-lifetime counter deltas       |
+| `~/.coral/eval-telemetry.json` + `.d`             | Legacy eval baseline plus optional immutable eval counter deltas       |
+| `~/.coral/retrieval/v2/spaces/*.chunks-v2.sqlite` | Semantic indexes isolated by embedding space and chunker version       |
+| `~/.coral/retrieval/index.sqlite`                 | Preserved legacy retrieval cache; current Coral does not open it       |
+| `~/.coral/mcp-trust.json` + `.d`                  | Legacy trust baseline plus atomic per-alias approval records           |
 
 `CORAL_HOME` relocates every path in this table. The separate read-only user
 configuration remains `~/.coral.json`.
+
+Semantic indexing keeps fitting TS/JS declarations and class members together.
+The chunker-version suffix preserves older caches and lets old and new Coral
+processes coexist; the next search or `/index` builds the new cache.
 
 Multiple Coral processes may share one `CORAL_HOME`. Atomic replacements use
 private unique temporary files. Session discovery scans the authoritative

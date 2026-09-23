@@ -85,9 +85,13 @@ Natural-language search over an on-disk embedding index for **this project**. **
 
 Each search refreshes the index (`refreshDeduped`). Snippets: at most 12 lines / 1,200 characters. Empty: `No semantically similar code chunks found.`
 
-Index path: `CORAL_HOME/retrieval/v2/spaces/<sha256>.sqlite`. Space id is SHA-256 of a version string plus normalized Ollama host plus the embedding model's **manifest digest** from `/api/tags`. Missing/ambiguous digest fails closed (no reuse under a mutable tag).
+Index path: `CORAL_HOME/retrieval/v2/spaces/<sha256>.chunks-v2.sqlite`. Space id is SHA-256 of a version string plus normalized Ollama host plus the embedding model's **manifest digest** from `/api/tags`. Missing/ambiguous digest fails closed (no reuse under a mutable tag). The chunker-version suffix isolates different chunk layouts. Older caches remain untouched; the first search or `/index` builds the new cache.
 
-Indexing limits: 2,000 files, 512 KiB per file, skip binaries, the `list_files` noise set, extra names `.coral` / `.coral-retrieval`, **reject symlinks**. Git repos use `git ls-files -z --cached --others --exclude-standard`. Chunker: 80 lines, 10-line overlap, 6,000 chars.
+Indexing limits: 2,000 files, 512 KiB per file, skip binaries, the `list_files` noise set, extra names `.coral` / `.coral-retrieval`, **reject symlinks**. Git repos use `git ls-files -z --cached --others --exclude-standard`.
+
+TS/JS chunks follow top-level statements, preserving fitting declarations and leading comments. Oversized class declarations split at direct member boundaries so fitting methods stay whole. Parsing supports `.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs`, and `.cjs`; it uses the existing TypeScript parser lazily, without type checking or a language server. Incomplete syntax can use recovered boundaries when they still cover the source safely.
+
+Chunks have an 80-line / 6,000-character budget. Oversized units, unsupported files, and unusable syntax boundaries use the existing line splitter with 10-line overlap. A single indivisible line may exceed the character budget. Original line ranges are retained, CRLF is normalized, and outer whitespace is trimmed; no synthetic context is added. Search ranking and the 12-line snippet display are unchanged. Structural checks do not establish improved semantic ranking.
 
 Default embedding model: `nomic-embed-text`. `/index` and `/index rebuild` (or `force`) share this indexer. Intended for ordinary project sizes, not giant monorepos (in-process vector scan).
 

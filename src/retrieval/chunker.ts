@@ -3,9 +3,9 @@
 
 import { CHUNKER_VERSION, type CodeChunk } from './types.js'
 
-const MAX_CHUNK_LINES = 80
+export const MAX_CHUNK_LINES = 80
 const OVERLAP_LINES = 10
-const MAX_CHUNK_CHARS = 6_000
+export const MAX_CHUNK_CHARS = 6_000
 
 export function chunkText(content: string): CodeChunk[]
 {

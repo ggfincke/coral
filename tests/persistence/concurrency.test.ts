@@ -481,7 +481,10 @@ test('same-space SQLite initialization and refresh serialize across processes', 
     }
 
     assert.equal(await readFile(legacyPath, 'utf-8'), 'legacy cache sentinel\n')
-    assert.match(dbPath, /\/retrieval\/v2\/spaces\/[a-f\d]{64}\.sqlite$/)
+    assert.match(
+      dbPath,
+      /\/retrieval\/v2\/spaces\/[a-f\d]{64}\.chunks-v2\.sqlite$/
+    )
 
     if (process.platform !== 'win32')
     {

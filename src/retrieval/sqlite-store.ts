@@ -9,6 +9,7 @@ import { coralHomePath } from '../utils/coral-home.js'
 import { ensureParentDir } from '../utils/fs.js'
 import { assertEmbeddingSpace } from './embedding-space.js'
 import { blobToVector, cosineSimilarity, vectorToBlob } from './vector.js'
+import { CHUNKER_VERSION } from './types.js'
 import type {
   EmbeddingSpace,
   IndexedFile,
@@ -90,7 +91,13 @@ interface SqliteStoreOptions
 export function embeddingSpaceDbPath(space: EmbeddingSpace): string
 {
   assertEmbeddingSpace(space)
-  return coralHomePath('retrieval', 'v2', 'spaces', `${space.id}.sqlite`)
+  // old processes must not replace chunks produced by a newer chunker
+  return coralHomePath(
+    'retrieval',
+    'v2',
+    'spaces',
+    `${space.id}.chunks-v${CHUNKER_VERSION}.sqlite`
+  )
 }
 
 function errorCode(err: unknown): string | undefined

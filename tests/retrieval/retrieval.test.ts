@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import Database from 'better-sqlite3'
 import { chunkText } from '../../src/retrieval/chunker.js'
+import { chunkSource } from '../../src/retrieval/source-chunker.js'
 import { createEmbeddingSpace } from '../../src/retrieval/embedding-space.js'
 import { collectIndexableFiles } from '../../src/retrieval/files.js'
 import { ProjectIndexer } from '../../src/retrieval/indexer.js'
@@ -291,7 +292,7 @@ test('ProjectIndexer batches across files and preserves vector ownership through
     await embedder.entered
     assert.deepEqual(
       embedder.batches.map((batch) => batch.length),
-      [16, 6]
+      [16, 4]
     )
     assert.equal(saved.length, 0)
 
@@ -303,7 +304,7 @@ test('ProjectIndexer batches across files and preserves vector ownership through
 
     assert.deepEqual(
       embedder.batches.map((batch) => batch.length),
-      [16, 6, 1]
+      [16, 4, 1]
     )
     assert.equal(embedder.maxActiveRequests, 1)
     assert.deepEqual(progress, [...sources.keys(), 'c-changing.ts'])
@@ -313,7 +314,10 @@ test('ProjectIndexer batches across files and preserves vector ownership through
     )
     for (const file of saved)
     {
-      const expectedChunks = chunkText(sources.get(file.path)!)
+      const expectedChunks = await chunkSource(
+        sources.get(file.path)!,
+        file.path
+      )
       assert.deepEqual(
         file.chunks,
         expectedChunks.map((chunk) => ({
@@ -919,7 +923,7 @@ test('SqliteIndexStore rejects zero-chunk upserts', async () =>
   }
 })
 
-test('versioned space cache preserves legacy data and validates schema metadata', async () =>
+test('versioned space cache isolates old chunks, preserves legacy data, and validates schema metadata', async () =>
 {
   const home = await tempDir('coral-retrieval-layout-')
   const previousHome = process.env.CORAL_HOME
@@ -930,30 +934,65 @@ test('versioned space cache preserves legacy data and validates schema metadata'
 
   const space = makeSpace('c', 'HTTP://OLLAMA.TEST:80/', 'same-tag:latest')
   const path = embeddingSpaceDbPath(space)
+  const oldPath = join(home, 'retrieval', 'v2', 'spaces', `${space.id}.sqlite`)
   let store: SqliteIndexStore | undefined
+  let oldStore: SqliteIndexStore | undefined
 
   try
   {
-    store = new SqliteIndexStore(space)
-    const projectId = store.ensureProject(home)
-    const file: IndexedFile = {
+    oldStore = new SqliteIndexStore(space, oldPath)
+    const oldProjectId = oldStore.ensureProject(home)
+    const source = 'export const feature = "current chunks"\n'
+    await writeFile(join(home, 'feature.ts'), source)
+    const sourceStat = await stat(join(home, 'feature.ts'))
+    const oldFile: IndexedFile = {
       path: 'feature.ts',
-      size: 12,
-      mtimeMs: 1,
-      ctimeMs: 1,
-      sha256: 'content',
+      size: sourceStat.size,
+      mtimeMs: sourceStat.mtimeMs,
+      ctimeMs: sourceStat.ctimeMs,
+      sha256: 'old-content',
       chunks: [
         {
           chunkIndex: 0,
           startLine: 1,
           endLine: 1,
-          text: 'feature',
-          chunkerVersion: CHUNKER_VERSION,
+          text: 'old chunks',
+          chunkerVersion: 1,
           embedding: [1, 0],
         },
       ],
     }
-    store.upsertFile(projectId, file, undefined)
+    assert.ok(oldStore.upsertFile(oldProjectId, oldFile, undefined))
+
+    store = new SqliteIndexStore(space)
+    const projectId = store.ensureProject(home)
+    const embedder = new KeywordEmbedder(space)
+    const indexer = new ProjectIndexer(home, embedder, store)
+    const first = await indexer.ensureIndexed()
+    assert.equal(first.embeddedFiles, 1)
+    assert.deepEqual(embedder.embeddedTexts, [source.trim()])
+    assert.equal(oldStore.search(oldProjectId, [1, 0], 1)[0].text, 'old chunks')
+    assert.equal(store.search(projectId, [0, 1], 1)[0].text, source.trim())
+
+    // simulate an older process replacing its cache between new-process searches
+    assert.ok(
+      oldStore.upsertFile(
+        oldProjectId,
+        {
+          ...oldFile,
+          chunks: [{ ...oldFile.chunks[0], text: 'updated old chunks' }],
+        },
+        oldStore.listFiles(oldProjectId, 1).get(oldFile.path)
+      )
+    )
+    const second = await indexer.ensureIndexed()
+    assert.equal(second.embeddedFiles, 0)
+    assert.equal(embedder.embeddedTexts.length, 1)
+    assert.equal(
+      oldStore.search(oldProjectId, [1, 0], 1)[0].text,
+      'updated old chunks'
+    )
+    assert.equal(store.search(projectId, [0, 1], 1)[0].text, source.trim())
     assert.throws(
       () => store!.search(projectId, [1, 0, 0], 1),
       /Embedding dimension mismatch/
@@ -972,7 +1011,17 @@ test('versioned space cache preserves legacy data and validates schema metadata'
     )
 
     assert.equal(await readFile(legacyPath, 'utf8'), 'legacy cache sentinel\n')
-    assert.match(path, /\/retrieval\/v2\/spaces\/[a-f\d]{64}\.sqlite$/)
+    assert.equal(
+      path,
+      join(
+        home,
+        'retrieval',
+        'v2',
+        'spaces',
+        `${space.id}.chunks-v${CHUNKER_VERSION}.sqlite`
+      )
+    )
+    assert.notEqual(path, oldPath)
     if (process.platform !== 'win32')
     {
       assert.equal((await stat(path)).mode & 0o777, 0o600)
@@ -1015,6 +1064,7 @@ test('versioned space cache preserves legacy data and validates schema metadata'
   finally
   {
     store?.close()
+    oldStore?.close()
     if (previousHome === undefined) delete process.env.CORAL_HOME
     else process.env.CORAL_HOME = previousHome
   }

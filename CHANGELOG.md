@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Semantic indexing:** group TS/JS source at declaration and class-member
+  boundaries, retaining bounded line-based fallback for oversized units and
+  other files. Keep search ranking and excerpts unchanged. Separate cache
+  filenames by chunker version so older Coral processes retain their own
+  indexes; the new layout rebuilds embeddings on first use without deleting
+  old caches.
+
 ## [0.15.0] - 2026-09-07
 
 ### Added
