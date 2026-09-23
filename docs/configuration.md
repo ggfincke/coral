@@ -140,22 +140,22 @@ The bundled TypeScript language server inherits a copy of `process.env`.
 
 Default root: `~/.coral`. Directories `0o700`, session/trust/index files typically `0o600`.
 
-| Path                                        | Contents                                                                        |
-| ------------------------------------------- | ------------------------------------------------------------------------------- |
-| `sessions/<8hex>.json`                      | Authoritative conversations, todos, bounded undo/redo                           |
-| `history.jsonl`                             | Append-only prompt history; navigation uses newest 500 valid rows               |
-| `prefs.json`                                | Whole-file last-writer-wins; `theme`                                            |
-| `telemetry.json`                            | Legacy baseline **read**; new interactive deltas go to `telemetry.d/`           |
-| `telemetry.d/<uuid>.json`                   | Immutable per-Agent-lifetime reliability counters                               |
-| `eval-telemetry.json` + `eval-telemetry.d/` | Eval harness only (`npm run eval -- --save-telemetry`), not the interactive CLI |
-| `mcp-trust.json`                            | Legacy launch-trust baseline (read)                                             |
-| `mcp-trust.d/<alias>.json`                  | Atomic per-alias approvals (write path for new trust)                           |
-| `retrieval/v2/spaces/<64-hex>.sqlite`       | Semantic indexes, one per verified embedding space                              |
-| `retrieval/index.sqlite`                    | Legacy cache; current Coral does **not** open it                                |
+| Path                                            | Contents                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------- |
+| `sessions/<8hex>.json`                          | Authoritative conversations, todos, bounded undo/redo                           |
+| `history.jsonl`                                 | Append-only prompt history; navigation uses newest 500 valid rows               |
+| `prefs.json`                                    | Whole-file last-writer-wins; `theme`                                            |
+| `telemetry.json`                                | Legacy baseline **read**; new interactive deltas go to `telemetry.d/`           |
+| `telemetry.d/<uuid>.json`                       | Immutable per-Agent-lifetime reliability counters                               |
+| `eval-telemetry.json` + `eval-telemetry.d/`     | Eval harness only (`npm run eval -- --save-telemetry`), not the interactive CLI |
+| `mcp-trust.json`                                | Legacy launch-trust baseline (read)                                             |
+| `mcp-trust.d/<alias>.json`                      | Atomic per-alias approvals (write path for new trust)                           |
+| `retrieval/v2/spaces/<64-hex>.chunks-v2.sqlite` | Semantic indexes, isolated by embedding space and chunker version               |
+| `retrieval/index.sqlite`                        | Legacy cache; current Coral does **not** open it                                |
 
 Multiple Coral processes may share one `CORAL_HOME`. Session discovery scans files (a stale index cannot hide a session). Same session ID: complete-file last-writer-wins. Telemetry deltas and per-alias trust avoid unrelated lost updates. Preferences are whole-file LWW. History is not rewritten on ordinary reads.
 
-Retrieval uses SQLite WAL and a bounded busy wait. Coral does not delete old caches while another process might have them open. To drop indexes: quit every Coral, then remove files under `CORAL_HOME/retrieval/`.
+Retrieval uses SQLite WAL and a bounded busy wait. Older `retrieval/v2/spaces/<64-hex>.sqlite` files remain untouched; current Coral builds a separate cache on the first search or `/index`. Coral does not delete old caches while another process might have them open. To drop indexes: quit every Coral, then remove files under `CORAL_HOME/retrieval/`.
 
 ---
 

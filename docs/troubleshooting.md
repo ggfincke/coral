@@ -75,7 +75,7 @@ Timeout 15s, 5 MiB buffer, 200 grep hits / 100 glob files.
 
 `/index` uses a different string: `Index build failed (embedding model {name}): …` plus the same pull hint when the model is missing. Already in progress: `Index build already in progress`. Usage: `/index` or `/index rebuild` (`force` is the same as `rebuild`).
 
-Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete. Digest errors (missing/ambiguous/invalid from `/api/tags`) fail closed so Coral will not reuse vectors under a mutable tag. Index files: `CORAL_HOME/retrieval/v2/spaces/*.sqlite`. Legacy `retrieval/index.sqlite` is unused.
+Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete. Digest errors (missing/ambiguous/invalid from `/api/tags`) fail closed so Coral will not reuse vectors under a mutable tag. Current index files: `CORAL_HOME/retrieval/v2/spaces/*.chunks-v2.sqlite`. The new chunk layout triggers a fresh build on first use; older space caches and legacy `retrieval/index.sqlite` remain unused and preserved.
 
 ---
 

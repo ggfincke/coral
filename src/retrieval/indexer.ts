@@ -2,7 +2,7 @@
 // project indexing and semantic search orchestration
 
 import { resolve } from 'node:path'
-import { chunkText } from './chunker.js'
+import { chunkSource } from './source-chunker.js'
 import { collectIndexableFiles, revalidateSourceFile } from './files.js'
 import type {
   CodeChunk,
@@ -230,7 +230,7 @@ export class ProjectIndexer
         continue
       }
 
-      const chunks = chunkText(source.content)
+      const chunks = await chunkSource(source.content, source.path)
       if (chunks.length === 0)
       {
         pendingFiles.push({ kind: 'delete', source })
