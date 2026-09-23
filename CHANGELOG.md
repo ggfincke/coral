@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Optional local image inspection prototype:** a standalone MCP helper reads
+  staged images through a separate local Ollama vision model and returns text
+  observations, with bounded file access, cancellation, and browser screenshot
+  setup guidance. Coral's main model and runtime dependencies are unchanged.
+
 - **ACP:** text-only stdio sessions with streamed tool evidence, supervised
   approvals, cancellation, model changes, and native resume on the current
   Agent/runtime. Session leases protect native snapshots from concurrent saves
