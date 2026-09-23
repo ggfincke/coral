@@ -43,6 +43,15 @@ export function buildRestoredBlocks(messages: OllamaMessage[]): OutputBlock[]
         restoredBlocks.push({ type: 'assistant', content: msg.content })
       }
 
+      for (const call of msg.tool_calls ?? [])
+      {
+        restoredBlocks.push({
+          type: 'tool_call',
+          toolName: call.function.name,
+          args: call.function.arguments,
+          status: 'recorded',
+        })
+      }
       continue
     }
 

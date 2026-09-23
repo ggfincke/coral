@@ -51,3 +51,12 @@ export function isValidSessionId(id: string): boolean
 {
   return SESSION_ID_PATTERN.test(id)
 }
+
+export interface ProcessSessionRuntimeIdentity
+{
+  kind: 'process'
+  runtimeId: string
+  hostname: string
+  processId: number
+  processStartedAt: string
+}

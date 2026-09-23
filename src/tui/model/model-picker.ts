@@ -38,7 +38,8 @@ export function buildModelPickerLines(
   models: Model[],
   selectedIndex: number,
   width: number,
-  height: number
+  height: number,
+  hasSession = false
 ): string[]
 {
   const columns = Math.max(Math.floor(width), 0)
@@ -63,7 +64,11 @@ export function buildModelPickerLines(
   if (rows >= 2) lines.push(style('primary').bold('Select an Ollama model'))
   if (rows >= 3)
   {
-    lines.push(chalk.dim('enter selects · ↑↓ or j/k moves · esc quits'))
+    lines.push(
+      chalk.dim(
+        `enter selects · ↑↓ or j/k moves · esc/ctrl+c ${hasSession ? 'returns to chat' : 'quits'}`
+      )
+    )
   }
   if (rows >= 8) lines.push('')
 

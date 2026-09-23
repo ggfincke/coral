@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ACP:** text-only stdio sessions with streamed tool evidence, supervised
+  approvals, cancellation, model changes, and native resume on the current
+  Agent/runtime. Session leases protect native snapshots from concurrent saves
+  and renames; failed saves must recover before another turn can run.
+- **Tool-free execution:** `coral exec --permission-profile none` exposes no
+  tools or MCP servers, keeps execution ephemeral, and reports failed,
+  cancelled, and iteration-limited results explicitly.
+
 ### Changed
 
 - **Semantic indexing:** group TS/JS source at declaration and class-member
