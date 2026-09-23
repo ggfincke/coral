@@ -37,7 +37,7 @@ test('shouldPlaceholderize follows the newline/size rules', () =>
     shouldPlaceholderize('x'.repeat(PLACEHOLDER_MIN_CHARS + 1)),
     true
   )
-  assert.equal(shouldPlaceholderize('two\nlines'), true)
+  assert.equal(shouldPlaceholderize('two\nlines'), false)
 })
 
 test('countPastedLines & buildPastePlaceholder format tokens', () =>

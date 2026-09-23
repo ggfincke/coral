@@ -6,6 +6,8 @@ import { test } from 'node:test'
 import chalk from 'chalk'
 import {
   countPromptRenderRows,
+  movePromptVertically,
+  layoutPrompt,
   MAX_PROMPT_VIEW_ROWS,
   renderPromptValueWithCursor,
 } from '../../src/tui/prompt/prompt-render.js'
@@ -67,4 +69,24 @@ test('long drafts scroll around the cursor & mark clipped rows', () =>
   const headVisible = headRendered.split('\n')
   assert.ok(headVisible[0]?.startsWith('line-0'))
   assert.equal(headVisible[0]?.startsWith('…'), false)
+})
+
+test('visual navigation follows wrapped grapheme and tab cells and recomputes after resize', () =>
+{
+  const text = 'ab界é\t123456789\nlast'
+  const layout = layoutPrompt(text, 0, 0, 8)
+  for (const position of layout.positions)
+  {
+    const down = movePromptVertically(text, position.offset, 1, 8, null)
+    if (!down) continue
+    const target = layoutPrompt(text, down.offset, 0, 8).positions.find(
+      (entry) => entry.offset === down.offset
+    )!
+    assert.equal(target.row, position.row + 1)
+    assert.ok(!text.slice(down.offset).startsWith('́'))
+  }
+  assert.equal(movePromptVertically('abcdefghijk', 2, 1, 5, null)?.offset, 7)
+  assert.equal(movePromptVertically('abcdefghijk', 2, 1, 8, null)?.offset, 10)
+  assert.equal(movePromptVertically('abcdefghijk', 2, -1, 5, null), null)
+  assert.equal(movePromptVertically('abcdefghijk', 11, 1, 5, null), null)
 })

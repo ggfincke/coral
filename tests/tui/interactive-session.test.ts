@@ -11,7 +11,16 @@ import {
   type InteractiveLifetimeAgent,
   type PromptSettlement,
 } from '../../src/tui/session/interactive-runtime.js'
-import { resolveStartupSession } from '../../src/tui/session/agent-session.js'
+import { AgentTodoState } from '../../src/agent/state/todos.js'
+import { makeFakeAgent } from '../helpers/agent-harness.js'
+import { loadSession } from '../../src/session/store.js'
+import { writeFileSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  forkAgentSession,
+  persistAgentSession,
+  resolveStartupSession,
+} from '../../src/tui/session/agent-session.js'
 import { runAdmittedCommand } from '../../src/tui/commands/command-operation.js'
 import type { SessionMeta } from '../../src/session/types.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
@@ -600,5 +609,135 @@ test('always-approvals grant identical tool calls without prompting until reset'
   settle(true)
   assert.equal(await afterReset, true)
 
+  await runtime.shutdown()
+})
+
+test('fork saves the complete parent, preserves files, and binds future saves only to the child', async () =>
+{
+  const cwd = await tempDir('coral-fork-')
+  const file = join(cwd, 'current.txt')
+  writeFileSync(file, 'current files')
+  const { agent } = makeFakeAgent(cwd, [], {
+    mcpMode: 'off',
+    todoState: new AgentTodoState([
+      { content: 'current task', status: 'in_progress' },
+    ]),
+  })
+  agent.restoreMessages([
+    { role: 'user', content: 'first' },
+    { role: 'assistant', content: 'answer' },
+    { role: 'user', content: 'second' },
+  ])
+  const boundary = agent
+    .getMessages()
+    .findIndex((message) => message.content === 'second')
+  agent.restoreUndoStack(
+    [
+      {
+        startIndex: 1,
+        endIndex: boundary,
+        userMessage: 'first',
+        messages: agent.getMessages().slice(1, boundary),
+        changes: [{ path: file, before: 'old files', after: 'current files' }],
+      },
+    ],
+    []
+  )
+  const parent = persistAgentSession(agent, null)!
+  let prompt: ActivePrompt | null = null
+  const runtime = new InteractiveSessionRuntime(
+    {
+      persist: persistAgentSession,
+      recordTelemetry()
+      {},
+      onPromptChange(value)
+      {
+        prompt = value
+      },
+      onSessionChange()
+      {},
+      onTransitionChange()
+      {},
+    },
+    agent,
+    parent
+  )
+  const grantTurn = runtime.beginOperation('turn')!
+  const grant = runtime.requestToolApproval(grantTurn, {
+    toolName: 'bash',
+    args: {},
+  })
+  runtime.settlePrompt(prompt!.id, { approved: true, always: true })
+  assert.equal(await grant, true)
+  runtime.completeTurn(grantTurn)
+  const command = runtime.beginOperation('command')!
+  const failed = forkAgentSession(agent, boundary, {
+    isCurrent: () => true,
+    saveParent: () => null,
+    adopt: () => assert.fail('must not adopt'),
+  })
+  assert.equal(failed.status, 'error')
+  assert.equal(runtime.getSessionId(), parent.id)
+  assert.equal(agent.getMessages().at(-1)?.content, 'second')
+  let childAgent = agent
+  const result = forkAgentSession(agent, boundary, {
+    isCurrent: () => runtime.acceptsCommandEvent(command),
+    saveParent: () => runtime.saveOperation(command),
+    adopt(child)
+    {
+      assert.deepEqual(child.undo, [])
+      assert.deepEqual(child.redo, [])
+      assert.deepEqual(child.todos, agent.getTodos())
+      assert.equal(child.meta.title, `${parent.title} (fork)`)
+      childAgent = makeFakeAgent(cwd, [], {
+        mcpMode: 'off',
+        todoState: new AgentTodoState(child.todos),
+      }).agent
+      childAgent.restoreMessages(child.messages)
+      void runtime.replaceAgent(childAgent, child.meta, {
+        preserveCommand: true,
+      })
+      return true
+    },
+  })
+  assert.equal(result.status, 'forked')
+  if (result.status !== 'forked') assert.fail(result.message)
+  runtime.finishCommand(command)
+  childAgent.restoreMessages([
+    ...childAgent.getMessages(),
+    { role: 'user', content: 'child only' },
+  ])
+  const turn = runtime.beginOperation('turn')!
+  prompt = null
+  const childApproval = runtime.requestToolApproval(turn, {
+    toolName: 'bash',
+    args: {},
+  })
+  assert.ok(prompt, 'fork must reset the parent approval grant')
+  runtime.settlePrompt(prompt!.id, false)
+  assert.equal(await childApproval, false)
+  runtime.completeTurn(turn)
+  assert.equal(loadSession(parent.id)?.undo?.length, 1)
+  assert.equal(loadSession(parent.id)?.messages.at(-1)?.content, 'second')
+  assert.equal(
+    loadSession(result.childId)?.messages.at(-1)?.content,
+    'child only'
+  )
+  assert.equal(readFileSync(file, 'utf8'), 'current files')
+  const recovery = forkAgentSession(
+    childAgent,
+    childAgent
+      .getMessages()
+      .findIndex((message) => message.content === 'child only'),
+    {
+      isCurrent: () => true,
+      saveParent: () =>
+        persistAgentSession(childAgent, loadSession(result.childId)!.meta),
+      adopt: () => false,
+    }
+  )
+  assert.equal(recovery.status, 'error')
+  if (recovery.status === 'error')
+    assert.ok(recovery.childId && loadSession(recovery.childId))
   await runtime.shutdown()
 })

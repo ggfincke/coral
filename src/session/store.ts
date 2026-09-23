@@ -218,7 +218,8 @@ export function createSession(
   messages: OllamaMessage[],
   todos: TodoItem[] = [],
   undo: UndoTurn[] = [],
-  redo: UndoTurn[] = []
+  redo: UndoTurn[] = [],
+  title?: string
 ): SessionMeta
 {
   ensureDir()
@@ -231,7 +232,7 @@ export function createSession(
     cwd,
     createdAt: now,
     updatedAt: now,
-    title: extractTitle(messages),
+    title: title?.trim() || extractTitle(messages),
     messageCount: countConversationMessages(messages),
   }
 

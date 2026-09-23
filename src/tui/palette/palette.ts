@@ -56,8 +56,6 @@ export interface PaletteInputResult
   state: PaletteInputState
 }
 
-const MAX_VISIBLE_ENTRIES = 10
-
 function scoreText(value: string, query: string): number
 {
   const lower = value.toLowerCase()
@@ -118,7 +116,7 @@ export function filterPaletteEntries(
 ): PaletteEntry[]
 {
   const normalized = query.trim().toLowerCase()
-  if (!normalized) return entries.slice(0, MAX_VISIBLE_ENTRIES)
+  if (!normalized) return entries
 
   return entries
     .map((entry, index) => ({
@@ -133,7 +131,6 @@ export function filterPaletteEntries(
         a.entry.kind.localeCompare(b.entry.kind) ||
         a.index - b.index
     )
-    .slice(0, MAX_VISIBLE_ENTRIES)
     .map((item) => item.entry)
 }
 
@@ -263,7 +260,12 @@ export function buildPaletteLines(opts: PaletteLinesOptions): string[]
         'type to filter · enter to run · esc cancels'
       )
     )
-  if (height >= 6) lines.push('')
+  if (height >= 6)
+    lines.push(
+      chalk.dim(
+        `${opts.entries.length ? opts.selectedIndex + 1 : 0}/${opts.entries.length}`
+      )
+    )
 
   if (opts.entries.length === 0)
   {

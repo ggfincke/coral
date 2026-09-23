@@ -109,6 +109,12 @@ const helpCommand: Command = {
 // preserve this exact order across help, completion, palette, and dispatch
 const commands: readonly Command[] = [
   helpCommand,
+  {
+    name: 'queue',
+    description:
+      'List queued messages or pause/resume/edit/remove/clear pending work',
+    execute: (args, ctx) => ctx.manageQueue(args),
+  },
   conversationCommands.clear,
   conversationCommands.compact,
   runtimeCommands.status,

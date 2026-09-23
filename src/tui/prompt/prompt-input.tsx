@@ -20,7 +20,6 @@ import {
   continueWithNewline,
   insertTextAt,
 } from './prompt-edit.js'
-import { buildLineStarts, verticalMove } from './line-index.js'
 import {
   EMPTY_EDITOR_MEMORY,
   nextKillIndex,
@@ -43,6 +42,7 @@ import {
   applyVimInput,
   createVimEngine,
   vimView,
+  syncVimDraft,
   type VimEngine,
 } from './vim.js'
 import {
@@ -64,6 +64,7 @@ import CompletionMenu, { buildCompletionMenuRows } from './completion-menu.js'
 import { resetPromptFileSuggestions } from './prompt-file-suggestions.js'
 import {
   buildPromptRenderModel,
+  movePromptVertically,
   fitPromptLine,
   MAX_PROMPT_VIEW_ROWS,
 } from './prompt-render.js'
@@ -104,7 +105,7 @@ export interface PromptInputProps
   // newest-500 history entries for ctrl+r reverse search; absent = disabled
   getHistoryEntries?: () => readonly HistoryEntry[]
   // hand the draft to $EDITOR; resolves after Ink suspends & resumes
-  onOpenEditor?: () => Promise<void>
+  onOpenEditor?: (draft: string) => Promise<string | null>
   // route composer keys through the vi engine (NORMAL/INSERT)
   viMode?: boolean
   // canonical chord -> action overrides resolved from prefs at startup
@@ -174,12 +175,17 @@ export default function PromptInput({
   const pasteRegistryRef = useRef(new Map<number, string>())
   const nextPasteIdRef = useRef(1)
   const [pendingPasteConfirm, setPendingPasteConfirm] = useState(false)
+  const [droppedChars, setDroppedChars] = useState(0)
   // editor memory: undo coalescing, kill ring, yank-pop span, column intent
   const memoryRef = useRef<EditorMemory>(EMPTY_EDITOR_MEMORY)
   const killRingRef = useRef<readonly string[]>([])
   const killIndexRef = useRef(0)
   const lastYankRef = useRef<{ start: number; end: number } | null>(null)
   const preferredColRef = useRef<number | null>(null)
+  useEffect(() =>
+  {
+    preferredColRef.current = null
+  }, [width, value])
   // ctrl+r reverse search: state here, pre-search composer snapshot in a ref
   const [search, setSearch] = useState<HistorySearchState>(IDLE_HISTORY_SEARCH)
   const searchSavedRef = useRef<{ value: string; cursorOffset: number }>({
@@ -193,13 +199,13 @@ export default function PromptInput({
   // vi engine drives the composer while viMode is on; external value changes
   // (paste, history, editor handoff) recreate it preserving the current mode
   const vimEngineRef = useRef<VimEngine | null>(null)
-  const vimModeRef = useRef<'insert' | 'normal'>('normal')
+  const [vimMode, setVimMode] = useState<'insert' | 'normal'>('normal')
   useEffect(() =>
   {
     if (viMode)
     {
       vimEngineRef.current = createVimEngine(value)
-      if (vimModeRef.current === 'insert')
+      if (vimMode === 'insert')
       {
         applyVimInput(vimEngineRef.current, { input: 'i' })
       }
@@ -244,7 +250,7 @@ export default function PromptInput({
     !dismissed &&
     !hasExternalValue &&
     !search.active &&
-    !viMode &&
+    (!viMode || vimMode === 'insert') &&
     query !== null &&
     items.length > 0
   const safeIndex = Math.min(selectedIndex, items.length - 1)
@@ -352,9 +358,13 @@ export default function PromptInput({
       if (next.value !== value)
       {
         onChange(next.value)
+        if (!next.value)
+        {
+          setPendingPasteConfirm(false)
+          setDroppedChars(0)
+        }
         setDismissed(false)
         setSelectedIndex(0)
-        setPendingPasteConfirm(false)
       }
     },
     [onChange, resolvedCursor.cursorOffset, value]
@@ -544,6 +554,8 @@ export default function PromptInput({
         return
       }
 
+      if (text.includes('\n') || shouldPlaceholderize(text))
+        setPendingPasteConfirm(true)
       if (!shouldPlaceholderize(text))
       {
         insertPastedText(text)
@@ -553,6 +565,7 @@ export default function PromptInput({
       const id = nextPasteIdRef.current
       nextPasteIdRef.current += 1
       const bounded = boundPastedText(text)
+      setDroppedChars((count) => count + bounded.truncatedChars)
 
       const registry = pasteRegistryRef.current
       while (registry.size >= 32)
@@ -592,11 +605,13 @@ export default function PromptInput({
   )
   const hint = search.active
     ? `${searchLabel} '${searchQuery}'${searchActions}`
-    : focus && pendingPasteConfirm && !viMode
-      ? 'pasted text armed · Enter confirms · next Enter sends'
+    : focus && pendingPasteConfirm
+      ? `paste · ${viMode ? ':wq confirms, Enter sends' : 'Enter confirms, next Enter sends'}${droppedChars ? ` · ${droppedChars} chars dropped` : ''}`
       : viMode && viStatusHint
         ? viStatusHint
-        : null
+        : droppedChars
+          ? `${droppedChars} pasted characters dropped · Ctrl+G to inspect`
+          : null
   const hintRows = hint && rowBudget > 1 ? 1 : 0
   const displayPlaceholder = displayValue.length === 0 && placeholder.length > 0
   const draft = useMemo(
@@ -796,10 +811,31 @@ export default function PromptInput({
         if (!editorBusyRef.current)
         {
           editorBusyRef.current = true
-          void onOpenEditor().finally(() =>
-          {
-            editorBusyRef.current = false
-          })
+          void onOpenEditor(
+            expandPastePlaceholders(value, (id) =>
+              pasteRegistryRef.current.get(id)
+            )
+          )
+            .then((edited) =>
+            {
+              if (edited !== null)
+              {
+                commitEdit(
+                  {
+                    value: edited,
+                    cursorOffset: edited.length,
+                    cursorWidth: 0,
+                  },
+                  'other'
+                )
+                if (edited.includes('\n') || shouldPlaceholderize(edited))
+                  setPendingPasteConfirm(true)
+              }
+            })
+            .finally(() =>
+            {
+              editorBusyRef.current = false
+            })
         }
         return
       }
@@ -823,7 +859,11 @@ export default function PromptInput({
 
       // application shortcuts keep priority in vi mode; only editor input
       // reaches the engine, so ctrl/meta keys cannot become literal letters
-      if (viMode && vimEngineRef.current)
+      if (
+        viMode &&
+        vimEngineRef.current &&
+        (vimMode === 'normal' || (key.escape && !menuOpen))
+      )
       {
         if (
           (key.ctrl || key.meta) &&
@@ -834,13 +874,12 @@ export default function PromptInput({
 
         const engine = vimEngineRef.current
         const before = vimView(engine)
-        if (before.value !== value)
+        if (
+          before.value !== value ||
+          before.cursorOffset !== resolvedCursor.cursorOffset
+        )
         {
-          vimEngineRef.current = createVimEngine(value)
-          if (before.mode === 'insert')
-          {
-            applyVimInput(vimEngineRef.current, { input: 'i' })
-          }
+          syncVimDraft(engine, value, resolvedCursor.cursorOffset)
         }
 
         const next = applyVimInput(vimEngineRef.current, {
@@ -850,11 +889,16 @@ export default function PromptInput({
           backspace: key.backspace,
           delete: key.delete,
         })
-        vimModeRef.current = next.mode
+        setVimMode(next.mode)
         setViStatusHint(next.statusHint)
 
         if (next.submitRequested)
         {
+          if (pendingPasteConfirm)
+          {
+            setPendingPasteConfirm(false)
+            return
+          }
           onSubmit(
             expandPastePlaceholders(next.value, (id) =>
               pasteRegistryRef.current.get(id)
@@ -912,20 +956,28 @@ export default function PromptInput({
         }
       }
 
+      if (viMode && vimMode === 'insert' && key.return)
+      {
+        commitEdit(
+          insertTextAt(value, resolvedCursor.cursorOffset, '\n'),
+          'other'
+        )
+        return
+      }
+
       if (key.upArrow || key.downArrow)
       {
         // vertical movement owns the arrows inside a multi-line draft; history
         // recall takes over at the first/last-line boundaries
         const deltaRows = key.upArrow ? -1 : 1
-        const starts = buildLineStarts(value)
-        const moved = verticalMove(
+        const moved = movePromptVertically(
           value,
-          starts,
           resolvedCursor.cursorOffset,
           deltaRows,
+          contentWidth,
           preferredColRef.current
         )
-        if (moved.offset !== resolvedCursor.cursorOffset)
+        if (moved)
         {
           preferredColRef.current = moved.preferredCol
           setCursor({
@@ -1038,6 +1090,7 @@ export default function PromptInput({
     [
       acceptCompletion,
       commitEdit,
+      contentWidth,
       editOpKind,
       finishSearch,
       getHistoryEntries,
@@ -1071,6 +1124,7 @@ export default function PromptInput({
       undoEdit,
       value,
       viMode,
+      vimMode,
       yankPopCycle,
       yankText,
     ]
