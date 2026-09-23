@@ -8,6 +8,10 @@ Coral does **not** sandbox MCP processes. Bounds below limit protocol messages a
 
 Deferred / not supported: remote transports, OAuth, standalone resource discovery, prompts, sampling, elicitation, hot config or tool-list updates, MCP from subagents, parallel MCP calls. Text resources **embedded in a tool result** are supported.
 
+For an optional local example, see the [image inspection prototype](../integrations/image-inspector/README.md).
+It runs a separate vision model through loopback Ollama and returns text to the
+main model, with setup instructions for handing off saved browser screenshots.
+
 ---
 
 ## Configure a server

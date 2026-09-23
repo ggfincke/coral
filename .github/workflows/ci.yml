@@ -37,8 +37,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install image inspector dependencies
+        run: npm ci --prefix integrations/image-inspector --ignore-scripts
+
       - name: Security audit
         run: npm audit --audit-level=high
+
+      - name: Audit image inspector dependencies
+        run: npm audit --prefix integrations/image-inspector --audit-level=high
 
       - name: Check formatting and linting
         run: npm run format:check
@@ -54,6 +60,9 @@ jobs:
 
       - name: Run unit tests
         run: npm test
+
+      - name: Run image inspector tests
+        run: npm --prefix integrations/image-inspector test
 
       - name: Check dev tools
         run: npm run check:dev-tools
