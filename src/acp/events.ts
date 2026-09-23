@@ -151,6 +151,9 @@ export class AcpEventProjection
         update,
       })
     })
+    // observe failures immediately while retaining the rejection for drain
+    void this.notificationTail.catch(() =>
+    {})
   }
 
   private resetMessageSegments(): void
