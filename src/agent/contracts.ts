@@ -61,7 +61,8 @@ export interface AgentEvents
   onToolApproval: (
     name: string,
     args: Record<string, unknown>,
-    presentation?: ToolCallPresentation
+    presentation?: ToolCallPresentation,
+    callId?: number
   ) => Promise<boolean>
   // launch trust is separate from per-tool approval and is never automatic
   onMcpLaunchApproval?: (request: McpLaunchApprovalRequest) => Promise<boolean>
@@ -76,6 +77,7 @@ export interface AgentEvents
   onCompactionStart?: () => void
   // report after pruning or summarization completes
   onCompaction?: (result: CompactionResult) => void
+  onIterationLimit?: () => void
   onDone: () => void
   onError: (error: Error) => void
 }

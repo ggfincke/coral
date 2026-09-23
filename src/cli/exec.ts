@@ -18,9 +18,10 @@ import type { Tool } from '../tools/tool.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { writeJsonFile } from '../utils/json.js'
 
-export type ExecPermissionProfile = 'read-only' | 'workspace-write'
+export type ExecPermissionProfile = 'none' | 'read-only' | 'workspace-write'
 export type ExecOutputFormat = 'text' | 'json' | 'stream-json'
-export type ExecStatus = 'completed' | 'failed' | 'cancelled'
+export type ExecStatus =
+  'completed' | 'failed' | 'cancelled' | 'iteration_limited'
 
 export interface CoralExecOptions
 {
@@ -78,9 +79,11 @@ export function resolveHeadlessProfile(
 ): HeadlessProfile
 {
   const tools =
-    profile === 'read-only'
-      ? subagentTools
-      : allTools.filter((tool) => WORKSPACE_WRITE_TOOL_NAMES.has(tool.name))
+    profile === 'none'
+      ? []
+      : profile === 'read-only'
+        ? subagentTools
+        : allTools.filter((tool) => WORKSPACE_WRITE_TOOL_NAMES.has(tool.name))
   const permissions = Object.fromEntries(
     tools.map((tool) => [tool.name, 'always_allow'] as const)
   ) as ToolPermissions
@@ -158,11 +161,12 @@ export async function runCoralExec(
   }
   const runId = dependencies.createRunId?.() ?? randomUUID()
   const profile = resolveHeadlessProfile(options.permissionProfile)
+  const mcp = options.mcp && options.permissionProfile !== 'none'
   const agent = new Agent(options.model, options.host, options.cwd, {
     tools: profile.tools,
-    permissions: resolveHeadlessPermissions(profile, options.cwd, options.mcp),
-    mcpMode: options.mcp ? 'ask' : 'off',
-    mcpConfig: options.mcp ? resolveMcpConfig() : { servers: [], issues: [] },
+    permissions: resolveHeadlessPermissions(profile, options.cwd, mcp),
+    mcpMode: mcp ? 'ask' : 'off',
+    mcpConfig: mcp ? resolveMcpConfig() : { servers: [], issues: [] },
     verifyEdits: false,
     ...(dependencies.inferenceClient
       ? { inferenceClient: dependencies.inferenceClient }
@@ -170,6 +174,7 @@ export async function runCoralExec(
   })
   let streamedResponse = ''
   let runError: Error | undefined
+  let iterationLimited = false
 
   try
   {
@@ -235,6 +240,10 @@ export async function runCoralExec(
         {
           emit({ type: 'done', run_id: runId })
         },
+        onIterationLimit()
+        {
+          iterationLimited = true
+        },
         onError(error)
         {
           runError = error
@@ -265,7 +274,9 @@ export async function runCoralExec(
     ? 'failed'
     : signal?.aborted
       ? 'cancelled'
-      : 'completed'
+      : iterationLimited
+        ? 'iteration_limited'
+        : 'completed'
   const finalResponse = latestAssistantResponse(agent) ?? streamedResponse
   let result: CoralExecResult = {
     version: 1,
@@ -335,7 +346,7 @@ export async function runExecCli(argv: string[]): Promise<number>
     .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
     .addOption(
       new Option('--permission-profile <profile>', 'headless tool profile')
-        .choices(['read-only', 'workspace-write'])
+        .choices(['none', 'read-only', 'workspace-write'])
         .default('read-only')
     )
     .addOption(
