@@ -51,8 +51,9 @@ test('headless execution emits JSONL and atomically writes its final result', as
     {
       return []
     },
-    async *chatStream()
+    async *chatStream(request)
     {
+      assert.equal(request.think, false)
       yield {
         message: {
           role: 'assistant',
@@ -71,6 +72,7 @@ test('headless execution emits JSONL and atomically writes its final result', as
     const result = await runCoralExec(
       {
         prompt: 'inspect the repository',
+        think: false,
         cwd: dir,
         model: 'fake-model',
         host: 'http://localhost:11434',
