@@ -120,6 +120,21 @@ async function normalizeImage(bytes, signal)
     {
       throw new Error('unsupported format')
     }
+    if (metadata.format === 'png')
+    {
+      // sharp exposes only the first APNG frame, so reject animation chunks directly
+      for (let offset = 8; offset < bytes.length;)
+      {
+        const remaining = bytes.length - offset
+        if (remaining < 12) throw new Error('truncated PNG chunk')
+        const length = bytes.readUInt32BE(offset)
+        if (length > remaining - 12) throw new Error('truncated PNG chunk')
+        const type = bytes.toString('latin1', offset + 4, offset + 8)
+        if (type === 'acTL') throw new Error('animated PNG is unsupported')
+        if (type === 'IEND') break
+        offset += length + 12
+      }
+    }
     signal.throwIfAborted()
     const { data, info } = await decoder
       .rotate()
