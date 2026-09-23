@@ -10,7 +10,7 @@ Interactive Coral is an Ink app. Type a prompt to run a turn. Slash commands and
 
 Header: `coral · {model or 'pick a model'} · ask|YOLO`. `session {id}` appears only once a session is bound. `{n} messages` appears only when the count is greater than 0.
 
-While a run is active, the status line uses stages such as `waiting for model`, `thinking`, `responding`, `compacting context`, `running {tool}`, or `ready`, plus a context-occupancy gauge and last-turn tok/s when known. Idle left side: occupancy gauge (or `ready`), last-turn throughput, and `N tok session`. Idle hints include `ctrl+p commands`, `/help`, `esc quits`, and `⚠ yolo` in yolo mode. During a run: `ctrl+c interrupts`. Other strings: `command palette` / `enter runs · esc closes`; picker `loading models from Ollama…` / `press r to retry` / `N models available`; `scrollback`; `switching model…` / `finishing model update…` / `finishing permission update…` / `finishing session update…`; `running command…`; `cleanup in progress`.
+While a run is active, the status line uses stages such as `waiting for model`, `thinking`, `responding`, `compacting context`, `running {tool}`, or `ready`, plus a context-occupancy gauge and last-turn tok/s when known. Idle left side: occupancy gauge (or `ready`), last-turn throughput, and `N tok since open`. Idle hints include `ctrl+p commands`, `/help`, `esc twice forks`, and `⚠ yolo` in yolo mode. During a run: `ctrl+c interrupts`. Other strings: `command palette` / `enter runs · esc closes`; picker `loading models from Ollama…` / `press r to retry` / `N models available`; `scrollback`; `switching model…` / `finishing model update…` / `finishing permission update…` / `finishing session update…`; `running command…`; `cleanup in progress`.
 
 Welcome (`welcome to coral`) shows only while the transcript is empty.
 
@@ -24,29 +24,29 @@ Parser: input must start with `/`; the name is lowercased; the first space split
 
 Aliases work for dispatch and `/` completion. The command palette runs the **canonical** name (`/permissions`, not `/perm`).
 
-| Command        | Aliases           | Arguments                | What it does                                                                                                                                                                                                          |
-| -------------- | ----------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/help`        |                   |                          | List commands and advertised keybindings                                                                                                                                                                              |
-| `/clear`       | `/reset`          |                          | Clear conversation history, todos, and undo. Unbinds the session. Does **not** delete the session file                                                                                                                |
-| `/compact`     |                   |                          | Summarize older history. TUI needs at least 4 non-system messages. Clears undo. See [Context](context.md)                                                                                                             |
-| `/status`      |                   |                          | Model, permission mode, session id, message count, estimated tokens, Ollama prompt/decode counts and speeds when present, compaction count, frozen-prefix coverage, repair counters, self-check flag, cwd, git branch |
-| `/mcp`         |                   |                          | Observational MCP status. Never launches a server. See [MCP](mcp.md)                                                                                                                                                  |
-| `/model`       |                   | none or tag              | No args: reopen picker. Else exact tag, then unique prefix among installed models                                                                                                                                     |
-| `/permissions` | `/perm`, `/perms` | none, `ask`, `yolo`      | Show or set mode. MCP catalog for the new mode starts on the **next chat turn**                                                                                                                                       |
-| `/verify`      |                   | none, `on`, `off`        | Post-edit self-check. Off by default. Not written to `.coral.json`                                                                                                                                                    |
-| `/theme`       |                   | none or name/label       | List or switch. `/theme` writes `prefs.json`. Match is case-insensitive id **or** label                                                                                                                               |
-| `/undo`        |                   |                          | Revert last live turn and captured in-workspace file/todo edits. Session JSON can duplicate file contents (including secrets)                                                                                         |
-| `/redo`        |                   |                          | Restore the last undone turn                                                                                                                                                                                          |
-| `/diff`        |                   |                          | `git diff` of the working tree. Empty → `No uncommitted changes`. Failure → `Not a git repository, or git is not installed`                                                                                           |
-| `/copy`        |                   | optional `code`          | Copy last assistant response, or its last fenced code block                                                                                                                                                           |
-| `/todo`        |                   | none or `clear`          | Show the model-maintained list, or clear it and save                                                                                                                                                                  |
-| `/index`       |                   | none, `rebuild`, `force` | Incremental semantic index, or full rebuild (`rebuild` and `force` are equivalent)                                                                                                                                    |
-| `/sessions`    | `/ls`             | optional positive int    | Recent sessions. Default **10** if missing or invalid                                                                                                                                                                 |
-| `/resume`      |                   | none or id/prefix        | Prefix match allowed. No args: newest **other** than current. Saves current first; save error cancels (`Current session could not be saved; resume was canceled.`). Cwd must still exist                              |
-| `/rename`      |                   | title                    | Rename the bound session. No args: print current id/title and `Usage: /rename <new title>`. No session: `No active session to rename. Send a message first.`                                                          |
-| `/new`         |                   |                          | Save first, then clear history and unbind. Does not delete the old file. Save `error`/`stale` **aborts**: `Current session could not be saved; the new conversation was not started.`                                 |
-| `/telemetry`   |                   |                          | Lifetime local reliability counters per model                                                                                                                                                                         |
-| `/exit`        | `/quit`           |                          | Shutdown                                                                                                                                                                                                              |
+| Command        | Aliases           | Arguments                | What it does                                                                                                                                                                                                                |
+| -------------- | ----------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/help`        |                   |                          | List commands and advertised keybindings                                                                                                                                                                                    |
+| `/clear`       | `/reset`          |                          | Clear conversation history, todos, and undo. Unbinds the session. Does **not** delete the session file                                                                                                                      |
+| `/compact`     |                   |                          | Summarize older history. TUI needs at least 4 non-system messages. Clears undo. See [Context](context.md)                                                                                                                   |
+| `/status`      |                   |                          | Model, permission mode, session id, message count, estimated tokens, Ollama prompt/decode counts and speeds when present, compaction count, frozen-prefix coverage, repair counters, self-check flag, cwd, git branch       |
+| `/mcp`         |                   |                          | Observational MCP status. Never launches a server. See [MCP](mcp.md)                                                                                                                                                        |
+| `/model`       |                   | none or tag              | No args: reopen picker. Else exact tag, then unique prefix among installed models                                                                                                                                           |
+| `/permissions` | `/perm`, `/perms` | none, `ask`, `yolo`      | Show or set mode. MCP catalog for the new mode starts on the **next chat turn**                                                                                                                                             |
+| `/verify`      |                   | none, `on`, `off`        | Post-edit self-check. Off by default. Not written to `.coral.json`                                                                                                                                                          |
+| `/theme`       |                   | none or name/label       | List or switch. `/theme` writes `prefs.json`. Match is case-insensitive id **or** label                                                                                                                                     |
+| `/undo`        |                   |                          | Revert last live turn and captured in-workspace file/todo edits. Session JSON can duplicate file contents (including secrets)                                                                                               |
+| `/redo`        |                   |                          | Restore the last undone turn                                                                                                                                                                                                |
+| `/diff`        |                   |                          | `git diff` of the working tree. Empty → `No uncommitted changes`. Failure → `Not a git repository, or git is not installed`                                                                                                 |
+| `/copy`        |                   | optional `code`          | Copy last assistant response, or its last fenced code block                                                                                                                                                                 |
+| `/todo`        |                   | none or `clear`          | Show the model-maintained list, or clear it and save                                                                                                                                                                        |
+| `/index`       |                   | none, `rebuild`, `force` | Incremental semantic index, or full rebuild (`rebuild` and `force` are equivalent)                                                                                                                                          |
+| `/sessions`    | `/ls`             | optional positive int    | Recent sessions. Default **10** if missing or invalid                                                                                                                                                                       |
+| `/resume`      |                   | none or id/prefix        | Prefix match allowed. No args: searchable session picker; Tab toggles current-project filtering. Saves current first; save error cancels (`Current session could not be saved; resume was canceled.`). Cwd must still exist |
+| `/rename`      |                   | title                    | Rename the bound session. No args: print current id/title and `Usage: /rename <new title>`. No session: `No active session to rename. Send a message first.`                                                                |
+| `/new`         |                   |                          | Save first, then clear history and unbind. Does not delete the old file. Save `error`/`stale` **aborts**: `Current session could not be saved; the new conversation was not started.`                                       |
+| `/telemetry`   |                   |                          | Lifetime local reliability counters per model                                                                                                                                                                               |
+| `/exit`        | `/quit`           |                          | Shutdown                                                                                                                                                                                                                    |
 
 `Ctrl+Y` while a turn, command, transition, or approval is active: `Permission mode is locked while a turn or command is running.` `/permissions` cannot be submitted in that state (the prompt is ignored). Palette cannot open during a run.
 
@@ -62,15 +62,15 @@ After abort, the transcript adds `Generation interrupted`. History keeps streame
 
 From `src/tui/input/keybindings.ts` (same list as `/help`):
 
-| Keys                  | Action                                                         |
-| --------------------- | -------------------------------------------------------------- |
-| `Ctrl+P`              | Command palette                                                |
-| `Ctrl+Y`              | Toggle ask / yolo                                              |
-| `Ctrl+T`              | Toggle **visibility** of streamed reasoning (not `--no-think`) |
-| `Ctrl+C`              | Interrupt a run, or exit when idle                             |
-| `Esc`                 | Interrupt a run, or exit when idle                             |
-| `↑` / `↓`             | Prompt input history (when the completion menu is closed)      |
-| `PageUp` / `PageDown` | Page the transcript                                            |
+| Keys                  | Action                                                            |
+| --------------------- | ----------------------------------------------------------------- |
+| `Ctrl+P`              | Command palette                                                   |
+| `Ctrl+Y`              | Toggle ask / yolo                                                 |
+| `Ctrl+T`              | Toggle **visibility** of streamed reasoning (not `--no-think`)    |
+| `Ctrl+C`              | Interrupt a run, or exit when idle                                |
+| `Esc`                 | Interrupt; twice while idle opens the fork picker                 |
+| `↑` / `↓`             | Move through visual draft rows; history beyond the first/last row |
+| `PageUp` / `PageDown` | Page the transcript                                               |
 
 `Ctrl+T` vs `--no-think`: the flag disables reasoning **requests**. The key only hides or shows thinking already (or still) being streamed.
 
@@ -120,9 +120,9 @@ Input history is `CORAL_HOME/history.jsonl` (default `~/.coral/history.jsonl`), 
 
 ## Model picker
 
-Chrome: `Select an Ollama model`; `enter selects · ↑↓ or j/k moves · esc quits`.
+The model picker shows selection keys and whether Esc/Ctrl+C quits startup or returns to an existing chat.
 
-- Up/`k`, Down/`j`, Enter select, Esc cancel (no Agent yet → quit; after an Agent exists → `esc returns to chat`).
+- Up/`k`, Down/`j`, Enter select, Esc / Ctrl+C cancel in loading, error, and ready states (startup quits; an existing session returns to chat).
 - After an error: `r` / `R` retry.
 - Empty: `No Ollama models found` / `Pull a model or pass --model explicitly.`
 
@@ -138,11 +138,11 @@ Preferred pin: `gemma4:31b-mlx`.
 
 ## Approval boxes
 
-Gated tool calls, MCP launch trust, and doom-loop pauses open a modal. If the body is taller than the terminal, it scrolls: `↑`/`↓` one line, `PgUp`/`PgDn` one page. Title and action keys stay pinned. Diff previews cap at 20 lines.
+Gated tool calls, MCP launch trust, and doom-loop pauses open a modal. If the body is taller than the terminal, it scrolls: `↑`/`↓` one line, `PgUp`/`PgDn` one page. Title and action keys stay pinned. Every available diff preview line is scrollable.
 
 | Kind       | Title / actions                                                                         | Keys                                                                                |
 | ---------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| Tool       | `Allow {tool}?` · `(y) approve  (n) reject  (esc) cancel`                               | `y` approve; `n` or Esc reject; `Ctrl+C` abort the run                              |
+| Tool       | `Allow {tool}?` · `(y) approve  (n) reject  (esc) reject`                               | `y` approve; `n` or Esc reject; `Ctrl+C` abort the run                              |
 | MCP launch | `Trust & launch MCP server "{alias}"?` · `(y) trust & launch  (n) reject  (esc) cancel` | `y` trust; `n` reject; **Esc and Ctrl+C abort the run** (Esc is not a clean reject) |
 | Doom loop  | `(y) continue  (n) stop`                                                                | `y` continue; `n` or Esc stop; `Ctrl+C` abort                                       |
 
@@ -174,3 +174,34 @@ Idle `Esc` / `Ctrl+C`, `/exit`, `/quit`, SIGINT, and SIGTERM go through the shut
 ## Related
 
 [CLI](cli.md) · [Permissions](permissions.md) · [Sessions](sessions.md) · [Context](context.md) · [Architecture](architecture.md) · [Troubleshooting](troubleshooting.md)
+
+## Queue and interruption
+
+Submitting a message during generation queues it. Successful completion continues FIFO processing; interruption, abort, or failure pauses it. Sending a separate message keeps paused entries paused. The composer shows count, paused state, and `/queue resume`.
+
+- `/queue` lists stable IDs and previews.
+- `/queue pause`, `/queue resume`, `/queue remove <id>`, and `/queue clear` work locally during generation.
+- `/queue edit <id>` requires idle state and uses the external editor. IDs and order stay fixed; the queue stays paused. Cancellation and errors preserve the entry.
+- Meta+Backspace with an empty composer pauses the queue and returns its newest entry for editing.
+
+New, clear/reset, resume, undo, redo, and forking refuse to proceed while queued entries remain. Resume or clear the queue first. Model changes, compaction, and rename retain it.
+
+## Drafts, paste, and inspection
+
+Up/Down move through visual rows, including wrapped text, graphemes, and tabs. Only movement beyond the first/last visual row enters history. Home/End and kill-line commands retain logical-line behavior. Completion menus take priority; ordinary arrows and completion also work in Vim insert mode.
+
+Pastes of 1,000 characters or fewer stay inline, including multiline text. Larger pastes collapse. Multiline and large pastes require Enter to confirm, then Enter to send; ordinary edits do not remove that protection. Oversized pastes show dropped-character counts. Ctrl+G opens expanded paste contents in `$VISUAL` or `$EDITOR`; empty/unchanged output cancels, failures explain how to retry, and successful edits use normal composer undo/cursor handling.
+
+Ctrl+O targets the newest expandable output at the bottom. In scrollback it targets a visible output nearest the viewport center. Its status hint identifies the result and action. Expansion preserves its position, and the target stays selected until navigation changes. Unrelated output blocks do not advertise Ctrl+O. Palette and session results show position/count and allow navigation through all matches.
+
+Context occupancy starts with `~` after resume, fork, undo, redo, or transcript rebuilding, until measured usage arrives. Tokens “since open” are cumulative only for the current opening of a session.
+
+## Approvals and forks
+
+Only unmodified `y/Y`, `n/N`, and the tool prompt's `a` can answer approvals. Ctrl/Alt variants do not settle them. Ctrl+Y explains that permission mode is locked; Ctrl+C interrupts. Esc rejects a tool, aborts MCP launch approval, or stops a doom loop. Full available diff previews scroll beneath pinned titles and action keys.
+
+Idle Esc twice opens **fork from this prompt**. The original is saved, files and current todos remain unchanged, and the selected prompt returns unsent in a fresh child session. See [Sessions](sessions.md).
+
+## Markdown export
+
+`/export` copies user/assistant text with the actual session title. `/export file` writes a new timestamped workspace file. `/export --file "notes/My Session.md"` uses the specified path, relative to the active workspace. Existing files are never overwritten and directories are never created implicitly. `--tools` (or the existing `tools` keyword) and `--thinking` opt into additional detail. Unknown or conflicting arguments are rejected; path case is preserved.

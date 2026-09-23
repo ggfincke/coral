@@ -2,8 +2,9 @@
 // parse interactive CLI args and render the TUI
 
 import { render } from 'ink'
-import { Command } from 'commander'
-import { createRequire } from 'node:module'
+import { resolve } from 'node:path'
+import { isSessionDirectory, sameWorkspace } from '../session/resume.js'
+import { parseCliArgs, type CliOptions } from './args.js'
 import App from '../tui/App.js'
 import { loadPrefs } from '../config/prefs.js'
 import { listSessions } from '../session/store.js'
@@ -14,48 +15,32 @@ import {
   kittyKeyboardOptIn,
   noColorRequested,
 } from '../tui/shell/terminal-prefs.js'
-import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
 import {
   formatCliResumeError,
   formatCliSessionList,
 } from '../tui/commands/session-output.js'
 import { launchCliApp } from './app-launch.js'
 
-const require = createRequire(import.meta.url)
-const { version } = require('../../package.json') as { version: string }
-
 export async function runInteractiveCli(
-  argv: string[] = process.argv
+  input: CliOptions | string[] = process.argv
 ): Promise<void>
 {
-  const program = new Command()
-    .name('coral')
-    .description('A local-first CLI/TUI coding agent for Ollama')
-    .version(version)
-    .option('-m, --model <model>', 'Ollama model to use')
-    .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
-    .option('--no-think', 'disable streamed reasoning requests')
-    .option(
-      '--yolo',
-      'auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP yoloTools'
-    )
-    .option('--resume', 'resume the most recent session')
-    .option('--session <id>', 'resume a specific session by ID')
-    .option('--sessions', 'list saved sessions & exit')
-    .option('--theme <name>', 'color theme (see /theme for the list)')
-    .parse(argv)
-
-  const opts = program.opts<{
-    model?: string
-    host: string
-    think: boolean
-    yolo: boolean
-    resume: boolean
-    session?: string
-    sessions: boolean
-    theme?: string
-  }>()
-
+  const parsed = Array.isArray(input)
+    ? parseCliArgs(input.slice(2))
+    : { kind: 'interactive' as const, options: input }
+  if (parsed.kind === 'exit')
+  {
+    process.exitCode = parsed.code
+    return
+  }
+  const opts = parsed.options
+  const cwd = opts.cwd ? resolve(opts.cwd) : process.cwd()
+  if (!isSessionDirectory(cwd))
+  {
+    console.error(`Not a workspace directory: ${cwd}`)
+    process.exitCode = 1
+    return
+  }
   // resolve theme: --theme flag > saved prefs > default
   if (opts.theme)
   {
@@ -88,7 +73,13 @@ export async function runInteractiveCli(
   // handle --sessions by listing sessions and exiting
   if (opts.sessions)
   {
-    console.log(formatCliSessionList(await listSessions()))
+    console.log(
+      formatCliSessionList(
+        (await listSessions()).filter(
+          (session) => !opts.cwd || sameWorkspace(session.cwd, cwd)
+        )
+      )
+    )
     process.exit(0)
   }
 
@@ -99,8 +90,31 @@ export async function runInteractiveCli(
   {
     const resolution = await resolveResumeSession({
       requestedId: opts.session,
-      allowPrefix: false,
+      allowPrefix: true,
       requireExistingCwd: true,
+    })
+
+    if (resolution.type !== 'target')
+    {
+      console.error(formatCliResumeError(resolution))
+      process.exit(1)
+    }
+
+    if (opts.cwd && !sameWorkspace(cwd, resolution.session.cwd))
+    {
+      console.error(
+        `Session workspace ${resolution.session.cwd} conflicts with --cwd ${cwd}.`
+      )
+      process.exitCode = 1
+      return
+    }
+    resumeSessionId = resolution.session.id
+  }
+  else if (opts.resume)
+  {
+    const resolution = await resolveResumeSession({
+      requireExistingCwd: true,
+      cwd: opts.cwd ? cwd : undefined,
     })
 
     if (resolution.type !== 'target')
@@ -111,22 +125,20 @@ export async function runInteractiveCli(
 
     resumeSessionId = resolution.session.id
   }
-  else if (opts.resume)
+
+  if (!process.stdin.isTTY || !process.stdout.isTTY)
   {
-    const resolution = await resolveResumeSession({ requireExistingCwd: true })
-
-    if (resolution.type !== 'target')
-    {
-      console.error(formatCliResumeError(resolution))
-      process.exit(1)
-    }
-
-    resumeSessionId = resolution.session.id
+    console.error(
+      'Interactive Coral requires terminal stdin and stdout. Use coral exec -m <model> "prompt" or --prompt-file - for pipelines.'
+    )
+    process.exitCode = 1
+    return
   }
-
   const exitCode = launchCliApp(
     {
       model: opts.model,
+      cwd,
+      initialPrompt: opts.prompt,
       host: opts.host,
       think: opts.think ?? true,
       yolo: opts.yolo ?? false,

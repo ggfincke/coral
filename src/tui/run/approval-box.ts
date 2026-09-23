@@ -13,11 +13,31 @@ import { style } from '../theme.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { stringifyForDisplay } from '../../utils/untrusted-text.js'
 import { visibleWidth } from '../wrap.js'
+import type { CoralKey } from '../input/terminal-input.js'
 
-// cap change previews so large edits don't swallow the screen
-const MAX_PREVIEW_LINES = 20
 const MAX_MCP_APPROVAL_ARG_CHARS = 8_000
 const MAX_APPROVAL_TOOL_NAME_CHARS = 256
+
+export type ApprovalKeyAction =
+  'approve' | 'always' | 'reject' | 'abort' | 'locked'
+
+// modifier shortcuts must never become a plain affirmative answer
+export function resolveApprovalKey(
+  kind: 'tool' | 'mcp' | 'doom',
+  input: string,
+  key: Pick<CoralKey, 'ctrl' | 'meta' | 'escape'>
+): ApprovalKeyAction | undefined
+{
+  const letter = input.toLowerCase()
+  if (key.ctrl && letter === 'c') return 'abort'
+  if (key.ctrl && letter === 'y') return 'locked'
+  if (key.escape) return kind === 'mcp' ? 'abort' : 'reject'
+  if (key.ctrl || key.meta) return undefined
+  if (letter === 'y') return 'approve'
+  if (letter === 'n') return 'reject'
+  if (letter === 'a' && kind === 'tool') return 'always'
+  return undefined
+}
 
 // logical prompt content: title and actions stay pinned while the body scrolls
 export interface PromptBoxContent
@@ -119,13 +139,9 @@ export function buildApprovalContent(
   {
     box.blank()
     const rendered = renderUnifiedDiff(diff, box.innerWidth)
-    for (const diffLine of rendered.slice(0, MAX_PREVIEW_LINES))
+    for (const diffLine of rendered)
     {
       box.raw(diffLine)
-    }
-    if (rendered.length > MAX_PREVIEW_LINES)
-    {
-      box.raw(chalk.dim(`… +${rendered.length - MAX_PREVIEW_LINES} more lines`))
     }
   }
   else if (previewMessage)
@@ -139,7 +155,7 @@ export function buildApprovalContent(
       chalk.bold('(y) approve'),
       box.warn('(a) allow always (session)'),
       '(n) reject',
-      chalk.dim('(esc) cancel'),
+      chalk.dim('(esc) reject · ctrl+c interrupts'),
     ].join('  ')
   )
 }
@@ -188,7 +204,7 @@ export function buildMcpApprovalContent(
   }
 
   return box.finish(
-    `${chalk.bold('(y) trust & launch')}  (n) reject  ${chalk.dim('(esc) cancel')}`
+    `${chalk.bold('(y) trust & launch')}  (n) reject  ${chalk.dim('(esc/ctrl+c) interrupts')}`
   )
 }
 
@@ -201,7 +217,9 @@ export function buildConfirmContent(
 {
   const box = contentBuilder(width, label)
   box.push(sanitizeUntrustedText(message))
-  return box.finish(`${chalk.bold('(y) continue')}  (n) stop`)
+  return box.finish(
+    `${chalk.bold('(y) continue')}  (n/esc) stop · ctrl+c interrupts`
+  )
 }
 
 export interface PromptBoxRender

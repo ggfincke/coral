@@ -357,7 +357,12 @@ function formatFinalizedBlock(
     {
       const label = toolDisplayLabel(block.toolName, block.display)
       const isError = block.status === 'error'
-      const statusMark = isError ? style('error')('✗') : style('success')('✓')
+      const statusMark =
+        block.status === 'recorded'
+          ? chalk.dim('·')
+          : isError
+            ? style('error')('✗')
+            : style('success')('✓')
       const duration =
         block.duration != null
           ? chalk.dim(` ${formatElapsed(block.duration)}`)
@@ -493,7 +498,22 @@ export interface TranscriptOptions
   themeGeneration?: number
 }
 
+export interface ToolResultSpan
+{
+  block: OutputBlock
+  start: number
+  end: number
+}
+
 export function buildTranscriptLines(opts: TranscriptOptions): string[]
+{
+  return buildTranscriptLayout(opts).lines
+}
+
+export function buildTranscriptLayout(opts: TranscriptOptions): {
+  lines: string[]
+  results: ToolResultSpan[]
+}
 {
   const {
     blocks,
@@ -507,6 +527,7 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
     themeGeneration = getThemeGeneration(),
   } = opts
   const transcript: string[] = []
+  const results: ToolResultSpan[] = []
 
   for (const block of blocks)
   {
@@ -514,9 +535,12 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
     {
       continue
     }
+    const start = transcript.length
     transcript.push(
       ...formatBlock(block, width, spinnerTick, themeGeneration, opts.cwd)
     )
+    if (block.type === 'tool_result')
+      results.push({ block, start, end: transcript.length })
   }
 
   if (showThinking)
@@ -560,7 +584,7 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
   }
 
   transcript.push(...physicalLines(live, width))
-  return transcript
+  return { lines: transcript, results }
 }
 
 export function maxScrollOffset(

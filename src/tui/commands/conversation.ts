@@ -1,7 +1,7 @@
 // src/tui/commands/conversation.ts
 // conversation-history, export, view-mode, and task-list commands
 
-import { join } from 'node:path'
+import { resolve } from 'node:path'
 import { writeFileSync } from 'node:fs'
 import { copyToClipboard } from '../../utils/clipboard.js'
 import { pluralize } from '../../utils/pluralize.js'
@@ -92,7 +92,6 @@ const undoCommand: Command = {
     }
 
     ctx.rebuildTranscript()
-    ctx.resetTokenUsage()
     const saved = ctx.saveCurrentSession()
     const warning = committedSaveWarning(saved, 'Undo completed')
     ctx.pushTerminalOutput(
@@ -116,7 +115,6 @@ const redoCommand: Command = {
     }
 
     ctx.rebuildTranscript()
-    ctx.resetTokenUsage()
     const saved = ctx.saveCurrentSession()
     const warning = committedSaveWarning(saved, 'Redo completed')
     ctx.pushTerminalOutput(
@@ -182,21 +180,68 @@ const copyCommand: Command = {
 const exportCommand: Command = {
   name: 'export',
   description:
-    "Export the conversation as Markdown to clipboard ('file' writes one, 'tools' includes tool detail)",
+    'Export Markdown: [file | --file "path.md"] [--tools] [--thinking]',
   async execute(args, ctx)
   {
-    const tokens = args.trim().toLowerCase().split(/\s+/).filter(Boolean)
-    const asFile = tokens.includes('file')
-    const includeTools = tokens.includes('tools')
+    const tokens = args.match(/"[^"\n]*"|'[^'\n]*'|[^\s"']+/g) ?? []
+    if (tokens.join('').replace(/\s/g, '') !== args.replace(/\s/g, ''))
+    {
+      ctx.pushOutput(
+        systemBlock(
+          'Invalid export quoting. Use /export --file "path with spaces.md".'
+        )
+      )
+      return
+    }
+    let asFile = false
+    let destination: string | undefined
+    let includeTools = false
+    let includeThinking = false
+    for (let index = 0; index < tokens.length; index++)
+    {
+      const token = tokens[index]!
+      if (token === 'tools' || token === '--tools') includeTools = true
+      else if (token === '--thinking') includeThinking = true
+      else if (token === 'file' && !asFile) asFile = true
+      else if (
+        token === '--file' &&
+        !asFile &&
+        tokens[index + 1] &&
+        !tokens[index + 1]!.startsWith('--')
+      )
+      {
+        asFile = true
+        const path = tokens[++index]!
+        destination =
+          path.startsWith('"') || path.startsWith("'")
+            ? path.slice(1, -1)
+            : path
+        if (!destination.trim())
+        {
+          ctx.pushOutput(systemBlock('Export destination must be nonempty.'))
+          return
+        }
+      }
+      else
+      {
+        ctx.pushOutput(
+          systemBlock(
+            'Usage: /export [file | --file "path.md"] [--tools | tools] [--thinking]'
+          )
+        )
+        return
+      }
+    }
 
     const markdown = buildSessionMarkdown(
       {
         sessionId: ctx.sessionLabelId,
+        title: ctx.sessionTitle,
         model: ctx.activeModel,
         cwd: ctx.getCwd(),
         messages: ctx.agent.getMessages(),
       },
-      { includeTools, includeThinking: true }
+      { includeTools, includeThinking }
     )
 
     if (!asFile)
@@ -220,7 +265,10 @@ const exportCommand: Command = {
     }
 
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const path = join(ctx.getCwd(), `coral-export-${stamp}.md`)
+    const path = resolve(
+      ctx.getCwd(),
+      destination ?? `coral-export-${stamp}.md`
+    )
     try
     {
       writeFileSync(path, markdown, { encoding: 'utf-8', flag: 'wx' })

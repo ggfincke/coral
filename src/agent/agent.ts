@@ -1309,6 +1309,7 @@ export class Agent
           iterations > this.maxIterations
         )
         {
+          events.onIterationLimit?.()
           finish()
           return
         }

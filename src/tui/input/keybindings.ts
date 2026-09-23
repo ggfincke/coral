@@ -73,7 +73,8 @@ export const KEYBINDINGS: readonly KeybindingSummary[] = [
   },
   {
     keys: 'esc',
-    description: 'Interrupt generation (or exit when idle)',
+    description:
+      'Interrupt generation; press twice when idle to fork an earlier prompt',
   },
   {
     keys: '↑↓',
@@ -105,7 +106,7 @@ export const KEYBINDINGS: readonly KeybindingSummary[] = [
   },
   {
     keys: 'ctrl+o',
-    description: 'Expand/collapse newest tool output',
+    description: 'Expand/collapse the targeted visible tool output',
   },
   {
     keys: 'ctrl+g',
@@ -113,7 +114,7 @@ export const KEYBINDINGS: readonly KeybindingSummary[] = [
   },
   {
     keys: 'meta+backspace',
-    description: 'Edit newest queued message (when composer is empty)',
+    description: 'Pause queue and edit newest entry (empty composer)',
   },
   {
     keys: 'pgup/dn',

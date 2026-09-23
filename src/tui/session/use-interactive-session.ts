@@ -1,7 +1,7 @@
 // src/tui/session/use-interactive-session.ts
 // own the interactive Agent, session, prompt, model, permission, and shutdown lifetime
 
-import { existsSync } from 'node:fs'
+import { isSessionDirectory } from '../../session/resume.js'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../agent/agent.js'
 import { ProjectWatcher } from '../../agent/watcher.js'
@@ -31,20 +31,23 @@ import {
 import { ProjectFileCatalog } from './project-file-catalog.js'
 import {
   buildPrimaryAgent,
+  forkAgentSession,
+  type ForkSessionResult,
   persistAgentSession,
   SessionTitleGenerator,
 } from './agent-session.js'
 
 export interface InteractiveSessionView
 {
-  restoreSession: (session: SessionData) => void
+  restoreSession: (session: SessionData, estimatedTokens: number) => void
   clearSession: () => void
-  resetTokenUsage: () => void
+  resetTokenUsage: (estimatedTokens: number) => void
 }
 
 export interface UseInteractiveSessionOptions
 {
   model?: string
+  cwd?: string
   host: string
   think: boolean
   initialYolo: boolean
@@ -87,6 +90,10 @@ export interface InteractiveSession
     owner?: OperationHandle<Agent>
   ) => Promise<ModelTransitionResult>
   resumeSession: (id: string, owner?: OperationHandle<Agent>) => boolean
+  forkSessionAtTurn: (
+    startIndex: number,
+    owner: OperationHandle<Agent>
+  ) => ForkSessionResult
   saveOperationSession: (handle: OperationHandle<Agent>) => SessionSaveResult
   renameCurrentSession: (title: string) => boolean
   clearCurrentSession: () => void
@@ -118,6 +125,7 @@ export interface InteractiveSession
   ) => Promise<T>
   abortActive: () => boolean
   hasActiveOperation: () => boolean
+  getSessionTitle: () => string | undefined
   getSessionId: () => string | null
   isYolo: () => boolean
   isAcceptingTransitions: () => boolean
@@ -143,7 +151,7 @@ export function useInteractiveSession(
     return buildPrimaryAgent({
       model: options.model,
       host: options.host,
-      cwd: options.initialSession?.meta.cwd,
+      cwd: options.initialSession?.meta.cwd ?? options.cwd,
       think: options.think,
       mcpMode: activeMcpMode(options.initialYolo),
       mcpConfig,
@@ -291,7 +299,8 @@ export function useInteractiveSession(
       setAgent(nextAgent)
       setActiveModel(nextAgent.getModel())
       setContextWindow(0)
-      if (restored) viewRef.current.restoreSession(restored)
+      if (restored)
+        viewRef.current.restoreSession(restored, nextAgent.getEstimatedTokens())
       fetchContextWindow(nextAgent)
       return true
     },
@@ -379,7 +388,7 @@ export function useInteractiveSession(
           buildPrimaryAgent({
             model: nextModel,
             host: options.host,
-            cwd: restored?.meta.cwd,
+            cwd: restored?.meta.cwd ?? options.cwd,
             think: options.think,
             mcpMode: activeMcpMode(yoloRef.current),
             mcpConfig,
@@ -399,6 +408,7 @@ export function useInteractiveSession(
       inferenceClient,
       mcpConfig,
       options.host,
+      options.cwd,
       options.think,
       runtime,
       switchModel,
@@ -430,6 +440,40 @@ export function useInteractiveSession(
     [runtime]
   )
 
+  const forkSessionAtTurn = useCallback(
+    (startIndex: number, owner: OperationHandle<Agent>) =>
+      forkAgentSession(owner.agent, startIndex, {
+        isCurrent: () =>
+          runtime.acceptsCommandEvent(owner) && !owner.signal.aborted,
+        saveParent: () => runtime.saveOperation(owner),
+        adopt: (child) =>
+          adoptAgent(
+            () =>
+              buildPrimaryAgent({
+                model: child.meta.model,
+                cwd: child.meta.cwd,
+                host: options.host,
+                think: options.think,
+                mcpMode: activeMcpMode(yoloRef.current),
+                mcpConfig,
+                inferenceClient,
+                restored: child,
+              }),
+            child,
+            true,
+            owner
+          ),
+      }),
+    [
+      adoptAgent,
+      inferenceClient,
+      mcpConfig,
+      options.host,
+      options.think,
+      runtime,
+    ]
+  )
+
   const clearCurrentSession = useCallback(() =>
   {
     const current = runtime.getAgent()
@@ -442,7 +486,9 @@ export function useInteractiveSession(
   const resetTokenUsage = useCallback(() =>
   {
     runtime.getAgent()?.resetTokenUsage()
-    viewRef.current.resetTokenUsage()
+    viewRef.current.resetTokenUsage(
+      runtime.getAgent()?.getEstimatedTokens() ?? 0
+    )
   }, [runtime])
 
   const resumeSession = useCallback(
@@ -451,7 +497,7 @@ export function useInteractiveSession(
       const target = loadSession(id)
       if (
         !target ||
-        !existsSync(target.meta.cwd) ||
+        !isSessionDirectory(target.meta.cwd) ||
         closingRef.current ||
         runtime.isClosing()
       )
@@ -753,6 +799,7 @@ export function useInteractiveSession(
     activateModel,
     switchModel,
     resumeSession,
+    forkSessionAtTurn,
     saveOperationSession,
     renameCurrentSession,
     clearCurrentSession,
@@ -772,6 +819,7 @@ export function useInteractiveSession(
     abortActive,
     hasActiveOperation,
     getSessionId,
+    getSessionTitle: () => runtime.getSessionMeta()?.title,
     isYolo,
     isAcceptingTransitions,
     shutdown,

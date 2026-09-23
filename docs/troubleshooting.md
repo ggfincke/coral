@@ -108,7 +108,7 @@ Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete.
 
 Doom loop modal: identical tool+args or identical error **3** times in **12** calls. `(y) continue  (n) stop`. Exec emits `doom_loop_stopped` and ends.
 
-`code_intel`: `code_intel supports .ts, .tsx, .mts, .cts, .js, .jsx, .mjs, and .cjs files`; `code_intel is unavailable in this session` / `TypeScript language server is unavailable`; `TypeScript diagnostics were not published within 5000ms; run the project typecheck as a fallback` (advice to the model — Coral does not run typecheck).
+`code_intel`: `code_intel supports .ts, .tsx, .mts, .cts, .js, .jsx, .mjs, and .cjs files`; `code_intel is unavailable in this session` / `TypeScript language server is unavailable`; `TypeScript diagnostics timed out after 5000ms`. Run the project typecheck as a fallback when diagnostics time out; Coral does not run it automatically.
 
 `bash` / MCP: not sandboxed. Approval of a command or trust of a server is host-level authority.
 

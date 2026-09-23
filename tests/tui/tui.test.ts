@@ -1,6 +1,7 @@
 // tests/tui/tui.test.ts
 // tests for major TUI transcript behavior
 
+import { toInputEvent } from '../../src/tui/input/terminal-input.js'
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import chalk from 'chalk'
@@ -30,6 +31,7 @@ import {
   buildApprovalContent,
   buildMcpApprovalContent,
   renderPromptBox,
+  resolveApprovalKey,
 } from '../../src/tui/run/approval-box.js'
 import {
   formatAutoCompactionResult,
@@ -94,6 +96,7 @@ function makeCommandContext(
     resumeSession: () => false,
     saveCurrentSession: () => ({ status: 'saved', id: 'abcd1234' }),
     renameCurrentSession: () => false,
+    manageQueue: async () => undefined,
     notifyThemeChanged()
     {},
   }
@@ -103,6 +106,7 @@ test('command registry preserves order, aliases, help, and dispatch', async () =
 {
   const expectedOrder = [
     'help',
+    'queue',
     'clear',
     'compact',
     'status',
@@ -229,7 +233,7 @@ test('tool results collapse at render time & expand on toggle', () =>
   }).map((line) => stripAnsi(line))
   assert.ok(!collapsed.some((line) => line.includes('out-35')))
   assert.ok(collapsed.some((line) => line.includes('10 more lines')))
-  assert.ok(collapsed.some((line) => line.includes('ctrl+o expands')))
+  assert.ok(!collapsed.some((line) => line.includes('ctrl+o expands')))
 
   // toggling the same block instance reveals the tail (identity-keyed state)
   toggleNewestToolResult([block])
@@ -1102,7 +1106,7 @@ test('dispatchCommand handles undo and redo transcript rebuilds', async () =>
   assert.equal(await dispatchCommand('/redo', ctx), true)
 
   assert.equal(rebuilds, 2)
-  assert.equal(gaugeResets, 2)
+  assert.equal(gaugeResets, 0)
   assert.equal(saves, 2)
   const rendered = plain(
     output
@@ -1365,4 +1369,41 @@ test('/index does not suggest pulling for artifact identity drift', async () =>
   const rendered = plain(output.map((block) => block.content))
   assert.match(rendered, /changed artifact identity/)
   assert.doesNotMatch(rendered, /ollama pull/)
+})
+
+test('approval shortcuts cannot grant permission and complete diffs remain inspectable', () =>
+{
+  for (const kind of ['tool', 'mcp', 'doom'] as const)
+  {
+    for (const raw of ['\x19', '\x1by', '\x0e'])
+    {
+      const event = toInputEvent(raw)!
+      const action = resolveApprovalKey(kind, event.input, event.key)
+      assert.ok(action === undefined || action === 'locked')
+    }
+    for (const [raw, expected] of [
+      ['y', 'approve'],
+      ['N', 'reject'],
+      ['\x03', 'abort'],
+    ] as const)
+    {
+      const event = toInputEvent(raw)!
+      assert.equal(resolveApprovalKey(kind, event.input, event.key), expected)
+    }
+    const escape = toInputEvent('\x1b')!
+    assert.equal(
+      resolveApprovalKey(kind, escape.input, escape.key),
+      kind === 'mcp' ? 'abort' : 'reject'
+    )
+  }
+  const always = toInputEvent('a')!
+  assert.equal(resolveApprovalKey('tool', always.input, always.key), 'always')
+  assert.equal(resolveApprovalKey('mcp', always.input, always.key), undefined)
+  const diff =
+    '--- a/file\n+++ b/file\n@@ -1 +1,50 @@\n-old\n' +
+    Array.from({ length: 50 }, (_, i) => `+line ${i}`).join('\n')
+  const content = buildApprovalContent('edit_file', { path: 'file' }, 80, diff)
+  assert.match(stripAnsi(content.bodyLines.join('\n')), /line 49/)
+  const bottom = renderPromptBox(content, 80, 15, 10000)
+  assert.match(stripAnsi(bottom.lines.join('\n')), /line 49/)
 })
