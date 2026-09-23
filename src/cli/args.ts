@@ -1,10 +1,10 @@
 // src/cli/args.ts
-// lightweight shared argument parsing before loading either execution runtime
+// lightweight shared argument parsing before loading an execution runtime
 
 import { Command, CommanderError, Option } from 'commander'
 import { createRequire } from 'node:module'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
-export type ExecPermissionProfile = 'read-only' | 'workspace-write'
+export type ExecPermissionProfile = 'none' | 'read-only' | 'workspace-write'
 export type ExecOutputFormat = 'text' | 'json' | 'stream-json'
 
 const { version } = createRequire(import.meta.url)('../../package.json') as {
@@ -31,7 +31,7 @@ export interface CliOptions
 }
 
 export type ParsedCli =
-  | { kind: 'interactive' | 'exec'; options: CliOptions }
+  | { kind: 'interactive' | 'exec' | 'acp'; options: CliOptions }
   | { kind: 'exit'; code: number }
 
 export function parseCliArgs(argv: string[]): ParsedCli
@@ -77,7 +77,7 @@ export function parseCliArgs(argv: string[]): ParsedCli
     )
     .addOption(
       new Option('--permission-profile <profile>', 'headless tool profile')
-        .choices(['read-only', 'workspace-write'])
+        .choices(['none', 'read-only', 'workspace-write'])
         .default('read-only')
     )
     .addOption(
@@ -102,6 +102,15 @@ export function parseCliArgs(argv: string[]): ParsedCli
         kind: 'exec',
         options: { ...command.optsWithGlobals<CliOptions>(), prompt },
       }
+    })
+  program
+    .command('acp')
+    .description('Serve Coral through the Agent Client Protocol')
+    .version(version)
+    .addHelpText('after', '\nShared options: -m/--model, --host, -V/--version.')
+    .action((_opts, command: Command) =>
+    {
+      parsed = { kind: 'acp', options: command.optsWithGlobals<CliOptions>() }
     })
   try
   {

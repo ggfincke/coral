@@ -111,3 +111,73 @@ test('headless execution emits JSONL and atomically writes its final result', as
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('tool-free generation stays ephemeral and reports inference failure and cancellation', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-exec-none-'))
+  const home = process.env.CORAL_HOME
+  process.env.CORAL_HOME = join(dir, 'home')
+  try
+  {
+    for (const mode of ['complete', 'fail', 'cancel'])
+    {
+      const abort = new AbortController()
+      const result = await runCoralExec(
+        {
+          prompt: 'generate a title',
+          cwd: dir,
+          model: 'fixture',
+          host: 'http://ollama.test',
+          permissionProfile: 'none',
+          outputFormat: 'json',
+          mcp: true,
+        },
+        {
+          writeStdout()
+          {},
+          writeStderr()
+          {},
+          inferenceClient: {
+            startKeepAlive()
+            {},
+            async listModels()
+            {
+              return []
+            },
+            async showModel()
+            {
+              return { contextLength: 8192, architecture: 'gemma' }
+            },
+            async *chatStream(request)
+            {
+              assert.deepEqual(request.tools, [])
+              if (mode === 'fail') throw new Error('inference unavailable')
+              if (mode === 'cancel') abort.abort()
+              yield {
+                message: { role: 'assistant', content: 'title' },
+                done: true,
+              }
+            },
+          },
+        },
+        abort.signal
+      )
+      assert.equal(
+        result.status,
+        mode === 'complete'
+          ? 'completed'
+          : mode === 'fail'
+            ? 'failed'
+            : 'cancelled'
+      )
+    }
+    const { existsSync } = await import('node:fs')
+    assert.equal(existsSync(join(process.env.CORAL_HOME!, 'sessions')), false)
+  }
+  finally
+  {
+    if (home === undefined) delete process.env.CORAL_HOME
+    else process.env.CORAL_HOME = home
+    await rm(dir, { recursive: true, force: true })
+  }
+})

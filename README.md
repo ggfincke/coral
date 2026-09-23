@@ -97,6 +97,9 @@ coral exec \
   --no-mcp
 ```
 
+The `none` profile exposes no tools and never starts MCP, including when `--mcp`
+is supplied. It supports tool-free titles and other generated text.
+
 The default `read-only` profile exposes file/search/code-intelligence tools plus
 Git status, diff, and log. `workspace-write` additionally exposes in-workspace
 write/edit tools and `bash`; it excludes Coral's task subagent and Git mutation
@@ -114,6 +117,21 @@ with a run ID, status, model, response, token usage, and any terminal error.
 Headless profiles are deterministic tool catalogs, not a hostile-process
 sandbox. In particular, `bash` runs directly on the host. External callers must
 still isolate workspaces and validate final filesystem or Git scope.
+
+## ACP clients
+
+`coral acp` serves text sessions over stdio for clients such as 456code:
+
+```bash
+CORAL_HOME=/path/to/separate-coral-home coral acp \
+  --host http://localhost:11434 --model qwen3.8:27b-mlx
+```
+
+It supports supervised approvals, streamed text/tool evidence, cancellation,
+model changes, and native `session/resume`. Attachments and client-supplied MCP
+servers are rejected; MCP is disabled. Use a separate home for each app instance.
+See [ACP setup and recovery](docs/acp.md) for protocol boundaries, native session
+ownership, and save-failure handling.
 
 ## Interactive use
 

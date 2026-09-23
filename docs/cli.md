@@ -1,6 +1,6 @@
 # CLI reference
 
-`coral --help` lists interactive options and `exec`. Use `coral help exec` or `coral exec --help` for headless help. Help and version exit before loading Agent or Ink. Version comes from `package.json` and works on both entry paths.
+`coral --help` lists interactive options, `exec`, and `acp`. Use `coral help exec` or `coral exec --help` for headless help, and `coral help acp` or `coral acp --help` for protocol help. Help and version exit before loading Agent or Ink. Version comes from `package.json` and works on all entry paths.
 
 ## Interactive: `coral [options] [prompt]`
 
@@ -45,7 +45,7 @@ cat prompt.md | coral exec -m gemma4:31b-mlx --prompt-file - --output-format str
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `[prompt]`                       | Quoted prompt text, mutually exclusive with `--prompt-file`                                                  |
 | `--prompt-file <path>`           | UTF-8 file; `-` explicitly reads piped stdin; nonempty, at most 1 MiB, bounded while reading and cancellable |
-| `--permission-profile <profile>` | `read-only` (default) or `workspace-write`                                                                   |
+| `--permission-profile <profile>` | `none`, `read-only` (default), or `workspace-write`                                                          |
 | `--output-format <format>`       | `text` (default), `json`, or `stream-json` (NDJSON)                                                          |
 | `--result-file <path>`           | Atomically write the version-1 result, including parsed input failures                                       |
 | `--ephemeral`                    | Compatibility marker; exec is always ephemeral                                                               |
@@ -55,19 +55,22 @@ Relative prompt-file and result-file paths resolve from the invoking shell direc
 
 ### Exit codes
 
-| Outcome                                                      | Code |
-| ------------------------------------------------------------ | ---- |
-| Completed, help, version                                     | 0    |
-| Syntax errors (stderr), runtime errors, result-file failures | 1    |
-| Validly parsed input failures: model, cwd, host, prompt      | 2    |
-| SIGINT cancellation, including stdin reads                   | 130  |
-| SIGTERM cancellation, including stdin reads                  | 143  |
+| Outcome                                                                        | Code |
+| ------------------------------------------------------------------------------ | ---- |
+| Completed, help, version                                                       | 0    |
+| Syntax errors (stderr), runtime errors, iteration limits, result-file failures | 1    |
+| Validly parsed input failures: model, cwd, host, prompt                        | 2    |
+| SIGINT cancellation, including stdin reads                                     | 130  |
+| SIGTERM cancellation, including stdin reads                                    | 143  |
 
 Parsed input failures produce the requested JSON/NDJSON result with empty response and zero usage, plus a stderr explanation. Syntax errors produce stderr only. The version-1 result shape below is unchanged.
 
 ### Permission profiles
 
 Every listed tool is set to `always_allow` inside the profile. Approvals still **always return false**, so anything that still requires a prompt (including MCP launch, doom-loop continue, and tools not in the profile) is rejected.
+
+**`none`:** no tools, no MCP startup, and no conversation writes. This profile
+overrides `--mcp`.
 
 **`read-only`** (same set as read-only subagents):
 
@@ -95,7 +98,7 @@ Result object:
 
 - `version`: `1`
 - `run_id`: UUID
-- `status`: `completed` \| `failed` \| `cancelled`
+- `status`: `completed` \| `failed` \| `cancelled` \| `iteration_limited`
 - `model`, `response`
 - `usage`: `prompt_tokens`, `completion_tokens`, `prompt_eval_duration_ns`, `eval_duration_ns`
 - optional `error`
@@ -105,6 +108,11 @@ Result-file write failures set `error` to `failed to write result file: …`, or
 `stream-json` `usage` events carry Agent `TokenUsage` (**camelCase**: `promptTokens`, `completionTokens`, `promptEvalDurationNs`, `evalDurationNs`, …). The final result object's `usage` field is **snake_case** as listed above.
 
 ---
+
+## ACP
+
+`coral acp [--host <url>] [-m, --model <model>]` runs an ACP agent over stdio.
+It does not open the TUI. See [ACP setup and recovery](acp.md).
 
 ## Related
 

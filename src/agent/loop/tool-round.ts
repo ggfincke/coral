@@ -589,7 +589,8 @@ export class ToolRoundExecutor
             input.events.onToolApproval(
               invocation.name,
               invocation.args,
-              invocation.presentation
+              invocation.presentation,
+              invocation.id
             ),
             input.signal
           )
