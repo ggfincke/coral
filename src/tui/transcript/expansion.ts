@@ -18,7 +18,10 @@ export function toolResultBudgetLines(toolName: string): number
 
 export function isExpandableBlock(block: OutputBlock): boolean
 {
-  return block.type === 'tool_result'
+  return (
+    block.type === 'tool_result' &&
+    block.content.split('\n').length > toolResultBudgetLines(block.toolName)
+  )
 }
 
 // expansion lives in a WeakMap keyed by block identity: indices shift on
@@ -105,7 +108,7 @@ export function resolveToolResultView(block: OutputBlock): CollapsedResultView
 
   const shown = lines.slice(0, budget).join('\n')
   return {
-    text: `${shown}\n… (${total - budget} more lines · ctrl+o expands)`,
+    text: `${shown}\n… (${total - budget} more lines)`,
     hiddenLines: total - budget,
     expanded: false,
   }

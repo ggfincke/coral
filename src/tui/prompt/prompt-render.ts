@@ -19,6 +19,7 @@ export interface PromptCursorSegment
 {
   text: string
   highlighted: boolean
+  virtual?: boolean
 }
 
 export function buildPromptCursorSegments(
@@ -71,23 +72,18 @@ export interface PromptRenderModel
   cursorRow: number
 }
 
-// wrap before clipping so the window follows terminal rows, including the
-// extra cursor cell at an exact-width line ending
-export function buildPromptRenderModel(
+// rendering and vertical navigation share grapheme offsets and terminal cells
+export function layoutPrompt(
   value: string,
   cursorOffset: number,
   cursorWidth: number,
-  width = Number.POSITIVE_INFINITY,
-  maxRows = MAX_PROMPT_VIEW_ROWS,
-  showCursor = true
-): PromptRenderModel
+  width: number
+)
 {
   const columnLimit = Math.max(1, Math.floor(width))
-  const rowLimit = Math.max(
-    1,
-    Math.min(MAX_PROMPT_VIEW_ROWS, Math.floor(maxRows))
-  )
   const rows: PromptCursorSegment[][] = [[]]
+  const positions: Array<{ offset: number; row: number; col: number }> = []
+  let offset = 0
   let cells = 0
   let cursorRow = 0
   const pushRow = () =>
@@ -109,8 +105,14 @@ export function buildPromptRenderModel(
       rawWidth > columnLimit ? '�' : rawWidth === 0 ? `◌${safeText}` : safeText
     const segmentWidth = stringWidth(text)
     if (cells > 0 && cells + segmentWidth > columnLimit) pushRow()
+    if (positions.at(-1)?.offset !== offset)
+      positions.push({ offset, row: rows.length - 1, col: cells })
     if (segment.highlighted) cursorRow = rows.length - 1
-    rows[rows.length - 1]!.push({ text, highlighted: segment.highlighted })
+    rows[rows.length - 1]!.push({
+      text,
+      highlighted: segment.highlighted,
+      virtual: segment.virtual,
+    })
     cells += segmentWidth
   }
 
@@ -126,7 +128,9 @@ export function buildPromptRenderModel(
       segment.text === '\r\n'
     )
     {
-      if (segment.highlighted) append({ text: ' ', highlighted: true })
+      if (segment.highlighted)
+        append({ text: ' ', highlighted: true, virtual: true })
+      else positions.push({ offset, row: rows.length - 1, col: cells })
       pushRow()
     }
     else if (segment.text === '\t')
@@ -141,12 +145,62 @@ export function buildPromptRenderModel(
     {
       append(segment)
     }
+    offset += segment.text.length
   }
   if (cursorOffset === value.length)
-  {
-    append({ text: ' ', highlighted: true })
-  }
+    append({ text: ' ', highlighted: true, virtual: true })
+  else
+    positions.push({ offset: value.length, row: rows.length - 1, col: cells })
 
+  return { rows, cursorRow, positions }
+}
+
+export function movePromptVertically(
+  value: string,
+  offset: number,
+  delta: number,
+  width: number,
+  preferred: number | null
+)
+{
+  const layout = layoutPrompt(value, offset, 0, width)
+  const current = layout.positions.findLast(
+    (position) => position.offset <= offset
+  )!
+  const column = preferred ?? current.col
+  const candidates = layout.positions.filter(
+    (position) => position.row === current.row + delta
+  )
+  if (!candidates.length) return null
+  const target = candidates.reduce((best, position) =>
+    Math.abs(position.col - column) < Math.abs(best.col - column)
+      ? position
+      : best
+  )
+  return { offset: target.offset, preferredCol: column }
+}
+
+// wrap before clipping so the window follows the same visual cursor rows
+export function buildPromptRenderModel(
+  value: string,
+  cursorOffset: number,
+  cursorWidth: number,
+  width = Number.POSITIVE_INFINITY,
+  maxRows = MAX_PROMPT_VIEW_ROWS,
+  showCursor = true
+): PromptRenderModel
+{
+  const columnLimit = Math.max(1, Math.floor(width))
+  const rowLimit = Math.max(
+    1,
+    Math.min(MAX_PROMPT_VIEW_ROWS, Math.floor(maxRows))
+  )
+  const { rows, cursorRow } = layoutPrompt(
+    value,
+    cursorOffset,
+    cursorWidth,
+    width
+  )
   const firstRow = Math.max(
     0,
     Math.min(cursorRow - Math.floor((rowLimit - 1) / 2), rows.length - rowLimit)
@@ -173,7 +227,9 @@ export function buildPromptRenderModel(
         .map((segment) =>
           showCursor && segment.highlighted
             ? chalk.inverse(segment.text)
-            : segment.text
+            : segment.virtual
+              ? ''
+              : segment.text
         )
         .join('')
     })

@@ -70,6 +70,7 @@ ollama pull nomic-embed-text
 | `-V`, `--version`       | Print the Coral version                                                              |
 | `-m`, `--model <model>` | Use an installed Ollama model without opening the picker                             |
 | `--host <url>`          | Set the Ollama host; defaults to `http://localhost:11434`                            |
+| `-C, --cwd <path>`      | Use a workspace; with `--resume`, restrict selection to that workspace               |
 | `--no-think`            | Disable streamed reasoning requests                                                  |
 | `--yolo`                | Auto-approve gated calls; denies stay blocked; use exact pre-trusted MCP `yoloTools` |
 | `--resume`              | Resume the most recent usable session                                                |
@@ -96,6 +97,9 @@ coral exec \
   --no-mcp
 ```
 
+The `none` profile exposes no tools and never starts MCP, including when `--mcp`
+is supplied. It supports tool-free titles and other generated text.
+
 The default `read-only` profile exposes file/search/code-intelligence tools plus
 Git status, diff, and log. `workspace-write` additionally exposes in-workspace
 write/edit tools and `bash`; it excludes Coral's task subagent and Git mutation
@@ -113,6 +117,21 @@ with a run ID, status, model, response, token usage, and any terminal error.
 Headless profiles are deterministic tool catalogs, not a hostile-process
 sandbox. In particular, `bash` runs directly on the host. External callers must
 still isolate workspaces and validate final filesystem or Git scope.
+
+## ACP clients
+
+`coral acp` serves text sessions over stdio for clients such as 456code:
+
+```bash
+CORAL_HOME=/path/to/separate-coral-home coral acp \
+  --host http://localhost:11434 --model qwen3.8:27b-mlx
+```
+
+It supports supervised approvals, streamed text/tool evidence, cancellation,
+model changes, and native `session/resume`. Attachments and client-supplied MCP
+servers are rejected; MCP is disabled. Use a separate home for each app instance.
+See [ACP setup and recovery](docs/acp.md) for protocol boundaries, native session
+ownership, and save-failure handling.
 
 ## Interactive use
 
@@ -140,18 +159,17 @@ measurements show a dash. `/status` includes the session ID and message count.
   Yolo never opens or persists launch trust; commission the identity in ask
   first.
 - Press `Ctrl+C` or `Esc` during a run to interrupt it. While idle, `Ctrl+C`
-  exits and pressing `Esc` twice opens the conversation backtrack picker.
+  exits and pressing `Esc` twice opens the fork picker. Forking saves the original conversation and restores the selected prompt in a fresh session; files and todos stay current.
 - Submit during a run to queue a follow-up. Coral sends it after the active
-  turn settles; `Meta+Backspace` restores the newest queued message for editing.
+  turn succeeds. Interruptions and failures pause the queue until `/queue resume`; `/queue` lists controls. `Meta+Backspace` pauses and restores the newest entry for editing.
 - The composer follows the cursor through up to eight wrapped draft rows.
   Resizing preserves the draft; if the controls and statistics cannot fit,
   Coral asks you to enlarge the terminal before accepting further input.
-- Multiline pastes stay in the composer and require a second Enter to send.
+- Pastes up to 1,000 characters stay inline; larger pastes collapse. Multiline and large pastes require two Enters to send, even after editing.
   `Ctrl+J` or `Meta+Enter` inserts a newline; `Shift+Enter` also works when the
   terminal reports it distinctly. `Ctrl+G` opens the draft in `$VISUAL` or
   `$EDITOR`, and `/vim` toggles modal editing.
-- Use `PageUp`/`PageDown` to move through the transcript and Up/Down to recall
-  input history. Completion menus temporarily own arrows, Tab, Enter, and Esc.
+- Use `PageUp`/`PageDown` to move through the transcript. Up/Down move through visual draft rows and recall history only beyond the first/last row. Completion menus temporarily own arrows, Tab, Enter, and Esc.
 
 ### Slash commands
 
@@ -178,7 +196,7 @@ measurements show a dash. `/status` includes the session ID and message count.
 | `/new`                                         | Save the current session and start a new conversation                |
 | `/telemetry`                                   | Show local lifetime reliability counters per model                   |
 | `/exit` (`/quit`)                              | Exit Coral                                                           |
-| `/export [file] [tools]`                       | Export Markdown to clipboard or a new workspace file                 |
+| `/export [file                                 | --file "path.md"] [--tools] [--thinking]`                            | Export Markdown to clipboard or a new workspace file |
 | `/raw [on\|off]`                               | Switch to plain transcript output for native terminal selection      |
 | `/vim [on\|off]`                               | Toggle modal editing in the composer                                 |
 | `/keybindings`                                 | Show effective keybinding overrides and configuration errors         |
@@ -192,14 +210,14 @@ measurements show a dash. `/status` includes the session ID and message count.
 | `Ctrl+T`               | Toggle streamed reasoning visibility              |
 | `Ctrl+C`               | Interrupt a run, or exit while idle               |
 | `Esc`                  | Interrupt a run; twice while idle opens backtrack |
-| Up/Down                | Navigate persistent input history                 |
+| Up/Down                | Move visual rows; history at draft boundaries     |
 | PageUp/PageDown        | Page through the transcript                       |
 | `Ctrl+J`, `Meta+Enter` | Insert a newline                                  |
 | `Ctrl+R`               | Search prompt history                             |
 | `Ctrl+G`               | Edit the draft in an external editor              |
 | `Ctrl+V`               | Yank the most recently killed text                |
 | `Meta+Y`               | Cycle the previous yank through the kill ring     |
-| `Ctrl+O`               | Expand or collapse the newest tool result         |
+| `Ctrl+O`               | Expand or collapse the targeted visible result    |
 | `Ctrl+Z`               | Suspend on Unix; use the shell's `fg` to resume   |
 
 User keybinding overrides are an array of `{ "action": "open-editor",

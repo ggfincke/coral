@@ -31,7 +31,6 @@ const require = createRequire(import.meta.url)
 const STARTUP_TIMEOUT_MS = 30_000
 const REQUEST_TIMEOUT_MS = 15_000
 const DIAGNOSTICS_TIMEOUT_MS = 5_000
-const DIAGNOSTICS_DEBOUNCE_MS = 150
 const SHUTDOWN_TIMEOUT_MS = 2_000
 const PROCESS_EXIT_TIMEOUT_MS = 500
 const MAX_STDERR_CHARS = 8_000
@@ -46,19 +45,6 @@ interface OpenDocument
 interface SyncedDocument
 {
   uri: string
-  changed: boolean
-}
-
-interface DiagnosticParams
-{
-  uri: string
-  diagnostics: LspDiagnostic[]
-}
-
-interface DiagnosticWaiter
-{
-  promise: Promise<void>
-  cancel: () => void
 }
 
 function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void>
@@ -132,15 +118,49 @@ async function controlledRequest<T>(
   }
 }
 
-function asDiagnosticParams(value: unknown): DiagnosticParams | null
+function diagnosticResponse(value: unknown): LspDiagnostic[]
 {
-  if (!isPlainObject(value)) return null
-  if (typeof value.uri !== 'string') return null
-  if (!Array.isArray(value.diagnostics)) return null
-  return {
-    uri: value.uri,
-    diagnostics: value.diagnostics.filter(isPlainObject) as LspDiagnostic[],
+  if (
+    !isPlainObject(value) ||
+    value.success !== true ||
+    !Array.isArray(value.body)
+  )
+  {
+    throw new Error('TypeScript diagnostics returned an invalid response')
   }
+  return value.body.map((item: unknown) =>
+  {
+    if (
+      !isPlainObject(item) ||
+      !isPlainObject(item.start) ||
+      typeof item.start.line !== 'number' ||
+      typeof item.start.offset !== 'number' ||
+      typeof item.text !== 'string'
+    )
+    {
+      throw new Error('TypeScript diagnostics returned an invalid diagnostic')
+    }
+    return {
+      range: {
+        start: {
+          line: item.start.line - 1,
+          character: item.start.offset - 1,
+        },
+      },
+      severity:
+        item.category === 'warning'
+          ? 2
+          : item.category === 'suggestion'
+            ? 4
+            : 1,
+      code:
+        typeof item.code === 'number' || typeof item.code === 'string'
+          ? item.code
+          : undefined,
+      source: typeof item.source === 'string' ? item.source : 'typescript',
+      message: item.text,
+    }
+  })
 }
 
 // * Own one TypeScript language server for an interactive Agent and its subagents
@@ -156,8 +176,6 @@ export class TypeScriptCodeIntel implements CodeIntelService
   private lastError?: Error
   private stderrTail = ''
   private documents = new Map<string, OpenDocument>()
-  private diagnostics = new Map<string, LspDiagnostic[]>()
-  private diagnosticListeners = new Map<string, Set<() => void>>()
 
   constructor(private cwd: string)
   {
@@ -181,7 +199,6 @@ export class TypeScriptCodeIntel implements CodeIntelService
   {
     this.started = false
     this.documents.clear()
-    this.diagnostics.clear()
     if (error) this.lastError = error
   }
 
@@ -223,17 +240,6 @@ export class TypeScriptCodeIntel implements CodeIntelService
 
   private registerServerHandlers(connection: MessageConnection): void
   {
-    connection.onNotification('textDocument/publishDiagnostics', (value) =>
-    {
-      const params = asDiagnosticParams(value)
-      if (!params) return
-      this.diagnostics.set(params.uri, params.diagnostics)
-      for (const listener of this.diagnosticListeners.get(params.uri) ?? [])
-      {
-        listener()
-      }
-    })
-
     connection.onRequest('window/workDoneProgress/create', () => null)
     connection.onRequest('client/registerCapability', () => null)
     connection.onRequest('client/unregisterCapability', () => null)
@@ -340,10 +346,6 @@ export class TypeScriptCodeIntel implements CodeIntelService
                     dynamicRegistration: false,
                     contentFormat: ['markdown', 'plaintext'],
                   },
-                  publishDiagnostics: {
-                    relatedInformation: true,
-                    versionSupport: true,
-                  },
                 },
                 general: { positionEncodings: ['utf-16'] },
               },
@@ -413,7 +415,7 @@ export class TypeScriptCodeIntel implements CodeIntelService
           text: file.content,
         },
       })
-      return { uri, changed: true }
+      return { uri }
     }
 
     if (current.content !== file.content)
@@ -424,9 +426,9 @@ export class TypeScriptCodeIntel implements CodeIntelService
         textDocument: { uri, version: next },
         contentChanges: [{ text: file.content }],
       })
-      return { uri, changed: true }
+      return { uri }
     }
-    return { uri, changed: false }
+    return { uri }
   }
 
   private sendRequest<T>(
@@ -446,108 +448,48 @@ export class TypeScriptCodeIntel implements CodeIntelService
     )
   }
 
-  private createDiagnosticWaiter(
-    uri: string,
-    signal?: AbortSignal
-  ): DiagnosticWaiter
-  {
-    let timeout: ReturnType<typeof setTimeout> | undefined
-    let debounce: ReturnType<typeof setTimeout> | undefined
-    let onAbort: (() => void) | undefined
-    let settled = false
-    let rejectPromise: (error: Error) => void = () => undefined
-    let resolvePromise: () => void = () => undefined
-
-    const cleanup = () =>
-    {
-      if (timeout) clearTimeout(timeout)
-      if (debounce) clearTimeout(debounce)
-      if (onAbort && signal) signal.removeEventListener('abort', onAbort)
-      const listeners = this.diagnosticListeners.get(uri)
-      listeners?.delete(onDiagnostic)
-      if (listeners?.size === 0) this.diagnosticListeners.delete(uri)
-    }
-    const settle = (error?: Error) =>
-    {
-      if (settled) return
-      settled = true
-      cleanup()
-      if (error) rejectPromise(error)
-      else resolvePromise()
-    }
-    const onDiagnostic = () =>
-    {
-      if (debounce) clearTimeout(debounce)
-      debounce = setTimeout(() => settle(), DIAGNOSTICS_DEBOUNCE_MS)
-    }
-    const promise = new Promise<void>((resolveWait, rejectWait) =>
-    {
-      resolvePromise = resolveWait
-      rejectPromise = rejectWait
-      timeout = setTimeout(
-        () =>
-          settle(
-            new Error(
-              `TypeScript diagnostics were not published within ${DIAGNOSTICS_TIMEOUT_MS}ms; run the project typecheck as a fallback`
-            )
-          ),
-        DIAGNOSTICS_TIMEOUT_MS
-      )
-      if (signal)
-      {
-        onAbort = () => settle(new DOMException('Aborted', 'AbortError'))
-        signal.addEventListener('abort', onAbort, { once: true })
-      }
-    })
-
-    const listeners = this.diagnosticListeners.get(uri) ?? new Set()
-    listeners.add(onDiagnostic)
-    this.diagnosticListeners.set(uri, listeners)
-    return { promise, cancel: () => settle() }
-  }
-
+  // request complete categories after sync; push notifications can be stale or partial
   private async queryDiagnostics(
     path: string,
     signal?: AbortSignal
   ): Promise<string>
   {
-    await this.ensureStarted(signal)
-    const uri = pathToFileURL(path).href
-    const hadCachedDiagnostics = this.diagnostics.has(uri)
-    const cachedDiagnostics = this.diagnostics.get(uri) ?? []
-    this.diagnostics.delete(uri)
-    const waiter = this.createDiagnosticWaiter(uri, signal)
-
-    try
-    {
-      const synced = await this.syncDocument(path, signal)
-      if (!synced.changed && hadCachedDiagnostics)
-      {
-        waiter.cancel()
-        this.diagnostics.set(uri, cachedDiagnostics)
-        return formatDiagnostics(cachedDiagnostics, this.cwd, path)
-      }
-      if (!synced.changed)
-      {
-        const connection = this.connection
-        if (!connection)
-        {
-          throw new Error('TypeScript language server is unavailable')
-        }
-        await connection.sendNotification('textDocument/didClose', {
-          textDocument: { uri },
-        })
-        this.documents.delete(path)
-        await this.syncDocument(path, signal)
-      }
-      await waiter.promise
-      return formatDiagnostics(this.diagnostics.get(uri) ?? [], this.cwd, path)
-    }
-    catch (error)
-    {
-      waiter.cancel()
-      throw error
-    }
+    await this.syncDocument(path, signal)
+    const connection = this.connection
+    if (!connection)
+      throw new Error('TypeScript language server is unavailable')
+    const commands = [
+      'syntacticDiagnosticsSync',
+      'semanticDiagnosticsSync',
+      'suggestionDiagnosticsSync',
+    ]
+    const results = await controlledRequest(
+      (source) =>
+        Promise.all(
+          commands.map((command) =>
+            connection.sendRequest<unknown>(
+              'workspace/executeCommand',
+              {
+                command: 'typescript.tsserverRequest',
+                arguments: [
+                  command,
+                  { file: path },
+                  { executionTarget: 0, expectsResult: true, isAsync: false },
+                ],
+              },
+              source.token
+            )
+          )
+        ),
+      DIAGNOSTICS_TIMEOUT_MS,
+      'TypeScript diagnostics',
+      signal
+    )
+    return formatDiagnostics(
+      results.flatMap(diagnosticResponse),
+      this.cwd,
+      path
+    )
   }
 
   async query(request: CodeIntelQuery): Promise<string>

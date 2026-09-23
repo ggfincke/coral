@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
+import { sameWorkspace } from '../../session/resume.js'
 import { listSessions, loadSessionPreview } from '../../session/store.js'
 import type { OllamaMessage } from '../../types/inference.js'
 import type { SessionMeta } from '../../session/types.js'
@@ -35,6 +36,7 @@ const MAX_LIST_ROWS = 12
 
 export interface SessionPickerLinesOptions
 {
+  currentProject?: boolean
   sessions: SessionMeta[]
   query: string
   selectedIndex: number
@@ -90,7 +92,7 @@ function sessionToEntry(session: SessionMeta): PaletteEntry
     kind: 'command',
     title: session.title || '(untitled)',
     detail: `${formatRelativeAge(session.updatedAt)} · ${session.messageCount} msgs`,
-    keywords: [session.id],
+    keywords: [session.id, session.cwd, session.model],
   }
 }
 
@@ -123,7 +125,7 @@ interface SessionPreviewTail
 }
 
 // walk backward only until the visible tail is filled; restored/plain owners
-// retain displayContent, thinking, attachment notices, and tool-output policy
+// retain displayContent and notices while prioritizing prompts and answers
 export function buildSessionPreviewTail(
   messages: readonly OllamaMessage[],
   maxRows: number
@@ -135,7 +137,11 @@ export function buildSessionPreviewTail(
   let index = messages.length - 1
   for (; index >= 0 && retained < budget; index--)
   {
-    const lines = formatBlocksPlain(buildRestoredBlocks([messages[index]!]))
+    const lines = formatBlocksPlain(
+      buildRestoredBlocks([messages[index]!]).filter(
+        (block) => block.type !== 'thinking' && block.type !== 'tool_result'
+      )
+    )
     const tail = lines.slice(Math.max(lines.length - (budget - retained), 0))
     groups.push(tail)
     retained += tail.length
@@ -321,7 +327,12 @@ export function buildSessionPickerLines(
         'type to filter · enter resumes · esc cancels'
       )
     )
-  if (height >= 6) lines.push('')
+  if (height >= 6)
+    lines.push(
+      chalk.dim(
+        `Tab: ${opts.currentProject ? 'current project' : 'all projects'} · ${sessions.length ? opts.selectedIndex + 1 : 0}/${sessions.length}`
+      )
+    )
 
   if (sessions.length === 0)
   {
@@ -399,6 +410,7 @@ export interface SessionPickerProps
 {
   width: number
   height: number
+  cwd?: string
   active?: boolean
   onResume: (sessionId: string) => void
   onClose: () => void
@@ -408,6 +420,7 @@ export default function SessionPicker({
   width,
   height,
   active = true,
+  cwd = process.cwd(),
   onResume,
   onClose,
 }: SessionPickerProps)
@@ -417,6 +430,7 @@ export default function SessionPicker({
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
+  const [currentProject, setCurrentProject] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
 
   const [reload, setReload] = useState(0)
@@ -435,7 +449,7 @@ export default function SessionPicker({
   useEffect(() =>
   {
     const controller = new AbortController()
-    // listSessions owns ordering & policy; the picker never refilters by cwd
+    // keep global discovery available while the view can filter by workspace
     void listSessions({ signal: controller.signal }).then(
       (loaded) =>
       {
@@ -456,8 +470,14 @@ export default function SessionPicker({
   useEffect(() => () => previewLoader.dispose(), [previewLoader])
 
   const matches = useMemo(
-    () => filterSessions(sessions, query),
-    [query, sessions]
+    () =>
+      filterSessions(
+        currentProject
+          ? sessions.filter((session) => sameWorkspace(session.cwd, cwd))
+          : sessions,
+        query
+      ),
+    [query, sessions, currentProject, cwd]
   )
   const safeIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0))
   const selectedId = matches[safeIndex]?.id
@@ -488,7 +508,16 @@ export default function SessionPicker({
       disposed = true
       previewLoader.cancel()
     }
-  }, [height, previewLoader, previewRows, query, selectedId, state, width])
+  }, [
+    height,
+    previewLoader,
+    previewRows,
+    query,
+    selectedId,
+    state,
+    width,
+    currentProject,
+  ])
 
   const themeGeneration = getThemeGeneration()
   const lines = useMemo(
@@ -496,6 +525,7 @@ export default function SessionPicker({
       state === 'ready'
         ? buildSessionPickerLines({
             sessions: matches,
+            currentProject,
             query,
             selectedIndex: safeIndex,
             width,
@@ -511,6 +541,7 @@ export default function SessionPicker({
             ],
     [
       error,
+      currentProject,
       height,
       matches,
       preview,
@@ -529,6 +560,13 @@ export default function SessionPicker({
       if (key.escape || (key.ctrl && input.toLowerCase() === 'c'))
       {
         onClose()
+        return
+      }
+      if (key.tab)
+      {
+        setCurrentProject((value) => !value)
+        setSelectedIndex(0)
+        setPreview(null)
         return
       }
       if (state === 'loading') return

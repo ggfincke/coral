@@ -84,6 +84,7 @@ export interface TokenUsageView
   prompt: number
   completion: number
   context: number
+  contextEstimated: boolean
   lastPrefillTps: number
   lastDecodeTps: number
 }
@@ -92,6 +93,7 @@ const EMPTY_TOKEN_USAGE: TokenUsageView = {
   prompt: 0,
   completion: 0,
   context: 0,
+  contextEstimated: true,
   lastPrefillTps: 0,
   lastDecodeTps: 0,
 }
@@ -103,6 +105,7 @@ export interface UseAgentTurnOptions
   addHistoryEntry: (text: string, sessionId: string | null) => void
   clearInput: () => void
   scrollToLatest: () => void
+  onInterrupted: () => void
 }
 
 export interface RunAgentTurnOptions
@@ -142,6 +145,7 @@ export function useAgentTurn(
     addHistoryEntry,
     clearInput,
     scrollToLatest,
+    onInterrupted,
   } = options
   const {
     agent,
@@ -159,7 +163,10 @@ export function useAgentTurn(
   )
   const [runStage, setRunStage] = useState<RunStage>('idle')
   const [runElapsed, setRunElapsed] = useState<string | null>(null)
-  const [tokenUsage, setTokenUsage] = useState(EMPTY_TOKEN_USAGE)
+  const [tokenUsage, setTokenUsage] = useState(() => ({
+    ...EMPTY_TOKEN_USAGE,
+    context: agent?.getEstimatedTokens() ?? 0,
+  }))
   const runStartTimeRef = useRef<number | null>(null)
   const toolStartTimesRef = useRef<Map<number, number>>(new Map())
   const {
@@ -196,10 +203,10 @@ export function useAgentTurn(
   }, [resetAnimation, resetStreamBuffer])
 
   const restoreSession = useCallback(
-    (restored: SessionData) =>
+    (restored: SessionData, estimatedTokens: number) =>
     {
       setOutput(buildRestoredBlocks(restored.messages))
-      setTokenUsage(EMPTY_TOKEN_USAGE)
+      setTokenUsage({ ...EMPTY_TOKEN_USAGE, context: estimatedTokens })
       resetRunState()
       scrollToLatest()
     },
@@ -214,9 +221,9 @@ export function useAgentTurn(
     scrollToLatest()
   }, [resetRunState, scrollToLatest])
 
-  const resetTokenUsage = useCallback(() =>
+  const resetTokenUsage = useCallback((estimatedTokens: number) =>
   {
-    setTokenUsage(EMPTY_TOKEN_USAGE)
+    setTokenUsage({ ...EMPTY_TOKEN_USAGE, context: estimatedTokens })
   }, [])
 
   const view = useMemo<InteractiveSessionView>(
@@ -228,6 +235,11 @@ export function useAgentTurn(
     (target: Agent | null = agent) =>
     {
       setOutput(target ? buildRestoredBlocks(target.getMessages()) : [])
+      setTokenUsage((previous) => ({
+        ...previous,
+        context: target?.getEstimatedTokens() ?? 0,
+        contextEstimated: true,
+      }))
       scrollToLatest()
     },
     [agent, scrollToLatest]
@@ -275,6 +287,7 @@ export function useAgentTurn(
       {
         const completion = completeTurn(operation)
         if (!completion.accepted) return
+        onInterrupted()
         const pendingBlocks = consumeBufferedBlocks()
         const toolStarts = new Map(toolStartTimesRef.current)
         const finishedAt = Date.now()
@@ -490,6 +503,7 @@ export function useAgentTurn(
                 prompt: usage.totalPromptTokens,
                 completion: usage.totalCompletionTokens,
                 context: usage.contextTokens,
+                contextEstimated: false,
                 lastPrefillTps:
                   prefillTps > 0 ? prefillTps : previous.lastPrefillTps,
                 lastDecodeTps:
@@ -530,6 +544,7 @@ export function useAgentTurn(
 
               if (completion.aborted)
               {
+                onInterrupted()
                 const toolStarts = new Map(toolStartTimesRef.current)
                 const finishedAt = Date.now()
                 setOutput((previous) => [
@@ -574,6 +589,7 @@ export function useAgentTurn(
       consumeBufferedBlocks,
       getSessionId,
       isYolo,
+      onInterrupted,
       rebuildTranscript,
       requestPrompt,
       requestToolApproval,

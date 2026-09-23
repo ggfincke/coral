@@ -759,7 +759,7 @@ test('renameSession updates authoritative metadata without losing conversation d
   assert.equal(loaded.messages.length, 3)
 })
 
-test('resolveResumeSessionFromCandidates keeps exact-only CLI resolution', () =>
+test('resolveResumeSessionFromCandidates supports callers that disable prefixes', () =>
 {
   const sessions = [makeMeta('abcd1234'), makeMeta('abce5678')]
   const result = resolveResumeSessionFromCandidates({

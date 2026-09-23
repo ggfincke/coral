@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   observations, with bounded file access, cancellation, and browser screenshot
   setup guidance. Coral's main model and runtime dependencies are unchanged.
 
+- **ACP:** text-only stdio sessions with streamed tool evidence, supervised
+  approvals, cancellation, model changes, and native resume on the current
+  Agent/runtime. Session leases protect native snapshots from concurrent saves
+  and renames; failed saves must recover before another turn can run.
+- **Tool-free execution:** `coral exec --permission-profile none` exposes no
+  tools or MCP servers, keeps execution ephemeral, and reports failed,
+  cancelled, and iteration-limited results explicitly.
+
 ## [0.15.0] - 2026-09-07
 
 ### Added

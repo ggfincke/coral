@@ -23,6 +23,7 @@ export interface CommandContext
   host: string
   yolo: boolean
   sessionLabelId: string | null
+  sessionTitle?: string
   pushOutput: (...blocks: OutputBlock[]) => void
   pushTerminalOutput: (...blocks: OutputBlock[]) => void
   clearSession: () => void
@@ -49,6 +50,7 @@ export interface CommandContext
   setVimMode: (enabled: boolean) => void
   // live modal-editing state for toggle commands
   isVimMode: () => boolean
+  manageQueue: (args: string) => Promise<void>
 }
 
 export interface Command

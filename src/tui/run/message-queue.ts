@@ -11,6 +11,7 @@ export interface MessageQueueState
 {
   readonly entries: readonly QueuedMessage[]
   readonly nextId: number
+  readonly paused: boolean
 }
 
 // bound the visible backlog; each entry still carries full text
@@ -19,7 +20,7 @@ const MAX_QUEUE_LINE_CHARS = 120
 
 export function emptyMessageQueue(): MessageQueueState
 {
-  return { entries: [], nextId: 1 }
+  return { entries: [], nextId: 1, paused: false }
 }
 
 export function enqueueMessage(
@@ -32,6 +33,7 @@ export function enqueueMessage(
   if (state.entries.length >= MAX_QUEUED_MESSAGES) return state
 
   return {
+    ...state,
     entries: [...state.entries, { id: state.nextId, text }],
     nextId: state.nextId + 1,
   }
@@ -76,6 +78,7 @@ export function dequeueOldestMessage(
   state: MessageQueueState
 ): DequeuedMessage | null
 {
+  if (state.paused) return null
   const oldest = state.entries[0]
   if (!oldest) return null
 
@@ -100,6 +103,7 @@ export function promoteNewestForEdit(
     state: {
       ...state,
       entries: state.entries.slice(0, -1),
+      paused: true,
     },
     message: newest,
   }

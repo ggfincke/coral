@@ -2,14 +2,14 @@
 // render the interactive terminal view and route user input
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Box, Text, useApp, useInput, useStdout } from 'ink'
+import { Box, Text, useApp, useStdout } from 'ink'
+import type { OutputBlock } from './transcript/types.js'
 import type { Agent } from '../agent/agent.js'
 import { clamp } from '../utils/clamp.js'
-import { pluralize } from '../utils/pluralize.js'
 import { buildModelPickerLines } from './model/model-picker.js'
 import { buildWelcomeLines } from './shell/welcome.js'
 import {
-  buildTranscriptLines,
+  buildTranscriptLayout,
   centerLinesVertical,
   maxScrollOffset,
   padLinesTop,
@@ -17,7 +17,11 @@ import {
 } from './transcript/transcript.js'
 import PromptInput from './prompt/prompt-input.js'
 import { formatBlocksPlain } from './transcript/plain.js'
-import { toggleNewestToolResult } from './transcript/expansion.js'
+import {
+  toggleNewestToolResult,
+  isExpandableBlock,
+  toolResultExpansionKey,
+} from './transcript/expansion.js'
 import { runInExternalEditor } from './prompt/editor-handoff.js'
 import { loadPrefs, savePrefs } from '../config/prefs.js'
 import {
@@ -31,6 +35,7 @@ import {
   formatIdleTitle,
   formatRunningTitle,
 } from './shell/title.js'
+import { useCoralInput } from './input/use-coral-input.js'
 import { useTerminalModes } from './input/use-terminal-modes.js'
 
 // queued-message rows shown above the composer before an overflow summary
@@ -75,6 +80,7 @@ import {
   buildConfirmContent,
   buildMcpApprovalContent,
   renderPromptBox,
+  resolveApprovalKey,
 } from './run/approval-box.js'
 import {
   buildRule,
@@ -88,7 +94,7 @@ import {
   buildBacktrackTurns,
   type BacktrackTurn,
 } from './transcript/backtrack.js'
-import { committedSaveWarning, systemBlock } from './commands/output.js'
+import { systemBlock } from './commands/output.js'
 import { useModelPicker } from './model/use-model-picker.js'
 import SessionPicker from './sessions/picker.js'
 import { buildPaletteEntries, type PaletteEntry } from './palette/palette.js'
@@ -98,6 +104,8 @@ import {
   dequeueOldestMessage,
   emptyMessageQueue,
   enqueueMessage,
+  editQueuedMessage,
+  removeQueuedMessage,
   formatQueueLines,
   promoteNewestForEdit,
 } from './run/message-queue.js'
@@ -105,6 +113,8 @@ import {
 export interface AppProps
 {
   model?: string
+  cwd?: string
+  initialPrompt?: string
   host: string
   think: boolean
   yolo: boolean
@@ -129,6 +139,8 @@ export default function App({
   think,
   yolo: initialYolo,
   resumeSessionId,
+  cwd,
+  initialPrompt,
 }: AppProps)
 {
   const { exit } = useApp()
@@ -141,7 +153,7 @@ export default function App({
   const [paletteOpen, setPaletteOpen] = useState(false)
   // /resume overlay: fuzzy saved-session picker with transcript previews
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
-  // esc-esc rewind selector over prior user prompts; idle-only
+  // esc-esc fork selector over prior user prompts; idle-only
   const [backtrackOpen, setBacktrackOpen] = useState(false)
   const [backtrackArmed, setBacktrackArmed] = useState(false)
   const lastEscapeAtRef = useRef(0)
@@ -152,6 +164,16 @@ export default function App({
   const [promptHeight, setPromptHeight] = useState(1)
   // prompts typed while a run is active; drained as autosends at the boundary
   const [queued, setQueued] = useState(emptyMessageQueue)
+  const queuePausedRef = useRef(false)
+  const pauseQueue = useCallback(() =>
+  {
+    queuePausedRef.current = true
+    setQueued((current) => ({ ...current, paused: true }))
+  }, [])
+  useEffect(() =>
+  {
+    queuePausedRef.current = queued.paused
+  }, [queued.paused])
   const [showThinking, setShowThinking] = useState(true)
   // raw scrollback: styled transcript replaced by a plain full-history dump
   const [rawMode, setRawModeState] = useState(false)
@@ -184,6 +206,7 @@ export default function App({
   // so command and chat turns cannot overlap
   const [commandRunning, setCommandRunning] = useState(false)
   // body scroll position inside the active approval/confirm prompt
+  const [lockedPromptId, setLockedPromptId] = useState<number | null>(null)
   const [promptScrollOffset, setPromptScrollOffset] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [terminalSize, setTerminalSize] = useState({
@@ -210,10 +233,11 @@ export default function App({
   })
   const interactiveView = useMemo<InteractiveSessionView>(
     () => ({
-      restoreSession: (session) =>
-        interactiveViewRef.current.restoreSession(session),
+      restoreSession: (session, estimate) =>
+        interactiveViewRef.current.restoreSession(session, estimate),
       clearSession: () => interactiveViewRef.current.clearSession(),
-      resetTokenUsage: () => interactiveViewRef.current.resetTokenUsage(),
+      resetTokenUsage: (estimate) =>
+        interactiveViewRef.current.resetTokenUsage(estimate),
     }),
     []
   )
@@ -223,6 +247,7 @@ export default function App({
     host,
     think,
     initialYolo,
+    cwd,
     initialSession: resumeSession,
     exit,
     view: interactiveView,
@@ -240,6 +265,7 @@ export default function App({
     activateModel,
     switchModel,
     resumeSession: resumeSessionById,
+    forkSessionAtTurn,
     saveOperationSession,
     renameCurrentSession,
     clearCurrentSession: clearSession,
@@ -251,13 +277,20 @@ export default function App({
     settlePrompt,
     finishCommand,
     runOperation,
-    abortActive: abortRun,
+    abortActive,
     hasActiveOperation,
     getSessionId,
+    getSessionTitle,
     isYolo,
     isAcceptingTransitions,
     shutdown: shutdownInteractive,
   } = interactive
+
+  const abortRun = useCallback(() =>
+  {
+    pauseQueue()
+    abortActive()
+  }, [abortActive, pauseQueue])
 
   // a queued prompt belongs to the conversation it was typed into; a session
   // switch invalidates the backlog instead of firing it at the new session
@@ -298,6 +331,7 @@ export default function App({
     addHistoryEntry,
     clearInput,
     scrollToLatest,
+    onInterrupted: pauseQueue,
   })
   useEffect(() =>
   {
@@ -343,7 +377,7 @@ export default function App({
   const chatViewportHeightRef = useRef(6)
   // prompt viewport geometry for the modal scroll keys
   const promptViewportRef = useRef({ maxOffset: 0, pageSize: 1 })
-  const currentCwd = agent?.getCwd() ?? getCwd()
+  const currentCwd = agent?.getCwd() ?? cwd ?? getCwd()
   const transcriptWidth = Math.max(terminalSize.columns - 2, 1)
   const sessionPickerVisible =
     sessionPickerOpen && !pickerVisible && Boolean(agent)
@@ -392,6 +426,7 @@ export default function App({
           decodeTps: tokenUsage.lastDecodeTps,
           prefillTps: tokenUsage.lastPrefillTps,
           contextTokens: tokenUsage.context,
+          contextEstimated: tokenUsage.contextEstimated,
           contextWindow,
           sessionTokens: tokenUsage.prompt + tokenUsage.completion,
         },
@@ -410,7 +445,7 @@ export default function App({
   else if (backtrackOpen)
   {
     activity = 'backtrack'
-    activityHint = 'enter restores · esc cancels'
+    activityHint = 'enter forks · esc cancels'
   }
   else if (sessionPickerVisible)
   {
@@ -427,11 +462,13 @@ export default function App({
           : `${models.length} models available`
     activityHint =
       pickerState === 'error'
-        ? 'r retries · esc closes'
-        : 'enter selects · esc closes'
+        ? `r retries · esc/ctrl+c ${agent ? 'returns' : 'quits'}`
+        : `enter selects · esc/ctrl+c ${agent ? 'returns' : 'quits'}`
   }
   else if (promptActive)
   {
+    if (lockedPromptId === activePrompt?.id)
+      activityHint = 'Permission mode is locked during approval.'
     activity = style('warning')(
       `waiting for your approval${runElapsed ? ` · ${runElapsed}` : ''}`
     )
@@ -469,7 +506,7 @@ export default function App({
         ? 'ctrl+c interrupts'
         : sessionTransition.phase === 'committed_cleanup'
           ? 'cleanup in progress'
-          : 'esc quits'
+          : 'ctrl+c interrupts'
   }
   else if (commandRunning)
   {
@@ -478,7 +515,7 @@ export default function App({
   }
   else if (backtrackArmed)
   {
-    activityHint = 'esc again -> edit an earlier prompt'
+    activityHint = 'esc again -> fork from an earlier prompt'
   }
   if (stalled && isRunning)
   {
@@ -488,11 +525,9 @@ export default function App({
   {
     activity += ` · ${style('warning')('ctx low — /compact')}`
   }
-  const activityLines = buildActivityLines(
-    activity,
-    activityHint,
-    transcriptWidth
-  )
+  const hasExpandableOutput = !rawMode && output.some(isExpandableBlock)
+  const activityLines = buildActivityLines(activity, '', transcriptWidth)
+  if (activityHint || hasExpandableOutput) activityLines.push('')
   const headerHeight = 2
   const statusHeight = activityLines.length + metricLines.length
   const availableHeight = Math.max(
@@ -517,7 +552,7 @@ export default function App({
   // the editor budget does not depend on its reported height, avoiding a
   // render-measure feedback loop while hints and suggestions appear
   const queueCapacity = showComposer
-    ? Math.max(availableHeight - 5 - 8 - 6, 0)
+    ? Math.max(availableHeight - 5 - 8 - 6, availableHeight >= 6 ? 1 : 0)
     : 0
   const queuePreviewCount = Math.min(
     queued.entries.length,
@@ -529,7 +564,7 @@ export default function App({
       ? [
           style('muted')(
             truncateLine(
-              `${queued.entries.length} queued · meta+backspace edits newest`,
+              `${queued.entries.length} queued · ${queued.paused ? 'paused · /queue resume' : '/queue controls · meta+backspace edits newest'}`,
               transcriptWidth
             )
           ),
@@ -628,15 +663,9 @@ export default function App({
   // expansion lives in a module-level WeakMap, so a tick forces the memoized
   // transcript to re-read it
   const [expansionTick, setExpansionTick] = useState(0)
-  const onToggleToolOutput = useCallback(() =>
-  {
-    if (!toggleNewestToolResult(output)) return
-    setExpansionTick((tick) => tick + 1)
-  }, [output])
-
-  const transcriptLines = useMemo(
+  const transcriptLayout = useMemo(
     () =>
-      buildTranscriptLines({
+      buildTranscriptLayout({
         cwd: currentCwd,
         blocks: output,
         streaming: streamBuf.text,
@@ -664,6 +693,75 @@ export default function App({
       expansionTick,
     ]
   )
+  const transcriptLines = transcriptLayout.lines
+  const stickyResult = useRef<OutputBlock | null>(null)
+  const pendingExpansionAnchor = useRef<{
+    block: OutputBlock
+    screenRow: number
+  } | null>(null)
+  const viewportStart = Math.max(
+    0,
+    transcriptLines.length -
+      Math.min(
+        scrollOffset,
+        maxScrollOffset(transcriptLines.length, chatViewportHeight)
+      ) -
+      chatViewportHeight
+  )
+  const expandable = rawMode
+    ? []
+    : transcriptLayout.results.filter((span) => isExpandableBlock(span.block))
+  const visibleResults = expandable.filter(
+    (span) =>
+      span.end > viewportStart &&
+      span.start < viewportStart + chatViewportHeight
+  )
+  const resultTarget =
+    expandable.find(
+      (span) =>
+        span.block === stickyResult.current &&
+        (scrollOffset === 0 || visibleResults.includes(span))
+    ) ??
+    (scrollOffset === 0
+      ? expandable.at(-1)
+      : visibleResults.reduce<(typeof visibleResults)[number] | undefined>(
+          (best, span) =>
+            !best ||
+            Math.abs(
+              (span.start + span.end) / 2 -
+                viewportStart -
+                chatViewportHeight / 2
+            ) <=
+              Math.abs(
+                (best.start + best.end) / 2 -
+                  viewportStart -
+                  chatViewportHeight / 2
+              )
+              ? span
+              : best,
+          undefined
+        ))
+  if (activityHint || hasExpandableOutput)
+  {
+    const hint =
+      resultTarget && !promptActive && !pickerOverlay
+        ? `ctrl+o ${toolResultExpansionKey(resultTarget.block) ? 'collapses' : 'expands'} ${resultTarget.block.type === 'tool_result' ? resultTarget.block.toolName : 'result'} #${transcriptLayout.results.indexOf(resultTarget) + 1}${activityHint ? ` · ${activityHint}` : ''}`
+        : activityHint
+    activityLines[activityLines.length - 1] = style('muted')(
+      truncateLine(hint, transcriptWidth)
+    )
+  }
+  const onToggleToolOutput = useCallback(() =>
+  {
+    if (!resultTarget) return
+    stickyResult.current = resultTarget.block
+    pendingExpansionAnchor.current = {
+      block: resultTarget.block,
+      screenRow: resultTarget.start - viewportStart,
+    }
+    toggleNewestToolResult([resultTarget.block])
+    setExpansionTick((tick) => tick + 1)
+  }, [resultTarget, viewportStart])
   const maxOffset = maxScrollOffset(transcriptLines.length, chatViewportHeight)
   const visibleTranscript = sliceViewport(
     transcriptLines,
@@ -678,7 +776,8 @@ export default function App({
           models,
           selectedModelIndex,
           transcriptWidth,
-          pickerViewportHeight
+          pickerViewportHeight,
+          Boolean(agent)
         )
       : pickerState === 'loading'
         ? ['Loading Ollama models…', `Host: ${host}`]
@@ -688,7 +787,7 @@ export default function App({
     pickerViewportHeight
   )
 
-  // rewind targets come from conversation storage so indices line up with
+  // fork targets come from conversation storage so indices line up with
   // messages; transcript blocks are a projection of these same turns
   const backtrackTurns = useMemo(
     () =>
@@ -776,7 +875,23 @@ export default function App({
     const nextLineCount = transcriptLines.length
     const previousLineCount = previousLineCountRef.current
 
-    if (scrollOffset > 0 && nextLineCount > previousLineCount)
+    const anchor = pendingExpansionAnchor.current
+    if (anchor)
+    {
+      pendingExpansionAnchor.current = null
+      const span = transcriptLayout.results.find(
+        (entry) => entry.block === anchor.block
+      )
+      if (span)
+        setScrollOffset(
+          clamp(
+            nextLineCount - chatViewportHeight - span.start + anchor.screenRow,
+            0,
+            maxScrollOffset(nextLineCount, chatViewportHeight)
+          )
+        )
+    }
+    else if (scrollOffset > 0 && nextLineCount > previousLineCount)
     {
       setScrollOffset(
         (current) => current + (nextLineCount - previousLineCount)
@@ -784,7 +899,14 @@ export default function App({
     }
 
     previousLineCountRef.current = nextLineCount
-  }, [output, scrollOffset, streamBuf, transcriptLines.length])
+  }, [
+    output,
+    scrollOffset,
+    streamBuf,
+    transcriptLines.length,
+    transcriptLayout,
+    chatViewportHeight,
+  ])
 
   useEffect(() =>
   {
@@ -796,7 +918,7 @@ export default function App({
     })
   }, [maxOffset, scrollOffset])
 
-  useInput(
+  useCoralInput(
     (ch, key) =>
     {
       if (terminalTooSmall)
@@ -827,66 +949,29 @@ export default function App({
         }
       }
 
-      if (activePrompt?.kind === 'mcp')
+      if (activePrompt)
       {
-        if ((key.ctrl && ch.toLowerCase() === 'c') || key.escape)
-        {
-          abortRun()
-        }
-        else if (ch === 'y' || ch === 'Y')
-        {
-          settlePrompt(activePrompt.id, true)
-        }
-        else if (ch === 'n' || ch === 'N')
-        {
-          settlePrompt(activePrompt.id, false)
-        }
-
-        return
-      }
-
-      if (activePrompt?.kind === 'tool')
-      {
-        if (key.ctrl && ch.toLowerCase() === 'c')
-        {
-          abortRun()
-        }
-        else if (!key.ctrl && !key.meta && (ch === 'a' || ch === 'A'))
+        const action = resolveApprovalKey(activePrompt.kind, ch, key)
+        if (action === 'abort') abortRun()
+        else if (action === 'locked') setLockedPromptId(activePrompt.id)
+        else if (action === 'always')
         {
           settlePrompt(activePrompt.id, { approved: true, always: true })
         }
-        else if (ch === 'y' || ch === 'Y')
+        else if (action === 'approve' || action === 'reject')
         {
-          settlePrompt(activePrompt.id, true)
+          settlePrompt(activePrompt.id, action === 'approve')
         }
-        else if (ch === 'n' || ch === 'N' || key.escape)
-        {
-          settlePrompt(activePrompt.id, false)
-        }
-
-        return
-      }
-
-      if (activePrompt?.kind === 'doom')
-      {
-        if (key.ctrl && ch.toLowerCase() === 'c')
-        {
-          abortRun()
-        }
-        else if (ch === 'y' || ch === 'Y')
-        {
-          settlePrompt(activePrompt.id, true)
-        }
-        else if (ch === 'n' || ch === 'N' || key.escape)
-        {
-          settlePrompt(activePrompt.id, false)
-        }
-
         return
       }
 
       if (pickerVisible)
       {
+        if (key.ctrl && ch.toLowerCase() === 'c')
+        {
+          escapeModelPicker()
+          return
+        }
         if (pickerState === 'loading')
         {
           if (key.escape) escapeModelPicker()
@@ -996,9 +1081,132 @@ export default function App({
     ]
   )
 
-  const runSlashCommand = useCallback(
-    async (value: string): Promise<SlashDispatchResult> =>
+  const queueHistoryWarning = useCallback(
+    (name: string): boolean =>
     {
+      if (
+        queued.entries.length === 0 ||
+        ![
+          'new',
+          'clear',
+          'reset',
+          'resume',
+          'undo',
+          'redo',
+          'backtrack',
+        ].includes(name)
+      )
+        return false
+      setOutput((previous) => [
+        ...previous,
+        systemBlock(
+          'Queued messages remain. Use /queue resume to finish them or /queue clear to discard them.'
+        ),
+      ])
+      return true
+    },
+    [queued.entries.length, setOutput]
+  )
+
+  const manageQueue = useCallback(
+    async (args: string): Promise<void> =>
+    {
+      const [action, rawId, ...extra] = args.trim().split(/\s+/)
+      const print = (message: string) =>
+        setOutput((previous) => [...previous, systemBlock(message)])
+      if (!action)
+      {
+        print(
+          queued.entries.length
+            ? `${queued.paused ? 'Queue paused' : 'Queue running'}\n${formatQueueLines(queued.entries).join('\n')}`
+            : 'No queued messages.'
+        )
+        return
+      }
+      const id = Number(rawId)
+      const needsId = action === 'edit' || action === 'remove'
+      if (
+        extra.length ||
+        (needsId
+          ? !Number.isSafeInteger(id) ||
+            !queued.entries.some((entry) => entry.id === id)
+          : rawId !== undefined) ||
+        !['pause', 'resume', 'clear', 'remove', 'edit'].includes(action)
+      )
+      {
+        print('Usage: /queue [pause|resume|clear|edit <id>|remove <id>]')
+        return
+      }
+      if (
+        action === 'edit' &&
+        (hasActiveOperation() || runStage !== 'idle' || transitioningSession)
+      )
+      {
+        print(
+          'Interrupt the current operation before editing a queued message.'
+        )
+        return
+      }
+      if (action === 'pause' || action === 'edit') pauseQueue()
+      if (action === 'resume')
+      {
+        queuePausedRef.current = false
+        setQueued((current) => ({ ...current, paused: false }))
+      }
+      else if (action === 'clear')
+        setQueued((current) => ({ ...current, entries: [] }))
+      else if (action === 'remove')
+        setQueued((current) => removeQueuedMessage(current, id))
+      else if (action === 'edit')
+      {
+        const entry = queued.entries.find((item) => item.id === id)!
+        setCommandRunning(true)
+        try
+        {
+          await suspendTerminal(async () =>
+          {
+            const result = await runInExternalEditor(entry.text)
+            if (result.text !== null)
+              setQueued((current) =>
+                editQueuedMessage(current, id, result.text!)
+              )
+          })
+        }
+        catch (error)
+        {
+          print(
+            `Could not edit queued message: ${toErrorMessage(error)}. Check $VISUAL or $EDITOR.`
+          )
+        }
+        finally
+        {
+          setCommandRunning(false)
+        }
+      }
+    },
+    [
+      hasActiveOperation,
+      pauseQueue,
+      queued,
+      runStage,
+      setOutput,
+      suspendTerminal,
+      transitioningSession,
+    ]
+  )
+
+  const runSlashCommand = useCallback(
+    async (
+      value: string,
+      preserveInput = false
+    ): Promise<SlashDispatchResult> =>
+    {
+      if (
+        queueHistoryWarning(
+          value.trim().split(/\s+/)[0]!.slice(1).toLowerCase()
+        )
+      )
+        return { admitted: false, handled: true }
       const commandOperation = beginOperation('command')
       if (!commandOperation) return { admitted: false, handled: false }
       const commandAgent = commandOperation.agent
@@ -1028,7 +1236,13 @@ export default function App({
         },
         async () =>
         {
-          setInput('')
+          if (
+            queueHistoryWarning(
+              value.trim().split(/\s+/)[0]!.slice(1).toLowerCase()
+            )
+          )
+            return { admitted: false, handled: true }
+          if (!preserveInput) setInput('')
           setScrollOffset(0)
 
           const cmdCtx: CommandContext = {
@@ -1037,6 +1251,7 @@ export default function App({
             host,
             yolo: isYolo(),
             sessionLabelId: getSessionId(),
+            sessionTitle: getSessionTitle(),
             signal: commandOperation.signal,
             getCwd: () => commandAgent.getCwd(),
             pushOutput: (...blocks) =>
@@ -1084,6 +1299,7 @@ export default function App({
             setVimMode,
             // /vim reads the live state back to toggle correctly
             isVimMode: () => viMode,
+            manageQueue,
           }
 
           // bare /resume opens the picker inside the joined command lifetime
@@ -1106,10 +1322,13 @@ export default function App({
       clearSession,
       finishCommand,
       getSessionId,
+      getSessionTitle,
       host,
       isYolo,
       rebuildTranscript,
       renameCurrentSession,
+      queueHistoryWarning,
+      manageQueue,
       reopenModelPicker,
       resetTokenUsage,
       resumeSessionById,
@@ -1126,55 +1345,36 @@ export default function App({
     ]
   )
 
-  // fork the conversation to just before a chosen turn; mirrors /undo's
-  // canonical sequence: rebuildTranscript -> resetTokenUsage -> save
+  // the runtime adopts a new child; the original command binding stays retired
   const backtrackToTurn = useCallback(
     async (turn: BacktrackTurn) =>
     {
+      if (queueHistoryWarning('backtrack')) return
       setBacktrackOpen(false)
       lastEscapeAtRef.current = 0
-
       const operation = beginOperation('command')
       if (!operation) return
-      const commandAgent = operation.agent
-
-      await runOperation(operation, async () =>
+      await runOperation(operation, () =>
       {
         try
         {
-          const removedMessages = commandAgent.truncateToTurn(turn.startIndex)
-          if (removedMessages === null)
-          {
-            if (acceptsCommandEvent(operation))
-            {
-              setOutput((prev) => [
-                ...prev,
-                systemBlock(
-                  'Cannot backtrack after compaction or history changes'
-                ),
-              ])
-            }
-            return
-          }
-
-          rebuildTranscript(commandAgent)
-          resetTokenUsage()
-          const saved = saveOperationSession(operation)
-
+          const result = forkSessionAtTurn(turn.startIndex, operation)
           if (acceptsCommandTerminal(operation))
           {
-            const warning = committedSaveWarning(saved, 'Backtrack completed')
-            setOutput((prev) => [
-              ...prev,
+            setOutput((previous) => [
+              ...previous,
               systemBlock(
-                `Backtracked ${pluralize(removedMessages, 'message')} — prompt restored to the composer`
+                result.status === 'forked'
+                  ? `Forked ${result.childId} from ${result.parentId}. Original saved; files and todo board stay current.`
+                  : result.message
               ),
-              ...(warning ? [warning] : []),
             ])
           }
-
-          resetNavigation()
-          setInput(turn.content)
+          if (result.status === 'forked')
+          {
+            resetNavigation()
+            setInput(turn.content)
+          }
         }
         finally
         {
@@ -1183,25 +1383,30 @@ export default function App({
       })
     },
     [
-      acceptsCommandEvent,
       acceptsCommandTerminal,
       beginOperation,
       finishCommand,
-      rebuildTranscript,
+      forkSessionAtTurn,
+      queueHistoryWarning,
       resetNavigation,
-      resetTokenUsage,
       runOperation,
-      saveOperationSession,
       setOutput,
     ]
   )
 
   const handleSubmit = useCallback(
-    async (value: string) =>
+    async (value: string, preserveInput = false) =>
     {
       const trimmed = value.trim()
       if (!trimmed || promptActive || commandRunning || transitioningSession)
       {
+        return
+      }
+
+      if (/^\/queue(?:\s|$)/i.test(trimmed))
+      {
+        if (!preserveInput) setInput('')
+        await manageQueue(trimmed.slice(6).trim())
         return
       }
 
@@ -1224,7 +1429,7 @@ export default function App({
           }
           setQueued(next)
           resetNavigation()
-          setInput('')
+          if (!preserveInput) setInput('')
         }
         return
       }
@@ -1233,12 +1438,13 @@ export default function App({
       let historyRecorded = false
       if (trimmed.startsWith('/'))
       {
-        const result = await runSlashCommand(trimmed)
+        const result = await runSlashCommand(trimmed, preserveInput)
         if (!result.admitted || result.handled) return
         historyRecorded = true
       }
       await runAgentTurn(value, {
         historyRecorded,
+        preserveInput,
         attachmentPaths: parseMentions(value),
       })
     },
@@ -1246,6 +1452,7 @@ export default function App({
       commandRunning,
       promptActive,
       queued,
+      manageQueue,
       resetNavigation,
       runAgentTurn,
       runStage,
@@ -1254,6 +1461,32 @@ export default function App({
       transitioningSession,
     ]
   )
+  const pendingInitialPrompt = useRef(initialPrompt)
+  useEffect(() =>
+  {
+    if (
+      !pendingInitialPrompt.current ||
+      !agent ||
+      pickerVisible ||
+      transitioningSession ||
+      commandRunning ||
+      runStage !== 'idle' ||
+      hasActiveOperation()
+    )
+      return
+    const prompt = pendingInitialPrompt.current
+    pendingInitialPrompt.current = undefined
+    void handleSubmit(prompt, true)
+  }, [
+    agent,
+    pickerVisible,
+    transitioningSession,
+    commandRunning,
+    runStage,
+    hasActiveOperation,
+    handleSubmit,
+  ])
+
   // wait for the idle render before autosending; admission takes the same
   // runtime slot as a manual submit and keeps an unsubmitted draft intact
   useEffect(() =>
@@ -1263,7 +1496,8 @@ export default function App({
       promptActive ||
       commandRunning ||
       transitioningSession ||
-      queued.entries.length === 0
+      queued.entries.length === 0 ||
+      queued.paused
     )
     {
       return
@@ -1271,7 +1505,13 @@ export default function App({
     let canceled = false
     queueMicrotask(() =>
     {
-      if (canceled || hasActiveOperation() || !isAcceptingTransitions()) return
+      if (
+        canceled ||
+        queuePausedRef.current ||
+        hasActiveOperation() ||
+        !isAcceptingTransitions()
+      )
+        return
       const next = dequeueOldestMessage(queued)
       if (!next) return
       setQueued(next.state)
@@ -1303,6 +1543,7 @@ export default function App({
     const promoted = promoteNewestForEdit(queued)
     if (!promoted) return false
 
+    queuePausedRef.current = true
     setQueued(promoted.state)
     resetNavigation()
     setInput(promoted.message.text)
@@ -1366,6 +1607,7 @@ export default function App({
 
   const onPageUp = useCallback(() =>
   {
+    stickyResult.current = null
     setScrollOffset((current) =>
       clamp(
         current + Math.max(chatViewportHeightRef.current - 1, 1),
@@ -1377,6 +1619,7 @@ export default function App({
 
   const onPageDown = useCallback(() =>
   {
+    stickyResult.current = null
     setScrollOffset((current) =>
       clamp(
         current - Math.max(chatViewportHeightRef.current - 1, 1),
@@ -1388,13 +1631,19 @@ export default function App({
 
   const onJumpTop = useCallback(() =>
   {
+    stickyResult.current = null
     setScrollOffset(maxOffsetRef.current)
   }, [])
 
-  const onJumpBottom = useCallback(() => setScrollOffset(0), [])
+  const onJumpBottom = useCallback(() =>
+  {
+    stickyResult.current = null
+    setScrollOffset(0)
+  }, [])
 
   const onHalfPageUp = useCallback(() =>
   {
+    stickyResult.current = null
     setScrollOffset((current) =>
       clamp(
         current + Math.max(Math.floor(chatViewportHeightRef.current / 2), 1),
@@ -1406,6 +1655,7 @@ export default function App({
 
   const onHalfPageDown = useCallback(() =>
   {
+    stickyResult.current = null
     setScrollOffset((current) =>
       clamp(
         current - Math.max(Math.floor(chatViewportHeightRef.current / 2), 1),
@@ -1416,35 +1666,35 @@ export default function App({
   }, [])
 
   // ctrl+g shares terminal suspension with job control and restores the draft
-  const handleOpenEditor = useCallback(async () =>
-  {
-    try
+  const handleOpenEditor = useCallback(
+    async (draft: string): Promise<string | null> =>
     {
-      await suspendTerminal(async () =>
+      let edited: string | null = null
+      try
       {
-        try
+        await suspendTerminal(async () =>
         {
-          const outcome = await runInExternalEditor(input)
-          if (outcome.text !== null && outcome.text !== input)
-          {
-            resetNavigation()
-            setInput(outcome.text)
-          }
-        }
-        catch
-        {
-          // editor missing or crashed: fall through w/ the draft intact
-        }
-      })
-    }
-    catch
-    {
-      // suspendTerminal unavailable in this Ink context; ignore the request
-    }
-  }, [input, resetNavigation, setInput, suspendTerminal])
+          edited = (await runInExternalEditor(draft)).text
+        })
+        if (edited !== null) resetNavigation()
+      }
+      catch (error)
+      {
+        setOutput((blocks) => [
+          ...blocks,
+          systemBlock(
+            `Editor failed: ${toErrorMessage(error)} Check VISUAL or EDITOR, then retry Ctrl+G.`
+          ),
+        ])
+      }
+      return edited
+    },
+    [resetNavigation, suspendTerminal, setOutput]
+  )
 
   const onScrollUp = useCallback(() =>
   {
+    stickyResult.current = null
     setScrollOffset((current) =>
       clamp(current + SCROLL_LINES, 0, maxOffsetRef.current)
     )
@@ -1452,6 +1702,7 @@ export default function App({
 
   const onScrollDown = useCallback(() =>
   {
+    stickyResult.current = null
     setScrollOffset((current) =>
       clamp(current - SCROLL_LINES, 0, maxOffsetRef.current)
     )
@@ -1605,7 +1856,7 @@ export default function App({
   }, [abortRun, hasActiveOperation, shutdown])
 
   // composer escape keeps interrupt priority during runs; when idle the first
-  // press arms esc-esc backtrack and a second press opens the rewind selector
+  // press arms esc-esc backtrack and a second press opens the fork selector
   const handleComposerEscape = useCallback(() =>
   {
     if (hasActiveOperation())
@@ -1614,6 +1865,7 @@ export default function App({
       return
     }
 
+    if (queueHistoryWarning('backtrack')) return
     const now = Date.now()
     if (
       !agent ||
@@ -1650,6 +1902,7 @@ export default function App({
     agent,
     commandRunning,
     hasActiveOperation,
+    queueHistoryWarning,
     transitioningSession,
   ])
 
@@ -1701,6 +1954,7 @@ export default function App({
             />
           ) : sessionPickerVisible ? (
             <SessionPicker
+              cwd={currentCwd}
               active={!terminalTooSmall}
               width={transcriptWidth}
               height={paletteViewportHeight}
