@@ -385,7 +385,7 @@ Each interactive Agent constructs one `TypeScriptCodeIntel` (`src/lsp/client.ts`
 
 No other languages, no rename/refactor, no workspace-wide diagnostic sweep.
 
-Timeouts: 30s startup, 15s requests, 5s diagnostics (150ms debounce), 2s shutdown, 500ms process-exit wait. At most **2** start attempts. If diagnostics are not published in 5s, the tool tells the model to run the project typecheck; Coral does not run it.
+Timeouts: 30s startup, 15s requests, 5s diagnostics, 2s shutdown, 500ms process-exit wait. At most **2** start attempts. Diagnostics synchronize the document and request complete syntax, semantic, and suggestion results through the bundled server's `typescript.tsserverRequest` command, sharing one 5s deadline. Partial push notifications cannot settle the result. A timeout reports an error; the project typecheck remains a manual fallback.
 
 ---
 
