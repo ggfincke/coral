@@ -11,6 +11,7 @@ export interface MetricValues
 {
   decodeTps: number
   prefillTps: number
+  contextEstimated?: boolean
   contextTokens: number
   contextWindow: number
   sessionTokens: number
@@ -29,17 +30,19 @@ export function buildMetricLines(
   const context =
     values.contextWindow > 0
       ? value(
-          `${formatTokenCount(values.contextTokens)}/${formatTokenCount(values.contextWindow)}`
+          `${values.contextEstimated ? '~' : ''}${formatTokenCount(values.contextTokens)}/${formatTokenCount(values.contextWindow)}`
         ) +
         label(
           ` ctx (${percentOfWindow(values.contextTokens, values.contextWindow)}%)`
         )
-      : value(formatTokenCount(values.contextTokens)) + label('/— ctx (—)')
+      : value(
+          `${values.contextEstimated ? '~' : ''}${formatTokenCount(values.contextTokens)}`
+        ) + label('/— ctx (—)')
   const groups = [
     value(rate(values.decodeTps)) + label(' tok/s'),
     value(rate(values.prefillTps)) + label(' tok/s prefill'),
     context,
-    value(formatTokenCount(values.sessionTokens)) + label(' tok session'),
+    value(formatTokenCount(values.sessionTokens)) + label(' tok since open'),
   ]
   const budget = Math.max(width, 1)
   const lines: string[] = []

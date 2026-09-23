@@ -59,7 +59,7 @@ Streamed reasoning requests are **on** unless you pass `--no-think`. `Ctrl+T` on
 
 Permission mode starts as **ask** (prompt before gated calls) unless you pass `--yolo`. See [Permissions](permissions.md).
 
-`--resume` loads the newest session by `updatedAt` and **exits 1** if that session's cwd is gone. It does not skip to the next session. Details: [CLI](cli.md), [Sessions](sessions.md).
+`--resume` loads the newest usable session by `updatedAt`, skipping unavailable directories. Add `-C /path/to/project` to restrict selection. Explicit `--session` targets never substitute another session. Details: [CLI](cli.md), [Sessions](sessions.md).
 
 ## Semantic search (optional)
 

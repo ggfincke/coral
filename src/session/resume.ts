@@ -3,7 +3,36 @@
 
 import { listSessions, loadSession } from './store.js'
 import type { SessionData, SessionMeta } from './types.js'
-import { existsSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+export function isSessionDirectory(cwd: string): boolean
+{
+  try
+  {
+    return statSync(cwd).isDirectory()
+  }
+  catch
+  {
+    return false
+  }
+}
+
+export function sameWorkspace(left: string, right: string): boolean
+{
+  const normalize = (path: string) =>
+  {
+    try
+    {
+      return realpathSync(path)
+    }
+    catch
+    {
+      return resolve(path)
+    }
+  }
+  return normalize(left) === normalize(right)
+}
 
 export type ResumeSessionResolution =
   | { type: 'target'; session: SessionMeta }
@@ -15,6 +44,7 @@ export type ResumeSessionResolution =
 
 export interface ResolveResumeSessionOptions
 {
+  cwd?: string
   requestedId?: string
   currentSessionId?: string | null
   allowPrefix?: boolean
@@ -45,10 +75,11 @@ function asResolution(
 
 export function resolveResumeSessionFromCandidates({
   requestedId,
+  cwd,
   currentSessionId,
   allowPrefix = false,
   requireExistingCwd = false,
-  canResumeInCwd = existsSync,
+  canResumeInCwd = isSessionDirectory,
   sessions,
   loadSessionById = loadSession,
 }: ResolveResumeSessionCandidatesOptions): ResumeSessionResolution
@@ -57,7 +88,12 @@ export function resolveResumeSessionFromCandidates({
 
   if (!normalizedId)
   {
-    const latest = sessions.find((session) => session.id !== currentSessionId)
+    const latest = sessions.find(
+      (session) =>
+        session.id !== currentSessionId &&
+        (!cwd || sameWorkspace(session.cwd, cwd)) &&
+        (!requireExistingCwd || canResumeInCwd(session.cwd))
+    )
     return latest
       ? asResolution(
           latest,

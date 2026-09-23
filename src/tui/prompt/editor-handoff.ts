@@ -66,6 +66,8 @@ function runEditorOnce(filePath: string, command: string): void
     }
   )
   if (result.error) throw result.error
+  if (result.status !== 0)
+    throw new Error(`Editor exited ${result.signal ?? result.status}.`)
 }
 
 // write the draft to a private temp file, open the user's editor on it, and

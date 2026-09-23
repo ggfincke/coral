@@ -259,7 +259,11 @@ test('backward preview tails preserve plain transcript policy without formatting
     },
     { role: 'assistant', content: 'final answer' },
   ]
-  const all = formatBlocksPlain(buildRestoredBlocks(messages))
+  const all = formatBlocksPlain(
+    buildRestoredBlocks(messages).filter(
+      (block) => block.type !== 'thinking' && block.type !== 'tool_result'
+    )
+  )
   for (const budget of [1, 8, 100])
   {
     const tail = buildSessionPreviewTail(messages, budget)
@@ -629,6 +633,7 @@ function makeCommandContext(
     resumeSession: () => false,
     saveCurrentSession: () => ({ status: 'saved', id: 'abcd1234' }),
     renameCurrentSession: () => false,
+    manageQueue: async () => undefined,
     notifyThemeChanged()
     {},
     ...overrides,

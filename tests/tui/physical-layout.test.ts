@@ -49,6 +49,8 @@ interface FrameProps
   rows: number
   scrollOffset: number
   tick: number
+  onOpenEditor?: PromptInputProps['onOpenEditor']
+  viMode?: boolean
   fixedAllocation?: number
 }
 
@@ -109,6 +111,8 @@ async function createFrameHarness(blocks: OutputBlock[], initial: FrameProps)
         { height: allocated, flexShrink: 0, overflowY: 'hidden' },
         createElement(PromptInput, {
           ...callbacks,
+          onOpenEditor: props.onOpenEditor,
+          viMode: props.viMode,
           value,
           width: props.columns,
           maxHeight,
@@ -325,5 +329,106 @@ test('physical Ink frames retain transcript rows and bound recalled drafts throu
   {
     await harness.close()
     chalk.level = previousColor
+  }
+})
+
+test('composer preserves wrapped drafts, paste confirmation, and editor contents through real input routing', async () =>
+{
+  let editorDraft = ''
+  let editorCancelled = false
+  const props: FrameProps = {
+    columns: 20,
+    rows: 24,
+    scrollOffset: 0,
+    tick: 0,
+    onOpenEditor: async (draft) =>
+    {
+      editorDraft = draft
+      return editorCancelled ? null : draft + '\nedited'
+    },
+  }
+  const harness = await createFrameHarness([], props)
+  try
+  {
+    const wrapped = '1234567890'.repeat(4)
+    await harness.input(wrapped)
+    await harness.input('\x1b[A')
+    await harness.input('X')
+    assert.equal(
+      harness.controls.value,
+      wrapped.slice(0, 20) + 'X' + wrapped.slice(20)
+    )
+    await harness.rerender({ ...props, columns: 10 })
+    await harness.input('\x1b[A')
+    await harness.input('Y')
+    assert.equal(harness.controls.value.indexOf('Y'), 11)
+    assert.equal(harness.controls.value.replace(/[XY]/g, ''), wrapped)
+    harness.controls.setDraft('')
+    await harness.flush()
+    await harness.rerender({ ...props, columns: 80 })
+    await harness.input('\x1b[200~alpha\nbeta\x1b[201~')
+    assert.equal(harness.controls.value, 'alpha\nbeta')
+    await harness.input('!')
+    await harness.input('\r')
+    assert.deepEqual(harness.controls.submissions, [])
+    await harness.input('\r')
+    assert.deepEqual(harness.controls.submissions, ['alpha\nbeta!'])
+    harness.controls.setDraft('')
+    await harness.flush()
+    const large = 'expanded '.repeat(140)
+    await harness.input('\x1b[200~' + large + '\x1b[201~')
+    const placeholder = harness.controls.value
+    assert.match(placeholder, /Pasted text/)
+    await harness.input('\x07')
+    assert.equal(editorDraft, large)
+    assert.equal(harness.controls.value, large + '\nedited')
+    await harness.input('\x1f')
+    assert.equal(harness.controls.value, placeholder)
+    editorCancelled = true
+    await harness.input('\x07')
+    assert.equal(harness.controls.value, placeholder)
+    await harness.input('\r')
+    assert.equal(harness.controls.submissions.length, 1)
+    await harness.input('\r')
+    assert.equal(harness.controls.submissions.at(-1), large)
+    harness.controls.setDraft('')
+    await harness.flush()
+    await harness.rerender({ ...props, columns: 80, viMode: true })
+    await harness.input('i')
+    await harness.input('abc')
+    await harness.input('\x1b[D')
+    await harness.input('X')
+    assert.equal(harness.controls.value, 'abXc')
+    await harness.input('\r')
+    assert.equal(harness.controls.value, 'abX\nc')
+    harness.controls.setDraft('')
+    await harness.flush()
+    await harness.input('/h')
+    await harness.input('\x1b[B')
+    await harness.input('\r')
+    assert.equal(harness.controls.value, '/history ')
+    assert.equal(harness.controls.submissions.length, 2)
+    harness.controls.setDraft('')
+    await harness.flush()
+    await harness.input('\x1b[200~safe\npaste\x1b[201~')
+    await harness.input('\x1b')
+    // allow Ink to distinguish bare escape from an alt chord after its 20 ms delay
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    await harness.flush()
+    await harness.input(':')
+    await harness.input('w')
+    await harness.input('q')
+    await harness.input('\r')
+    assert.equal(harness.controls.submissions.length, 2)
+    await harness.input('\r')
+    assert.equal(
+      harness.controls.submissions.at(-1),
+      'safe\npaste',
+      stripAnsi(harness.frames.at(-1)!)
+    )
+  }
+  finally
+  {
+    await harness.close()
   }
 })

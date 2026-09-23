@@ -1,7 +1,7 @@
 // src/tui/session/agent-session.ts
 // construct primary Agents, bridge persisted sessions, & generate titles
 
-import { existsSync } from 'node:fs'
+import { isSessionDirectory } from '../../session/resume.js'
 import { Agent } from '../../agent/agent.js'
 import type { AgentInferenceClient } from '../../agent/inference-client.js'
 import { AgentTodoState } from '../../agent/state/todos.js'
@@ -20,6 +20,7 @@ import {
 } from '../../session/types.js'
 import type { OllamaMessage } from '../../types/inference.js'
 import { findUserTurnStarts, type UndoTurn } from '../../types/undo.js'
+import { toErrorMessage } from '../../utils/errors.js'
 import { ellipsize } from '../../utils/ellipsize.js'
 
 export interface StartupSession
@@ -50,7 +51,8 @@ export function resolveStartupSession(
   }
 
   const session = loadSession(resumeSessionId)
-  if (!session || !existsSync(session.meta.cwd)) return { session: null }
+  if (!session || !isSessionDirectory(session.meta.cwd))
+    return { session: null }
   return { session }
 }
 
@@ -112,6 +114,73 @@ export function persistAgentSession(
   {
     // session save failure is non-fatal
     return null
+  }
+}
+
+export type ForkSessionResult =
+  | { status: 'forked'; parentId: string; childId: string }
+  | { status: 'error'; message: string; childId?: string }
+
+// persist the whole parent before creating a separate conversation-only child
+export function forkAgentSession(
+  agent: Agent,
+  startIndex: number,
+  actions: {
+    isCurrent: () => boolean
+    saveParent: () => SessionMeta | null
+    adopt: (child: SessionData) => boolean
+  }
+): ForkSessionResult
+{
+  let childId: string | undefined
+  try
+  {
+    const messages = agent.getMessages()
+    if (
+      !actions.isCurrent() ||
+      !Number.isInteger(startIndex) ||
+      startIndex < agent.getFrozenPrefix().messages ||
+      !findUserTurnStarts(messages, agent.getUndoStack()).includes(startIndex)
+    )
+    {
+      return {
+        status: 'error',
+        message: 'Cannot fork after compaction or history changes.',
+      }
+    }
+    const parent = actions.saveParent()
+    if (!parent || !actions.isCurrent())
+    {
+      return {
+        status: 'error',
+        message: 'Current session could not be saved; fork was canceled.',
+      }
+    }
+    const prefix = structuredClone(messages.slice(0, startIndex))
+    const todos = structuredClone(agent.getTodos())
+    const meta = createSession(
+      agent.getModel(),
+      agent.getCwd(),
+      prefix,
+      todos,
+      [],
+      [],
+      `${parent.title} (fork)`
+    )
+    childId = meta.id
+    if (!actions.adopt({ meta, messages: prefix, todos, undo: [], redo: [] }))
+    {
+      throw new Error('could not activate the fork')
+    }
+    return { status: 'forked', parentId: parent.id, childId }
+  }
+  catch (error)
+  {
+    return {
+      status: 'error',
+      childId,
+      message: `Fork failed: ${toErrorMessage(error)}${childId ? `. Saved child ${childId} is available through /resume.` : ''}`,
+    }
   }
 }
 

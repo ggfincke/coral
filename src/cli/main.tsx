@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 // src/cli/main.tsx
-// dispatch interactive and noninteractive Coral commands
+// dispatch parsed commands through separate lazy execution paths
 
-if (process.argv[2] === 'acp')
+import { parseCliArgs } from './args.js'
+
+const parsed = parseCliArgs(process.argv.slice(2))
+if (parsed.kind === 'exit') process.exitCode = parsed.code
+else if (parsed.kind === 'acp')
 {
   const { runAcpCli } = await import('./acp.js')
-  process.exitCode = await runAcpCli(process.argv.slice(3))
+  process.exitCode = await runAcpCli(parsed.options)
 }
-else if (process.argv[2] === 'exec')
+else if (parsed.kind === 'exec')
 {
   const { runExecCli } = await import('./exec.js')
-  process.exitCode = await runExecCli(process.argv.slice(3))
+  process.exitCode = await runExecCli(parsed.options)
 }
 else
 {
   const { runInteractiveCli } = await import('./interactive.js')
-  await runInteractiveCli(process.argv)
+  await runInteractiveCli(parsed.options)
 }

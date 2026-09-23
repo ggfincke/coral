@@ -29,7 +29,7 @@ export interface ToolCallBlock
   args: Record<string, unknown>
   // correlate parallel results to their originating calls
   callId?: number
-  status?: 'success' | 'error'
+  status?: 'success' | 'error' | 'recorded'
   duration?: number
   // preserve the event-time display snapshot across catalog refreshes
   display?: ToolCallPresentation

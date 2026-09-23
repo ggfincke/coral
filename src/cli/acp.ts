@@ -2,9 +2,9 @@
 // serve Coral ACP over stdio without loading the interactive TUI
 
 import { Readable, Writable } from 'node:stream'
-import { Command, CommanderError } from 'commander'
+import { parseCliArgs } from './args.js'
 import * as acp from '@agentclientprotocol/sdk'
-import { DEFAULT_OLLAMA_HOST, normalizeOllamaHost } from '../ollama/host.js'
+import { normalizeOllamaHost } from '../ollama/host.js'
 import { boundedDiagnostic } from '../acp/errors.js'
 
 export interface CoralAcpCliOptions
@@ -52,23 +52,19 @@ export async function serveAcpStdio(
 }
 
 export async function runAcpCli(
-  argv: string[],
+  input: string[] | CoralAcpCliOptions,
   dependencies: CoralAcpCliDependencies = {}
 ): Promise<number>
 {
   const writeStderr =
     dependencies.writeStderr ?? ((text: string) => process.stderr.write(text))
-  const command = new Command()
-    .name('coral acp')
-    .description('Serve Coral through the Agent Client Protocol')
-    .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
-    .option('-m, --model <model>', 'default Ollama model for new sessions')
-    .exitOverride()
-
   try
   {
-    command.parse(argv, { from: 'user' })
-    const parsed = command.opts<{ host: string; model?: string }>()
+    const result = Array.isArray(input)
+      ? parseCliArgs(['acp', ...input])
+      : { kind: 'acp' as const, options: input }
+    if (result.kind === 'exit') return result.code
+    const parsed = result.options
     const model = parsed.model?.trim()
     if (parsed.model !== undefined && !model)
     {
@@ -82,7 +78,6 @@ export async function runAcpCli(
   }
   catch (error)
   {
-    if (error instanceof CommanderError) return error.exitCode
     writeStderr(`Cannot start Coral ACP: ${boundedDiagnostic(error)}\n`)
     return 1
   }
