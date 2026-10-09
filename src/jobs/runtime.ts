@@ -26,9 +26,11 @@ function canonicalJobsDirectory(): string
   return join(realpathSync(ancestor), ...missing)
 }
 
-export function jobProcessEnvironment(): NodeJS.ProcessEnv
+export function jobProcessEnvironment(
+  base: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv
 {
-  return { ...process.env, CORAL_HOME: dirname(canonicalJobsDirectory()) }
+  return { ...base, CORAL_HOME: dirname(canonicalJobsDirectory()) }
 }
 
 export function jobRuntimePaths(): {

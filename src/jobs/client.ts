@@ -141,12 +141,27 @@ export async function ensureJobSupervisor(): Promise<void>
   throw lastError
 }
 
+function currentEnvironment(): Record<string, string>
+{
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string'
+    )
+  )
+}
+
 export async function controlJob(
   request: Exclude<JobRequest, { action: 'ping' }>
 ): Promise<JobResponse>
 {
   await ensureJobSupervisor()
-  const response = await sendJobRequest(request)
+  // starting or resuming runs the task with this shell's environment, not
+  // whichever shell happened to launch the long-lived supervisor
+  const response = await sendJobRequest(
+    request.action === 'start' || request.action === 'resume'
+      ? { ...request, environment: currentEnvironment() }
+      : request
+  )
   if (!response.ok) throw new Error(response.error ?? 'Task request failed.')
   return response
 }

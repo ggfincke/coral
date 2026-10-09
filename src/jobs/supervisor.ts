@@ -245,6 +245,26 @@ async function acquireSupervisor(): Promise<SupervisorOwner | undefined>
   }
 }
 
+function validEnvironment(value: unknown): value is Record<string, string>
+{
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entries = Object.entries(value)
+  let bytes = 0
+  for (const [key, entry] of entries)
+  {
+    if (
+      !key ||
+      key.includes('=') ||
+      key.includes('\0') ||
+      typeof entry !== 'string' ||
+      entry.includes('\0')
+    )
+      return false
+    bytes += key.length + entry.length
+  }
+  return entries.length <= 4096 && bytes <= 1024 * 1024
+}
+
 function validateRequest(value: unknown): JobRequest
 {
   const request = value as JobRequest
@@ -265,6 +285,13 @@ function validateRequest(value: unknown): JobRequest
     if (typeof request.digest !== 'string')
       throw new Error('Draft editing requires its previous digest.')
     request.spec = parseJobSpec(request.spec)
+  }
+  if (
+    (request.action === 'start' || request.action === 'resume') &&
+    !validEnvironment(request.environment)
+  )
+  {
+    throw new Error('Task requests must carry the requesting environment.')
   }
   if (
     request.action === 'start' &&
@@ -304,6 +331,8 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
   let blocked: string | undefined
   let queueRun: Promise<void> | undefined
   let serial = Promise.resolve()
+  // held in memory only, never in task records: environments carry secrets
+  const environments = new Map<string, Record<string, string>>()
   const sockets = new Set<Socket>()
   let idle: ReturnType<typeof setTimeout> | undefined
   let forceStop: ReturnType<typeof setTimeout> | undefined
@@ -377,6 +406,16 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
         )
         continue
       }
+      const environment = environments.get(job.id)
+      if (!environment)
+      {
+        requireInput(
+          job,
+          'The task supervisor restarted before this task ran, so the environment of the shell that queued it is gone. Resume it from a shell with the intended environment.'
+        )
+        continue
+      }
+      environments.delete(job.id)
       job.status = 'running'
       job.activeSince = new Date().toISOString()
       writeJob(job)
@@ -387,7 +426,10 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
         {
           cwd: job.spec.repository.source,
           detached: true,
-          env: { ...jobProcessEnvironment(), CORAL_JOB_PROCESS_TOKEN: token },
+          env: {
+            ...jobProcessEnvironment(environment),
+            CORAL_JOB_PROCESS_TOKEN: token,
+          },
           stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
         }
       )
@@ -587,6 +629,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
       job.queuedAt = new Date().toISOString()
       job.queueOrder =
         Math.max(0, ...listJobs().map((entry) => entry.queueOrder ?? 0)) + 1
+      environments.set(job.id, request.environment!)
       persistControl(() =>
       {
         appendJobEvent(job.id, 'queued', 'Approved task added to the queue.')
@@ -611,6 +654,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
       {
         // unprovable leftovers block only this task's control, not the queue
         await cleanupJobProcesses(job.id)
+        environments.delete(job.id)
         job.status = 'cancelled'
         persistControl(() => writeJob(job))
       }
@@ -647,6 +691,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
         'Inspect current files and continue the approved task from observed state.'
       job.resumeSetup = request.setupResolution
       job.resumeShell = request.shellResolution
+      environments.set(job.id, request.environment!)
       job.status = 'queued'
       job.queuedAt = new Date().toISOString()
       job.queueOrder =

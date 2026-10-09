@@ -108,7 +108,14 @@ export interface JobPlanOptions
 export type JobRequest =
   | { action: 'ping' }
   | { action: 'edit'; id: string; digest: string; spec: JobSpec }
-  | { action: 'start'; id: string; digest: string; hostShell: true }
+  | {
+      action: 'start'
+      id: string
+      digest: string
+      hostShell: true
+      // filled by the client: tasks run with the approving shell's environment
+      environment?: Record<string, string>
+    }
   | { action: 'cancel'; id: string }
   | {
       action: 'resume'
@@ -116,6 +123,7 @@ export type JobRequest =
       instructions: string
       setupResolution?: 'retry' | 'skip'
       shellResolution?: 'continue' | 'retry'
+      environment?: Record<string, string>
     }
 
 export interface JobResponse
