@@ -39,6 +39,11 @@ export interface TokenUsage
   totalEvalDurationNs: number
 }
 
+// settled turn status is independent of the legacy terminal callbacks
+export type AgentRunOutcome =
+  | { status: 'completed' | 'iteration_limit' | 'cancelled' | 'stopped' }
+  | { status: 'failed'; error: Error }
+
 // callbacks for streaming tokens, tool calls, and completion
 export interface AgentEvents
 {

@@ -133,6 +133,85 @@ servers are rejected; MCP is disabled. Use a separate home for each app instance
 See [ACP setup and recovery](docs/acp.md) for protocol boundaries, native session
 ownership, and save-failure handling.
 
+## Durable coding tasks
+
+`coral jobs` runs persistent coding tasks in separate Git worktrees on macOS
+and Linux. One background supervisor maintains a FIFO queue, with one active
+worker per `CORAL_HOME`. Closing the terminal or a task viewer leaves the task
+running; restarting the machine does not automatically restart interrupted work.
+
+Create a proposal from committed code:
+
+```bash
+coral jobs plan "Update the greeting implementation and verify its output" \
+  --model qwen3.8:27b-mlx \
+  --time-limit 120 \
+  --max-repairs 3
+```
+
+Planning reads the selected commit and proposes implementation, setup, and
+verification commands without running them. The default starting point is
+`HEAD`. When the source checkout has uncommitted changes, explicitly pass
+`--ref HEAD` (or another commit/ref) to choose committed code. Uncommitted and
+ignored files are not copied into the task worktree.
+
+Review the proposal with `coral jobs show <id>`. It prints the editable draft
+file and an approval digest. Edit only its `spec` fields while the task is a
+draft, then show it again to inspect the final commands and updated digest.
+Start that exact proposal with:
+
+```bash
+coral jobs start <id> --approve <digest> --allow-host-shell
+coral jobs logs <id> --follow
+coral jobs show <id>
+coral jobs diff <id>
+```
+
+In the interactive TUI, `/jobs` opens the task list and creation/review panel.
+The panel supports draft editing, explicit host-shell authorization, progress,
+transcript, check results, diffs, cancellation, and continuation. Closing the
+panel only closes the viewer.
+
+Tasks run setup once, implement the approved objective, and execute the complete
+agreed check suite. Failed checks allow up to three repair attempts by default,
+rerunning the full suite after each repair. The default two-hour active budget
+includes setup, inference, shell commands, and checks; queue time does not count.
+Limits are chosen before launch and consumed allowance is retained on continuation.
+The final `ready_for_review` state means the Agent finished naturally, the
+agreed checks passed, and the supervisor confirmed stopped execution and an intact
+worktree. Review the resulting changes
+yourself; a task does not automatically commit, apply, push, merge, or open a PR.
+
+```bash
+coral jobs cancel <id>
+coral jobs resume <id> --instructions "Inspect the current changes and continue"
+```
+
+Cancellation waits for owned processes to stop. A crash leaves the task
+`interrupted`, preserving its worktree, logs, and last settled conversation.
+Explicit continuation first reconciles the actual files; it does not
+automatically replay an interrupted command. If setup was interrupted, inspect
+its effects and supply `--setup-resolution retry` or `--setup-resolution skip`
+when continuing. Agent-issued shell commands are also journaled before execution.
+When a result is uncertain, inspect the recorded command and current files, then use
+`--shell-resolution continue` to continue without replaying it, or
+`--shell-resolution retry` to authorize another attempt after reconciliation.
+An interrupted verification command also requires `--shell-resolution retry`
+before the full agreed check suite can run again.
+Iteration limits, exhausted repair/time budgets, and uncertain
+execution are surfaced instead of being reported as success.
+
+Task records and checkpoints live under `CORAL_HOME/jobs` (normally
+`~/.coral/jobs`), separate from ordinary saved sessions. Worktrees and task
+evidence are retained. `list`, `show`, and `diff` support `--json` for inspection;
+`logs --follow` can be interrupted without cancelling the task.
+
+**Host execution:** tasks explicitly authorize host shell commands. A Git
+worktree is not a sandbox. Workers are instructed to remain in their worktree
+and avoid Git mutations and background processes, but shell access is still
+host access. The task profile excludes MCP and nested workers. Container
+sandboxing, automatic integration, and Windows task execution are not included.
+
 ## Interactive use
 
 The header identifies the workspace, active model, and permission mode. Above

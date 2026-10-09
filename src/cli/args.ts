@@ -45,6 +45,7 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .description('A local-first CLI/TUI coding agent for Ollama')
     .version(version)
     .addHelpCommand('help [command]', 'display help for a command')
+    .addHelpText('after', '\nDurable coding tasks: coral jobs --help')
     .option('-m, --model <model>', 'Ollama model to use')
     .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
     .option('--no-think', 'disable streamed reasoning requests')

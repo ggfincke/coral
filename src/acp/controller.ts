@@ -78,11 +78,12 @@ interface CoralAcpAgent
   extends InteractiveLifetimeAgent, ProviderTurnSnapshotAgent
   {
   acceptTurn(input: string): AcceptedTurn
+  // ACP settles turns from events; the returned outcome is unused here
   runAcceptedTurn(
     accepted: AcceptedTurn,
     events: AgentEvents,
     signal?: AbortSignal
-  ): Promise<void>
+  ): Promise<unknown>
   switchModel(model: string, signal?: AbortSignal): Promise<void>
   restoreMessages(messages: SessionData['messages']): void
   restoreUndoStack(undo?: UndoTurn[], redo?: UndoTurn[]): void

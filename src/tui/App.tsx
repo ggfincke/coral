@@ -98,6 +98,7 @@ import {
 import { systemBlock } from './commands/output.js'
 import { useModelPicker } from './model/use-model-picker.js'
 import SessionPicker from './sessions/picker.js'
+import JobPanel from './jobs/panel.js'
 import { buildPaletteEntries, type PaletteEntry } from './palette/palette.js'
 import type { OperationHandle } from './session/interactive-runtime.js'
 import { useAgentTurn } from './run/use-agent-turn.js'
@@ -154,6 +155,7 @@ export default function App({
   const [paletteOpen, setPaletteOpen] = useState(false)
   // /resume overlay: fuzzy saved-session picker with transcript previews
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
+  const [jobsOpen, setJobsOpen] = useState(false)
   // esc-esc fork selector over prior user prompts; idle-only
   const [backtrackOpen, setBacktrackOpen] = useState(false)
   const [backtrackArmed, setBacktrackArmed] = useState(false)
@@ -381,9 +383,13 @@ export default function App({
   const currentCwd = agent?.getCwd() ?? cwd ?? getCwd()
   const transcriptWidth = Math.max(terminalSize.columns - 2, 1)
   const sessionPickerVisible =
-    sessionPickerOpen && !pickerVisible && Boolean(agent)
+    sessionPickerOpen && !pickerVisible && !jobsOpen && Boolean(agent)
   const paletteVisible =
-    paletteOpen && !pickerVisible && !sessionPickerVisible && Boolean(agent)
+    paletteOpen &&
+    !pickerVisible &&
+    !sessionPickerVisible &&
+    !jobsOpen &&
+    Boolean(agent)
 
   // render the controller's one active blocking prompt
   const activePromptContent = useMemo(() =>
@@ -419,7 +425,11 @@ export default function App({
   )
   const promptActive = Boolean(activePromptContent)
   const pickerOverlay =
-    pickerVisible || paletteVisible || backtrackOpen || sessionPickerVisible
+    pickerVisible ||
+    paletteVisible ||
+    backtrackOpen ||
+    sessionPickerVisible ||
+    jobsOpen
   const showComposer = Boolean(agent) && !pickerOverlay && !promptActive
   const metricLines = agent
     ? buildMetricLines(
@@ -438,7 +448,12 @@ export default function App({
     contextWindow > 0 && tokenUsage.context >= contextWindow * CTX_LOW_RATIO
   let activity = 'ready'
   let activityHint = ''
-  if (paletteVisible)
+  if (jobsOpen)
+  {
+    activity = 'durable coding tasks'
+    activityHint = 'background execution continues after closing the viewer'
+  }
+  else if (paletteVisible)
   {
     activity = 'command palette'
     activityHint = 'enter runs · esc closes'
@@ -549,7 +564,13 @@ export default function App({
   const terminalTooSmall =
     terminalSize.columns < 24 ||
     availableHeight <
-      (promptActive ? approvalPinnedRows : pickerOverlay ? 4 : 5)
+      (promptActive
+        ? approvalPinnedRows
+        : jobsOpen
+          ? 10
+          : pickerOverlay
+            ? 4
+            : 5)
   // the editor budget does not depend on its reported height, avoiding a
   // render-measure feedback loop while hints and suggestions appear
   const queueCapacity = showComposer
@@ -1315,6 +1336,12 @@ export default function App({
             return { admitted: true, handled: true }
           }
 
+          if (value.trim().toLowerCase() === '/jobs')
+          {
+            setJobsOpen(true)
+            return { admitted: true, handled: true }
+          }
+
           const handled = await dispatchCommand(value.trim(), cmdCtx)
           return { admitted: true, handled }
         }
@@ -1404,7 +1431,13 @@ export default function App({
     async (value: string, preserveInput = false) =>
     {
       const trimmed = value.trim()
-      if (!trimmed || promptActive || commandRunning || transitioningSession)
+      if (
+        !trimmed ||
+        promptActive ||
+        commandRunning ||
+        transitioningSession ||
+        jobsOpen
+      )
       {
         return
       }
@@ -1474,6 +1507,7 @@ export default function App({
     [
       agent,
       commandRunning,
+      jobsOpen,
       promptActive,
       queued,
       manageQueue,
@@ -1520,6 +1554,7 @@ export default function App({
       promptActive ||
       commandRunning ||
       transitioningSession ||
+      jobsOpen ||
       queued.entries.length === 0 ||
       queued.paused
     )
@@ -1560,6 +1595,7 @@ export default function App({
     commandRunning,
     hasActiveOperation,
     isAcceptingTransitions,
+    jobsOpen,
     promptActive,
     queued,
     runAgentTurn,
@@ -1797,13 +1833,21 @@ export default function App({
       isRunning ||
       commandRunning ||
       transitioningSession ||
-      promptActive
+      promptActive ||
+      jobsOpen
     )
     {
       return
     }
     setPaletteOpen(true)
-  }, [agent, commandRunning, isRunning, promptActive, transitioningSession])
+  }, [
+    agent,
+    commandRunning,
+    isRunning,
+    jobsOpen,
+    promptActive,
+    transitioningSession,
+  ])
 
   const runKeybindingAction = useCallback(
     (action: KeybindingAction) =>
@@ -1965,6 +2009,17 @@ export default function App({
         >
           {pickerVisible ? (
             <LineList lines={visiblePicker} />
+          ) : jobsOpen && agent ? (
+            <JobPanel
+              active={!terminalTooSmall}
+              width={transcriptWidth}
+              height={paletteViewportHeight}
+              cwd={currentCwd}
+              model={activeModel}
+              host={host}
+              suspendTerminal={suspendTerminal}
+              onClose={() => setJobsOpen(false)}
+            />
           ) : paletteVisible ? (
             <CommandPalette
               active={!terminalTooSmall}
@@ -2024,9 +2079,11 @@ export default function App({
           <LineList lines={visibleTodoLines} />
         )}
 
-        {!pickerVisible && !sessionPickerVisible && agent && promptActive && (
-          <LineList lines={promptBoxLines} />
-        )}
+        {!pickerVisible &&
+          !sessionPickerVisible &&
+          !jobsOpen &&
+          agent &&
+          promptActive && <LineList lines={promptBoxLines} />}
 
         <LineList lines={activityLines} />
         <LineList lines={metricLines} />
@@ -2066,6 +2123,7 @@ export default function App({
                 !paletteVisible &&
                 !backtrackOpen &&
                 !sessionPickerVisible &&
+                !jobsOpen &&
                 Boolean(agent) &&
                 !promptActive &&
                 !terminalTooSmall
