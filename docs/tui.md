@@ -27,8 +27,9 @@ Parser: input must start with `/`; the name is lowercased; the first space split
 Aliases work for dispatch and `/` completion. The command palette runs the **canonical** name (`/permissions`, not `/perm`).
 
 Discovered skill names share this registry. Built-ins win exact collisions;
-otherwise the full name or a unique prefix invokes the skill case-insensitively.
-Ambiguous prefixes list their matches. The transcript, history, session title,
+otherwise only the full name invokes the skill, case-insensitively; completion
+fills in partial names. While a run is active, a skill invocation queues like a
+plain message. The transcript, history, session title,
 and restored session preserve the typed slash text while the model receives a
 synthetic instruction to load the selected skill.
 

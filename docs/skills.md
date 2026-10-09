@@ -61,8 +61,8 @@ coral skills path        # print AGENTS_HOME/skills
 Coral never copies packages into or scans `CORAL_HOME/skills`.
 
 `/skills` is observational. Each winning skill is also a slash command, such as
-`/simplification-review`, and a unique prefix is accepted unless it overlaps a
-built-in prefix. Built-ins win exact collisions. Optional text after the skill
+`/simplification-review`. Only the full name (case-insensitive) runs a skill;
+completion fills in partial names. Built-ins win exact collisions. Optional text after the skill
 name becomes additional user instruction. The typed command is retained in the
 transcript, input history, session title, and restored sessions; the model sees
 a semantic instruction to call `skill` for the resolved winner.

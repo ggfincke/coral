@@ -53,7 +53,6 @@ import {
   commandCompletions,
   commandInfos,
   dispatchCommand,
-  formatAmbiguousSkill,
   keybindingInfos,
   resolveSlashSkill,
 } from './commands/registry.js'
@@ -1462,17 +1461,6 @@ export default function App({
           })
           return
         }
-        if (skill?.kind === 'ambiguous')
-        {
-          addHistoryEntry(trimmed, getSessionId())
-          if (!preserveInput) setInput('')
-          setScrollOffset(0)
-          setOutput((previous) => [
-            ...previous,
-            systemBlock(formatAmbiguousSkill(skill.query, skill.names)),
-          ])
-          return
-        }
         const result = await runSlashCommand(trimmed, preserveInput)
         if (!result.admitted || result.handled) return
         historyRecorded = true
@@ -1484,10 +1472,8 @@ export default function App({
       })
     },
     [
-      addHistoryEntry,
       agent,
       commandRunning,
-      getSessionId,
       promptActive,
       queued,
       manageQueue,

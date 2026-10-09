@@ -4,7 +4,6 @@
 import chalk from 'chalk'
 import {
   canonicalSkillName,
-  compareSkillText,
   type SkillIndex,
   type SkillRecord,
 } from '../../skills/types.js'
@@ -30,14 +29,13 @@ import { workspaceCommands } from './workspace.js'
 
 const SKILL_DETAIL_MAX = 80
 
-export type SlashSkillResolution =
-  | {
-      kind: 'skill'
-      record: SkillRecord
-      args: string
-      prompt: string
-    }
-  | { kind: 'ambiguous'; query: string; names: string[] }
+export interface SlashSkillResolution
+{
+  kind: 'skill'
+  record: SkillRecord
+  args: string
+  prompt: string
+}
 
 // parse one slash command from terminal input
 function parseCommand(input: string): ParsedCommand | null
@@ -182,16 +180,6 @@ for (const command of commands)
   for (const alias of command.aliases ?? []) BUILTIN_NAMES.add(alias)
 }
 
-function isBuiltinPrefix(query: string): boolean
-{
-  if (!query) return false
-  for (const name of BUILTIN_NAMES)
-  {
-    if (name.startsWith(query)) return true
-  }
-  return false
-}
-
 function skillCommandInfos(skills: readonly SkillRecord[]): CommandInfo[]
 {
   return skills
@@ -237,17 +225,8 @@ export function formatSkillInvokePrompt(
   return trimmed ? `${lead}\n\n${trimmed}` : lead
 }
 
-export function formatAmbiguousSkill(query: string, names: string[]): string
-{
-  const cleanQuery = sanitizeUntrustedText(query)
-  const cleanNames = names.map(sanitizeUntrustedText)
-  return (
-    `Ambiguous skill /${cleanQuery} - matches: ${cleanNames.join(', ')}\n` +
-    `Type the full name, or ${style('user')('/skills')} to list.`
-  )
-}
-
-// built-ins win; otherwise an exact or unique case-folded skill name may run
+// built-ins win; otherwise only an exact case-folded skill name runs, so a
+// short or mistyped command can never start a model turn by prefix
 export function resolveSlashSkill(
   input: string,
   skills: SkillIndex
@@ -258,43 +237,14 @@ export function resolveSlashSkill(
   const query = canonicalSkillName(parsed.name)
   if (BUILTIN_NAMES.has(query)) return null
 
-  const available = skills.records.filter(
-    (record) => !BUILTIN_NAMES.has(canonicalSkillName(record.name))
-  )
-  const exact = skills.get(query)
-  if (exact && !BUILTIN_NAMES.has(canonicalSkillName(exact.name)))
-  {
-    return {
-      kind: 'skill',
-      record: exact,
-      args: parsed.args,
-      prompt: formatSkillInvokePrompt(exact, parsed.args),
-    }
+  const record = skills.get(query)
+  if (!record) return null
+  return {
+    kind: 'skill',
+    record,
+    args: parsed.args,
+    prompt: formatSkillInvokePrompt(record, parsed.args),
   }
-  if (isBuiltinPrefix(query)) return null
-
-  const prefixed = available.filter((record) =>
-    canonicalSkillName(record.name).startsWith(query)
-  )
-  if (prefixed.length === 1)
-  {
-    const record = prefixed[0]!
-    return {
-      kind: 'skill',
-      record,
-      args: parsed.args,
-      prompt: formatSkillInvokePrompt(record, parsed.args),
-    }
-  }
-  if (prefixed.length > 1)
-  {
-    return {
-      kind: 'ambiguous',
-      query,
-      names: prefixed.map((record) => record.name).sort(compareSkillText),
-    }
-  }
-  return null
 }
 
 export function keybindingInfos(): KeybindingSummary[]
