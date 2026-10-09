@@ -9,6 +9,7 @@ import {
 import { AgentTodoState } from '../agent/state/todos.js'
 import type { AgentEvents } from '../agent/contracts.js'
 import type { SessionData } from '../session/types.js'
+import { BASH_DEFAULT_TIMEOUT_MS } from '../tools/bash.js'
 import { allTools } from '../tools/registry.js'
 import type { Tool } from '../tools/tool.js'
 import { toError } from '../utils/errors.js'
@@ -278,8 +279,12 @@ export async function executeJob(
                 cwd: job.worktree!.path,
                 signal: context?.signal ?? signal,
                 jobId: id,
+                // honor the bash tool's advertised default so a watch-mode
+                // command cannot hold the task until its time budget runs out
                 timeoutMs:
-                  typeof args.timeout === 'number' ? args.timeout : undefined,
+                  typeof args.timeout === 'number'
+                    ? args.timeout
+                    : BASH_DEFAULT_TIMEOUT_MS,
               })
               intent.result = {
                 ok: result.ok,
