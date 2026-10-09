@@ -202,9 +202,10 @@ Iteration limits, exhausted repair/time budgets, and uncertain
 execution are surfaced instead of being reported as success.
 
 Task records and checkpoints live under `CORAL_HOME/jobs` (normally
-`~/.coral/jobs`), separate from ordinary saved sessions. Worktrees and task
-evidence are retained. `list`, `show`, and `diff` support `--json` for inspection;
-`logs --follow` can be interrupted without cancelling the task.
+`~/.coral/jobs`), separate from ordinary saved sessions. See [Durable coding
+tasks](docs/jobs.md) for the full lifecycle and recovery reference. Worktrees
+and task evidence are retained. `list`, `show`, and `diff` support `--json` for
+inspection; `logs --follow` can be interrupted without cancelling the task.
 
 **Host execution:** tasks explicitly authorize host shell commands. A Git
 worktree is not a sandbox. Workers are instructed to remain in their worktree
@@ -602,6 +603,7 @@ By default Coral stores:
 | `~/.coral/retrieval/v2/spaces/*.chunks-v2.sqlite` | Semantic indexes isolated by embedding space and chunker version       |
 | `~/.coral/retrieval/index.sqlite`                 | Preserved legacy retrieval cache; current Coral does not open it       |
 | `~/.coral/mcp-trust.json` + `.d`                  | Legacy trust baseline plus atomic per-alias approval records           |
+| `~/.coral/jobs/<id>/`                             | Durable task records, events, checkpoints, command output, worktree    |
 
 Personal skills live under `AGENTS_HOME/skills` (default
 `~/.agents/skills`), with standing instructions in `AGENTS_HOME/AGENTS.md`.
@@ -609,6 +611,11 @@ Those user-owned paths are not relocated by `CORAL_HOME`.
 
 `CORAL_HOME` relocates every path in this table. The separate read-only user
 configuration remains `~/.coral.json`.
+
+Durable tasks also keep a private control directory at
+`/tmp/coral-jobs-<uid>-<hash>/`, a locked worktree for each task in the source
+repository's worktree list, and a `codex/job-<id>` branch. Coral retains all of
+these after a task settles. See [Durable coding tasks](docs/jobs.md).
 
 Semantic indexing keeps fitting TS/JS declarations and class members together.
 The chunker-version suffix preserves older caches and lets old and new Coral

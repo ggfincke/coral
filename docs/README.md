@@ -28,7 +28,7 @@ Coral is pre-1.0. Interfaces, session files, and configuration can still change 
 11. [Architecture](architecture.md) — layers, turn loop, ownership, compaction modes, constructor seams, and non-goals. This is the systems document, not a how-to.
 12. [Troubleshooting](troubleshooting.md) — Ollama, context, MCP, sessions, common failures.
 
-[ACP setup and recovery](acp.md) covers connecting app clients and native session ownership.
+[ACP setup and recovery](acp.md) covers connecting app clients and native session ownership. [Durable coding tasks](jobs.md) covers `coral jobs` and `/jobs`: approval, background execution, recovery, and where task data lives.
 
 ## Reading order
 
