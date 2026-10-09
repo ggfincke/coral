@@ -30,7 +30,7 @@ scripts are never read or executed by this tool.
 ## Discovery and precedence
 
 Each package directory needs a `SKILL.md` with YAML-like `name` and
-`description` frontmatter. Names use letters, digits, `.`, `_`, and `-`, and
+`description` frontmatter; `description` may be a `>` or `|` block scalar. Names use letters, digits, `.`, `_`, and `-`, and
 identity is ASCII case-insensitive while authored casing remains visible.
 
 Precedence is:

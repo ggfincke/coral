@@ -4,6 +4,7 @@
 const SKILL_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const FRONTMATTER_OPEN = /^---[ \t]*\r?\n/
 const FRONTMATTER_CLOSE = /\r?\n---[ \t]*(?:\r?\n|$)/
+const BLOCK_SCALAR = /^([>|])[+-]?$/
 
 export interface SkillFrontmatter
 {
@@ -36,14 +37,30 @@ export function parseSkillFrontmatter(text: string): SkillFrontmatter | null
   if (!close || close.index === undefined) return null
 
   const raw = rest.slice(0, close.index)
+  const lines = raw.split(/\r?\n/)
   let name = ''
   let description = ''
-  for (const line of raw.split(/\r?\n/))
+  for (let index = 0; index < lines.length; index++)
   {
-    const match = line.match(/^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/)
+    const match = lines[index]!.match(/^([A-Za-z][A-Za-z0-9_-]*)\s*:\s*(.*)$/)
     if (!match) continue
     const key = match[1]
-    const value = unquote(match[2] ?? '')
+    let value = unquote(match[2] ?? '')
+    // `>` & `|` block scalars take the following indented lines; folded
+    // blocks join w/ spaces, literal blocks keep their line breaks
+    const block = (match[2] ?? '').trim().match(BLOCK_SCALAR)
+    if (block)
+    {
+      const body: string[] = []
+      while (
+        index + 1 < lines.length &&
+        (/^\s/.test(lines[index + 1]!) || lines[index + 1]!.trim() === '')
+      )
+      {
+        body.push(lines[++index]!.trim())
+      }
+      value = body.join(block[1] === '>' ? ' ' : '\n').trim()
+    }
     if (key === 'name') name = value
     else if (key === 'description') description = value
   }

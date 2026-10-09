@@ -102,7 +102,13 @@ function skillRoots(options: DiscoverSkillsOptions): SkillRoot[]
   ])
   {
     const dir = resolveDirectory(candidate.path)
-    if (dir && isPathInsideRoot(checkout, dir))
+    // launching from AGENTS_HOME's parent makes a project root the personal
+    // root; scan it once so it does not collide with itself
+    if (
+      dir &&
+      isPathInsideRoot(checkout, dir) &&
+      !roots.some((root) => root.dir === dir)
+    )
     {
       roots.push({ source: candidate.source, dir, confinePackages: true })
     }
