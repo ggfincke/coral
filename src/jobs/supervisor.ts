@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import {
   chmodSync,
   existsSync,
+  statSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -106,6 +107,30 @@ function accountInterrupted(
     job.error = reason
     writeJob(job)
     appendJobEvent(job.id, 'interrupted', reason)
+  }
+}
+
+// a problem confined to one task parks it for the user instead of stopping
+// the queue; nothing was left running for it
+function requireInput(job: JobRecord, reason: string): void
+{
+  delete job.activeSince
+  delete job.settledStatus
+  job.status = 'needs_input'
+  job.error = reason
+  writeJob(job)
+  appendJobEvent(job.id, 'needs_input', reason)
+}
+
+function isDirectory(path: string): boolean
+{
+  try
+  {
+    return statSync(path).isDirectory()
+  }
+  catch
+  {
+    return false
   }
 }
 
@@ -284,6 +309,18 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
   let forceStop: ReturnType<typeof setTimeout> | undefined
   let budgetStop: ReturnType<typeof setTimeout> | undefined
 
+  // * when worker ownership or control state cannot be proved, stop taking
+  // work and exit; the next client starts a fresh supervisor whose recovery
+  // re-checks the active-worker journal instead of leaving a wedged process
+  const failClosed = (error: unknown) =>
+  {
+    blocked ??= toErrorMessage(error)
+    if (stopping) return
+    if (idle) clearTimeout(idle)
+    // leave time for in-flight responses to reach their clients
+    idle = setTimeout(shutdown, 1000)
+  }
+
   const persistControl = (operation: () => void) =>
   {
     try
@@ -292,20 +329,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
     }
     catch (error)
     {
-      blocked = toErrorMessage(error)
-      throw error
-    }
-  }
-
-  const settleControlProcesses = async (id: string) =>
-  {
-    try
-    {
-      await cleanupJobProcesses(id)
-    }
-    catch (error)
-    {
-      blocked = toErrorMessage(error)
+      failClosed(error)
       throw error
     }
   }
@@ -319,10 +343,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
       const target = activeOwner
       forceStop = setTimeout(() =>
       {
-        void terminateOwnedGroup(target).catch((error: unknown) =>
-        {
-          blocked = toErrorMessage(error)
-        })
+        void terminateOwnedGroup(target).catch(failClosed)
       }, 5000)
     }
   }
@@ -346,6 +367,14 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
         job.error =
           'The approved draft changed; prepare and confirm a new task.'
         writeJob(job)
+        continue
+      }
+      if (!isDirectory(job.spec.repository.source))
+      {
+        requireInput(
+          job,
+          `The source checkout is missing: ${job.spec.repository.source}. Restore it, then resume this task.`
+        )
         continue
       }
       job.status = 'running'
@@ -374,7 +403,19 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
       {})
       try
       {
-        if (!child.pid) throw new Error('Could not start the task worker.')
+        if (!child.pid)
+        {
+          // spawn failed outright, so no worker or command was started
+          const reason = await exited.then(
+            () => 'no process was created',
+            (error: unknown) => toErrorMessage(error)
+          )
+          requireInput(
+            readJob(job.id),
+            `Could not start the task worker (${reason}). Resume this task to retry.`
+          )
+          continue
+        }
         activeOwner = await captureOwnedProcess(child.pid, token)
         writeJsonFile(paths.active, { jobId: job.id, owner: activeOwner })
         child.send({ type: 'start' }, () =>
@@ -389,10 +430,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
               const target = activeOwner
               forceStop = setTimeout(() =>
               {
-                void terminateOwnedGroup(target).catch((error: unknown) =>
-                {
-                  blocked = toErrorMessage(error)
-                })
+                void terminateOwnedGroup(target).catch(failClosed)
               }, 5000)
             }
           },
@@ -410,16 +448,29 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
           !stopping
         )
         {
-          if (settled.settledStatus === 'ready_for_review')
-            await assertJobWorktree(settled)
-          settled.status = settled.settledStatus
-          delete settled.settledStatus
-          appendJobEvent(
-            job.id,
-            settled.status,
-            'Worker and task commands have stopped.'
-          )
-          writeJob(settled)
+          const worktreeProblem =
+            settled.settledStatus === 'ready_for_review'
+              ? await assertJobWorktree(settled).then(
+                  () => undefined,
+                  (error: unknown) => toErrorMessage(error)
+                )
+              : undefined
+          if (worktreeProblem)
+            requireInput(
+              settled,
+              `The task finished, but its worktree failed verification: ${worktreeProblem}`
+            )
+          else
+          {
+            settled.status = settled.settledStatus
+            delete settled.settledStatus
+            appendJobEvent(
+              job.id,
+              settled.status,
+              'Worker and task commands have stopped.'
+            )
+            writeJob(settled)
+          }
         }
         else if (cancelRequested && settled.status === 'running')
         {
@@ -441,8 +492,12 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
       }
       catch (error)
       {
-        blocked = toErrorMessage(error)
-        appendJobEvent(job.id, 'error', `Queue blocked: ${blocked}`)
+        failClosed(error)
+        appendJobEvent(
+          job.id,
+          'error',
+          `Queue stopped: ${toErrorMessage(error)}. The next task command restarts the supervisor and recovers this task.`
+        )
         // leave ownership journals intact when cleanup cannot be proved
         if (activeOwner) await terminateOwnedGroup(activeOwner).catch(() =>
         {})
@@ -466,10 +521,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
     if (idle) clearTimeout(idle)
     if (queueRun || stopping || blocked) return
     queueRun = drain()
-      .catch((error: unknown) =>
-      {
-        blocked = toErrorMessage(error)
-      })
+      .catch(failClosed)
       .finally(() =>
       {
         queueRun = undefined
@@ -485,7 +537,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
           }
           catch (error)
           {
-            blocked = toErrorMessage(error)
+            failClosed(error)
             return
           }
           // an idle supervisor is demand-started again by the next mutating client
@@ -496,7 +548,11 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
 
   const handle = async (request: JobRequest): Promise<JobResponse> =>
   {
-    if (blocked) return { ok: false, error: blocked }
+    if (blocked)
+      return {
+        ok: false,
+        error: `${blocked} The task supervisor is restarting; retry shortly.`,
+      }
     if (stopping)
       return { ok: false, error: 'Task supervisor is stopping. Retry shortly.' }
     if (request.action === 'ping') return { ok: true }
@@ -553,7 +609,8 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
         ['queued', 'draft', 'interrupted', 'needs_input'].includes(job.status)
       )
       {
-        await settleControlProcesses(job.id)
+        // unprovable leftovers block only this task's control, not the queue
+        await cleanupJobProcesses(job.id)
         job.status = 'cancelled'
         persistControl(() => writeJob(job))
       }
@@ -584,7 +641,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
           'This task exhausted its approved time. Prepare a new task with an appropriate limit.'
         )
       }
-      await settleControlProcesses(job.id)
+      await cleanupJobProcesses(job.id)
       job.continuation =
         request.instructions ||
         'Inspect current files and continue the approved task from observed state.'

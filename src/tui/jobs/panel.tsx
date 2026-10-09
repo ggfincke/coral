@@ -9,7 +9,7 @@ import { createJobPlan } from '../../jobs/plan.js'
 import { assertJobsPlatform } from '../../jobs/process.js'
 import {
   jobSpecDigest,
-  listJobs,
+  listJobRecords,
   parseJobSpec,
   readJob,
   readJobEvents,
@@ -101,6 +101,7 @@ export default function JobPanel({
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
+  const [unreadable, setUnreadable] = useState(0)
   const [externalEditorOpen, setExternalEditorOpen] = useState(false)
   const [refresh, setRefresh] = useState(0)
   const [offset, setOffset] = useState(0)
@@ -153,8 +154,10 @@ export default function JobPanel({
     {
       try
       {
-        const records = orderJobs(listJobs())
+        const listing = listJobRecords()
+        const records = orderJobs(listing.jobs)
         if (!accepts()) return
+        setUnreadable(listing.invalid.length)
         setJobs((previous) =>
           records.map((record) =>
           {
@@ -862,7 +865,9 @@ export default function JobPanel({
                       notice ||
                         (screen.kind === 'detail'
                           ? `${shownOffset + 1}-${Math.min(shownOffset + bodyHeight, body.length)} / ${body.length} rows`
-                          : 'FIFO queue · one active worker · manual worktree review')
+                          : unreadable > 0
+                            ? `${unreadable} unreadable task record${unreadable === 1 ? '' : 's'} skipped · coral jobs list names them`
+                            : 'FIFO queue · one active worker · manual worktree review')
                     )
                   ),
             width

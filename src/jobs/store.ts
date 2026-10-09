@@ -14,6 +14,7 @@ import { decodeSessionData, encodeSessionData } from '../session/codec.js'
 import type { SessionData } from '../session/types.js'
 import { coralHomePath } from '../utils/coral-home.js'
 import { ensurePrivateDir } from '../utils/fs.js'
+import { toErrorMessage } from '../utils/errors.js'
 import { isPlainObject } from '../utils/guards.js'
 import { writeJsonFile } from '../utils/json.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
@@ -370,22 +371,46 @@ export function writeJob(job: JobRecord): void
   writeJsonFile(path, job)
 }
 
-export function listJobs(): JobRecord[]
+export interface JobListing
+{
+  jobs: JobRecord[]
+  // unreadable records stay on disk for the user to fix; they never block
+  // listing or the queue
+  invalid: { id: string; error: string }[]
+}
+
+export function listJobRecords(): JobListing
 {
   assertStateDirectories()
-  if (!existsSync(jobsDirectory())) return []
-  return readdirSync(jobsDirectory(), { withFileTypes: true })
-    .filter(
-      (entry) =>
-        entry.isDirectory() &&
-        JOB_ID.test(entry.name) &&
-        existsSync(join(jobDirectory(entry.name), 'job.json'))
+  const listing: JobListing = { jobs: [], invalid: [] }
+  if (!existsSync(jobsDirectory())) return listing
+  for (const entry of readdirSync(jobsDirectory(), { withFileTypes: true }))
+  {
+    if (
+      !entry.isDirectory() ||
+      !JOB_ID.test(entry.name) ||
+      !existsSync(join(jobDirectory(entry.name), 'job.json'))
     )
-    .map((entry) => readJob(entry.name))
-    .sort(
-      (a, b) =>
-        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
-    )
+      continue
+    try
+    {
+      listing.jobs.push(readJob(entry.name))
+    }
+    catch (error)
+    {
+      listing.invalid.push({ id: entry.name, error: toErrorMessage(error) })
+    }
+  }
+  listing.jobs.sort(
+    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+  )
+  listing.invalid.sort((a, b) => a.id.localeCompare(b.id))
+  return listing
+}
+
+export function listJobs(): JobRecord[]
+{
+  return listJobRecords().jobs
 }
 
 export function readJobEvents(id: string, after = 0): JobEvent[]

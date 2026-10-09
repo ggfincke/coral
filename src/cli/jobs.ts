@@ -18,7 +18,7 @@ import { assertJobsPlatform } from '../jobs/process.js'
 import {
   jobDirectory,
   jobSpecDigest,
-  listJobs,
+  listJobRecords,
   readJob,
   readJobEvents,
   readJobSnapshot,
@@ -328,15 +328,19 @@ export async function runJobsCli(args: string[]): Promise<number>
     .option('--json', 'print task records as JSON')
     .action((options: { json?: boolean }) =>
     {
-      const jobs = listJobs()
+      const { jobs, invalid } = listJobRecords()
       if (options.json) json(jobs)
-      else if (jobs.length === 0)
+      else if (jobs.length === 0 && invalid.length === 0)
         output('No coding tasks yet. Create one with coral jobs plan.')
       else
         for (const job of jobs)
           output(
             `${job.id}  ${job.status.padEnd(16)}  ${job.spec.objective.replace(/\s+/g, ' ')}`
           )
+      for (const record of invalid)
+        process.stderr.write(
+          `${record.id}  unreadable        ${sanitizeUntrustedText(record.error)}\n`
+        )
     })
 
   command
