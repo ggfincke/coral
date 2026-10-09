@@ -13,7 +13,8 @@ import {
   statSync,
 } from 'node:fs'
 import { isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { ellipsize } from '../utils/ellipsize.js'
+import { ellipsize, excerpt, truncateUtf8 } from '../utils/ellipsize.js'
+import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 import { parseSkillFrontmatter } from './parse.js'
 import {
   canonicalSkillName,
@@ -281,26 +282,37 @@ export function discoverSkills(options: DiscoverSkillsOptions): SkillIndex
   return new SkillIndex(records, collisions)
 }
 
+const DISPLAY_NAME_MAX = 128
+const DISPLAY_SOURCE_MAX = 32
+const DISPLAY_ROOT_MAX = 240
+const DISPLAY_DESCRIPTION_MAX = 240
+
+export interface SkillDisplayFields
+{
+  name: string
+  source: string
+  root: string
+  description: string
+}
+
+// sanitized single-line fields shared by `coral skills` & `/skills`
+export function skillDisplayFields(record: SkillRecord): SkillDisplayFields
+{
+  const field = (value: string, max: number): string =>
+    excerpt(sanitizeUntrustedText(value).replace(/\s+/g, ' ').trim(), max)
+  return {
+    name: field(record.name, DISPLAY_NAME_MAX),
+    source: field(record.source, DISPLAY_SOURCE_MAX),
+    root: field(record.root, DISPLAY_ROOT_MAX),
+    description: field(record.description, DISPLAY_DESCRIPTION_MAX),
+  }
+}
+
 export interface FormatSkillCatalogOptions
 {
   maxChars?: number
   maxBytes?: number
   descriptionMaxChars?: number
-}
-
-function truncateUtf8(text: string, maxBytes: number): string
-{
-  if (Buffer.byteLength(text, 'utf-8') <= maxBytes) return text
-  let result = ''
-  let used = 0
-  for (const character of text)
-  {
-    const bytes = Buffer.byteLength(character, 'utf-8')
-    if (used + bytes > maxBytes) break
-    result += character
-    used += bytes
-  }
-  return result
 }
 
 export function formatSkillCatalog(

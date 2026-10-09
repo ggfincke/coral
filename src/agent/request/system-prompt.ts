@@ -10,6 +10,7 @@ import {
   type ProjectContextSnapshot,
 } from './project-context.js'
 import { formatSkillCatalog, type SkillIndex } from '../../skills/discover.js'
+import { truncateUtf8 } from '../../utils/ellipsize.js'
 import { CHARS_PER_TOKEN } from '../../utils/limits.js'
 
 // standing instructions & the skill catalog share an allowance that scales w/
@@ -64,21 +65,6 @@ function formatBulletSection(
 {
   if (bullets.length === 0) return ''
   return `\n\n## ${title}\n\n${bullets.join('\n')}`
-}
-
-function truncateUtf8(text: string, maxBytes: number): string
-{
-  if (Buffer.byteLength(text, 'utf-8') <= maxBytes) return text
-  let result = ''
-  let used = 0
-  for (const character of text)
-  {
-    const bytes = Buffer.byteLength(character, 'utf-8')
-    if (used + bytes > maxBytes) break
-    result += character
-    used += bytes
-  }
-  return result
 }
 
 function boundedSection(

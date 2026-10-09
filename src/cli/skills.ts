@@ -3,21 +3,18 @@
 
 import { resolve } from 'node:path'
 import type { CliOptions, SkillsCliAction } from './args.js'
-import { discoverSkills, PERSONAL_SKILLS_HINT } from '../skills/discover.js'
+import {
+  discoverSkills,
+  PERSONAL_SKILLS_HINT,
+  skillDisplayFields,
+} from '../skills/discover.js'
 import {
   canonicalSkillName,
   type SkillIndex,
   type SkillRecord,
 } from '../skills/types.js'
 import { agentsHomePath } from '../utils/agents-home.js'
-import { excerpt } from '../utils/ellipsize.js'
 import { toErrorMessage } from '../utils/errors.js'
-import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
-
-const SKILL_NAME_MAX = 128
-const SKILL_SOURCE_MAX = 32
-const SKILL_ROOT_MAX = 240
-const SKILL_DESCRIPTION_MAX = 240
 
 interface SkillsCliIo
 {
@@ -25,17 +22,9 @@ interface SkillsCliIo
   writeStderr?: (text: string) => void
 }
 
-function displayField(value: string, max: number): string
-{
-  return excerpt(sanitizeUntrustedText(value).replace(/\s+/g, ' ').trim(), max)
-}
-
 function formatRecord(record: SkillRecord): string[]
 {
-  const name = displayField(record.name, SKILL_NAME_MAX)
-  const source = displayField(record.source, SKILL_SOURCE_MAX)
-  const root = displayField(record.root, SKILL_ROOT_MAX)
-  const description = displayField(record.description, SKILL_DESCRIPTION_MAX)
+  const { name, source, root, description } = skillDisplayFields(record)
   return [`${name}  ${source}  ${root}`, `  ${description}`]
 }
 
@@ -56,9 +45,7 @@ export function formatSkillsList(index: SkillIndex): string
     const collision = collisions.get(canonicalSkillName(record.name))
     for (const rejected of collision?.rejected ?? [])
     {
-      const name = displayField(rejected.name, SKILL_NAME_MAX)
-      const source = displayField(rejected.source, SKILL_SOURCE_MAX)
-      const root = displayField(rejected.root, SKILL_ROOT_MAX)
+      const { name, source, root } = skillDisplayFields(rejected)
       lines.push(`  rejected collision: ${name}  ${source}  ${root}`)
     }
   }
