@@ -7,10 +7,13 @@ auto-executes files under `scripts/`.
 ## Prompt and loading
 
 Coral reads standing rules from `AGENTS_HOME/AGENTS.md` (default
-`~/.agents/AGENTS.md`) through an 8 KiB file limit. Standing rules receive the
-full 4,096-byte supplemental prompt allowance first. Only remaining bytes may
-hold the discovered skill catalog (`name` and bounded `description`), so
-installing skills never reduces the standing-instruction section.
+`~/.agents/AGENTS.md`) through an 8 KiB file limit. Standing rules and the
+discovered skill catalog (`name` and bounded `description`) share a prompt
+allowance of one eighth of the context window, between 4 KiB and 10 KiB.
+While skills are available, standing rules take at most half of it (and never
+more than 4 KiB); the catalog gets the rest, up to 6 KiB. A catalog that does
+not fit ends with an omitted-count line, and calling `skill` with an unknown
+name lists every winner.
 
 The model calls the built-in `skill` tool to load `SKILL.md` or a confined file
 under `references/`. Loads are capped at 1 MiB and reject `..`, absolute paths,

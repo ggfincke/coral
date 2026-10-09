@@ -331,7 +331,7 @@ export function formatSkillCatalog(
     const line = formatRecord(record)
     const next = [...kept, line]
     const omitted = index.size - next.length
-    const marker = `- ... ${omitted} more skills omitted; use /skills to list`
+    const marker = `- ... ${omitted} more skills omitted; call the skill tool with any name to list all`
     const candidate = [...next, ...(omitted > 0 ? [marker] : [])].join('\n')
     if (!fits(candidate)) break
     kept.push(line)
@@ -339,7 +339,7 @@ export function formatSkillCatalog(
 
   if (kept.length === index.size) return kept.join('\n')
   const omitted = index.size - kept.length
-  const marker = `- ... ${omitted} more skills omitted; use /skills to list`
+  const marker = `- ... ${omitted} more skills omitted; call the skill tool with any name to list all`
   const prefix = kept.length > 0 ? `${kept.join('\n')}\n` : ''
   const markerChars = Math.max(maxChars - prefix.length, 0)
   const markerBytes = Math.max(maxBytes - Buffer.byteLength(prefix, 'utf-8'), 0)

@@ -10,7 +10,8 @@ import { promisify } from 'node:util'
 import stripAnsi from 'strip-ansi'
 import {
   buildSystemPrompt,
-  SUPPLEMENTAL_CONTEXT_MAX_BYTES,
+  SKILL_CATALOG_MAX_BYTES,
+  USER_INSTRUCTIONS_MAX_BYTES,
 } from '../../src/agent/request/system-prompt.js'
 import { ConversationState } from '../../src/agent/state/conversation.js'
 import { formatSkillsList } from '../../src/cli/skills.js'
@@ -242,7 +243,7 @@ test('case-folded precedence keeps personal then Coral winners and reports every
   }
 })
 
-test('standing instructions are byte-identical and receive the full prompt budget before skills', async () =>
+test('standing instructions and the skill catalog keep separate prompt budgets', async () =>
 {
   const cwd = await tempDir('coral-skill-prompt-')
   const record = skillRecord(cwd)
@@ -265,24 +266,26 @@ test('standing instructions are byte-identical and receive the full prompt budge
     )
   const userSection = (value: string): string =>
     supplemental(value).split('\n\n## Skills')[0]!
+  const skillsSection = (value: string): string =>
+    supplemental(value).slice(supplemental(value).indexOf('\n\n## Skills'))
 
   const longWithoutSkills = prompt(longInstructions, false)
   const longWithSkills = prompt(longInstructions, true)
   assert.equal(userSection(longWithSkills), userSection(longWithoutSkills))
   assert.equal(
-    Buffer.byteLength(supplemental(longWithSkills), 'utf-8'),
-    SUPPLEMENTAL_CONTEXT_MAX_BYTES
+    Buffer.byteLength(userSection(longWithSkills), 'utf-8'),
+    USER_INSTRUCTIONS_MAX_BYTES
   )
-  assert.doesNotMatch(longWithSkills, /## Skills/)
+  assert.match(longWithSkills, /## Skills/)
+  assert.ok(
+    Buffer.byteLength(skillsSection(longWithSkills), 'utf-8') <=
+      SKILL_CATALOG_MAX_BYTES
+  )
 
   const shortWithoutSkills = prompt(shortInstructions, false)
   const shortWithSkills = prompt(shortInstructions, true)
   assert.equal(userSection(shortWithSkills), userSection(shortWithoutSkills))
-  assert.match(shortWithSkills, /## Skills/)
-  assert.ok(
-    Buffer.byteLength(supplemental(shortWithSkills), 'utf-8') <=
-      SUPPLEMENTAL_CONTEXT_MAX_BYTES
-  )
+  assert.equal(skillsSection(shortWithSkills), skillsSection(longWithSkills))
 })
 
 test('slash invocation sends semantic content while preserving typed display text through sessions', async () =>

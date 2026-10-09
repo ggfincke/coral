@@ -17,7 +17,10 @@ import type { Tool } from '../tools/tool.js'
 import { EMPTY_SKILL_INDEX, type SkillIndex } from '../skills/types.js'
 import { type SubagentResult, type SubagentRunner } from '../tools/subagent.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
-import { buildSystemPrompt } from './request/system-prompt.js'
+import {
+  buildSystemPrompt,
+  supplementalBudgetForWindow,
+} from './request/system-prompt.js'
 import {
   captureProjectContext,
   projectContextBudgetForWindow,
@@ -974,6 +977,9 @@ export class Agent
       projectContextSnapshot,
       skills: this.skills,
       userInstructions: this.userInstructions,
+      supplementalBudget: supplementalBudgetForWindow(
+        this.numCtx || this.contextWindowSize || MIN_NUM_CTX
+      ),
     })
   }
 
