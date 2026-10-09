@@ -307,7 +307,10 @@ export function formatSkillCatalog(
       record.description.replace(/\s+/g, ' ').trim(),
       descriptionMaxChars
     )
-    return `- **${record.name}**: ${description}`
+    // repository-supplied packages are tagged so they never read as the
+    // user's own instructions
+    const origin = record.source === 'user' ? '' : ' (project)'
+    return `- **${record.name}**${origin}: ${description}`
   }
 
   if (options.maxChars === undefined && options.maxBytes === undefined)
