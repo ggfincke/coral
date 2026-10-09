@@ -233,7 +233,8 @@ function validRecord(value: unknown): value is JobRecord
       !isPlainObject(worktree) ||
       !nonempty(worktree.path, 4096) ||
       !isAbsolute(worktree.path) ||
-      worktree.branch !== `codex/job-${value.id}`
+      worktree.branch !== `codex/job-${value.id}` ||
+      (worktree.pending !== undefined && worktree.pending !== true)
     )
       return false
   }

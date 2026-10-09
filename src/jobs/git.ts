@@ -1,7 +1,7 @@
 // src/jobs/git.ts
 // committed source selection and preserved task worktree identity
 
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { lstat, readFile, readlink, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { execFileCommand, formatProcessError } from '../utils/process.js'
@@ -93,7 +93,31 @@ export async function resolveJobRepository(
   return { source, commonDir, commit }
 }
 
-// the persisted path is an intent record before any branch or checkout is created
+// a pending worktree was never verified or handed to the worker, so nothing
+// in it is task work; clear any partial checkout & registration
+async function discardPendingWorktree(
+  source: string,
+  path: string,
+  signal?: AbortSignal
+): Promise<void>
+{
+  const registered = (
+    await git(source, ['worktree', 'list', '--porcelain', '-z'], signal)
+  )
+    .split('\0')
+    .includes(`worktree ${path}`)
+  // double force also removes a locked entry whose directory is gone
+  if (registered)
+    await git(
+      source,
+      ['worktree', 'remove', '--force', '--force', '--', path],
+      signal
+    )
+  if (existsSync(path)) rmSync(path, { recursive: true, force: true })
+}
+
+// the persisted path is an intent record before any branch or checkout is
+// created; it stays pending until the new worktree verifies
 export async function ensureJobWorktree(
   job: JobRecord,
   signal?: AbortSignal
@@ -112,8 +136,15 @@ export async function ensureJobWorktree(
         'Task worktree intent does not match its private owned location'
       )
     }
-    if (existsSync(path))
+    if (!job.worktree.pending)
     {
+      // a verified worktree may hold task work, so it is never rebuilt
+      if (!existsSync(path))
+      {
+        throw new Error(
+          `Task worktree is missing: ${path}. It held this task's changes on branch ${branch}; restore it or prepare a new task.`
+        )
+      }
       await assertJobWorktree(job, signal)
       return job
     }
@@ -131,26 +162,45 @@ export async function ensureJobWorktree(
   {
     throw new Error('Source repository identity changed after task approval')
   }
-  job.worktree = { path, branch }
+  const source = job.spec.repository.source
+  if (job.worktree?.pending) await discardPendingWorktree(source, path, signal)
+  job.worktree = { path, branch, pending: true }
   job.updatedAt = new Date().toISOString()
   writeJob(job)
+  // an interrupted earlier attempt may have created the branch already; reuse
+  // it only while it still names the approved commit
+  const existing = (
+    await git(
+      source,
+      ['for-each-ref', '--format=%(objectname)', `refs/heads/${branch}`],
+      signal
+    )
+  ).trim()
+  if (existing && existing !== job.spec.repository.commit)
+  {
+    throw new Error(
+      `Branch ${branch} already exists at a different commit; inspect or delete it, then resume this task.`
+    )
+  }
   await git(
-    job.spec.repository.source,
+    source,
     [
       'worktree',
       'add',
       '--lock',
       '--reason',
       `Coral task ${job.id}`,
-      '-b',
-      branch,
+      ...(existing ? [] : ['-b', branch]),
       '--',
       path,
-      job.spec.repository.commit,
+      existing ? branch : job.spec.repository.commit,
     ],
     signal
   )
   await assertJobWorktree(job, signal)
+  delete job.worktree.pending
+  job.updatedAt = new Date().toISOString()
+  writeJob(job)
   return job
 }
 

@@ -58,7 +58,9 @@ export interface JobRecord
   approval?: { digest: string; approvedAt: string; hostShell: true }
   queuedAt?: string
   queueOrder?: number
-  worktree?: { path: string; branch: string }
+  // pending marks a creation that has not been verified yet, so a crash
+  // mid-creation can be rebuilt without touching task work
+  worktree?: { path: string; branch: string; pending?: true }
   phase?: JobPhase
   activeSince?: string
   consumedMs: number
