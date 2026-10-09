@@ -280,9 +280,13 @@ export class Agent
     this.thinkMode = options.think ?? true
     this.skills = options.skills ?? EMPTY_SKILL_INDEX
     this.userInstructions = options.userInstructions ?? ''
-    this.baseTools = (options.tools ?? allTools).map((tool) =>
-      tool.name === 'skill' ? createSkillTool(this.skills) : tool
-    )
+    // bind skill to this Agent's index; with nothing installed it is omitted
+    // rather than advertised as a tool that can only fail
+    this.baseTools = (options.tools ?? allTools)
+      .filter((tool) => tool.name !== 'skill' || this.skills.size > 0)
+      .map((tool) =>
+        tool.name === 'skill' ? createSkillTool(this.skills) : tool
+      )
     this.wireToolCatalog()
     this.maxIterations = options.maxIterations
     this.verifyEdits =
@@ -352,12 +356,7 @@ export class Agent
   {
     return new Agent(this.model, this.baseUrl, this.cwd, {
       think: this.thinkMode,
-      tools: subagentTools.map((tool) =>
-        tool.name === 'skill'
-          ? (this.baseTools.find((candidate) => candidate.name === 'skill') ??
-            tool)
-          : tool
-      ),
+      tools: subagentTools,
       maxIterations: SUBAGENT_MAX_ITERATIONS,
       numCtx: this.numCtx,
       verifyEdits: false,

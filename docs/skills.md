@@ -15,6 +15,12 @@ more than 4 KiB); the catalog gets the rest, up to 6 KiB. A catalog that does
 not fit ends with an omitted-count line, and calling `skill` with an unknown
 name lists every winner.
 
+Interactive, exec, and ACP sessions all load skills and standing rules. With no
+skills installed, the `skill` tool is not offered. Skills are discovered once
+per Agent, so new packages appear after a restart or session switch.
+`coral exec --permission-profile none` exposes no tools, so no catalog is
+shown, but standing rules are still included.
+
 The model calls the built-in `skill` tool to load `SKILL.md` or a confined file
 under `references/`. Loads are capped at 1 MiB and reject `..`, absolute paths,
 symlink escape, non-regular files, and every other package directory. Skill

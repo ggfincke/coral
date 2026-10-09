@@ -107,7 +107,8 @@ prompt's bounded Skills catalog. Optional `file` defaults to `SKILL.md` and may
 name only a file under `references/`. Lookup uses the same ASCII case-folded
 identity as slash commands.
 
-The tool is read-only, parallel-safe, and available to read-only subagents. It
+The tool is offered only when at least one skill is installed. It is
+read-only, parallel-safe, and available to read-only subagents. It
 never reads `scripts/` or executes package files. Missing, escaping,
 non-regular, and files over 1 MiB fail closed. Discovery, precedence, and
 collision diagnostics are documented in [Skills](skills.md).
