@@ -110,12 +110,16 @@ function skillRoots(options: DiscoverSkillsOptions): SkillRoot[]
   return roots
 }
 
+// size the buffer from fstat so small files never allocate the full limit;
+// growth past that size after fstat reads as truncation
 function readDescriptorBounded(
   descriptor: number,
-  maxBytes: number
+  maxBytes: number,
+  sizeHint: number
 ): { content: string; truncated: boolean }
 {
-  const buffer = Buffer.alloc(maxBytes + 1)
+  const limit = Math.min(maxBytes, sizeHint)
+  const buffer = Buffer.alloc(limit + 1)
   let offset = 0
   while (offset < buffer.length)
   {
@@ -129,8 +133,8 @@ function readDescriptorBounded(
     if (read === 0) break
     offset += read
   }
-  const truncated = offset > maxBytes
-  const used = truncated ? maxBytes : offset
+  const truncated = offset > limit
+  const used = truncated ? limit : offset
   return {
     content: buffer.subarray(0, used).toString('utf-8'),
     truncated,
@@ -174,7 +178,8 @@ function readConfinedRegularFile(
     }
     const bounded = readDescriptorBounded(
       descriptor,
-      SKILL_FILE_READ_LIMIT_BYTES
+      SKILL_FILE_READ_LIMIT_BYTES,
+      stats.size
     )
     if (bounded.truncated) return null
     return { path: target, content: bounded.content }
@@ -373,7 +378,8 @@ export function loadUserInstructions(agentsHome: string): string
     }
     const bounded = readDescriptorBounded(
       descriptor,
-      USER_INSTRUCTIONS_READ_LIMIT_BYTES
+      USER_INSTRUCTIONS_READ_LIMIT_BYTES,
+      stats.size
     )
     if (!bounded.content.trim()) return ''
     return bounded.truncated
