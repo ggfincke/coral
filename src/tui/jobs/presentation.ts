@@ -1,6 +1,7 @@
 // src/tui/jobs/presentation.ts
 // present durable task records using existing terminal styles and renderers
 
+import { jobCommandOutputPath } from '../../jobs/store.js'
 import type { JobEvent, JobRecord } from '../../jobs/types.js'
 import type { SessionData } from '../../session/types.js'
 import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
@@ -168,6 +169,13 @@ export function jobDetailLines(
           sanitizeUntrustedText(result.command),
           style('muted')(`${result.startedAt} -> ${result.finishedAt}`),
           sanitizeUntrustedText(result.output || '(no output)'),
+          ...(result.outputFile
+            ? [
+                style('muted')(
+                  `Full output: ${jobCommandOutputPath(job.id, result.outputFile)}`
+                ),
+              ]
+            : []),
           '',
         ])
       : ['No settled command results yet.']

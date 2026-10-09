@@ -16,6 +16,7 @@ import { getJobDiff } from '../jobs/git.js'
 import { createJobPlan } from '../jobs/plan.js'
 import { assertJobsPlatform } from '../jobs/process.js'
 import {
+  jobCommandOutputPath,
   jobDirectory,
   jobSpecDigest,
   listJobRecords,
@@ -97,7 +98,10 @@ function describe(job: JobRecord, transcript = false): void
     output('Command results:')
     for (const result of job.commandResults)
       output(
-        `[${result.phase}, attempt ${result.attempt}, ${result.ok ? 'pass' : 'fail'}] ${result.command}\n${result.output}`
+        `[${result.phase}, attempt ${result.attempt}, ${result.ok ? 'pass' : 'fail'}] ${result.command}\n${result.output}` +
+          (result.outputFile
+            ? `\nFull output: ${jobCommandOutputPath(job.id, result.outputFile)}`
+            : '')
       )
   }
   if (transcript)

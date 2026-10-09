@@ -22,10 +22,15 @@ import type { JobEvent, JobRecord, JobSpec } from './types.js'
 
 const JOB_ID = /^[0-9a-f]{8}$/
 const SNAPSHOT_NAME = /^snapshot-[0-9a-f-]{36}\.json$/
+const OUTPUT_NAME = /^output-[0-9a-f-]{36}\.log$/
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const DIGEST = /^[0-9a-f]{64}$/
 const MAX_RECORD_BYTES = 16 * 1024 * 1024
 const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
+const MAX_OUTPUT_FILE_BYTES = 4 * 1024 * 1024
+// records keep only this much of each command's output so they stay small
+// enough to rewrite on every heartbeat
+export const JOB_OUTPUT_TAIL_CHARS = 8_192
 const MAX_EVENTS_BYTES = 2 * 1024 * 1024
 const MAX_EVENT_TEXT = 16 * 1024
 const STATUSES = new Set([
@@ -133,6 +138,9 @@ function validRecord(value: unknown): value is JobRecord
       !integer(result.attempt) ||
       typeof result.ok !== 'boolean' ||
       !text(result.output, 1024 * 1024) ||
+      (result.outputFile !== undefined &&
+        (typeof result.outputFile !== 'string' ||
+          !OUTPUT_NAME.test(result.outputFile))) ||
       !timestamp(result.startedAt) ||
       !timestamp(result.finishedAt)
     )
@@ -494,6 +502,39 @@ export function writeJobSnapshot(id: string, session: SessionData): string
     mode: 0o600,
   })
   return name
+}
+
+// full command output is immutable evidence beside the record
+export function writeJobCommandOutput(id: string, output: string): string
+{
+  const name = `output-${randomUUID()}.log`
+  writeFileSync(join(prepareDirectory(id), name), output, {
+    flag: 'wx',
+    mode: 0o600,
+  })
+  return name
+}
+
+export function jobCommandOutputPath(id: string, name: string): string
+{
+  if (!OUTPUT_NAME.test(name)) throw new Error('Invalid task output name')
+  return join(jobDirectory(id), name)
+}
+
+export function readJobCommandOutput(id: string, name: string): string
+{
+  assertStateDirectories(id)
+  const path = jobCommandOutputPath(id, name)
+  const info = lstatSync(path)
+  if (
+    !info.isFile() ||
+    info.isSymbolicLink() ||
+    info.size > MAX_OUTPUT_FILE_BYTES
+  )
+  {
+    throw new Error(`Invalid or oversized task output file: ${path}`)
+  }
+  return readFileSync(path, 'utf8')
 }
 
 export function readJobSnapshot(id: string, name: string): SessionData

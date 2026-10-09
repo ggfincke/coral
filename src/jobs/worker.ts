@@ -17,10 +17,12 @@ import { assertJobWorktree, ensureJobWorktree, getJobDiff } from './git.js'
 import { runJobCommand } from './process.js'
 import {
   appendJobEvent,
+  JOB_OUTPUT_TAIL_CHARS,
   jobSpecDigest,
   readJob,
   readJobSnapshot,
   writeJob,
+  writeJobCommandOutput,
   writeJobSnapshot,
 } from './store.js'
 import type { JobPhase, JobRecord } from './types.js'
@@ -48,6 +50,7 @@ export interface JobWorkerDependencies
   writeJob?: typeof writeJob
   appendJobEvent?: typeof appendJobEvent
   writeJobSnapshot?: typeof writeJobSnapshot
+  writeJobCommandOutput?: typeof writeJobCommandOutput
   readJobSnapshot?: typeof readJobSnapshot
   ensureJobWorktree?: typeof ensureJobWorktree
   assertJobWorktree?: typeof assertJobWorktree
@@ -67,6 +70,7 @@ export async function executeJob(
     writeJob,
     appendJobEvent,
     writeJobSnapshot,
+    writeJobCommandOutput,
     readJobSnapshot,
     ensureJobWorktree,
     assertJobWorktree,
@@ -365,11 +369,19 @@ export async function executeJob(
       signal,
       jobId: id,
     })
+    // the record keeps a bounded tail; full output goes to its own file so
+    // verbose suites can never push the record past its size limit
+    const outputFile =
+      result.output.length > JOB_OUTPUT_TAIL_CHARS
+        ? durable(() => io.writeJobCommandOutput(id, result.output))
+        : undefined
     const evidence = {
       phase,
       command,
       attempt: job.repairs,
-      ...result,
+      ok: result.ok,
+      output: result.output.slice(-JOB_OUTPUT_TAIL_CHARS),
+      ...(outputFile ? { outputFile } : {}),
       startedAt,
       finishedAt: new Date().toISOString(),
     }

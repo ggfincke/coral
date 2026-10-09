@@ -39,7 +39,9 @@ export interface JobCommandResult
   command: string
   attempt: number
   ok: boolean
+  // bounded tail; longer output lives in the task's outputFile
   output: string
+  outputFile?: string
   startedAt: string
   finishedAt: string
 }
