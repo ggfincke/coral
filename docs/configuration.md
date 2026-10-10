@@ -142,18 +142,21 @@ The bundled TypeScript language server inherits a copy of `process.env`.
 
 Default root: `~/.coral`. Directories `0o700`, session/trust/index files typically `0o600`.
 
-| Path                                            | Contents                                                                        |
-| ----------------------------------------------- | ------------------------------------------------------------------------------- |
-| `sessions/<8hex>.json`                          | Authoritative conversations, todos, bounded undo/redo                           |
-| `history.jsonl`                                 | Append-only prompt history; navigation uses newest 500 valid rows               |
-| `prefs.json`                                    | Whole-file last-writer-wins; `theme`                                            |
-| `telemetry.json`                                | Legacy baseline **read**; new interactive deltas go to `telemetry.d/`           |
-| `telemetry.d/<uuid>.json`                       | Immutable per-Agent-lifetime reliability counters                               |
-| `eval-telemetry.json` + `eval-telemetry.d/`     | Eval harness only (`npm run eval -- --save-telemetry`), not the interactive CLI |
-| `mcp-trust.json`                                | Legacy launch-trust baseline (read)                                             |
-| `mcp-trust.d/<alias>.json`                      | Atomic per-alias approvals (write path for new trust)                           |
-| `retrieval/v2/spaces/<64-hex>.chunks-v2.sqlite` | Semantic indexes, isolated by embedding space and chunker version               |
-| `retrieval/index.sqlite`                        | Legacy cache; current Coral does **not** open it                                |
+| Path                                            | Contents                                                                                                              |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `sessions/<8hex>.json`                          | Authoritative conversations, todos, bounded undo/redo                                                                 |
+| `history.jsonl`                                 | Append-only prompt history; navigation uses newest 500 valid rows                                                     |
+| `prefs.json`                                    | Whole-file last-writer-wins; `theme`                                                                                  |
+| `telemetry.json`                                | Legacy baseline **read**; new interactive deltas go to `telemetry.d/`                                                 |
+| `telemetry.d/<uuid>.json`                       | Immutable per-Agent-lifetime reliability counters                                                                     |
+| `eval-telemetry.json` + `eval-telemetry.d/`     | Eval harness only (`npm run eval -- --save-telemetry`), not the interactive CLI                                       |
+| `mcp-trust.json`                                | Legacy launch-trust baseline (read)                                                                                   |
+| `mcp-trust.d/<alias>.json`                      | Atomic per-alias approvals (write path for new trust)                                                                 |
+| `retrieval/v2/spaces/<64-hex>.chunks-v2.sqlite` | Semantic indexes, isolated by embedding space and chunker version                                                     |
+| `retrieval/index.sqlite`                        | Legacy cache; current Coral does **not** open it                                                                      |
+| `jobs/<8hex>/`                                  | Durable task record, events, checkpoints, command output, and worktree; see [Durable tasks](jobs.md#where-data-lives) |
+
+Durable tasks also use a private control directory, `/tmp/coral-jobs-<uid>-<hash>/`, derived from the resolved `CORAL_HOME`; one supervisor serves each `CORAL_HOME`.
 
 Multiple Coral processes may share one `CORAL_HOME`. Session discovery scans files (a stale index cannot hide a session). Same session ID: complete-file last-writer-wins. Telemetry deltas and per-alias trust avoid unrelated lost updates. Preferences are whole-file LWW. History is not rewritten on ordinary reads.
 

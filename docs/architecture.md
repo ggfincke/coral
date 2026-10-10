@@ -30,7 +30,7 @@ Package version at the time of this writing is `0.15.0`. Node.js `>=24` is requi
 ## What Coral is not
 
 - Not a multi-provider agent (OpenAI / Anthropic / …). The `AgentInferenceClient` seam is an Ollama-shaped test/runtime injection point. Production constructs `OllamaClient`.
-- Not a remote-hosted service. The process on your machine owns the TUI, the Agent, tools, and local files.
+- Not a remote-hosted service. Processes on your machine own the TUI, the Agent, tools, and local files. Durable tasks add a local background supervisor and worker process; nothing runs elsewhere.
 - Not a hostile-process sandbox. `bash` and MCP servers run as ordinary host processes. Headless permission profiles are **deterministic tool catalogs**, not isolation.
 - Not an IDE. TypeScript/JavaScript code intelligence is a bundled language-server tool (`code_intel`), not an editor.
 - Not a session sync or collaboration product. Sessions are whole-file JSON on disk; concurrent saves of the same ID are last-writer-wins, not merged.
@@ -147,7 +147,7 @@ The Ink UI is not the Agent.
 - `App.tsx` retains terminal geometry, top-level input routing, modal composition, and rendering.
 - Built-in slash commands are four feature bundles plus `/help`, registered in a **fixed order** in `src/tui/commands/registry.ts`. Discovered skill winners extend completion and the palette, but built-ins keep precedence.
 
-`src/cli/args.ts` owns lightweight Commander parsing for both entry paths. `main.tsx` lazily imports interactive or headless execution only after parsing; help/version exit before loading Agent or Ink. Root help lists `exec`, `acp`, and `skills`; `coral help <command>` works.
+`src/cli/args.ts` owns lightweight Commander parsing for both entry paths. `main.tsx` dispatches `jobs` to its own Commander program first, then lazily imports interactive or headless execution only after parsing; help/version exit before loading Agent or Ink. Root help lists `exec`, `acp`, and `skills`; `coral help <command>` works.
 
 This layer exists so Ink/React can be swapped or tested without rewriting the Agent, and so only one turn, command, or transition runs at a time.
 
@@ -188,6 +188,20 @@ rejected record. Project roots and packages are realpath-confined to the
 checkout and corresponding project skill root. See [Skills](skills.md).
 
 Codec owns “is this JSON a session?”. Store owns “where does it live and how is it replaced?”.
+
+### Durable task processes (beside the four layers)
+
+`coral jobs` and the `/jobs` panel are clients. Approved tasks run in separate local processes that outlive them:
+
+| Process / module                      | Owns                                                                                                   |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Client (`src/jobs/client.ts`)         | Demand-starting the supervisor; sending authenticated control requests with the requesting environment |
+| Supervisor (`src/jobs/supervisor.ts`) | One per `CORAL_HOME`: lock, control socket, FIFO queue, queue/settle transitions, crash recovery       |
+| Worker (`src/jobs/worker.ts`)         | One active task: worktree, setup, Agent turns, checks, repairs, checkpoints, heartbeats                |
+| `src/jobs/store.ts`                   | Task records, bounded events, checkpoints, command output files under `CORAL_HOME/jobs/<id>/`          |
+| `src/jobs/process.ts`, `git.ts`       | Process-group ownership journals and joined termination; worktree creation and identity checks         |
+
+The supervisor writes queue and settle transitions; a running worker writes its own record. A worker receives its start signal only after its process group is journaled, each task command is journaled before it runs, and cancellation waits for those groups to exit. When a worker's ownership cannot be proved, the supervisor stops taking work and exits so the next client's supervisor re-runs recovery. Problems confined to one task (an unreadable record, a missing checkout, a failed spawn) park only that task. `src/jobs` is imported only by `src/cli` and `src/tui`, and uses the Agent's public interface. See [Durable coding tasks](jobs.md).
 
 ---
 
@@ -407,6 +421,7 @@ Timeouts: 30s startup, 15s requests, 5s diagnostics, 2s shutdown, 500ms process-
 ```mermaid
 flowchart TB
   argv["process.argv"]
+  argv -->|argv2 jobs| jobs["src/cli/jobs.ts"]
   argv -->|argv2 exec| exec["src/cli/exec.ts"]
   argv -->|else| interactive["src/cli/interactive.tsx"]
   interactive --> launch["launchCliApp"]
@@ -569,6 +584,7 @@ Useful granularity for navigating behavior, not every file.
 | `src/tui/shell/`                | Shutdown coordinator, copy, welcome, metrics                                                                                                                       |
 | `src/tui/transcript/`           | Transcript, todo panel, markdown, sanitize                                                                                                                         |
 | `src/tui/palette/`              | Command palette                                                                                                                                                    |
+| `src/tui/jobs/`                 | `/jobs` task panel and its presentation                                                                                                                            |
 | `src/agent/agent.ts`            | Façade                                                                                                                                                             |
 | `src/agent/contracts.ts`        | Public events and options                                                                                                                                          |
 | `src/agent/inference-client.ts` | Transport seam                                                                                                                                                     |
@@ -583,6 +599,7 @@ Useful granularity for navigating behavior, not every file.
 | `src/lsp/`                      | Bundled TypeScript language-server client                                                                                                                          |
 | `src/retrieval/`                | Semantic index, embeddings, SQLite spaces                                                                                                                          |
 | `src/session/`                  | Types, codec, store, resume, undo persist shaping                                                                                                                  |
+| `src/jobs/`                     | Durable task client, supervisor, worker, store, Git worktrees, process ownership                                                                                   |
 | `src/skills/`                   | Discovery, realpath confinement, case-folded precedence, immutable catalog                                                                                         |
 | `src/config/`                   | User/project JSON, permissions, MCP parse, context, verify, prefs                                                                                                  |
 | `src/telemetry/`                | Local reliability deltas                                                                                                                                           |

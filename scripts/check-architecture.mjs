@@ -302,6 +302,13 @@ function dependencyErrors(edges)
     const source = topLevel(edge.source)
     const target = topLevel(edge.target)
 
+    if (target === 'jobs' && !['jobs', 'tui', 'cli'].includes(source))
+    {
+      errors.push(
+        `only application composition may enter durable tasks: ${edge.source} -> ${edge.target}`
+      )
+    }
+
     if (target === 'cli' && source !== 'cli')
     {
       errors.push(
@@ -344,7 +351,7 @@ function dependencyErrors(edges)
       }
     }
     if (
-      ['tui', 'cli', 'session'].includes(source) &&
+      ['tui', 'cli', 'session', 'jobs'].includes(source) &&
       (edge.target.startsWith('src/agent/effects/') ||
         edge.target.startsWith('src/agent/loop/'))
     )

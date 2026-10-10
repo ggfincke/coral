@@ -9,7 +9,7 @@ import {
   formatProcessError,
 } from '../utils/process.js'
 
-const DEFAULT_TIMEOUT = 30_000
+export const BASH_DEFAULT_TIMEOUT_MS = 30_000
 
 export const bashTool: Tool = {
   name: 'bash',
@@ -29,7 +29,7 @@ export const bashTool: Tool = {
   async execute(args, context?: ToolExecutionContext): Promise<ToolResult>
   {
     const command = args.command as string
-    const timeout = (args.timeout as number) ?? DEFAULT_TIMEOUT
+    const timeout = (args.timeout as number) ?? BASH_DEFAULT_TIMEOUT_MS
 
     const result = await execShellCommand(command, {
       cwd: context?.cwd ?? getCwd(),

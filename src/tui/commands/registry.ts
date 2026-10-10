@@ -26,6 +26,7 @@ import { coralHeader, systemBlock } from './output.js'
 import { runtimeCommands } from './runtime.js'
 import { sessionCommands } from './sessions.js'
 import { workspaceCommands } from './workspace.js'
+import { jobsCommand } from './jobs.js'
 
 const SKILL_DETAIL_MAX = 80
 
@@ -169,6 +170,7 @@ const commands: readonly Command[] = [
   sessionCommands.resume,
   sessionCommands.rename,
   sessionCommands.new,
+  jobsCommand,
   runtimeCommands.telemetry,
   runtimeCommands.exit,
 ]
