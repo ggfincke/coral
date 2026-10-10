@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-09
+
 ### Added
 
 - **Agent Skills:** discover personal and project instruction packs, advertise
@@ -16,11 +18,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   collisions.
 - **Standing instructions:** load bounded `AGENTS_HOME/AGENTS.md` (default
   `~/.agents/AGENTS.md`) into interactive and exec system prompts.
-- Durable coding tasks with committed-source planning, exact draft approval,
-  preserved Git worktrees, a background FIFO queue, and CLI/TUI controls.
-- Task checkpoints, explicit crash recovery, bounded check-and-repair cycles,
-  process-group cancellation, and reviewable verification evidence on macOS
-  and Linux.
+- **Durable coding tasks:** `coral jobs` and the `/jobs` panel plan from
+  committed source, run an exactly approved draft in a preserved Git worktree
+  through a background FIFO queue, and stop at `ready_for_review` without
+  committing, pushing, or merging.
+- **Task recovery and verification:** checkpoints, explicit crash recovery,
+  bounded check-and-repair cycles, process-group cancellation, and reviewable
+  verification evidence on macOS and Linux.
+
+### Security
+
+- **Dependencies:** update the MCP SDK to 1.32.1 (GHSA-6qxp-vccf-f47h) and
+  `sharp` to 0.35.5, and refresh vulnerable transitive dependencies within
+  their existing ranges for Coral and the image-inspector helper.
 
 ## [0.16.0] - 2026-09-23
 
@@ -765,7 +775,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
-[Unreleased]: https://github.com/ggfincke/coral/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/ggfincke/coral/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/ggfincke/coral/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/ggfincke/coral/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/ggfincke/coral/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/ggfincke/coral/compare/v0.13.0...v0.14.0
