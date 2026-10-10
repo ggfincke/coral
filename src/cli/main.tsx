@@ -11,15 +11,15 @@ if (process.argv[2] === 'jobs')
   const { runJobsCli } = await import('./jobs.js')
   process.exitCode = await runJobsCli(process.argv.slice(3))
 }
-else if (parsed.kind === 'skills')
-{
-  const { runSkillsCli } = await import('./skills.js')
-  process.exitCode = runSkillsCli(parsed.action, parsed.options)
-}
 else
 {
   const parsed = parseCliArgs(process.argv.slice(2))
   if (parsed.kind === 'exit') process.exitCode = parsed.code
+  else if (parsed.kind === 'skills')
+  {
+    const { runSkillsCli } = await import('./skills.js')
+    process.exitCode = runSkillsCli(parsed.action, parsed.options)
+  }
   else if (parsed.kind === 'acp')
   {
     const { runAcpCli } = await import('./acp.js')
