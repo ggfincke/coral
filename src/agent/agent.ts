@@ -12,10 +12,15 @@ import {
 } from '../types/inference.js'
 import { allTools, subagentTools } from '../tools/registry.js'
 import { ToolCatalog } from '../tools/catalog.js'
+import { createSkillTool } from '../tools/skill.js'
 import type { Tool } from '../tools/tool.js'
+import { EMPTY_SKILL_INDEX, type SkillIndex } from '../skills/types.js'
 import { type SubagentResult, type SubagentRunner } from '../tools/subagent.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
-import { buildSystemPrompt } from './request/system-prompt.js'
+import {
+  buildSystemPrompt,
+  supplementalBudgetForWindow,
+} from './request/system-prompt.js'
 import {
   captureProjectContext,
   projectContextBudgetForWindow,
@@ -49,6 +54,7 @@ export type {
   AgentMcpManager,
   AgentMcpManagerFactory,
   AgentOptions,
+  AgentRunOutcome,
   TokenUsage,
 } from './contracts.js'
 import { toError } from '../utils/errors.js'
@@ -123,7 +129,12 @@ import {
   estimateModelRequestMessageDeltaTokens,
   toModelRequestMessage,
 } from './request/projection.js'
-import type { AcceptedTurn, AgentEvents, AgentOptions } from './contracts.js'
+import type {
+  AcceptedTurn,
+  AgentEvents,
+  AgentOptions,
+  AgentRunOutcome,
+} from './contracts.js'
 
 // cap tool-call rounds for research subagents
 const SUBAGENT_MAX_ITERATIONS = 24
@@ -256,7 +267,9 @@ export class Agent
   private ownsCodeIntel: boolean
   private readonly lifecycleAbort = new AbortController()
   private readonly mcpScope: McpToolScope
-  private readonly activeRuns = new Set<Promise<void>>()
+  private readonly skills: SkillIndex
+  private readonly userInstructions: string
+  private readonly activeRuns = new Set<Promise<AgentRunOutcome>>()
   private disposePromise?: Promise<void>
 
   constructor(
@@ -271,7 +284,15 @@ export class Agent
     this.cwd = resolve(cwd ?? getCwd())
     this.client = options.inferenceClient ?? new OllamaClient(baseUrl)
     this.thinkMode = options.think ?? true
-    this.baseTools = options.tools ?? allTools
+    this.skills = options.skills ?? EMPTY_SKILL_INDEX
+    this.userInstructions = options.userInstructions ?? ''
+    // bind skill to this Agent's index; with nothing installed it is omitted
+    // rather than advertised as a tool that can only fail
+    this.baseTools = (options.tools ?? allTools)
+      .filter((tool) => tool.name !== 'skill' || this.skills.size > 0)
+      .map((tool) =>
+        tool.name === 'skill' ? createSkillTool(this.skills) : tool
+      )
     this.wireToolCatalog()
     this.maxIterations = options.maxIterations
     this.verifyEdits =
@@ -347,6 +368,8 @@ export class Agent
       verifyEdits: false,
       codeIntel: this.codeIntel,
       mcpMode: 'off',
+      skills: this.skills,
+      userInstructions: this.userInstructions,
     })
   }
 
@@ -447,6 +470,11 @@ export class Agent
   getMcpStatus(): McpStatus
   {
     return this.mcpScope.getStatus()
+  }
+
+  getSkills(): SkillIndex
+  {
+    return this.skills
   }
 
   private dynamicToolTokenBudget(): number
@@ -899,7 +927,7 @@ export class Agent
       const projectContextSnapshot = captureProjectContext(this.cwd)
       const plan = this.requestPlanner.fitSystemPrompt({
         contextWindow,
-        activeContent: activeMessage.displayContent ?? activeMessage.content,
+        activeContent: activeMessage.content,
         tools: catalog.ollamaTools,
         desiredProjectContextBudget:
           projectContextBudgetForWindow(contextWindow),
@@ -952,6 +980,11 @@ export class Agent
       catalog,
       projectContextBudget,
       projectContextSnapshot,
+      skills: this.skills,
+      userInstructions: this.userInstructions,
+      supplementalBudget: supplementalBudgetForWindow(
+        this.numCtx || this.contextWindowSize || MIN_NUM_CTX
+      ),
     })
   }
 
@@ -967,7 +1000,7 @@ export class Agent
     const projectContextSnapshot = captureProjectContext(this.cwd)
     const plan = this.requestPlanner.fitSystemPrompt({
       contextWindow,
-      activeContent: activeMessage.displayContent ?? activeMessage.content,
+      activeContent: activeMessage.content,
       tools: this.toolCatalog.ollamaTools,
       desiredProjectContextBudget: projectContextBudgetForWindow(contextWindow),
       systemContentAt: (projectContextBudget) =>
@@ -1131,13 +1164,16 @@ export class Agent
         ? { content: input }
         : {
             content: input.content,
+            displayContent: input.displayContent,
             attachmentPaths: input.attachmentPaths
               ? Object.freeze([...input.attachmentPaths])
               : undefined,
           }
-    const displayContent = semanticInput.attachmentPaths?.length
-      ? semanticInput.content
-      : undefined
+    const displayContent =
+      semanticInput.displayContent ??
+      (semanticInput.attachmentPaths?.length
+        ? semanticInput.content
+        : undefined)
 
     const handle: AcceptedTurn = Object.freeze({
       id: Symbol('accepted-turn'),
@@ -1155,12 +1191,12 @@ export class Agent
     input: string | TurnInput,
     events: AgentEvents,
     signal?: AbortSignal
-  ): Promise<void>
+  ): Promise<AgentRunOutcome>
   {
     if (this.lifecycleAbort.signal.aborted)
     {
       this.finishRun(events)
-      return Promise.resolve()
+      return Promise.resolve({ status: 'stopped' })
     }
 
     const accepted = this.acceptTurn(input)
@@ -1172,7 +1208,7 @@ export class Agent
     accepted: AcceptedTurn,
     events: AgentEvents,
     signal?: AbortSignal
-  ): Promise<void>
+  ): Promise<AgentRunOutcome>
   {
     const active = this.acceptedTurn
     if (!active || active.handle !== accepted)
@@ -1197,7 +1233,7 @@ export class Agent
     accepted: ActiveAcceptedTurn,
     events: AgentEvents,
     externalSignal?: AbortSignal
-  ): Promise<void>
+  ): Promise<AgentRunOutcome>
   {
     const signal = externalSignal
       ? AbortSignal.any([externalSignal, this.lifecycleAbort.signal])
@@ -1230,25 +1266,34 @@ export class Agent
         if (this.acceptedTurn === accepted) this.acceptedTurn = undefined
       }
     }
-    const finish = () =>
+    const finish = (
+      status: 'completed' | 'iteration_limit' | 'stopped' = 'completed'
+    ): AgentRunOutcome =>
     {
       finalize()
       terminalCallbackStarted = true
       this.finishRun(events)
+      return {
+        status: signal.aborted
+          ? this.lifecycleAbort.signal.aborted
+            ? 'stopped'
+            : 'cancelled'
+          : status,
+      }
     }
-    const fail = (error: Error) =>
+    const fail = (error: Error): AgentRunOutcome =>
     {
       finalize()
       terminalCallbackStarted = true
       events.onError(error)
+      return { status: 'failed', error }
     }
 
     try
     {
       if (signal.aborted)
       {
-        finish()
-        return
+        return finish()
       }
 
       let capturedTurn: CapturedTurn
@@ -1276,11 +1321,9 @@ export class Agent
       {
         if (signal.aborted || this.lifecycleAbort.signal.aborted)
         {
-          finish()
-          return
+          return finish()
         }
-        fail(toError(err))
-        return
+        return fail(toError(err))
       }
 
       const compactionCallbacks: CompactionCallbacks = {
@@ -1298,8 +1341,7 @@ export class Agent
       {
         if (signal?.aborted)
         {
-          finish()
-          return
+          return finish()
         }
 
         // cap tool-call rounds for subagents
@@ -1310,8 +1352,7 @@ export class Agent
         )
         {
           events.onIterationLimit?.()
-          finish()
-          return
+          return finish('iteration_limit')
         }
 
         let fullContent = ''
@@ -1542,21 +1583,18 @@ export class Agent
           {
             // preserve streamed content as a partial message
             this.recordPartialOnAbort(fullContent, fullThinking)
-            finish()
-            return
+            return finish()
           }
 
           // record undo for prior mutations without signaling clean completion
-          fail(toError(err))
-          return
+          return fail(toError(err))
         }
 
         // save partial content and stop after a mid-stream abort
         if (signal?.aborted)
         {
           this.recordPartialOnAbort(fullContent, fullThinking)
-          finish()
-          return
+          return finish()
         }
 
         // recover tool calls emitted as text content
@@ -1615,11 +1653,9 @@ export class Agent
           {
             if (signal?.aborted)
             {
-              finish()
-              return
+              return finish()
             }
-            fail(toError(err))
-            return
+            return fail(toError(err))
           }
         }
         this.producedModels.add(this.model)
@@ -1686,14 +1722,12 @@ export class Agent
             }
           }
 
-          finish()
-          return
+          return finish()
         }
 
         if (!preparedToolRound || !toolResultAllowance)
         {
-          fail(new Error('Prepared tool round lost its reservation'))
-          return
+          return fail(new Error('Prepared tool round lost its reservation'))
         }
 
         const toolExecution = await this.toolRounds.execute({
@@ -1726,11 +1760,9 @@ export class Agent
         {
           if (signal.aborted || this.lifecycleAbort.signal.aborted)
           {
-            finish()
-            return
+            return finish()
           }
-          fail(toolExecution.error)
-          return
+          return fail(toolExecution.error)
         }
 
         const toolResults = [...outcome.toolResults]
@@ -1752,16 +1784,15 @@ export class Agent
           }
           catch (err)
           {
-            fail(toError(err))
+            return fail(toError(err))
           }
-          return
+          return fail(new Error('Tool result exceeded its request budget'))
         }
         this.pushMessages([assistantMessage, ...toolResults])
 
         if (outcome.aborted)
         {
-          finish()
-          return
+          return finish('stopped')
         }
         // pause for user confirmation when the interactive loop shows a stuck pattern
         if (doomTrip && events.onDoomLoop)
@@ -1777,14 +1808,12 @@ export class Agent
           }
           catch
           {
-            finish()
-            return
+            return finish('stopped')
           }
 
           if (!proceed)
           {
-            finish()
-            return
+            return finish('stopped')
           }
           // fresh streak required before tripping again
           doomLoop.reset()
@@ -1797,10 +1826,9 @@ export class Agent
       if (terminalCallbackStarted) throw err
       if (signal.aborted || this.lifecycleAbort.signal.aborted)
       {
-        finish()
-        return
+        return finish()
       }
-      fail(toError(err))
+      return fail(toError(err))
     }
     finally
     {

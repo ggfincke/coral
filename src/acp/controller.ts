@@ -32,9 +32,11 @@ import type {
   ProcessSessionRuntimeIdentity,
   SessionData,
 } from '../session/types.js'
+import { discoverSkills, loadUserInstructions } from '../skills/discover.js'
 import { recordReliability } from '../telemetry/store.js'
 import type { Model } from '../types/inference.js'
 import type { UndoTurn } from '../types/undo.js'
+import { agentsHomePath } from '../utils/agents-home.js'
 import { toError } from '../utils/errors.js'
 import { coralAcpError, invalidAcpParams, boundedDiagnostic } from './errors.js'
 import { AcpEventProjection, AcpIdAllocator } from './events.js'
@@ -76,11 +78,12 @@ interface CoralAcpAgent
   extends InteractiveLifetimeAgent, ProviderTurnSnapshotAgent
   {
   acceptTurn(input: string): AcceptedTurn
+  // ACP settles turns from events; the returned outcome is unused here
   runAcceptedTurn(
     accepted: AcceptedTurn,
     events: AgentEvents,
     signal?: AbortSignal
-  ): Promise<void>
+  ): Promise<unknown>
   switchModel(model: string, signal?: AbortSignal): Promise<void>
   restoreMessages(messages: SessionData['messages']): void
   restoreUndoStack(undo?: UndoTurn[], redo?: UndoTurn[]): void
@@ -203,11 +206,14 @@ function defaultCreateAgent(
   }
 ): CoralAcpAgent
 {
+  const agentsHome = agentsHomePath()
   const agent = new Agent(model, options.host, cwd, {
     think: true,
     mcpMode: 'off',
     mcpConfig: binding.mcpConfig,
     todoState: new AgentTodoState(restored?.todos),
+    skills: discoverSkills({ cwd, agentsHome }),
+    userInstructions: loadUserInstructions(agentsHome),
   })
   if (restored)
   {

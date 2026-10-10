@@ -21,9 +21,11 @@ import {
   type ToolPermissions,
 } from '../config/permissions.js'
 import { normalizeOllamaHost } from '../ollama/host.js'
+import { discoverSkills, loadUserInstructions } from '../skills/discover.js'
 import { allTools, subagentTools } from '../tools/registry.js'
 import type { Tool } from '../tools/tool.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { agentsHomePath } from '../utils/agents-home.js'
 import { writeJsonFile } from '../utils/json.js'
 
 export type ExecStatus =
@@ -169,6 +171,8 @@ export async function runCoralExec(
   const runId = dependencies.createRunId?.() ?? randomUUID()
   const profile = resolveHeadlessProfile(options.permissionProfile)
   const mcp = options.mcp && options.permissionProfile !== 'none'
+  const agentsHome = agentsHomePath()
+  const skills = discoverSkills({ cwd: options.cwd, agentsHome })
   const agent = new Agent(options.model, options.host, options.cwd, {
     tools: profile.tools,
     permissions: resolveHeadlessPermissions(profile, options.cwd, mcp),
@@ -176,6 +180,8 @@ export async function runCoralExec(
     mcpConfig: mcp ? resolveMcpConfig() : { servers: [], issues: [] },
     verifyEdits: false,
     think: options.think ?? true,
+    skills,
+    userInstructions: loadUserInstructions(agentsHome),
     ...(dependencies.inferenceClient
       ? { inferenceClient: dependencies.inferenceClient }
       : {}),

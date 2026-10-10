@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agent Skills:** discover personal and project instruction packs, advertise
+  a bounded catalog, load bodies on demand with the read-only `skill` tool, and
+  invoke winners as slash commands. Personal skills take precedence, project
+  symlink escapes fail closed, and `/skills` and `coral skills` report rejected
+  collisions.
+- **Standing instructions:** load bounded `AGENTS_HOME/AGENTS.md` (default
+  `~/.agents/AGENTS.md`) into interactive and exec system prompts.
+- Durable coding tasks with committed-source planning, exact draft approval,
+  preserved Git worktrees, a background FIFO queue, and CLI/TUI controls.
+- Task checkpoints, explicit crash recovery, bounded check-and-repair cycles,
+  process-group cancellation, and reviewable verification evidence on macOS
+  and Linux.
+
 ## [0.16.0] - 2026-09-23
 
 ### Added

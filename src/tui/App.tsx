@@ -54,6 +54,7 @@ import {
   commandInfos,
   dispatchCommand,
   keybindingInfos,
+  resolveSlashSkill,
 } from './commands/registry.js'
 import type { CommandContext } from './commands/contracts.js'
 import { runAdmittedCommand } from './commands/command-operation.js'
@@ -97,6 +98,7 @@ import {
 import { systemBlock } from './commands/output.js'
 import { useModelPicker } from './model/use-model-picker.js'
 import SessionPicker from './sessions/picker.js'
+import JobPanel from './jobs/panel.js'
 import { buildPaletteEntries, type PaletteEntry } from './palette/palette.js'
 import type { OperationHandle } from './session/interactive-runtime.js'
 import { useAgentTurn } from './run/use-agent-turn.js'
@@ -153,6 +155,7 @@ export default function App({
   const [paletteOpen, setPaletteOpen] = useState(false)
   // /resume overlay: fuzzy saved-session picker with transcript previews
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
+  const [jobsOpen, setJobsOpen] = useState(false)
   // esc-esc fork selector over prior user prompts; idle-only
   const [backtrackOpen, setBacktrackOpen] = useState(false)
   const [backtrackArmed, setBacktrackArmed] = useState(false)
@@ -380,9 +383,13 @@ export default function App({
   const currentCwd = agent?.getCwd() ?? cwd ?? getCwd()
   const transcriptWidth = Math.max(terminalSize.columns - 2, 1)
   const sessionPickerVisible =
-    sessionPickerOpen && !pickerVisible && Boolean(agent)
+    sessionPickerOpen && !pickerVisible && !jobsOpen && Boolean(agent)
   const paletteVisible =
-    paletteOpen && !pickerVisible && !sessionPickerVisible && Boolean(agent)
+    paletteOpen &&
+    !pickerVisible &&
+    !sessionPickerVisible &&
+    !jobsOpen &&
+    Boolean(agent)
 
   // render the controller's one active blocking prompt
   const activePromptContent = useMemo(() =>
@@ -418,7 +425,11 @@ export default function App({
   )
   const promptActive = Boolean(activePromptContent)
   const pickerOverlay =
-    pickerVisible || paletteVisible || backtrackOpen || sessionPickerVisible
+    pickerVisible ||
+    paletteVisible ||
+    backtrackOpen ||
+    sessionPickerVisible ||
+    jobsOpen
   const showComposer = Boolean(agent) && !pickerOverlay && !promptActive
   const metricLines = agent
     ? buildMetricLines(
@@ -437,7 +448,12 @@ export default function App({
     contextWindow > 0 && tokenUsage.context >= contextWindow * CTX_LOW_RATIO
   let activity = 'ready'
   let activityHint = ''
-  if (paletteVisible)
+  if (jobsOpen)
+  {
+    activity = 'durable coding tasks'
+    activityHint = 'background execution continues after closing the viewer'
+  }
+  else if (paletteVisible)
   {
     activity = 'command palette'
     activityHint = 'enter runs · esc closes'
@@ -548,7 +564,13 @@ export default function App({
   const terminalTooSmall =
     terminalSize.columns < 24 ||
     availableHeight <
-      (promptActive ? approvalPinnedRows : pickerOverlay ? 4 : 5)
+      (promptActive
+        ? approvalPinnedRows
+        : jobsOpen
+          ? 10
+          : pickerOverlay
+            ? 4
+            : 5)
   // the editor budget does not depend on its reported height, avoiding a
   // render-measure feedback loop while hints and suggestions appear
   const queueCapacity = showComposer
@@ -1016,10 +1038,15 @@ export default function App({
   )
 
   // slash-command list and project-file lookup for prompt autocomplete
-  const completionCommands = useMemo(() => commandCompletions(), [])
+  const discoveredSkills = agent?.getSkills()
+  const completionCommands = useMemo(
+    () => commandCompletions(discoveredSkills),
+    [discoveredSkills]
+  )
   const paletteEntries = useMemo(
-    () => buildPaletteEntries(commandInfos(), keybindingInfos()),
-    []
+    () =>
+      buildPaletteEntries(commandInfos(discoveredSkills), keybindingInfos()),
+    [discoveredSkills]
   )
   const refreshFiles = useCallback(
     () => refreshProjectFiles(currentCwd),
@@ -1309,6 +1336,12 @@ export default function App({
             return { admitted: true, handled: true }
           }
 
+          if (value.trim().toLowerCase() === '/jobs')
+          {
+            setJobsOpen(true)
+            return { admitted: true, handled: true }
+          }
+
           const handled = await dispatchCommand(value.trim(), cmdCtx)
           return { admitted: true, handled }
         }
@@ -1398,7 +1431,13 @@ export default function App({
     async (value: string, preserveInput = false) =>
     {
       const trimmed = value.trim()
-      if (!trimmed || promptActive || commandRunning || transitioningSession)
+      if (
+        !trimmed ||
+        promptActive ||
+        commandRunning ||
+        transitioningSession ||
+        jobsOpen
+      )
       {
         return
       }
@@ -1410,11 +1449,15 @@ export default function App({
         return
       }
 
-      // while a run is active, plain messages queue for autosend at the turn
-      // boundary; slash commands stay interactive-only and are dropped
+      // while a run is active, plain messages & skill invocations queue for
+      // autosend at the turn boundary; built-in commands are dropped
       if (runStage !== 'idle')
       {
-        if (!trimmed.startsWith('/'))
+        const queuesAsTurn =
+          !trimmed.startsWith('/') ||
+          (agent !== null &&
+            resolveSlashSkill(trimmed, agent.getSkills())?.kind === 'skill')
+        if (queuesAsTurn)
         {
           const next = enqueueMessage(queued, trimmed)
           if (next === queued)
@@ -1434,10 +1477,23 @@ export default function App({
         return
       }
 
-      // intercept slash commands before sending to the agent
+      // skill names are semantic turns; built-ins stay local commands
       let historyRecorded = false
       if (trimmed.startsWith('/'))
       {
+        const skill = agent
+          ? resolveSlashSkill(trimmed, agent.getSkills())
+          : null
+        if (skill?.kind === 'skill')
+        {
+          await runAgentTurn(skill.prompt, {
+            historyRecorded: false,
+            preserveInput,
+            attachmentPaths: parseMentions(trimmed),
+            displayContent: trimmed,
+          })
+          return
+        }
         const result = await runSlashCommand(trimmed, preserveInput)
         if (!result.admitted || result.handled) return
         historyRecorded = true
@@ -1449,7 +1505,9 @@ export default function App({
       })
     },
     [
+      agent,
       commandRunning,
+      jobsOpen,
       promptActive,
       queued,
       manageQueue,
@@ -1496,6 +1554,7 @@ export default function App({
       promptActive ||
       commandRunning ||
       transitioningSession ||
+      jobsOpen ||
       queued.entries.length === 0 ||
       queued.paused
     )
@@ -1515,10 +1574,16 @@ export default function App({
       const next = dequeueOldestMessage(queued)
       if (!next) return
       setQueued(next.state)
-      void runAgentTurn(next.message.text, {
+      const text = next.message.text
+      const skill =
+        agent && text.trimStart().startsWith('/')
+          ? resolveSlashSkill(text.trim(), agent.getSkills())
+          : null
+      void runAgentTurn(skill?.kind === 'skill' ? skill.prompt : text, {
         historyRecorded: false,
-        attachmentPaths: parseMentions(next.message.text),
+        attachmentPaths: parseMentions(text),
         preserveInput: true,
+        ...(skill?.kind === 'skill' ? { displayContent: text.trim() } : {}),
       })
     })
     return () =>
@@ -1526,9 +1591,11 @@ export default function App({
       canceled = true
     }
   }, [
+    agent,
     commandRunning,
     hasActiveOperation,
     isAcceptingTransitions,
+    jobsOpen,
     promptActive,
     queued,
     runAgentTurn,
@@ -1766,13 +1833,21 @@ export default function App({
       isRunning ||
       commandRunning ||
       transitioningSession ||
-      promptActive
+      promptActive ||
+      jobsOpen
     )
     {
       return
     }
     setPaletteOpen(true)
-  }, [agent, commandRunning, isRunning, promptActive, transitioningSession])
+  }, [
+    agent,
+    commandRunning,
+    isRunning,
+    jobsOpen,
+    promptActive,
+    transitioningSession,
+  ])
 
   const runKeybindingAction = useCallback(
     (action: KeybindingAction) =>
@@ -1803,7 +1878,7 @@ export default function App({
       setPaletteOpen(false)
       if (entry.command)
       {
-        void runSlashCommand(entry.command)
+        void handleSubmit(entry.command)
         return
       }
       if (entry.action)
@@ -1811,7 +1886,7 @@ export default function App({
         runKeybindingAction(entry.action)
       }
     },
-    [runKeybindingAction, runSlashCommand]
+    [handleSubmit, runKeybindingAction]
   )
 
   const onHistoryUp = useCallback(() =>
@@ -1934,6 +2009,17 @@ export default function App({
         >
           {pickerVisible ? (
             <LineList lines={visiblePicker} />
+          ) : jobsOpen && agent ? (
+            <JobPanel
+              active={!terminalTooSmall}
+              width={transcriptWidth}
+              height={paletteViewportHeight}
+              cwd={currentCwd}
+              model={activeModel}
+              host={host}
+              suspendTerminal={suspendTerminal}
+              onClose={() => setJobsOpen(false)}
+            />
           ) : paletteVisible ? (
             <CommandPalette
               active={!terminalTooSmall}
@@ -1993,9 +2079,11 @@ export default function App({
           <LineList lines={visibleTodoLines} />
         )}
 
-        {!pickerVisible && !sessionPickerVisible && agent && promptActive && (
-          <LineList lines={promptBoxLines} />
-        )}
+        {!pickerVisible &&
+          !sessionPickerVisible &&
+          !jobsOpen &&
+          agent &&
+          promptActive && <LineList lines={promptBoxLines} />}
 
         <LineList lines={activityLines} />
         <LineList lines={metricLines} />
@@ -2035,6 +2123,7 @@ export default function App({
                 !paletteVisible &&
                 !backtrackOpen &&
                 !sessionPickerVisible &&
+                !jobsOpen &&
                 Boolean(agent) &&
                 !promptActive &&
                 !terminalTooSmall

@@ -84,6 +84,7 @@ async function runAcpSubprocess<T>(
       env: {
         ...process.env,
         CORAL_HOME: coralHome,
+        AGENTS_HOME: join(coralHome, 'agents'),
         CORAL_NUM_CTX: '8192',
       },
       stdio: ['pipe', 'pipe', 'pipe'],

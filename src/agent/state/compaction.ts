@@ -140,7 +140,8 @@ function isPruneMarker(content: string): boolean
 export function pruneToolResults(
   messages: OllamaMessage[],
   protectCount: number = PRUNE_PROTECT_COUNT,
-  startIndex = 0
+  startIndex = 0,
+  protectActiveSkillResultsFrom = messages.length
 ): {
   prunedMessages: OllamaMessage[]
   prunedCount: number
@@ -162,6 +163,17 @@ export function pruneToolResults(
   const protectedSet = new Set(
     protectCount > 0 ? toolIndices.slice(-protectCount) : []
   )
+
+  let mostRecentSkillIndex = -1
+  for (let index = toolIndices.length - 1; index >= 0; index--)
+  {
+    const messageIndex = toolIndices[index]!
+    if (messages[messageIndex]!.tool_name === 'skill')
+    {
+      mostRecentSkillIndex = messageIndex
+      break
+    }
+  }
 
   const thinkingIndices: number[] = []
   for (let i = startIndex; i < messages.length; i++)
@@ -188,6 +200,8 @@ export function pruneToolResults(
       msg.role === 'tool' &&
       i >= startIndex &&
       !protectedSet.has(i) &&
+      !(msg.tool_name === 'skill' && i >= protectActiveSkillResultsFrom) &&
+      i !== mostRecentSkillIndex &&
       !isPruneMarker(msg.content)
     )
     {

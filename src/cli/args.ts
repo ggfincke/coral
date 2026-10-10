@@ -30,8 +30,11 @@ export interface CliOptions
   mcp: boolean
 }
 
+export type SkillsCliAction = 'list' | 'path'
+
 export type ParsedCli =
   | { kind: 'interactive' | 'exec' | 'acp'; options: CliOptions }
+  | { kind: 'skills'; action: SkillsCliAction; options: CliOptions }
   | { kind: 'exit'; code: number }
 
 export function parseCliArgs(argv: string[]): ParsedCli
@@ -42,6 +45,7 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .description('A local-first CLI/TUI coding agent for Ollama')
     .version(version)
     .addHelpCommand('help [command]', 'display help for a command')
+    .addHelpText('after', '\nDurable coding tasks: coral jobs --help')
     .option('-m, --model <model>', 'Ollama model to use')
     .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
     .option('--no-think', 'disable streamed reasoning requests')
@@ -111,6 +115,31 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .action((_opts, command: Command) =>
     {
       parsed = { kind: 'acp', options: command.optsWithGlobals<CliOptions>() }
+    })
+  const skills = program
+    .command('skills')
+    .description('List and locate Agent skill packages')
+  skills
+    .command('list', { isDefault: true })
+    .description('List skills discovered for the workspace')
+    .action((_opts, command: Command) =>
+    {
+      parsed = {
+        kind: 'skills',
+        action: 'list',
+        options: command.optsWithGlobals<CliOptions>(),
+      }
+    })
+  skills
+    .command('path')
+    .description('Print AGENTS_HOME/skills')
+    .action((_opts, command: Command) =>
+    {
+      parsed = {
+        kind: 'skills',
+        action: 'path',
+        options: command.optsWithGlobals<CliOptions>(),
+      }
     })
   try
   {

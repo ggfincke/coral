@@ -4,6 +4,7 @@
 import type { ToolPermissions } from '../config/permissions.js'
 import type { McpConfigResolution } from '../config/mcp.js'
 import type { CodeIntelService } from '../lsp/contracts.js'
+import type { SkillIndex } from '../skills/types.js'
 import type {
   ActiveMcpMode,
   McpLaunchApprovalRequest,
@@ -37,6 +38,11 @@ export interface TokenUsage
   totalPromptEvalDurationNs: number
   totalEvalDurationNs: number
 }
+
+// settled turn status is independent of the legacy terminal callbacks
+export type AgentRunOutcome =
+  | { status: 'completed' | 'iteration_limit' | 'cancelled' | 'stopped' }
+  | { status: 'failed'; error: Error }
 
 // callbacks for streaming tokens, tool calls, and completion
 export interface AgentEvents
@@ -123,6 +129,10 @@ export interface AgentOptions
   trackFileChanges?: boolean
   // narrow transport seam; production uses the Ollama client by default
   inferenceClient?: AgentInferenceClient
+  // composition roots discover and inject skills; Agent never scans the home
+  skills?: SkillIndex
+  // capped AGENTS_HOME/AGENTS.md body; omit when empty
+  userInstructions?: string
   // share one runner between the task tool and post-edit verification
   readOnlySubagentRunner?: SubagentRunner
   // preserve lazy MCP SDK loading while allowing manager test doubles

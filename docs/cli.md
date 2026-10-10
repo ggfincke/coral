@@ -1,6 +1,6 @@
 # CLI reference
 
-`coral --help` lists interactive options, `exec`, and `acp`. Use `coral help exec` or `coral exec --help` for headless help, and `coral help acp` or `coral acp --help` for protocol help. Help and version exit before loading Agent or Ink. Version comes from `package.json` and works on all entry paths.
+`coral --help` lists interactive options, `exec`, `acp`, and `skills`. Use `coral help exec` or `coral exec --help` for headless help, and `coral help acp` or `coral acp --help` for protocol help. Help and version exit before loading Agent or Ink. Version comes from `package.json` and works on all entry paths. Root help ends with a pointer to `coral jobs --help`.
 
 ## Interactive: `coral [options] [prompt]`
 
@@ -109,11 +109,34 @@ Result-file write failures set `error` to `failed to write result file: …`, or
 
 ---
 
+## Skills: `coral skills`
+
+`coral skills` (or `coral skills list`) lists winning packages for the workspace and every rejected case-folded collision; `-C` selects the workspace. `coral skills path` prints `AGENTS_HOME/skills`.
+
+---
+
 ## ACP
 
 `coral acp [--host <url>] [-m, --model <model>]` runs an ACP agent over stdio.
 It does not open the TUI. See [ACP setup and recovery](acp.md).
 
+## Durable tasks: `coral jobs`
+
+`coral jobs <command>` prepares, runs, and reviews background coding tasks in dedicated Git worktrees on macOS and Linux. It is dispatched before the shared parser and has its own options: pass `--cwd` to `plan` instead of the global `-C`.
+
+| Command                     | Purpose                                                                                        |
+| --------------------------- | ---------------------------------------------------------------------------------------------- |
+| `plan [objective] -m <tag>` | Save an editable draft from committed code (`--ref`, `--time-limit`, `--max-repairs`, `--cwd`) |
+| `start <id>`                | Approve the exact draft: `--approve <digest> --allow-host-shell`                               |
+| `list`                      | All tasks; unreadable records are named on stderr                                              |
+| `show <id>`                 | Status, budgets, checks, worktree; `--transcript` adds the last checkpoint                     |
+| `logs <id>`                 | Bounded events; `--follow` until settlement, `--after <n>` to resume a cursor                  |
+| `cancel <id>`               | Cancel queued work or stop a running task after its processes exit                             |
+| `resume <id>`               | Reconcile and continue; `--setup-resolution`, `--shell-resolution` for interrupted commands    |
+| `diff <id>`                 | Staged, unstaged, and untracked changes in the task worktree                                   |
+
+Every subcommand accepts `--json`. See [Durable coding tasks](jobs.md).
+
 ## Related
 
-[Getting started](getting-started.md) · [TUI](tui.md) · [Permissions](permissions.md) · [Sessions](sessions.md) · [Configuration](configuration.md) · [Architecture](architecture.md)
+[Getting started](getting-started.md) · [Durable tasks](jobs.md) · [TUI](tui.md) · [Permissions](permissions.md) · [Sessions](sessions.md) · [Configuration](configuration.md) · [Architecture](architecture.md)

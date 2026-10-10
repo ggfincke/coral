@@ -126,6 +126,21 @@ During a run, `Ctrl+C` / `Esc` abort the Agent (partial assistant or `(interrupt
 
 ---
 
+## Durable tasks
+
+| Symptom                                                      | What to do                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coral jobs` says the task supervisor is restarting          | It stopped because it could not prove a worker's processes exited. Run the command again; the new supervisor re-checks the previous worker first. If startup itself fails, its launch log under `/tmp/coral-jobs-<uid>-<hash>/` is printed. |
+| `coral jobs list` prints `unreadable`                        | That task's `job.json` is invalid (often a hand-edit typo in a draft). Fix or restore the file; other tasks keep running.                                                                                                                   |
+| `needs_input`: source checkout is missing                    | The repository the task was approved against moved or was deleted. Restore it at the same path, then `coral jobs resume <id>`.                                                                                                              |
+| `needs_input`: the supervisor restarted before this task ran | Its starting environment was held only in memory. Resume it from a shell with the intended `PATH` and credentials.                                                                                                                          |
+| `needs_input`: repair or time budget exhausted               | Inspect `coral jobs show <id>` and the checks output, then resume with instructions, or plan a new task with larger limits.                                                                                                                 |
+| Task worktree is missing                                     | A verified worktree was deleted. It held the task's changes on `codex/job-<id>`; restore it or plan a new task.                                                                                                                             |
+| Branch `codex/job-<id>` already exists at a different commit | Something moved the task branch before its worktree was verified. Inspect or delete the branch, then resume.                                                                                                                                |
+| Resume asks for `--setup-resolution` or `--shell-resolution` | A command was interrupted with unknown effects. Inspect the files and the recorded command, then choose; see [Durable tasks](jobs.md#cancel-and-continue).                                                                                  |
+
+---
+
 ## Related
 
-[Getting started](getting-started.md) · [CLI](cli.md) · [TUI](tui.md) · [MCP](mcp.md) · [Context](context.md) · [Sessions](sessions.md) · [Architecture](architecture.md)
+[Getting started](getting-started.md) · [Durable tasks](jobs.md) · [CLI](cli.md) · [TUI](tui.md) · [MCP](mcp.md) · [Context](context.md) · [Sessions](sessions.md) · [Architecture](architecture.md)
