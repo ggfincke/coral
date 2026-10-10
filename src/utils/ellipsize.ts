@@ -1,5 +1,5 @@
 // src/utils/ellipsize.ts
-// single-line string shorteners: cap with ellipsis and first-line excerpt
+// string shorteners: cap with ellipsis, by UTF-8 bytes, and first-line excerpt
 
 // drop a trailing lone high surrogate left by code-unit slicing
 export function trimTrailingHighSurrogate(text: string): string
@@ -35,4 +35,20 @@ function firstLine(text: string): string
 export function excerpt(text: string, max: number): string
 {
   return ellipsize(firstLine(text), max)
+}
+
+// cap text to max UTF-8 bytes without splitting a code point
+export function truncateUtf8(text: string, maxBytes: number): string
+{
+  if (Buffer.byteLength(text, 'utf-8') <= maxBytes) return text
+  let result = ''
+  let used = 0
+  for (const character of text)
+  {
+    const bytes = Buffer.byteLength(character, 'utf-8')
+    if (used + bytes > maxBytes) break
+    result += character
+    used += bytes
+  }
+  return result
 }

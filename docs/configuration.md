@@ -127,8 +127,10 @@ Coral-owned reads in `src/`:
 | `CORAL_HOME`            | If set and nonempty, `resolve` that path (cwd-relative allowed). Else `~/.coral`. Relocates **mutable state only**, not `~/.coral.json`                                                                                   |
 | `CORAL_NUM_CTX`         | `parseInt` base 10. Used iff finite and `> 0`. Wins over project `maxNumCtx`. Still floored at **8192** unless native is smaller, and capped by native/memory. Request prompts are separately capped at **32,768** tokens |
 | `CORAL_EMBEDDING_MODEL` | Trimmed nonempty wins over project embedding model                                                                                                                                                                        |
+| `AGENTS_HOME`           | Shared Agents directory; defaults to `~/.agents`. Personal skills use `skills/`, and standing instructions use `AGENTS.md`                                                                                                |
 
 No other `CORAL_*` variables are read by the product. Coral does not read `OLLAMA_HOST`.
+`AGENTS_HOME` is separate from `CORAL_HOME` and is not relocated with it.
 
 MCP `passEnv` names are read from `process.env` at launch. **Unset** names disable that server for the session. An empty string is not treated as missing.
 

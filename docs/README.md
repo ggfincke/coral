@@ -19,13 +19,14 @@ Coral is pre-1.0. Interfaces, session files, and configuration can still change 
 ## What the agent can do
 
 7. [Tools](tools.md) — every built-in tool, params, and policy highlights.
-8. [Sessions](sessions.md) — save, resume, list, what is stored.
-9. [Context, compaction, and undo](context.md) — window sizing, `/compact`, `/undo`.
+8. [Skills](skills.md) — personal/project instruction packs and slash invocation.
+9. [Sessions](sessions.md) — save, resume, list, what is stored.
+10. [Context, compaction, and undo](context.md) — window sizing, `/compact`, `/undo`.
 
 ## How it is put together
 
-10. [Architecture](architecture.md) — layers, turn loop, ownership, compaction modes, constructor seams, and non-goals. This is the systems document, not a how-to.
-11. [Troubleshooting](troubleshooting.md) — Ollama, context, MCP, sessions, common failures.
+11. [Architecture](architecture.md) — layers, turn loop, ownership, compaction modes, constructor seams, and non-goals. This is the systems document, not a how-to.
+12. [Troubleshooting](troubleshooting.md) — Ollama, context, MCP, sessions, common failures.
 
 [ACP setup and recovery](acp.md) covers connecting app clients and native session ownership.
 

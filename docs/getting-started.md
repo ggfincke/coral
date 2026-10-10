@@ -51,7 +51,12 @@ npm run dev -- --host http://localhost:11434
    - If it is not installed, the first row is the newest model by `modified_at`.
    - Exactly one installed model, or a resumed session whose stored model is still installed, skips the picker.
 4. Type a normal prompt and press Enter. `/` autocompletes slash commands. `@` picks a project file.
-5. `/help` lists commands and keybindings. They are not sent to the model.
+5. `/help` lists built-in commands, discovered skill names, and keybindings.
+   Built-ins stay local; choosing a skill name starts an Agent turn.
+
+Optional Agent Skills need no install step inside Coral. Put personal packages
+under `AGENTS_HOME/skills` (default `~/.agents/skills`), then run
+`coral skills` to inspect the winning catalog. See [Skills](skills.md).
 
 Default Ollama host is `http://localhost:11434`. Override with `--host`. Coral does not read `OLLAMA_HOST`.
 
@@ -80,3 +85,4 @@ If the workspace contains `.coral.md` (then `AGENTS.md`, `README.md`, and other 
 - `.coral.json` and `CORAL_HOME`: [Configuration](configuration.md)
 - How the loop is built: [Architecture](architecture.md)
 - Resume and session files: [Sessions](sessions.md)
+- Reusable instruction packs: [Skills](skills.md)

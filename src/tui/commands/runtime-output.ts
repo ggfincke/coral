@@ -3,10 +3,25 @@
 
 import chalk from 'chalk'
 import type { McpServerStatus, McpStatus } from '../../mcp/types.js'
+import {
+  PERSONAL_SKILLS_HINT,
+  skillDisplayFields,
+} from '../../skills/discover.js'
+import {
+  canonicalSkillName,
+  type SkillIndex,
+  type SkillRecord,
+} from '../../skills/types.js'
 import { getTheme, style, type Role, type RoleColor } from '../theme.js'
 import { THEMES } from '../themes.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { coralHeader } from './output.js'
+
+function formatRejectedSkill(record: SkillRecord): string
+{
+  const { name, source, root } = skillDisplayFields(record)
+  return `    ${style('warning')('Rejected collision:')} ${name}  ${source}\n      ${chalk.dim(root)}`
+}
 
 // keep MCP availability copy consistent across status and mode formatters
 export function describePermissionMode(yolo: boolean): string
@@ -141,6 +156,40 @@ export function formatMcpStatus(status: McpStatus): string
     lines.push(...formatMcpServer(server))
   }
   lines.push('', chalk.dim('  Config changes require a new Coral session.'))
+  return lines.join('\n')
+}
+
+export function formatSkillsStatus(skills: SkillIndex): string
+{
+  const lines = [coralHeader('skills'), '']
+  if (skills.size === 0)
+  {
+    lines.push(chalk.dim(`  No skills installed. ${PERSONAL_SKILLS_HINT}`))
+    return lines.join('\n')
+  }
+
+  const collisions = new Map(
+    skills.collisions.map((collision) => [collision.canonicalName, collision])
+  )
+  for (const [index, skill] of skills.records.entries())
+  {
+    if (index > 0) lines.push('')
+    const { name, source, root, description } = skillDisplayFields(skill)
+    lines.push(
+      `  ${style('user')(name)}  ${chalk.dim(source)}`,
+      `    ${chalk.dim(root)}`,
+      `    ${description}`
+    )
+    const collision = collisions.get(canonicalSkillName(skill.name))
+    for (const rejected of collision?.rejected ?? [])
+    {
+      lines.push(formatRejectedSkill(rejected))
+    }
+  }
+  lines.push(
+    '',
+    chalk.dim('  Type /name to run a skill. /skills does not load a package.')
+  )
   return lines.join('\n')
 }
 

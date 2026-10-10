@@ -142,7 +142,7 @@ tokens. Statistics wrap onto additional rows in narrow terminals; unavailable
 measurements show a dash. `/status` includes the session ID and message count.
 
 - Type a normal prompt to start an agent turn.
-- Type `/` to autocomplete slash commands.
+- Type `/` to autocomplete slash commands and discovered Agent Skills.
 - Type `@` to pick a project file. The picker refreshes a session-owned project
   file catalog, and the Agent captures mentioned text only after it knows the
   final context/tool budget. Attachments are fitted in mention order within the
@@ -180,6 +180,7 @@ measurements show a dash. `/status` includes the session ID and message count.
 | `/compact`                                     | Summarize older conversation history to free context                 |
 | `/status`                                      | Show model, session, token, context, permission, and Git branch info |
 | `/mcp`                                         | Show MCP config, launch, server, and available-tool status           |
+| `/skills`                                      | Show skill winners and rejected name collisions                      |
 | `/model [name]`                                | Open the model picker or switch to a named installed model           |
 | `/permissions [ask\|yolo]` (`/perm`, `/perms`) | Show or change approval mode                                         |
 | `/verify [on\|off]`                            | Toggle the post-edit read-only self-check                            |
@@ -241,6 +242,8 @@ Coral exposes a small structured toolset to the model:
 - Git status, diff, log, add, commit, branch switching, and push
 - Shell execution with bounded output, timeouts, and interrupt support
 - Semantic `search_code` over a local Ollama embedding index
+- On-demand `skill` instruction packs from `AGENTS_HOME/skills` and project
+  skill directories
 - TypeScript/JavaScript `code_intel` for definitions, references, hover/type
   information, and per-file diagnostics
 - A read-only `task` subagent for bounded research that should not consume the
@@ -504,6 +507,7 @@ The command is observational and never launches a server. Common states:
 | `CORAL_HOME`            | Move mutable Coral state from `~/.coral` to another directory                    |
 | `CORAL_NUM_CTX`         | Override the project context-window ceiling; environment wins over `.coral.json` |
 | `CORAL_EMBEDDING_MODEL` | Override the semantic embedding model; environment wins over `.coral.json`       |
+| `AGENTS_HOME`           | Shared Agents directory for personal skills and standing instructions            |
 
 ## Local data and privacy
 
@@ -519,6 +523,10 @@ By default Coral stores:
 | `~/.coral/retrieval/v2/spaces/*.chunks-v2.sqlite` | Semantic indexes isolated by embedding space and chunker version       |
 | `~/.coral/retrieval/index.sqlite`                 | Preserved legacy retrieval cache; current Coral does not open it       |
 | `~/.coral/mcp-trust.json` + `.d`                  | Legacy trust baseline plus atomic per-alias approval records           |
+
+Personal skills live under `AGENTS_HOME/skills` (default
+`~/.agents/skills`), with standing instructions in `AGENTS_HOME/AGENTS.md`.
+Those user-owned paths are not relocated by `CORAL_HOME`.
 
 `CORAL_HOME` relocates every path in this table. The separate read-only user
 configuration remains `~/.coral.json`.

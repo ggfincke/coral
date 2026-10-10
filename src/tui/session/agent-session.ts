@@ -18,10 +18,12 @@ import {
   type SessionData,
   type SessionMeta,
 } from '../../session/types.js'
+import { discoverSkills, loadUserInstructions } from '../../skills/discover.js'
 import type { OllamaMessage } from '../../types/inference.js'
 import { findUserTurnStarts, type UndoTurn } from '../../types/undo.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { ellipsize } from '../../utils/ellipsize.js'
+import { agentsHomePath } from '../../utils/agents-home.js'
 
 export interface StartupSession
 {
@@ -58,6 +60,13 @@ export function resolveStartupSession(
 
 export function buildPrimaryAgent(options: PrimaryAgentOptions): Agent
 {
+  // interactive launch always threads a concrete cwd; the Agent keeps its own
+  // ambient fallback when none is given, matching pre-skills behavior
+  const agentsHome = agentsHomePath()
+  const skills = discoverSkills({
+    cwd: options.cwd ?? process.cwd(),
+    agentsHome,
+  })
   const agent = new Agent(options.model, options.host, options.cwd, {
     think: options.think,
     mcpMode: options.mcpMode,
@@ -65,6 +74,8 @@ export function buildPrimaryAgent(options: PrimaryAgentOptions): Agent
     todoState: new AgentTodoState(options.restored?.todos),
     inferenceClient: options.inferenceClient,
     trackFileChanges: true,
+    skills,
+    userInstructions: loadUserInstructions(agentsHome),
   })
   if (options.restored)
   {

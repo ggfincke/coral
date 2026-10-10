@@ -27,6 +27,7 @@ import {
   describePermissionMode,
   formatMcpStatus,
   formatPermissionsHelp,
+  formatSkillsStatus,
   formatThemeList,
   formatUnknownPermissionMode,
 } from './runtime-output.js'
@@ -180,6 +181,16 @@ const mcpCommand: Command = {
   execute(_args, ctx)
   {
     ctx.pushOutput(systemBlock(formatMcpStatus(ctx.agent.getMcpStatus())))
+  },
+}
+
+// /skills command
+const skillsCommand: Command = {
+  name: 'skills',
+  description: 'Show discovered skill packages',
+  execute(_args, ctx)
+  {
+    ctx.pushOutput(systemBlock(formatSkillsStatus(ctx.agent.getSkills())))
   },
 }
 
@@ -528,6 +539,7 @@ const exitCommand: Command = {
 export const runtimeCommands = {
   status: statusCommand,
   mcp: mcpCommand,
+  skills: skillsCommand,
   model: modelCommand,
   permissions: permissionsCommand,
   verify: verifyCommand,

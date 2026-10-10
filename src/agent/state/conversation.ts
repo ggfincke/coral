@@ -661,10 +661,17 @@ export class ConversationState
   {
     const beforeStoredTokens = this.estimatedTokenCount
     const beforeMessages = this.messages.length
+    const activeMessage = this.activeAnchor
+      ? this.resolveAnchor(this.activeAnchor)
+      : undefined
+    const activeIndex = activeMessage
+      ? this.messages.indexOf(activeMessage)
+      : this.messages.length
     const { prunedMessages, prunedCount, prunedThinking } = buildPrunedMessages(
       this.messages,
       protectCount,
-      this.frozenPrefixLength
+      this.frozenPrefixLength,
+      activeIndex
     )
     if (prunedCount === 0 && prunedThinking === 0) return null
 

@@ -54,6 +54,7 @@ import {
   commandInfos,
   dispatchCommand,
   keybindingInfos,
+  resolveSlashSkill,
 } from './commands/registry.js'
 import type { CommandContext } from './commands/contracts.js'
 import { runAdmittedCommand } from './commands/command-operation.js'
@@ -1016,10 +1017,15 @@ export default function App({
   )
 
   // slash-command list and project-file lookup for prompt autocomplete
-  const completionCommands = useMemo(() => commandCompletions(), [])
+  const discoveredSkills = agent?.getSkills()
+  const completionCommands = useMemo(
+    () => commandCompletions(discoveredSkills),
+    [discoveredSkills]
+  )
   const paletteEntries = useMemo(
-    () => buildPaletteEntries(commandInfos(), keybindingInfos()),
-    []
+    () =>
+      buildPaletteEntries(commandInfos(discoveredSkills), keybindingInfos()),
+    [discoveredSkills]
   )
   const refreshFiles = useCallback(
     () => refreshProjectFiles(currentCwd),
@@ -1410,11 +1416,15 @@ export default function App({
         return
       }
 
-      // while a run is active, plain messages queue for autosend at the turn
-      // boundary; slash commands stay interactive-only and are dropped
+      // while a run is active, plain messages & skill invocations queue for
+      // autosend at the turn boundary; built-in commands are dropped
       if (runStage !== 'idle')
       {
-        if (!trimmed.startsWith('/'))
+        const queuesAsTurn =
+          !trimmed.startsWith('/') ||
+          (agent !== null &&
+            resolveSlashSkill(trimmed, agent.getSkills())?.kind === 'skill')
+        if (queuesAsTurn)
         {
           const next = enqueueMessage(queued, trimmed)
           if (next === queued)
@@ -1434,10 +1444,23 @@ export default function App({
         return
       }
 
-      // intercept slash commands before sending to the agent
+      // skill names are semantic turns; built-ins stay local commands
       let historyRecorded = false
       if (trimmed.startsWith('/'))
       {
+        const skill = agent
+          ? resolveSlashSkill(trimmed, agent.getSkills())
+          : null
+        if (skill?.kind === 'skill')
+        {
+          await runAgentTurn(skill.prompt, {
+            historyRecorded: false,
+            preserveInput,
+            attachmentPaths: parseMentions(trimmed),
+            displayContent: trimmed,
+          })
+          return
+        }
         const result = await runSlashCommand(trimmed, preserveInput)
         if (!result.admitted || result.handled) return
         historyRecorded = true
@@ -1449,6 +1472,7 @@ export default function App({
       })
     },
     [
+      agent,
       commandRunning,
       promptActive,
       queued,
@@ -1515,10 +1539,16 @@ export default function App({
       const next = dequeueOldestMessage(queued)
       if (!next) return
       setQueued(next.state)
-      void runAgentTurn(next.message.text, {
+      const text = next.message.text
+      const skill =
+        agent && text.trimStart().startsWith('/')
+          ? resolveSlashSkill(text.trim(), agent.getSkills())
+          : null
+      void runAgentTurn(skill?.kind === 'skill' ? skill.prompt : text, {
         historyRecorded: false,
-        attachmentPaths: parseMentions(next.message.text),
+        attachmentPaths: parseMentions(text),
         preserveInput: true,
+        ...(skill?.kind === 'skill' ? { displayContent: text.trim() } : {}),
       })
     })
     return () =>
@@ -1526,6 +1556,7 @@ export default function App({
       canceled = true
     }
   }, [
+    agent,
     commandRunning,
     hasActiveOperation,
     isAcceptingTransitions,
@@ -1803,7 +1834,7 @@ export default function App({
       setPaletteOpen(false)
       if (entry.command)
       {
-        void runSlashCommand(entry.command)
+        void handleSubmit(entry.command)
         return
       }
       if (entry.action)
@@ -1811,7 +1842,7 @@ export default function App({
         runKeybindingAction(entry.action)
       }
     },
-    [runKeybindingAction, runSlashCommand]
+    [handleSubmit, runKeybindingAction]
   )
 
   const onHistoryUp = useCallback(() =>

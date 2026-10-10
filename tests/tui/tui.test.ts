@@ -111,6 +111,7 @@ test('command registry preserves order, aliases, help, and dispatch', async () =
     'compact',
     'status',
     'mcp',
+    'skills',
     'model',
     'permissions',
     'verify',
