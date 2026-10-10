@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { closeSync, openSync, readFileSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { assertJobsPlatform, processIdentity } from './process.js'
 import {
   coralJobProcessArgs,
@@ -26,6 +27,8 @@ export function sendJobRequest(request: JobRequest): Promise<JobResponse>
     const socket = createConnection(jobRuntimePaths().socket)
     let text = ''
     let settled = false
+    // multibyte characters may straddle chunk boundaries
+    const decoder = new StringDecoder('utf8')
     socket.setTimeout(10_000, () =>
       socket.destroy(new Error('Task supervisor did not respond.'))
     )
@@ -35,7 +38,7 @@ export function sendJobRequest(request: JobRequest): Promise<JobResponse>
     })
     socket.on('data', (chunk) =>
     {
-      text += chunk.toString('utf8')
+      text += decoder.write(chunk)
       if (text.length > 32 * 1024 * 1024)
       {
         socket.destroy(new Error('Task response exceeds the control limit.'))
@@ -77,25 +80,32 @@ export async function ensureJobSupervisor(): Promise<void>
   assertJobsPlatform()
   const until = Date.now() + 30_000
   let lastError: unknown = new Error('Task supervisor is not running.')
+  // a stopping or blocked supervisor exits shortly, so its refusal is retried
+  // like an absent one and a replacement is launched once its owner is gone
   const ping = async () =>
-    sendJobRequest({ action: 'ping' }).catch((error: unknown) =>
-    {
-      lastError = error
-      return undefined
-    })
-  const initial = await ping()
-  if (initial)
   {
-    if (!initial.ok) throw new Error(initial.error ?? 'Task queue is blocked.')
-    return
+    const response = await sendJobRequest({ action: 'ping' }).catch(
+      (error: unknown) =>
+      {
+        lastError = error
+        return undefined
+      }
+    )
+    if (response && !response.ok)
+    {
+      lastError = new Error(response.error ?? 'Task queue is blocked.')
+      return undefined
+    }
+    return response
   }
-  const owner = readSupervisorOwner()
   let launchLog: string | undefined
   let launchError: Error | undefined
   let launchFinished = false
   // recovery may need several joined termination rounds; a live owner is never displaced
-  if (!owner || (await processIdentity(owner.pid)) !== owner.identity)
+  const launchIfOwnerGone = async () =>
   {
+    const owner = readSupervisorOwner()
+    if (owner && (await processIdentity(owner.pid)) === owner.identity) return
     launchLog = join(jobRuntimePaths().directory, `launch-${randomUUID()}.log`)
     const descriptor = openSync(launchLog, 'wx', 0o600)
     try
@@ -123,14 +133,9 @@ export async function ensureJobSupervisor(): Promise<void>
   do
   {
     if (launchError) throw launchError
-    const response = await ping()
-    if (response)
-    {
-      if (!response.ok)
-        throw new Error(response.error ?? 'Task queue is blocked.')
-      return
-    }
-    if (launchFinished && launchLog)
+    if (await ping()) return
+    if (!launchLog) await launchIfOwnerGone()
+    else if (launchFinished)
     {
       const diagnostics = readFileSync(launchLog, 'utf8').slice(-8192).trim()
       if (diagnostics)

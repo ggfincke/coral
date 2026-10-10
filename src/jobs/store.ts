@@ -31,6 +31,8 @@ const MAX_OUTPUT_FILE_BYTES = 4 * 1024 * 1024
 // records keep only this much of each command's output so they stay small
 // enough to rewrite on every heartbeat
 export const JOB_OUTPUT_TAIL_CHARS = 8_192
+// the longest delay setTimeout honors, less the supervisor's settle margin
+export const MAX_JOB_ACTIVE_MS = 2_147_482_000
 const MAX_EVENTS_BYTES = 2 * 1024 * 1024
 const MAX_EVENT_TEXT = 16 * 1024
 const STATUSES = new Set([
@@ -95,7 +97,7 @@ function validSpec(value: unknown): value is JobSpec
     commands(value.checks) &&
     integer(value.activeTimeLimitMs) &&
     value.activeTimeLimitMs > 0 &&
-    value.activeTimeLimitMs <= 2_147_482_000 &&
+    value.activeTimeLimitMs <= MAX_JOB_ACTIVE_MS &&
     integer(value.maxRepairs)
   )
 }

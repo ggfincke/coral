@@ -531,7 +531,12 @@ export async function executeJob(
       {
         const command = job.spec.checks[index]
         const result = await runCommand('checks', command, index)
-        if (!result.ok) failures.push(`${command}\n${result.output}`)
+        // the repair prompt gets the same bounded tail as the record so
+        // verbose suites cannot exceed the model's request budget
+        if (!result.ok)
+          failures.push(
+            `${command}\n${result.output.slice(-JOB_OUTPUT_TAIL_CHARS)}`
+          )
       }
       if (failures.length === 0)
       {

@@ -14,7 +14,12 @@ import type {
 import { toErrorMessage } from '../utils/errors.js'
 import { isPlainObject } from '../utils/guards.js'
 import { listJobSource, readJobSource, resolveJobRepository } from './git.js'
-import { appendJobEvent, jobDirectory, writeJob } from './store.js'
+import {
+  appendJobEvent,
+  jobDirectory,
+  MAX_JOB_ACTIVE_MS,
+  writeJob,
+} from './store.js'
 import {
   DEFAULT_JOB_ACTIVE_MS,
   DEFAULT_JOB_REPAIRS,
@@ -152,15 +157,17 @@ export async function createJobPlan(
     throw new Error('Choose an Ollama model for the task')
   const activeTimeLimitMs = options.activeTimeLimitMs ?? DEFAULT_JOB_ACTIVE_MS
   const maxRepairs = options.maxRepairs ?? DEFAULT_JOB_REPAIRS
+  // reject limits the draft record would refuse before spending a planning run
   if (
     !Number.isSafeInteger(activeTimeLimitMs) ||
     activeTimeLimitMs <= 0 ||
+    activeTimeLimitMs > MAX_JOB_ACTIVE_MS ||
     !Number.isSafeInteger(maxRepairs) ||
     maxRepairs < 0
   )
   {
     throw new Error(
-      'Task active time must be a positive integer in milliseconds, and repairs a nonnegative integer'
+      `Task active time must be a positive integer in milliseconds, at most ${MAX_JOB_ACTIVE_MS}, and repairs a nonnegative integer`
     )
   }
   const host = normalizeOllamaHost(options.host)

@@ -15,6 +15,7 @@ import {
 } from 'node:fs'
 import { createServer, type Socket } from 'node:net'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { writeJsonFile } from '../utils/json.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
@@ -105,8 +106,9 @@ function accountInterrupted(
     delete job.settledStatus
     job.status = 'interrupted'
     job.error = reason
-    writeJob(job)
+    // the event lands first so a viewer that sees the settled status has it
     appendJobEvent(job.id, 'interrupted', reason)
+    writeJob(job)
   }
 }
 
@@ -118,8 +120,8 @@ function requireInput(job: JobRecord, reason: string): void
   delete job.settledStatus
   job.status = 'needs_input'
   job.error = reason
-  writeJob(job)
   appendJobEvent(job.id, 'needs_input', reason)
+  writeJob(job)
 }
 
 function isDirectory(path: string): boolean
@@ -597,7 +599,17 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
       }
     if (stopping)
       return { ok: false, error: 'Task supervisor is stopping. Retry shortly.' }
-    if (request.action === 'ping') return { ok: true }
+    if (request.action === 'ping')
+    {
+      // clients ping before each request, so a pending idle shutdown must not
+      // close the socket between that ping and the request that follows
+      if (idle && !queueRun)
+      {
+        clearTimeout(idle)
+        idle = setTimeout(shutdown, 60_000)
+      }
+      return { ok: true }
+    }
     const job = readJob(request.id)
     if (request.action === 'edit')
     {
@@ -720,10 +732,12 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
     socket.setTimeout(10_000, () => socket.destroy())
     let buffer = ''
     let received = false
+    // multibyte characters may straddle chunk boundaries
+    const decoder = new StringDecoder('utf8')
     socket.on('data', (chunk) =>
     {
       if (received) return
-      buffer += chunk.toString('utf8')
+      buffer += decoder.write(chunk)
       if (buffer.length > 8 * 1024 * 1024)
       {
         socket.destroy()

@@ -156,6 +156,10 @@ async function followLogs(
   do
   {
     signal.throwIfAborted()
+    // settlement events are appended before the status, so reading the
+    // status first guarantees the final event is in this batch
+    const settled =
+      options.follow && !['queued', 'running'].includes(readJob(id).status)
     for (const event of readJobEvents(id, cursor))
     {
       if (options.json) process.stdout.write(`${JSON.stringify(event)}\n`)
@@ -163,8 +167,7 @@ async function followLogs(
         output(`[${event.at} #${event.sequence} ${event.type}] ${event.text}`)
       cursor = event.sequence
     }
-    if (!options.follow) break
-    if (!['queued', 'running'].includes(readJob(id).status)) break
+    if (!options.follow || settled) break
     await delay(250, undefined, { signal })
   } while (!signal.aborted)
 }
