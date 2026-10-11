@@ -13,7 +13,9 @@ import type {
 } from '../types/inference.js'
 import { DEFAULT_OLLAMA_HOST, normalizeOllamaHost } from './host.js'
 import { OllamaApiError, OllamaModelIdentityError } from './errors.js'
+import { modelLookupKey } from './model-name.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { isPlainObject } from '../utils/guards.js'
 
 const DEFAULT_KEEP_ALIVE = '10m'
 const JSON_HEADERS = { 'Content-Type': 'application/json' } as const
@@ -108,19 +110,108 @@ function wireTool(tool: OllamaTool): OllamaTool
   }
 }
 
-// match the shortest names returned by /api/tags while preserving custom hosts
-function modelLookupKey(model: string): string
+// validate the wire container without replacing tool argument validation
+function streamToolCall(value: unknown): OllamaToolCall
 {
-  let key = model.trim().replace(/^https?:\/\//i, '')
-  key = key.replace(/^registry\.ollama\.ai\/library\//i, '')
-  key = key.replace(/^library\//i, '')
-
-  if (key.lastIndexOf(':') <= key.lastIndexOf('/'))
+  if (
+    !isPlainObject(value) ||
+    (value.type !== undefined && value.type !== 'function') ||
+    !isPlainObject(value.function) ||
+    typeof value.function.name !== 'string' ||
+    (value.function.arguments != null &&
+      !isPlainObject(value.function.arguments)) ||
+    (value.function.index !== undefined &&
+      (typeof value.function.index !== 'number' ||
+        !Number.isInteger(value.function.index) ||
+        value.function.index < 0))
+  )
   {
-    key += ':latest'
+    throw new Error('Invalid Ollama chat stream tool call')
   }
 
-  return key.toLowerCase()
+  return {
+    type: 'function',
+    function: {
+      name: value.function.name,
+      arguments: value.function.arguments ?? {},
+      ...(value.function.index !== undefined
+        ? { index: value.function.index }
+        : {}),
+    },
+  }
+}
+
+// reject protocol failures before Agent consumes partial text or tool calls
+function streamResponse(line: string): ChatResponse
+{
+  let value: unknown
+  try
+  {
+    value = JSON.parse(line)
+  }
+  catch (cause)
+  {
+    throw new Error('Invalid Ollama chat stream JSON', { cause })
+  }
+  if (!isPlainObject(value))
+  {
+    throw new Error('Invalid Ollama chat stream response')
+  }
+  if (value.error !== undefined)
+  {
+    if (typeof value.error !== 'string')
+    {
+      throw new Error('Invalid Ollama chat stream error response')
+    }
+    throw new Error(`Ollama stream error: ${value.error || 'unknown error'}`)
+  }
+  if (typeof value.done !== 'boolean')
+  {
+    throw new Error('Invalid Ollama chat stream completion flag')
+  }
+
+  const message =
+    value.message === undefined && value.done
+      ? { role: 'assistant', content: '' }
+      : value.message
+  if (
+    !isPlainObject(message) ||
+    message.role !== 'assistant' ||
+    (message.content !== undefined && typeof message.content !== 'string') ||
+    (message.thinking !== undefined && typeof message.thinking !== 'string') ||
+    (message.tool_calls !== undefined && !Array.isArray(message.tool_calls))
+  )
+  {
+    throw new Error('Invalid Ollama chat stream message')
+  }
+
+  const response: ChatResponse = {
+    message: {
+      role: 'assistant',
+      content: message.content ?? '',
+      ...(message.thinking !== undefined ? { thinking: message.thinking } : {}),
+      ...(message.tool_calls !== undefined
+        ? { tool_calls: message.tool_calls.map(streamToolCall) }
+        : {}),
+    },
+    done: value.done,
+  }
+  for (const field of [
+    'prompt_eval_count',
+    'prompt_eval_duration',
+    'eval_count',
+    'eval_duration',
+  ] as const)
+  {
+    const metric = value[field]
+    if (metric === undefined) continue
+    if (typeof metric !== 'number' || !Number.isFinite(metric) || metric < 0)
+    {
+      throw new Error(`Invalid Ollama chat stream ${field}`)
+    }
+    response[field] = metric
+  }
+  return response
 }
 
 function normalizedArtifactDigest(digest: unknown): string | null
@@ -574,25 +665,37 @@ export class OllamaClient
 
         for (const line of lines)
         {
+          if (signal?.aborted) return
           if (line.trim())
           {
-            yield JSON.parse(line) as ChatResponse
+            const chunk = streamResponse(line)
+            yield chunk
+            if (chunk.done) return
           }
         }
       }
 
       if (!signal?.aborted)
       {
-        const final = remainderParts.join('')
+        const final = remainderParts.join('') + decoder.decode()
         if (final.trim())
         {
-          yield JSON.parse(final) as ChatResponse
+          const chunk = streamResponse(final)
+          yield chunk
+          if (chunk.done) return
+        }
+        if (!signal?.aborted)
+        {
+          throw new Error('Ollama chat stream ended before completion')
         }
       }
     }
     finally
     {
-      await reader.cancel()
+      // cleanup must not replace the stream's diagnostic or cancellation outcome
+      await reader.cancel().catch(() =>
+      {})
+      reader.releaseLock()
     }
   }
 }

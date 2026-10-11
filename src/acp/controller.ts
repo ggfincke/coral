@@ -223,6 +223,10 @@ function defaultCreateAgent(
         ? restored.messages.slice(1)
         : restored.messages
     agent.restoreMessages([currentSystem, ...restoredTail])
+    agent.restoreSuccessfulCompactionMetrics({
+      successfulCount: restored.meta.compactionCount,
+      lastCompactedAt: restored.meta.lastCompactedAt,
+    })
     agent.restoreUndoStack(restored.undo, restored.redo)
   }
   return agent

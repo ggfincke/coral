@@ -3,6 +3,7 @@
 
 import { strict as assert } from 'node:assert'
 import { writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import {
@@ -246,6 +247,53 @@ test('resolvePinnedContextWindow treats model-list failure as unknown weight', a
 
     assert.equal(resolved?.contextWindow, MISTRAL.contextLength)
     assert.equal(resolved?.weightBytes, 0)
+  })
+})
+
+test('canonical and tagless model names share memory budgets without collapsing custom hosts', async () =>
+{
+  const cwd = join(tmpdir(), 'coral-context-mock-only', String(process.pid))
+  const listed: Model[] = [
+    { name: 'model:latest', size: 18 * GiB, modified_at: '' },
+    {
+      name: 'private/model:latest',
+      model: 'other:latest',
+      size: 20 * GiB,
+      modified_at: '',
+    },
+    { name: 'library/other:latest', size: 19 * GiB, modified_at: '' },
+  ]
+  await withNumCtx(undefined, async () =>
+  {
+    const resolve = (model: string) =>
+      resolvePinnedContextWindow({
+        model,
+        cwd,
+        totalMemBytes: 32 * GiB,
+        showModel: async () => ({
+          contextLength: 131_072,
+          architecture: 'full-attention',
+          blockCount: 32,
+          kvHeadCount: 8,
+          keyLength: 128,
+          valueLength: 128,
+        }),
+        listModels: async () => listed,
+      })
+    const canonical = await resolve('model:latest')
+    for (const alias of [
+      'model',
+      'library/model',
+      'registry.ollama.ai/library/model',
+    ])
+    {
+      assert.deepEqual(await resolve(alias), canonical)
+    }
+    assert.equal(canonical?.weightBytes, 18 * GiB)
+    assert.equal(canonical?.contextWindow, 8_192)
+    assert.equal((await resolve('other'))?.weightBytes, 20 * GiB)
+    assert.equal((await resolve('library/other:latest'))?.weightBytes, 19 * GiB)
+    assert.equal((await resolve('custom.example/model'))?.weightBytes, 0)
   })
 })
 
