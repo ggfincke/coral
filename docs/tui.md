@@ -215,6 +215,8 @@ Context occupancy starts with `~` after resume, fork, undo, redo, or transcript 
 
 Only unmodified `y/Y`, `n/N`, and the tool prompt's `a` can answer approvals. Ctrl/Alt variants do not settle them. Ctrl+Y explains that permission mode is locked; Ctrl+C interrupts. Esc rejects a tool, aborts MCP launch approval, or stops a doom loop. Full available diff previews scroll beneath pinned titles and action keys.
 
+Large or expensive diffs may omit the preview after reaching a source-size or computation limit. File edits and their undo snapshots remain available when a display diff is omitted.
+
 Idle Esc twice opens **fork from this prompt**. The original is saved, files and current todos remain unchanged, and the selected prompt returns unsent in a fresh child session. See [Sessions](sessions.md).
 
 ## Markdown export

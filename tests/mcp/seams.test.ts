@@ -77,6 +77,59 @@ describe('MCP output conversion', () =>
 
 describe('MCP tool adapter', () =>
 {
+  test('MCP schema reconstruction isolates reused IDs and local references', async () =>
+  {
+    for (const dialect of [
+      'http://json-schema.org/draft-07/schema#',
+      'https://json-schema.org/draft/2020-12/schema',
+    ])
+    {
+      const schema = (valueType: 'string' | 'integer'): JsonSchema => ({
+        $schema: dialect,
+        $id: 'https://example.test/tool-contract',
+        type: 'object',
+        definitions: {
+          value: { $id: 'value', type: valueType },
+        },
+        properties: { value: { $ref: '#/definitions/value' } },
+        required: ['value'],
+        additionalProperties: false,
+      })
+      const createTool = () =>
+        createMcpTool({
+          name: 'mcp__fixture__reconstructed',
+          displayLabel: 'MCP · fixture · reconstructed',
+          inputSchema: schema('string'),
+          outputSchema: schema('integer'),
+          secretValues: [],
+          invoke: async (args, _signal, bridgeResult) =>
+            bridgeResult({ content: [], structuredContent: args }),
+        })
+      const original = createTool()
+      const reconstructed = createTool()
+
+      for (const tool of [original, reconstructed])
+      {
+        assert.deepEqual(tool.validateArgs?.({ value: 'accepted' }), {
+          ok: true,
+          args: { value: 'accepted' },
+        })
+        assert.equal(tool.validateArgs?.({ value: 42 })?.ok, false)
+
+        const acceptedOutput = await tool.execute({ value: 42 })
+        assert.equal(acceptedOutput.error, undefined)
+        assert.match(acceptedOutput.output, /42/)
+
+        const rejectedOutput = await tool.execute({ value: 'rejected' })
+        assert.equal(rejectedOutput.output, '')
+        assert.match(
+          rejectedOutput.error ?? '',
+          /structured output failed validation/
+        )
+      }
+    }
+  })
+
   test('MCP tool adaptation separates raw validation from model projection', () =>
   {
     const escape = String.fromCharCode(27)
