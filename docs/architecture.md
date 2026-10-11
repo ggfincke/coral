@@ -412,7 +412,9 @@ Each interactive Agent constructs one `TypeScriptCodeIntel` (`src/lsp/client.ts`
 
 No other languages, no rename/refactor, no workspace-wide diagnostic sweep.
 
-Timeouts: 30s startup, 15s requests, 5s diagnostics, 2s shutdown, 500ms process-exit wait. At most **2** start attempts. Diagnostics synchronize the document and request complete syntax, semantic, and suggestion results through the bundled server's `typescript.tsserverRequest` command, sharing one 5s deadline. Partial push notifications cannot settle the result. A timeout reports an error; the project typecheck remains a manual fallback.
+Each query serializes a disk refresh of previously opened documents plus its requested file before asking the same connection for semantic results. Changed documents receive `didChange`; missing or unreadable retained documents receive `didClose`, and unreadable files fail the query. Cancellation prevents queued work from starting. Disposal aborts and joins active work before releasing the owned server.
+
+Timeouts: 30s startup, 15s requests, 5s diagnostics, 2s shutdown, 500ms process-exit wait. The restart budget allows **2** start attempts; intentional cancellation during startup or a document notification refunds that attempt while retiring any uncertain overlay. Genuine startup/connection failures remain charged. Diagnostics synchronize the document and request complete syntax, semantic, and suggestion results through the bundled server's `typescript.tsserverRequest` command, sharing one 5s deadline. Partial push notifications cannot settle the result. A timeout reports an error; the project typecheck remains a manual fallback.
 
 ---
 
