@@ -17,8 +17,10 @@ import type {
 } from '../../src/acp/session-policy.js'
 import type { McpConfigResolution } from '../../src/config/mcp.js'
 import { CoralAcpController } from '../../src/acp/controller.js'
+import { OllamaClient } from '../../src/ollama/client.js'
 import { SessionPersistenceError } from '../../src/session/errors.js'
 import {
+  createSession,
   loadSession,
   retryProviderSessionSave,
   saveProviderSession,
@@ -587,6 +589,73 @@ test('official SDK lifecycle persists turns, model changes, and resume without r
     const afterResume = loadSessionForTest(sessionId)
     assert.equal(afterResume.meta.messageCount, 4)
     assert.equal(afterResume.meta.title, 'first turn')
+  })
+})
+
+test('default ACP Agent preserves restored compaction metrics during metadata saves', async (t) =>
+{
+  t.mock.method(OllamaClient.prototype, 'startKeepAlive', () => undefined)
+  t.mock.method(OllamaClient.prototype, 'listModels', async () => [
+    { name: 'model-a', size: 1, modified_at: '' },
+    { name: 'model-b', size: 1, modified_at: '' },
+  ])
+  t.mock.method(OllamaClient.prototype, 'showModel', async () =>
+  {
+    throw new Error('unexpected model request')
+  })
+  t.mock.method(OllamaClient.prototype, 'chatStream', () =>
+  {
+    assert.fail('unexpected inference')
+  })
+  await withCoralHome(async (cwd) =>
+  {
+    const meta = createSession(
+      'model-a',
+      cwd,
+      [
+        { role: 'system', content: 'Stored system' },
+        { role: 'user', content: 'Historical conversation' },
+      ],
+      [],
+      [],
+      [],
+      'Named historical session',
+      { compactionCount: 7, lastCompactedAt: 'legacy opaque timestamp' }
+    )
+    const instance = new CoralAcpController({
+      host: 'http://ollama.test',
+      model: 'model-a',
+    })
+    try
+    {
+      await client([]).connectWith(instance.createApp(), async (cx) =>
+      {
+        await initialize(cx)
+        await cx.request(acp.methods.agent.session.resume, {
+          sessionId: meta.id,
+          cwd,
+          mcpServers: [],
+        })
+        await cx.request(acp.methods.agent.session.setConfigOption, {
+          sessionId: meta.id,
+          configId: 'model',
+          value: 'model-b',
+        })
+        await cx.request(acp.methods.agent.session.close, {
+          sessionId: meta.id,
+        })
+      })
+      const saved = loadSessionForTest(meta.id)
+      assert.equal(saved.meta.model, 'model-b')
+      assert.equal(saved.meta.compactionCount, 7)
+      assert.equal(saved.meta.lastCompactedAt, 'legacy opaque timestamp')
+      assert.equal(saved.meta.createdAt, meta.createdAt)
+      assert.equal(saved.meta.title, 'Named historical session')
+    }
+    finally
+    {
+      await instance.shutdown()
+    }
   })
 })
 

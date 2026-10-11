@@ -140,7 +140,7 @@ This layer exists so the TUI is not the source of truth for history, and so comp
 
 The Ink UI is not the Agent.
 
-- `InteractiveSessionRuntime` (`src/tui/session/interactive-runtime.ts`) is **framework-neutral**. It owns Agent generations, one active operation (`turn` or `command`), one lifecycle transition (`model`, `permission`, or `session`), blocking prompts (`tool`, `mcp`, `doom`), session binding, persist-on-complete, and Agent retirement. Process signals are handled by the React hook plus `src/tui/shell/shutdown.ts`.
+- `InteractiveSessionRuntime` (`src/runtime/interactive-session.ts`, re-exported by `src/tui/session/interactive-runtime.ts`) is **framework-neutral**. It owns Agent generations, one active operation (`turn` or `command`), one lifecycle transition (`model`, `permission`, or `session`), blocking prompts (`tool`, `mcp`, `doom`), session binding, persist-on-complete, and Agent retirement. Process signals are handled by the React hook plus `src/tui/shell/shutdown.ts`.
 - `useInteractiveSession` adapts that authority into React: construct/switch/resume Agents, MCP ask/yolo, persist/rename/clear, SIGINT/SIGTERM.
 - `useAgentTurn` projects Agent events into the transcript and run stage.
 - `useModelPicker` owns model discovery and selection presentation.
@@ -543,7 +543,7 @@ flowchart TD
 | **hard-fit**            | Planner returned `needs_history_compaction`                | System + active turn; everything between is summarized                                                                                                                                                  | **Yes**      |
 | **manual** (`/compact`) | User command                                               | Frozen prefix is **system only**, then the new handoff. TUI refuses when **non-system** messages < 4; `forceCompact` / `prepareSummary('manual')` refuse when **total** messages (including system) < 4 | **Yes**      |
 
-A separate **hard message-count guard** runs every model-request iteration after `compactIfNeeded`: if stored messages exceed 100, Coral trims to 100 (preserving the active turn). That is independent of whether prune/summarize ran.
+A separate **message-count guard** runs every model-request iteration after `compactIfNeeded`: if stored messages exceed 100, Coral trims toward 100 while preserving the active turn and complete assistant/tool rounds. Compaction and trim boundaries move backward to the owning assistant when a cutoff would split its tool results; an indivisible group can therefore exceed the target. Summary preparation returns a no-op when no complete group can be summarized. The count guard is independent of whether prune/summarize ran.
 
 `onCompactionStart` fires only before a **summarization** model call, not before prune. Successful summarize/trim TUI notices include `Undo history cleared`. Prune notices do not.
 
