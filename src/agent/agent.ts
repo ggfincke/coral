@@ -508,6 +508,20 @@ export class Agent
     this.state.restoreMessages(savedMessages)
   }
 
+  // restore durable session metrics before admitting another turn
+  restoreSuccessfulCompactionMetrics(metrics: {
+    successfulCount?: number
+    lastCompactedAt?: string
+  }): void
+  {
+    this.lifecycleAbort.signal.throwIfAborted()
+    if (this.acceptedTurn)
+    {
+      throw new Error('Cannot restore compaction metrics during an active turn')
+    }
+    this.state.restoreSuccessfulCompactionMetrics(metrics)
+  }
+
   // native session watchers publish hints without mutating stored history
   notifyFileChanges(paths: readonly string[] | null): void
   {
