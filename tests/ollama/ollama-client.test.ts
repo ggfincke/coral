@@ -19,6 +19,115 @@ function buildNdjsonResponse(lines: unknown[]): Response
   )
 }
 
+test('chatStream requires valid completion records and preserves stream diagnostics', async (t) =>
+{
+  const partial = {
+    message: { role: 'assistant', content: 'partial' },
+    done: false,
+  }
+  for (const [name, body, expected] of [
+    ['partial EOF', JSON.stringify(partial), /ended before completion/],
+    ['stream error', '{"error":"runner stopped"}', /runner stopped/],
+    [
+      'invalid message',
+      '{"message":null,"done":true}',
+      /Invalid Ollama chat stream message/,
+    ],
+  ] as const)
+  {
+    await t.test(name, async () =>
+    {
+      await withFetch(
+        async () => new Response(body),
+        async () =>
+        {
+          const client = new OllamaClient()
+          await assert.rejects(async () =>
+          {
+            for await (const _chunk of client.chatStream({
+              model: 'fake',
+              messages: [],
+            }))
+            {
+              void _chunk
+            }
+          }, expected)
+        }
+      )
+    })
+  }
+
+  await t.test(
+    'final record without a newline and terminal-only metadata',
+    async () =>
+    {
+      await withFetch(
+        async () =>
+          new Response(
+            `${JSON.stringify(partial)}\n{"done":true,"eval_count":3}`
+          ),
+        async () =>
+        {
+          const chunks = []
+          for await (const chunk of new OllamaClient().chatStream({
+            model: 'fake',
+            messages: [],
+          }))
+          {
+            chunks.push(chunk)
+          }
+          assert.deepEqual(chunks, [
+            partial,
+            {
+              message: { role: 'assistant', content: '' },
+              done: true,
+              eval_count: 3,
+            },
+          ])
+        }
+      )
+    }
+  )
+
+  await t.test(
+    'completion stops buffered records and cleanup preserves its outcome',
+    async () =>
+    {
+      let cancelled = false
+      const body = new ReadableStream({
+        start(controller)
+        {
+          controller.enqueue(
+            new TextEncoder().encode('{"done":true}\n{"error":"too late"}\n')
+          )
+        },
+        cancel()
+        {
+          cancelled = true
+          throw new Error('cleanup failed')
+        },
+      })
+      await withFetch(
+        async () => new Response(body),
+        async () =>
+        {
+          const chunks = []
+          for await (const chunk of new OllamaClient().chatStream({
+            model: 'fake',
+            messages: [],
+          }))
+          {
+            chunks.push(chunk)
+          }
+          assert.equal(chunks.length, 1)
+          assert.equal(chunks[0]?.done, true)
+          assert.equal(cancelled, true)
+        }
+      )
+    }
+  )
+})
+
 test('normalizeOllamaHost canonicalizes identity and rejects unsafe URL parts', () =>
 {
   assert.equal(

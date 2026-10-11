@@ -361,6 +361,7 @@ export class Agent
   private createReadOnlySubagent(): Agent
   {
     return new Agent(this.model, this.baseUrl, this.cwd, {
+      inferenceClient: this.client,
       think: this.thinkMode,
       tools: subagentTools,
       maxIterations: SUBAGENT_MAX_ITERATIONS,
@@ -1148,16 +1149,17 @@ export class Agent
     events.onDone()
   }
 
-  // record streamed content as a partial assistant message on abort
-  private recordPartialOnAbort(
+  // retain streamed text without committing an unfinished tool invocation
+  private recordPartialResponse(
     fullContent: string,
-    fullThinking: string
+    fullThinking: string,
+    placeholder = '(interrupted)'
   ): void
   {
     if (!fullContent && !fullThinking) return
     const partial: OllamaMessage = {
       role: 'assistant',
-      content: fullContent || '(interrupted)',
+      content: fullContent || placeholder,
     }
     if (fullThinking) partial.thinking = fullThinking
     this.pushMessage(partial)
@@ -1596,18 +1598,23 @@ export class Agent
           if (signal?.aborted)
           {
             // preserve streamed content as a partial message
-            this.recordPartialOnAbort(fullContent, fullThinking)
+            this.recordPartialResponse(fullContent, fullThinking)
             return finish()
           }
 
           // record undo for prior mutations without signaling clean completion
+          this.recordPartialResponse(
+            fullContent,
+            fullThinking,
+            '(incomplete response)'
+          )
           return fail(toError(err))
         }
 
         // save partial content and stop after a mid-stream abort
         if (signal?.aborted)
         {
-          this.recordPartialOnAbort(fullContent, fullThinking)
+          this.recordPartialResponse(fullContent, fullThinking)
           return finish()
         }
 

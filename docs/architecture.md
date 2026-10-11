@@ -111,6 +111,8 @@ Chat requests send `keep_alive: '10m'` unless a caller overrides `ChatRequest.ke
 
 If `/api/chat` returns HTTP **400, 404, or 422** and the error body mentions `think` or `unknown field`, the client retries **once** without `think` and caches that the model does not support it. Other rejections are not retried.
 
+Every non-cancelled chat stream must end with a valid `done: true` record. The client accepts an unterminated final line and metadata-only completion records, preserves server error messages, and rejects malformed records or premature EOF. On failure, Agent retains streamed text and reasoning, discards incomplete tool calls, and reports failure without `onDone`.
+
 `startKeepAlive(model)` only remembers `lastModel`. It does **not** send a keep-alive request. `evictModel` POSTs `keep_alive: 0`; Agent `dispose()` never calls it, so a loaded model stays on the Ollama host after Coral exits.
 
 The client concatenates consecutive leading `system` messages into one wire system message (prompt + optional Git context). Frozen compaction handoffs are **user** messages, so they are not coalesced. Coral never adds Ollama's `format` field on tool-bearing requests because that drops `tool_calls`.
@@ -382,7 +384,7 @@ MCP tools cannot claim a built-in name (after normalization). They cannot self-g
 
 ### `task` subagents
 
-`task` runs a **read-only child Agent** with a 24-iteration cap, shared LSP client, inherited `num_ctx`, `mcpMode: 'off'`, `verifyEdits: false`, and tools limited to `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`. Unexpected `require_approval` calls are denied (no prompt). `task` itself is not subagent-safe (no recursion). The optional `description` argument is display-only; only `prompt` is forwarded.
+`task` runs a **read-only child Agent** with a 24-iteration cap, the parent's inference and LSP clients, inherited `num_ctx`, `mcpMode: 'off'`, `verifyEdits: false`, and tools limited to `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`. Unexpected `require_approval` calls are denied (no prompt). `task` itself is not subagent-safe (no recursion). The optional `description` argument is display-only; only `prompt` is forwarded.
 
 ---
 
