@@ -1,6 +1,13 @@
 // src/tui/prompt/vim.ts
 // pure vi-modal editing engine for the prompt composer
 
+import {
+  clampGraphemeOffset,
+  graphemeOffsets,
+  nextGraphemeOffset,
+  previousGraphemeOffset,
+} from './grapheme.js'
+
 export type VimMode = 'insert' | 'normal'
 
 export interface VimKey
@@ -125,7 +132,7 @@ function firstNonBlank(value: string, span: LineSpan): number
     (value.charAt(i) === ' ' || value.charAt(i) === '\t')
   )
   {
-    i++
+    i = nextGraphemeOffset(value, i)
   }
   return i
 }
@@ -133,13 +140,17 @@ function firstNonBlank(value: string, span: LineSpan): number
 // normal-mode cursor sits ON a character; empty lines collapse onto their start
 function clampNormal(value: string, offset: number): number
 {
+  offset = clampGraphemeOffset(value, offset)
   const starts = lineStartsOf(value)
   const span = lineSpan(value, starts, locateLine(starts, offset))
   if (span.end === span.start)
   {
     return span.start
   }
-  return Math.min(Math.max(offset, span.start), span.end - 1)
+  return Math.min(
+    Math.max(offset, span.start),
+    previousGraphemeOffset(value, span.end)
+  )
 }
 
 function wordForward(value: string, pos: number): number
@@ -150,26 +161,26 @@ function wordForward(value: string, pos: number): number
   {
     while (i < n && isWordChar(value.charAt(i)))
     {
-      i++
+      i = nextGraphemeOffset(value, i)
     }
   }
   while (i < n && !isWordChar(value.charAt(i)))
   {
-    i++
+    i = nextGraphemeOffset(value, i)
   }
   return i
 }
 
 function wordBackward(value: string, pos: number): number
 {
-  let i = Math.min(pos, value.length) - 1
-  while (i >= 0 && !isWordChar(value.charAt(i)))
+  let i = previousGraphemeOffset(value, pos)
+  while (i > 0 && !isWordChar(value.charAt(i)))
   {
-    i--
+    i = previousGraphemeOffset(value, i)
   }
-  while (i > 0 && isWordChar(value.charAt(i - 1)))
+  while (i > 0 && isWordChar(value.charAt(previousGraphemeOffset(value, i))))
   {
-    i--
+    i = previousGraphemeOffset(value, i)
   }
   return Math.max(i, 0)
 }
@@ -177,18 +188,21 @@ function wordBackward(value: string, pos: number): number
 function wordEnd(value: string, pos: number): number | null
 {
   const n = value.length
-  let i = pos + 1
+  let i = nextGraphemeOffset(value, pos)
   while (i < n && !isWordChar(value.charAt(i)))
   {
-    i++
+    i = nextGraphemeOffset(value, i)
   }
   if (i >= n)
   {
     return null
   }
-  while (i + 1 < n && isWordChar(value.charAt(i + 1)))
+  while (
+    nextGraphemeOffset(value, i) < n &&
+    isWordChar(value.charAt(nextGraphemeOffset(value, i)))
+  )
   {
-    i++
+    i = nextGraphemeOffset(value, i)
   }
   return i
 }
@@ -208,27 +222,36 @@ function wordRunAround(value: string, pos: number): [number, number]
   let hi = pos
   if (onWord)
   {
-    while (lo > 0 && isWordChar(value.charAt(lo - 1)))
+    while (
+      lo > 0 &&
+      isWordChar(value.charAt(previousGraphemeOffset(value, lo)))
+    )
     {
-      lo--
+      lo = previousGraphemeOffset(value, lo)
     }
-    while (hi + 1 < n && isWordChar(value.charAt(hi + 1)))
+    while (
+      nextGraphemeOffset(value, hi) < n &&
+      isWordChar(value.charAt(nextGraphemeOffset(value, hi)))
+    )
     {
-      hi++
+      hi = nextGraphemeOffset(value, hi)
     }
   }
   else
   {
-    while (lo > 0 && sep(lo - 1))
+    while (lo > 0 && sep(previousGraphemeOffset(value, lo)))
     {
-      lo--
+      lo = previousGraphemeOffset(value, lo)
     }
-    while (hi + 1 < n && sep(hi + 1))
+    while (
+      nextGraphemeOffset(value, hi) < n &&
+      sep(nextGraphemeOffset(value, hi))
+    )
     {
-      hi++
+      hi = nextGraphemeOffset(value, hi)
     }
   }
-  return [lo, hi + 1]
+  return [lo, nextGraphemeOffset(value, hi)]
 }
 
 // aw extends the inner run by one adjacent space/tab, preferring the right side
@@ -238,12 +261,13 @@ function extendToAll(value: string, range: [number, number]): [number, number]
   const after = value.charAt(hi)
   if (after === ' ' || after === '\t')
   {
-    return [lo, hi + 1]
+    return [lo, nextGraphemeOffset(value, hi)]
   }
-  const before = lo > 0 ? value.charAt(lo - 1) : ''
+  const previous = previousGraphemeOffset(value, lo)
+  const before = lo > 0 ? value.charAt(previous) : ''
   if (before === ' ' || before === '\t')
   {
-    return [lo - 1, hi]
+    return [previous, hi]
   }
   return range
 }
@@ -260,7 +284,7 @@ function quoteRange(
   const idxs: number[] = []
   const starts = lineStartsOf(value)
   const span = lineSpan(value, starts, locateLine(starts, pos))
-  for (let i = span.start; i < span.end; i++)
+  for (let i = span.start; i < span.end; i = nextGraphemeOffset(value, i))
   {
     const ch = value.charAt(i)
     if (ch === quote)
@@ -274,7 +298,9 @@ function quoteRange(
     const close = idxs[k + 1]
     if (open <= pos && pos <= close)
     {
-      return inclusive ? [open, close + 1] : [open + 1, close]
+      return inclusive
+        ? [open, nextGraphemeOffset(value, close)]
+        : [nextGraphemeOffset(value, open), close]
     }
   }
   return null
@@ -298,8 +324,9 @@ function bracketRange(
   else
   {
     let depth = 0
-    for (let i = pos - 1; i >= 0; i--)
+    for (let i = pos; i > 0;)
     {
+      i = previousGraphemeOffset(value, i)
       const ch = value.charAt(i)
       if (ch === closer)
       {
@@ -321,7 +348,11 @@ function bracketRange(
     return null
   }
   let depth = 0
-  for (let i = openIdx + 1; i < value.length; i++)
+  for (
+    let i = nextGraphemeOffset(value, openIdx);
+    i < value.length;
+    i = nextGraphemeOffset(value, i)
+  )
   {
     const ch = value.charAt(i)
     if (ch === opener)
@@ -336,7 +367,9 @@ function bracketRange(
         {
           return null
         }
-        return inclusive ? [openIdx, i + 1] : [openIdx + 1, i]
+        return inclusive
+          ? [openIdx, nextGraphemeOffset(value, i)]
+          : [nextGraphemeOffset(value, openIdx), i]
       }
       depth--
     }
@@ -359,10 +392,10 @@ function resolveCharRange(
   {
     case 'h':
       return cursor > span.start
-        ? [Math.max(span.start, cursor - 1), cursor]
+        ? [Math.max(span.start, previousGraphemeOffset(value, cursor)), cursor]
         : null
     case 'l':
-      return [cursor, Math.min(span.end, cursor + 1)]
+      return [cursor, Math.min(span.end, nextGraphemeOffset(value, cursor))]
     case '$':
       return cursor < span.end ? [cursor, span.end] : null
     case '0':
@@ -386,7 +419,7 @@ function resolveCharRange(
       {
         return null
       }
-      return [cursor, we + 1]
+      return [cursor, nextGraphemeOffset(value, we)]
     }
     case 'b':
     {
@@ -516,9 +549,9 @@ function deleteUnderCursor(state: VimState): void
   {
     return
   }
-  setRegister(state, state.value.charAt(state.cursor), false)
-  state.value =
-    state.value.slice(0, state.cursor) + state.value.slice(state.cursor + 1)
+  const end = nextGraphemeOffset(state.value, state.cursor)
+  setRegister(state, state.value.slice(state.cursor, end), false)
+  state.value = state.value.slice(0, state.cursor) + state.value.slice(end)
   state.cursor = clampNormal(state.value, state.cursor)
 }
 
@@ -536,35 +569,47 @@ function pasteRegister(state: VimState, after: boolean): void
       ? state.register.slice(0, -1)
       : state.register
     const isLastRow = span.row + 1 >= starts.length
-    const insertAt = isLastRow ? state.value.length : span.end + 1
-    const text = isLastRow ? `\n${content}` : `${content}\n`
+    const append = after && isLastRow
+    const insertAt = after
+      ? isLastRow
+        ? state.value.length
+        : span.end + 1
+      : span.start
+    const text = append ? `\n${content}` : `${content}\n`
     state.value =
       state.value.slice(0, insertAt) + text + state.value.slice(insertAt)
-    state.cursor = clampNormal(state.value, insertAt)
+    state.cursor = clampNormal(state.value, insertAt + (append ? 1 : 0))
     return
   }
-  const insertAt = after ? Math.min(state.cursor + 1, span.end) : state.cursor
+  const insertAt = after
+    ? Math.min(nextGraphemeOffset(state.value, state.cursor), span.end)
+    : state.cursor
   state.value =
     state.value.slice(0, insertAt) +
     state.register +
     state.value.slice(insertAt)
   state.cursor = clampNormal(
     state.value,
-    Math.max(insertAt, insertAt + state.register.length - 1)
+    Math.max(
+      insertAt,
+      previousGraphemeOffset(state.value, insertAt + state.register.length)
+    )
   )
 }
 
-// vertical move keeps the column, clamped into the target line's bounds
+// vertical moves preserve the grapheme column inside the target line's bounds
 function moveToRow(state: VimState, row: number): void
 {
   const starts = lineStartsOf(state.value)
   const targetRow = Math.min(Math.max(row, 0), starts.length - 1)
-  const col = state.cursor - starts[locateLine(starts, state.cursor)]
+  const offsets = graphemeOffsets(state.value)
+  const col =
+    offsets.indexOf(state.cursor) -
+    offsets.indexOf(starts[locateLine(starts, state.cursor)])
   const target = lineSpan(state.value, starts, targetRow)
-  state.cursor = Math.min(
-    target.start + col,
-    Math.max(target.start, target.end - 1)
-  )
+  const targetOffset =
+    offsets[offsets.indexOf(target.start) + col] ?? target.end
+  state.cursor = clampNormal(state.value, Math.min(targetOffset, target.end))
 }
 
 function applyInsertInput(state: VimState, key: VimKey): void
@@ -575,7 +620,10 @@ function applyInsertInput(state: VimState, key: VimKey): void
     const starts = lineStartsOf(state.value)
     const span = lineSpan(state.value, starts, locateLine(starts, state.cursor))
     state.mode = 'normal'
-    state.cursor = Math.max(span.start, state.cursor - 1)
+    state.cursor = Math.max(
+      span.start,
+      previousGraphemeOffset(state.value, state.cursor)
+    )
     return
   }
   if (key.input && key.input.length > 0)
@@ -600,9 +648,10 @@ function applyInsertInput(state: VimState, key: VimKey): void
   {
     if (state.cursor > 0)
     {
+      const start = previousGraphemeOffset(state.value, state.cursor)
       state.value =
-        state.value.slice(0, state.cursor - 1) + state.value.slice(state.cursor)
-      state.cursor--
+        state.value.slice(0, start) + state.value.slice(state.cursor)
+      state.cursor = start
     }
     return
   }
@@ -611,7 +660,8 @@ function applyInsertInput(state: VimState, key: VimKey): void
     if (state.cursor < state.value.length)
     {
       state.value =
-        state.value.slice(0, state.cursor) + state.value.slice(state.cursor + 1)
+        state.value.slice(0, state.cursor) +
+        state.value.slice(nextGraphemeOffset(state.value, state.cursor))
     }
     return
   }
@@ -651,7 +701,10 @@ function applyCmdlineInput(state: VimState, key: VimKey): void
   }
   if (key.backspace)
   {
-    state.cmdlineText = state.cmdlineText.slice(0, -1)
+    state.cmdlineText = state.cmdlineText.slice(
+      0,
+      previousGraphemeOffset(state.cmdlineText, state.cmdlineText.length)
+    )
     if (state.cmdlineText.length === 0)
     {
       state.cmdlineActive = false
@@ -799,7 +852,10 @@ function applyNormalInput(state: VimState, key: VimKey): void
           starts,
           locateLine(starts, state.cursor)
         )
-        enterInsert(state, Math.min(span.end, state.cursor + 1))
+        enterInsert(
+          state,
+          Math.min(span.end, nextGraphemeOffset(state.value, state.cursor))
+        )
       }
       return
     case 'I':
@@ -854,10 +910,16 @@ function applyNormalInput(state: VimState, key: VimKey): void
     switch (ch)
     {
       case 'h':
-        state.cursor = Math.max(span.start, state.cursor - 1)
+        state.cursor = Math.max(
+          span.start,
+          previousGraphemeOffset(state.value, state.cursor)
+        )
         break
       case 'l':
-        state.cursor = Math.min(span.end - 1, state.cursor + 1)
+        state.cursor = clampNormal(
+          state.value,
+          Math.min(span.end, nextGraphemeOffset(state.value, state.cursor))
+        )
         break
       case 'j':
         moveToRow(state, span.row + 1)
@@ -872,7 +934,10 @@ function applyNormalInput(state: VimState, key: VimKey): void
         state.cursor = firstNonBlank(state.value, span)
         break
       case '$':
-        state.cursor = span.end > span.start ? span.end - 1 : span.start
+        state.cursor =
+          span.end > span.start
+            ? previousGraphemeOffset(state.value, span.end)
+            : span.start
         break
       case 'w':
         state.cursor = clampNormal(
@@ -928,7 +993,20 @@ export function syncVimDraft(
 {
   const state = engine as unknown as VimState
   state.value = value
-  state.cursor = Math.min(Math.max(cursorOffset, 0), value.length)
+  state.cursor =
+    state.mode === 'normal'
+      ? clampNormal(value, cursorOffset)
+      : clampGraphemeOffset(value, cursorOffset, 'forward')
+}
+
+// retain cross-prompt yanks after the composer releases its paste payloads
+export function materializeVimRegister(
+  engine: VimEngine,
+  expandText: (value: string) => string
+): void
+{
+  const state = engine as unknown as VimState
+  state.register = expandText(state.register)
 }
 
 export function vimView(engine: VimEngine): VimView
@@ -984,5 +1062,9 @@ export function applyVimInput(engine: VimEngine, key: VimKey): VimView
   {
     applyNormalInput(state, key)
   }
+  state.cursor =
+    state.mode === 'normal'
+      ? clampNormal(state.value, state.cursor)
+      : clampGraphemeOffset(state.value, state.cursor, 'forward')
   return vimView(engine)
 }
