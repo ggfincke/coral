@@ -223,6 +223,24 @@ test('computeDiff keeps its 200-line cap and summary marker', () =>
   assert.match(lines[200]!, /^… \+\d+ more changed lines$/)
 })
 
+test('computeDiff omits previews when edit or time budgets are exhausted', (t) =>
+{
+  const clock = t.mock.method(Date, 'now', () => 0)
+  assert.equal(computeDiff('', 'added\n'.repeat(2_001)), null)
+
+  let now = 0
+  clock.mock.mockImplementation(() =>
+  {
+    const current = now
+    now += 60_000
+    return current
+  })
+  assert.equal(computeDiff('before\n', 'after\n'), null)
+
+  clock.mock.restore()
+  assert.match(computeDiff('before\n', 'after\n') ?? '', /-before\n\+after/)
+})
+
 test('wrapLines keeps indent handling stable', () =>
 {
   const lines = wrapLines('alpha beta gamma delta epsilon', 20, '  ')

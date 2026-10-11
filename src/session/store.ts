@@ -240,7 +240,8 @@ export function createSession(
   todos: TodoItem[] = [],
   undo: UndoTurn[] = [],
   redo: UndoTurn[] = [],
-  title?: string
+  title?: string,
+  compaction?: Pick<SessionMetaHint, 'compactionCount' | 'lastCompactedAt'>
 ): SessionMeta
 {
   ensureDir()
@@ -255,6 +256,12 @@ export function createSession(
     updatedAt: now,
     title: title?.trim() || extractTitle(messages),
     messageCount: countConversationMessages(messages),
+    ...(compaction
+      ? {
+          compactionCount: compaction.compactionCount,
+          lastCompactedAt: compaction.lastCompactedAt,
+        }
+      : {}),
   }
 
   writeSessionData({ meta, messages, todos, undo, redo })

@@ -49,7 +49,9 @@ export const gitStatusTool: Tool = {
   {
     const short = (args.short as boolean) ?? true
     const flags = short ? ['status', '--short'] : ['status']
-    return runGit(flags, context?.cwd ?? getCwd())
+    return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
+      signal: context?.signal,
+    })
   },
 }
 
@@ -110,6 +112,7 @@ export const gitDiffTool: Tool = {
     // git diff can exit 1 with valid output in some configs, so trust stdout
     return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
       allowStdoutOnError: true,
+      signal: context?.signal,
     })
   },
 }
@@ -170,7 +173,9 @@ export const gitLogTool: Tool = {
     if (ref) flags.push(ref)
     if (path) flags.push('--', path)
 
-    return runGit(flags, context?.cwd ?? getCwd())
+    return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
+      signal: context?.signal,
+    })
   },
 }
 
@@ -210,7 +215,9 @@ export const gitAddTool: Tool = {
 
     if (all)
     {
-      const result = await runGitCommand(['add', '-A'], cwd)
+      const result = await runGitCommand(['add', '-A'], cwd, {
+        signal: context?.signal,
+      })
       if (result.error) return result
       return { output: 'Staged all changes' }
     }
@@ -227,7 +234,9 @@ export const gitAddTool: Tool = {
       return { output: '', error: `Invalid path: ${unsafe}` }
     }
 
-    const result = await runGitCommand(['add', '--', ...paths], cwd)
+    const result = await runGitCommand(['add', '--', ...paths], cwd, {
+      signal: context?.signal,
+    })
     if (result.error) return result
     return { output: `Staged ${paths.length} path(s): ${paths.join(', ')}` }
   },
@@ -264,7 +273,8 @@ export const gitCommitTool: Tool = {
     return runGit(
       ['commit', '-m', message],
       context?.cwd ?? getCwd(),
-      '(commit created)'
+      '(commit created)',
+      { signal: context?.signal }
     )
   },
 }
@@ -334,7 +344,8 @@ export const gitSwitchTool: Tool = {
     {
       const branchCheck = await runGitCommand(
         ['check-ref-format', '--branch', branch],
-        cwd
+        cwd,
+        { signal: context?.signal }
       )
       if (branchCheck.error)
       {
@@ -347,11 +358,15 @@ export const gitSwitchTool: Tool = {
     flags.push(branch)
     if (startPoint) flags.push(startPoint)
 
-    const switched = await runGitCommand(flags, cwd)
+    const switched = await runGitCommand(flags, cwd, {
+      signal: context?.signal,
+    })
     if (switched.error) return switched
 
-    const currentBranch = await currentBranchLabel(cwd)
-    const status = await runGitCommand(['status', '--short'], cwd)
+    const currentBranch = await currentBranchLabel(cwd, context?.signal)
+    const status = await runGitCommand(['status', '--short'], cwd, {
+      signal: context?.signal,
+    })
     const statusBlock =
       !status.error && status.output.trim()
         ? `Status:\n${status.output}`
@@ -430,6 +445,7 @@ export const gitPushTool: Tool = {
     // pushes hit the network — allow more time than the default git timeout
     return runGit(flags, context?.cwd ?? getCwd(), '(pushed)', {
       timeout: 60_000,
+      signal: context?.signal,
     })
   },
 }

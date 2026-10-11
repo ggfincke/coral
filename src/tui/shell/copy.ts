@@ -1,7 +1,7 @@
 // src/tui/shell/copy.ts
 // extract the last assistant reply and its last code block for /copy
 
-import { lexer, type Token } from 'marked'
+import { lexer, type Token, type Tokens } from 'marked'
 import type { OllamaMessage } from '../../types/inference.js'
 
 // find the last assistant message with non-empty text
@@ -30,6 +30,10 @@ export function lastCodeBlock(markdown: string): string | null
       if (token.type === 'code')
       {
         last = (token as { text: string }).text
+      }
+      if (token.type === 'list')
+      {
+        for (const item of (token as Tokens.List).items) visit(item.tokens)
       }
       const nested = (token as { tokens?: Token[] }).tokens
       if (nested) visit(nested)

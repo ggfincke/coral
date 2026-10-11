@@ -189,6 +189,163 @@ describe('ConversationState', () =>
     ])
   })
 
+  test('manual compaction and fallback trimming retain complete multi-call rounds', () =>
+  {
+    const messages: OllamaMessage[] = [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: 'one long task' },
+    ]
+    for (let round = 0; round < 4; round++)
+    {
+      messages.push(
+        {
+          role: 'assistant',
+          content: `round ${round}`,
+          tool_calls: [
+            {
+              function: {
+                name: 'read_file',
+                arguments: { path: `${round}.ts` },
+              },
+            },
+            { function: { name: 'grep', arguments: { pattern: `${round}` } } },
+          ],
+        },
+        { role: 'tool', tool_name: 'read_file', content: `file ${round}` },
+        { role: 'tool', tool_name: 'grep', content: `matches ${round}` }
+      )
+    }
+    messages.push({ role: 'assistant', content: 'done' })
+
+    // both first-result and sibling-result cutoffs retain their owning call
+    for (const minRecentMessages of [5, 6])
+    {
+      const state = new ConversationState('system')
+      state.restoreMessages(messages)
+      const prepared = state.prepareSummary({
+        mode: 'manual',
+        config: { ...compactConfig, minRecentMessages },
+      })
+      assert.ok(prepared)
+      assert.deepEqual(prepared.messages, messages.slice(1, 8))
+      assert.equal(
+        state.commitSummary(
+          prepared.plan,
+          'earlier rounds',
+          '2026-09-23T12:00:00.000Z'
+        ).status,
+        'committed'
+      )
+      assert.deepEqual(state.getMessages().slice(2), messages.slice(8))
+      assertExactEstimate(state)
+
+      const frozen = state.getFrozenPrefix()
+      state.trimToMax(5)
+      assert.deepEqual(state.getMessages(), [...frozen, ...messages.slice(11)])
+      const anchor = state.acceptUserMessage('active request')
+      state.appendMessages(messages.slice(8, 11))
+      state.trimToMax(2)
+      assert.deepEqual(state.getFrozenPrefix(), frozen)
+      assert.equal(state.indexOf(anchor), frozen.length)
+      assert.deepEqual(
+        state.getMessages().slice(frozen.length + 1),
+        messages.slice(8, 11)
+      )
+      assertExactEstimate(state)
+    }
+
+    const trimmed = new ConversationState('system')
+    trimmed.restoreMessages(messages)
+    trimmed.trimToMax(6)
+    assert.deepEqual(trimmed.getMessages(), [messages[0], ...messages.slice(8)])
+    assertExactEstimate(trimmed)
+
+    const indivisible = new ConversationState('system')
+    indivisible.appendMessages(messages.slice(2, 5))
+    const before = indivisible.getMessages()
+    assert.equal(
+      indivisible.prepareSummary({ mode: 'manual', config: compactConfig }),
+      null
+    )
+    assert.deepEqual(indivisible.getMessages(), before)
+  })
+
+  test('successful compaction metadata restores without changing transient failures or history', () =>
+  {
+    const state = new ConversationState('system')
+    state.restoreMessages([
+      { role: 'user', content: `${FROZEN_SUMMARY_MARKER} restored summary` },
+      { role: 'user', content: 'older' },
+      { role: 'assistant', content: 'older answer' },
+      { role: 'user', content: 'newer' },
+      { role: 'assistant', content: 'newer answer' },
+    ])
+    const failed = state.prepareSummary({
+      mode: 'automatic',
+      config: compactConfig,
+    })!
+    state.recordAutomaticSummaryFailure(failed.plan)
+    state.restoreUndoStack([
+      {
+        startIndex: 4,
+        endIndex: 6,
+        userMessage: 'newer',
+        messages: state.getMessages().slice(4),
+        changes: [],
+      },
+    ])
+    const before = {
+      messages: state.getMessages(),
+      undo: state.exportUndoState(),
+      frozen: state.getFrozenPrefix(),
+      tokens: state.getEstimatedTokens(),
+    }
+    const stale = state.prepareSummary({
+      mode: 'manual',
+      config: compactConfig,
+    })!
+
+    state.restoreSuccessfulCompactionMetrics({
+      successfulCount: 5,
+      lastCompactedAt: '2026-09-23T11:00:00.000Z',
+    })
+    assert.deepEqual(state.getCompactionMetrics(), {
+      failureCount: 1,
+      successfulCount: 5,
+      lastCompactedAt: '2026-09-23T11:00:00.000Z',
+    })
+    assert.equal(
+      state.commitSummary(
+        stale.plan,
+        'late summary',
+        '2026-09-23T12:00:00.000Z'
+      ).status,
+      'stale'
+    )
+    state.restoreSuccessfulCompactionMetrics({})
+    assert.deepEqual(state.getCompactionMetrics(), {
+      failureCount: 1,
+      successfulCount: 0,
+      lastCompactedAt: null,
+    })
+    assert.deepEqual(
+      {
+        messages: state.getMessages(),
+        undo: state.exportUndoState(),
+        frozen: state.getFrozenPrefix(),
+        tokens: state.getEstimatedTokens(),
+      },
+      before
+    )
+    state.resetCompactionMetrics()
+    assert.deepEqual(state.getCompactionMetrics(), {
+      failureCount: 0,
+      successfulCount: 0,
+      lastCompactedAt: null,
+    })
+    assertExactEstimate(state)
+  })
+
   test('ConversationState preserves compaction asymmetries & the complete active trim tail', () =>
   {
     const state = new ConversationState('current system')

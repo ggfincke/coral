@@ -89,17 +89,15 @@ const ajvOptions: AjvOptions = {
   allErrors: true,
 }
 
-// compile each schema under its declared dialect because SDK servers may use draft-07
-const ajv2020 = addFormats(new Ajv2020(ajvOptions))
-const ajvDraft07 = addFormats(new Ajv(ajvOptions))
-
+// keep schema IDs local to each contract while honoring its declared dialect
 function schemaValidator<T>(schema: JsonSchema): JsonSchemaValidator<T>
 {
   const declared = (schema as { $schema?: unknown }).$schema
-  const ajv =
+  const ajv = addFormats(
     typeof declared === 'string' && declared.includes('draft-07')
-      ? ajvDraft07
-      : ajv2020
+      ? new Ajv(ajvOptions)
+      : new Ajv2020(ajvOptions)
+  )
   const validate = ajv.compile(schema as Record<string, unknown>)
   return (input) =>
     validate(input)

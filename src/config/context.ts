@@ -2,6 +2,7 @@
 // memory-aware context-window sizing
 
 import { loadProjectConfig } from './project-config.js'
+import { modelLookupKey } from '../ollama/model-name.js'
 import type { Model, ModelInfo } from '../types/inference.js'
 import { isPlainObject } from '../utils/guards.js'
 
@@ -177,7 +178,23 @@ async function resolveModelWeightBytes(
   try
   {
     const models = await listModels(signal)
-    return models.find((candidate) => candidate.name === model)?.size ?? 0
+    const exact = models.find((candidate) => candidate.name === model)
+    if (exact) return exact.size
+
+    const key = modelLookupKey(model)
+    let weightBytes = 0
+    for (const candidate of models)
+    {
+      const matches = [candidate.name, candidate.model].some(
+        (name) => typeof name === 'string' && modelLookupKey(name) === key
+      )
+      if (matches && Number.isFinite(candidate.size) && candidate.size >= 0)
+      {
+        // ambiguous aliases use the conservative weight without selecting a model
+        weightBytes = Math.max(weightBytes, candidate.size)
+      }
+    }
+    return weightBytes
   }
   catch (err)
   {

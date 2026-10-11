@@ -12,7 +12,10 @@ import {
   StreamMessageReader,
   StreamMessageWriter,
 } from 'vscode-jsonrpc/node'
-import { readRequiredTextFile } from '../utils/file-read.js'
+import {
+  readRequiredTextFile,
+  type TextFileReadResult,
+} from '../utils/file-read.js'
 import { isPlainObject } from '../utils/guards.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
@@ -40,11 +43,6 @@ interface OpenDocument
 {
   version: number
   content: string
-}
-
-interface SyncedDocument
-{
-  uri: string
 }
 
 function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void>
@@ -118,6 +116,29 @@ async function controlledRequest<T>(
   }
 }
 
+// queued callers can cancel immediately while their transaction stays joined
+async function waitForQuery<T>(
+  work: Promise<T>,
+  signal: AbortSignal
+): Promise<T>
+{
+  let onAbort: () => void = () => undefined
+  const aborted = new Promise<never>((_resolve, reject) =>
+  {
+    onAbort = () => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    if (signal.aborted) onAbort()
+  })
+  try
+  {
+    return await Promise.race([work, aborted])
+  }
+  finally
+  {
+    signal.removeEventListener('abort', onAbort)
+  }
+}
+
 function diagnosticResponse(value: unknown): LspDiagnostic[]
 {
   if (
@@ -176,6 +197,9 @@ export class TypeScriptCodeIntel implements CodeIntelService
   private lastError?: Error
   private stderrTail = ''
   private documents = new Map<string, OpenDocument>()
+  private queryTail: Promise<void> = Promise.resolve()
+  private lifetime = new AbortController()
+  private disposePromise?: Promise<void>
 
   constructor(private cwd: string)
   {
@@ -225,8 +249,9 @@ export class TypeScriptCodeIntel implements CodeIntelService
     )
   }
 
-  private handleUnexpectedClose(): void
+  private handleUnexpectedClose(connection: MessageConnection): void
   {
+    if (this.connection !== connection) return
     if (this.stopping || this.disposed) return
     const error =
       this.lastError ??
@@ -235,6 +260,7 @@ export class TypeScriptCodeIntel implements CodeIntelService
     this.connection = undefined
     this.child = undefined
     this.markStopped(error)
+    connection.dispose()
     child?.kill('SIGTERM')
   }
 
@@ -262,13 +288,6 @@ export class TypeScriptCodeIntel implements CodeIntelService
   private async start(signal?: AbortSignal): Promise<void>
   {
     if (this.disposed) throw new Error('Code intelligence is already shut down')
-    if (this.startAttempts >= MAX_START_ATTEMPTS)
-    {
-      throw (
-        this.lastError ?? new Error('TypeScript language server is unavailable')
-      )
-    }
-    this.startAttempts++
     this.stderrTail = ''
 
     const serverPackage =
@@ -313,11 +332,12 @@ export class TypeScriptCodeIntel implements CodeIntelService
       this.registerServerHandlers(connection)
       connection.onError(([error]) =>
       {
-        if (!this.stopping) this.lastError = error
+        if (this.connection === connection && !this.stopping)
+          this.lastError = error
       })
       connection.onClose(() =>
       {
-        this.handleUnexpectedClose()
+        this.handleUnexpectedClose(connection)
       })
       connection.listen()
 
@@ -356,7 +376,15 @@ export class TypeScriptCodeIntel implements CodeIntelService
         'TypeScript language server initialization',
         signal
       )
-      await connection.sendNotification('initialized', {})
+      await controlledRequest(
+        () => connection.sendNotification('initialized', {}),
+        STARTUP_TIMEOUT_MS,
+        'TypeScript language server initialization',
+        signal
+      )
+      signal?.throwIfAborted()
+      if (this.disposed || this.connection !== connection)
+        throw new Error('TypeScript language server is unavailable')
       this.started = true
       this.lastError = undefined
     }
@@ -373,91 +401,163 @@ export class TypeScriptCodeIntel implements CodeIntelService
   private async ensureStarted(signal?: AbortSignal): Promise<void>
   {
     if (this.started && this.connection) return
-    this.startPromise ??= this.start(signal).finally(() =>
+    if (!this.startPromise)
     {
-      this.startPromise = undefined
-    })
+      signal?.throwIfAborted()
+      if (this.startAttempts >= MAX_START_ATTEMPTS)
+      {
+        throw (
+          this.lastError ??
+          new Error('TypeScript language server is unavailable')
+        )
+      }
+      this.startAttempts++
+      this.startPromise = this.start(signal)
+        .catch((error) =>
+        {
+          // intentional cancellation must not consume the failure restart budget
+          if (signal?.aborted) this.startAttempts--
+          throw error
+        })
+        .finally(() =>
+        {
+          this.startPromise = undefined
+        })
+    }
     return this.startPromise
+  }
+
+  private assertConnection(
+    connection: MessageConnection,
+    signal: AbortSignal
+  ): void
+  {
+    signal.throwIfAborted()
+    if (this.disposed || !this.started || this.connection !== connection)
+      throw new Error('TypeScript language server is unavailable')
+  }
+
+  private async notifyDocument(
+    connection: MessageConnection,
+    method: string,
+    params: unknown,
+    signal: AbortSignal,
+    commit: () => void
+  ): Promise<void>
+  {
+    this.assertConnection(connection, signal)
+    try
+    {
+      await controlledRequest(
+        () => connection.sendNotification(method, params),
+        REQUEST_TIMEOUT_MS,
+        `Code intelligence ${method}`,
+        signal
+      )
+      this.assertConnection(connection, signal)
+      commit()
+    }
+    catch (error)
+    {
+      // a failed write may have reached the server; never reuse that overlay
+      if (this.connection === connection)
+      {
+        if (signal.aborted) this.startAttempts--
+        this.markStopped(new Error(toErrorMessage(error)))
+        await this.stopProcess()
+      }
+      throw error
+    }
   }
 
   private async syncDocument(
     path: string,
-    signal?: AbortSignal
-  ): Promise<SyncedDocument>
+    file: TextFileReadResult,
+    connection: MessageConnection,
+    signal: AbortSignal,
+    required: boolean
+  ): Promise<void>
   {
-    const id = codeIntelLanguageId(path)
-    if (!id)
-    {
-      throw new Error(
-        `Unsupported code-intelligence file type: ${extname(path) || '(none)'}`
-      )
-    }
-
-    const file = await readRequiredTextFile(path)
-    if (!file.ok) throw new Error(file.message)
-    await this.ensureStarted(signal)
-    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
-
-    const connection = this.connection
-    if (!connection)
-      throw new Error('TypeScript language server is unavailable')
+    this.assertConnection(connection, signal)
     const uri = pathToFileURL(path).href
     const current = this.documents.get(path)
+    if (!file.ok)
+    {
+      if (current)
+      {
+        await this.notifyDocument(
+          connection,
+          'textDocument/didClose',
+          { textDocument: { uri } },
+          signal,
+          () => this.documents.delete(path)
+        )
+      }
+      if (required || file.reason !== 'missing') throw new Error(file.message)
+      return
+    }
 
     if (!current)
     {
-      this.documents.set(path, { version: 1, content: file.content })
-      await connection.sendNotification('textDocument/didOpen', {
-        textDocument: {
-          uri,
-          languageId: id,
-          version: 1,
-          text: file.content,
+      await this.notifyDocument(
+        connection,
+        'textDocument/didOpen',
+        {
+          textDocument: {
+            uri,
+            languageId: codeIntelLanguageId(path),
+            version: 1,
+            text: file.content,
+          },
         },
-      })
-      return { uri }
+        signal,
+        () => this.documents.set(path, { version: 1, content: file.content })
+      )
+      return
     }
 
     if (current.content !== file.content)
     {
       const next = current.version + 1
-      this.documents.set(path, { version: next, content: file.content })
-      await connection.sendNotification('textDocument/didChange', {
-        textDocument: { uri, version: next },
-        contentChanges: [{ text: file.content }],
-      })
-      return { uri }
+      await this.notifyDocument(
+        connection,
+        'textDocument/didChange',
+        {
+          textDocument: { uri, version: next },
+          contentChanges: [{ text: file.content }],
+        },
+        signal,
+        () => this.documents.set(path, { version: next, content: file.content })
+      )
     }
-    return { uri }
   }
 
-  private sendRequest<T>(
+  private async sendRequest<T>(
+    connection: MessageConnection,
     method: string,
     params: unknown,
-    signal?: AbortSignal
+    signal: AbortSignal
   ): Promise<T>
   {
-    const connection = this.connection
-    if (!connection)
-      throw new Error('TypeScript language server is unavailable')
-    return controlledRequest(
+    this.assertConnection(connection, signal)
+    const result = await controlledRequest(
       (source) => connection.sendRequest<T>(method, params, source.token),
       REQUEST_TIMEOUT_MS,
       `Code intelligence ${method}`,
       signal
     )
+    this.assertConnection(connection, signal)
+    return result
   }
 
   // request complete categories after sync; push notifications can be stale or partial
   private async queryDiagnostics(
     path: string,
-    signal?: AbortSignal
+    connection: MessageConnection,
+    signal: AbortSignal
   ): Promise<string>
   {
-    await this.syncDocument(path, signal)
-    const connection = this.connection
-    if (!connection)
-      throw new Error('TypeScript language server is unavailable')
+    this.assertConnection(connection, signal)
     const commands = [
       'syntacticDiagnosticsSync',
       'semanticDiagnosticsSync',
@@ -485,6 +585,7 @@ export class TypeScriptCodeIntel implements CodeIntelService
       'TypeScript diagnostics',
       signal
     )
+    this.assertConnection(connection, signal)
     return formatDiagnostics(
       results.flatMap(diagnosticResponse),
       this.cwd,
@@ -492,21 +593,28 @@ export class TypeScriptCodeIntel implements CodeIntelService
     )
   }
 
-  async query(request: CodeIntelQuery): Promise<string>
+  private async queryTransaction(
+    request: CodeIntelQuery,
+    signal: AbortSignal
+  ): Promise<string>
   {
+    signal.throwIfAborted()
     const path = resolve(this.cwd, request.path)
-    if (request.operation === 'diagnostics')
+    if (!codeIntelLanguageId(path))
     {
-      return this.queryDiagnostics(path, request.signal)
+      throw new Error(
+        `Unsupported code-intelligence file type: ${extname(path) || '(none)'}`
+      )
     }
 
     const line = request.line
     const character = request.character
     if (
-      !Number.isInteger(line) ||
-      !Number.isInteger(character) ||
-      line! < 1 ||
-      character! < 1
+      request.operation !== 'diagnostics' &&
+      (!Number.isInteger(line) ||
+        !Number.isInteger(character) ||
+        line! < 1 ||
+        character! < 1)
     )
     {
       throw new Error(
@@ -514,7 +622,26 @@ export class TypeScriptCodeIntel implements CodeIntelService
       )
     }
 
-    const { uri } = await this.syncDocument(path, request.signal)
+    const target = await readRequiredTextFile(path, { signal })
+    signal.throwIfAborted()
+    if (!target.ok && !this.started) throw new Error(target.message)
+    await this.ensureStarted(signal)
+    const connection = this.connection
+    if (!connection)
+      throw new Error('TypeScript language server is unavailable')
+    this.assertConnection(connection, signal)
+    // refresh only overlays we retained; unopened workspace files stay server-owned
+    for (const retained of this.documents.keys())
+    {
+      if (retained === path) continue
+      const file = await readRequiredTextFile(retained, { signal })
+      await this.syncDocument(retained, file, connection, signal, false)
+    }
+    await this.syncDocument(path, target, connection, signal, true)
+    if (request.operation === 'diagnostics')
+      return this.queryDiagnostics(path, connection, signal)
+
+    const uri = pathToFileURL(path).href
     const params = {
       textDocument: { uri },
       position: { line: line! - 1, character: character! - 1 },
@@ -523,28 +650,46 @@ export class TypeScriptCodeIntel implements CodeIntelService
     if (request.operation === 'definition')
     {
       const result = await this.sendRequest<unknown>(
+        connection,
         'textDocument/definition',
         params,
-        request.signal
+        signal
       )
       return formatLocationResult(result, this.cwd, 'definition')
     }
     if (request.operation === 'references')
     {
       const result = await this.sendRequest<unknown>(
+        connection,
         'textDocument/references',
         { ...params, context: { includeDeclaration: true } },
-        request.signal
+        signal
       )
       return formatLocationResult(result, this.cwd, 'references')
     }
 
     const result = await this.sendRequest<unknown>(
+      connection,
       'textDocument/hover',
       params,
-      request.signal
+      signal
     )
     return formatHoverResult(result)
+  }
+
+  query(request: CodeIntelQuery): Promise<string>
+  {
+    const signal = request.signal
+      ? AbortSignal.any([request.signal, this.lifetime.signal])
+      : this.lifetime.signal
+    const work = this.queryTail.then(() =>
+      this.queryTransaction(request, signal)
+    )
+    this.queryTail = work.then(
+      () => undefined,
+      () => undefined
+    )
+    return waitForQuery(work, signal)
   }
 
   private waitForExit(
@@ -618,11 +763,17 @@ export class TypeScriptCodeIntel implements CodeIntelService
     }
   }
 
-  async dispose(): Promise<void>
+  dispose(): Promise<void>
   {
-    if (this.disposed) return
+    if (this.disposePromise) return this.disposePromise
     this.disposed = true
-    await this.startPromise?.catch(() => undefined)
-    await this.stopProcess()
+    this.lifetime.abort()
+    this.disposePromise = (async () =>
+    {
+      await this.queryTail
+      await this.startPromise?.catch(() => undefined)
+      await this.stopProcess()
+    })()
+    return this.disposePromise
   }
 }
