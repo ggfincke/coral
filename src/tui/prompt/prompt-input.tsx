@@ -1,7 +1,14 @@
 // src/tui/prompt/prompt-input.tsx
 // inline prompt input with unified keyboard, wheel, and safe text insertion
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { Box, Text, usePaste } from 'ink'
 import { style } from '../theme.js'
 import { useCoralInput } from '../input/use-coral-input.js'
@@ -41,6 +48,7 @@ import type { HistoryEntry } from './input-history.js'
 import {
   applyVimInput,
   createVimEngine,
+  materializeVimRegister,
   vimView,
   syncVimDraft,
   type VimEngine,
@@ -49,6 +57,7 @@ import {
   boundPastedText,
   buildPastePlaceholder,
   expandPastePlaceholders,
+  MAX_STORED_PASTES,
   sanitizePastedText,
   shouldPlaceholderize,
 } from './paste.js'
@@ -69,6 +78,14 @@ import {
   MAX_PROMPT_VIEW_ROWS,
 } from './prompt-render.js'
 
+export type PromptSubmitKind = 'standard' | 'vim'
+
+export interface PromptReset
+{
+  epoch: number
+  kind: PromptSubmitKind | 'external'
+}
+
 export interface PromptInputProps
 {
   value: string
@@ -83,7 +100,8 @@ export interface PromptInputProps
   completionCommands?: CommandSummary[]
   refreshFiles?: () => Promise<string[]>
   onChange: (value: string) => void
-  onSubmit: (value: string) => void
+  onSubmit: (value: string, kind: PromptSubmitKind) => void
+  reset?: PromptReset
   onEscape: () => void
   onInterrupt: () => void
   onPageUp: () => void
@@ -120,6 +138,7 @@ interface CursorState
 }
 
 const EMPTY_HISTORY_ENTRIES: readonly HistoryEntry[] = []
+const INITIAL_RESET: PromptReset = { epoch: 0, kind: 'external' }
 
 export default function PromptInput({
   value,
@@ -135,6 +154,7 @@ export default function PromptInput({
   refreshFiles,
   onChange,
   onSubmit,
+  reset = INITIAL_RESET,
   onEscape,
   onInterrupt,
   onPageUp,
@@ -176,6 +196,8 @@ export default function PromptInput({
   const nextPasteIdRef = useRef(1)
   const [pendingPasteConfirm, setPendingPasteConfirm] = useState(false)
   const [droppedChars, setDroppedChars] = useState(0)
+  const [pasteRejected, setPasteRejected] = useState(false)
+  const resetEpochRef = useRef(reset.epoch)
   // editor memory: undo coalescing, kill ring, yank-pop span, column intent
   const memoryRef = useRef<EditorMemory>(EMPTY_EDITOR_MEMORY)
   const killRingRef = useRef<readonly string[]>([])
@@ -217,6 +239,47 @@ export default function PromptInput({
     // recreate ONLY on mode flips; value sync happens in the drive branch
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viMode])
+
+  // only the application can retire a draft; declined submits keep its undo
+  // and payloads, while cross-prompt yanks become independent of the registry
+  useLayoutEffect(() =>
+  {
+    if (resetEpochRef.current === reset.epoch) return
+    resetEpochRef.current = reset.epoch
+    const expandText = (text: string) =>
+      expandPastePlaceholders(text, (id) => pasteRegistryRef.current.get(id))
+    killRingRef.current =
+      reset.kind === 'standard' ? [] : killRingRef.current.map(expandText)
+    if (vimEngineRef.current)
+    {
+      if (reset.kind === 'vim')
+      {
+        vimEngineRef.current = createVimEngine(value)
+        // retire imperative editor state before another input frame arrives
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setVimMode('normal')
+      }
+      else
+      {
+        materializeVimRegister(vimEngineRef.current, expandText)
+        syncVimDraft(vimEngineRef.current, value, value.length)
+      }
+      setViStatusHint(vimView(vimEngineRef.current).statusHint)
+    }
+    pasteRegistryRef.current.clear()
+    memoryRef.current = EMPTY_EDITOR_MEMORY
+    killIndexRef.current = 0
+    lastYankRef.current = null
+    preferredColRef.current = null
+    searchSavedRef.current = { value: '', cursorOffset: 0 }
+    setSearch(IDLE_HISTORY_SEARCH)
+    setCursor({ value, cursorOffset: value.length, cursorWidth: 0 })
+    setPendingPasteConfirm(false)
+    setDroppedChars(0)
+    setPasteRejected(false)
+    setDismissed(false)
+    setSelectedIndex(0)
+  }, [reset.epoch, reset.kind, value])
   // move the cursor to the end when external value changes invalidate its
   // controlled position
   const hasExternalValue = value !== cursor.value
@@ -250,6 +313,7 @@ export default function PromptInput({
     !dismissed &&
     !hasExternalValue &&
     !search.active &&
+    !pasteRejected &&
     (!viMode || vimMode === 'insert') &&
     query !== null &&
     items.length > 0
@@ -337,11 +401,15 @@ export default function PromptInput({
       op: EditOpKind
     ) =>
     {
-      memoryRef.current = pushUndo(
-        memoryRef.current,
-        { value, cursorOffset: resolvedCursor.cursorOffset },
-        op
-      )
+      // cursor-only moves end a typing run but never cost an undo press
+      memoryRef.current =
+        next.value === value
+          ? { ...memoryRef.current, lastOpCharInsert: false }
+          : pushUndo(
+              memoryRef.current,
+              { value, cursorOffset: resolvedCursor.cursorOffset },
+              op
+            )
       if (next.killed)
       {
         killRingRef.current = pushKill(killRingRef.current, next.killed)
@@ -554,26 +622,26 @@ export default function PromptInput({
         return
       }
 
-      if (text.includes('\n') || shouldPlaceholderize(text))
-        setPendingPasteConfirm(true)
       if (!shouldPlaceholderize(text))
       {
+        setPasteRejected(false)
+        if (text.includes('\n')) setPendingPasteConfirm(true)
         insertPastedText(text)
         return
       }
 
+      const registry = pasteRegistryRef.current
+      if (registry.size >= MAX_STORED_PASTES)
+      {
+        setPasteRejected(true)
+        return
+      }
+      setPasteRejected(false)
       const id = nextPasteIdRef.current
       nextPasteIdRef.current += 1
       const bounded = boundPastedText(text)
       setDroppedChars((count) => count + bounded.truncatedChars)
 
-      const registry = pasteRegistryRef.current
-      while (registry.size >= 32)
-      {
-        const oldest = registry.keys().next().value
-        if (oldest === undefined) break
-        registry.delete(oldest)
-      }
       registry.set(id, bounded.text)
 
       insertPastedText(buildPastePlaceholder(id, text))
@@ -603,16 +671,18 @@ export default function PromptInput({
     search.query,
     Math.max(1, contentWidth - searchLabel.length - searchActions.length - 3)
   )
-  const hint = search.active
-    ? `${searchLabel} '${searchQuery}'${searchActions}`
-    : focus && pendingPasteConfirm
-      ? `paste · ${viMode ? ':wq confirms, Enter sends' : 'Enter confirms, next Enter sends'}${droppedChars ? ` · ${droppedChars} chars dropped` : ''}`
-      : viMode && viStatusHint
-        ? viStatusHint
-        : droppedChars
-          ? `${droppedChars} pasted characters dropped · Ctrl+G to inspect`
-          : null
-  const hintRows = hint && rowBudget > 1 ? 1 : 0
+  const hint = pasteRejected
+    ? 'Paste limit reached; send this draft before another large paste'
+    : search.active
+      ? `${searchLabel} '${searchQuery}'${searchActions}`
+      : focus && pendingPasteConfirm
+        ? `paste · ${viMode ? ':wq confirms, Enter sends' : 'Enter confirms, next Enter sends'}${droppedChars ? ` · ${droppedChars} chars dropped` : ''}`
+        : viMode && viStatusHint
+          ? viStatusHint
+          : droppedChars
+            ? `${droppedChars} pasted characters dropped · Ctrl+G to inspect`
+            : null
+  const hintRows = hint && (rowBudget > 1 || pasteRejected) ? 1 : 0
   const displayPlaceholder = displayValue.length === 0 && placeholder.length > 0
   const draft = useMemo(
     () =>
@@ -665,8 +735,10 @@ export default function PromptInput({
       safeIndex,
     ]
   )
-  const desiredHeight =
+  const desiredHeight = Math.min(
+    rowBudget,
     draft.rows.length + hintRows + desiredCompletionRows.length
+  )
   useEffect(() =>
   {
     onHeightChange?.(desiredHeight)
@@ -678,7 +750,7 @@ export default function PromptInput({
     1,
     Math.min(rowBudget, Math.floor(allocatedHeight))
   )
-  const visibleHintRows = hint && allocatedRows > 1 ? 1 : 0
+  const visibleHintRows = hint && (allocatedRows > 1 || pasteRejected) ? 1 : 0
   const visibleDraftRows = Math.min(
     draft.rows.length,
     allocatedRows - visibleHintRows
@@ -712,6 +784,7 @@ export default function PromptInput({
   const handleInput = useCallback(
     (input: string, key: CoralKey) =>
     {
+      setPasteRejected(false)
       if (pendingTerminalSequenceRef.current)
       {
         const combinedInput = pendingTerminalSequenceRef.current + input
@@ -811,6 +884,7 @@ export default function PromptInput({
         if (!editorBusyRef.current)
         {
           editorBusyRef.current = true
+          const editorEpoch = resetEpochRef.current
           void onOpenEditor(
             expandPastePlaceholders(value, (id) =>
               pasteRegistryRef.current.get(id)
@@ -818,7 +892,11 @@ export default function PromptInput({
           )
             .then((edited) =>
             {
-              if (edited !== null)
+              if (
+                edited !== null &&
+                mountedRef.current &&
+                editorEpoch === resetEpochRef.current
+              )
               {
                 commitEdit(
                   {
@@ -902,10 +980,9 @@ export default function PromptInput({
           onSubmit(
             expandPastePlaceholders(next.value, (id) =>
               pasteRegistryRef.current.get(id)
-            )
+            ),
+            'vim'
           )
-          vimEngineRef.current = createVimEngine('')
-          setCursor({ value: '', cursorOffset: 0, cursorWidth: 0 })
           return
         }
 
@@ -1053,19 +1130,9 @@ export default function PromptInput({
         onSubmit(
           expandPastePlaceholders(value, (id) =>
             pasteRegistryRef.current.get(id)
-          )
+          ),
+          'standard'
         )
-        // reset the cursor after a real submit so later history recall does not
-        // reuse a stale mid-text position
-        if (value.trim())
-        {
-          setCursor({ value: '', cursorOffset: 0, cursorWidth: 0 })
-          memoryRef.current = EMPTY_EDITOR_MEMORY
-          killRingRef.current = []
-          killIndexRef.current = 0
-          lastYankRef.current = null
-          preferredColRef.current = null
-        }
         return
       }
       if (isParsedControlFragment(input))
