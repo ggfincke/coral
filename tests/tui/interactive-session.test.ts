@@ -12,11 +12,13 @@ import {
   type PromptSettlement,
 } from '../../src/tui/session/interactive-runtime.js'
 import { AgentTodoState } from '../../src/agent/state/todos.js'
+import type { AgentInferenceClient } from '../../src/agent/inference-client.js'
 import { makeFakeAgent } from '../helpers/agent-harness.js'
 import { loadSession } from '../../src/session/store.js'
 import { writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  buildPrimaryAgent,
   forkAgentSession,
   persistAgentSession,
   resolveStartupSession,
@@ -610,6 +612,86 @@ test('always-approvals grant identical tool calls without prompting until reset'
   assert.equal(await afterReset, true)
 
   await runtime.shutdown()
+})
+
+test('TUI first-save and resume-save preserve durable compaction metrics', async () =>
+{
+  const inferenceClient: AgentInferenceClient = {
+    startKeepAlive()
+    {},
+    async showModel()
+    {
+      throw new Error('unexpected model request')
+    },
+    async listModels()
+    {
+      return []
+    },
+    chatStream()
+    {
+      assert.fail('unexpected inference')
+    },
+  }
+  const options = {
+    model: 'test-model',
+    host: 'http://ollama.test',
+    cwd: process.cwd(),
+    think: false,
+    mcpMode: 'off' as const,
+    mcpConfig: { servers: [], issues: [] },
+    inferenceClient,
+  }
+  const original = buildPrimaryAgent(options)
+  const agents = [original]
+  try
+  {
+    original.restoreMessages([{ role: 'user', content: 'Keep this title' }])
+    original.restoreSuccessfulCompactionMetrics({
+      successfulCount: 5,
+      lastCompactedAt: 'legacy opaque timestamp',
+    })
+    const first = persistAgentSession(original, null)
+    assert.ok(first)
+    const stored = loadSession(first.id)
+    assert.ok(stored)
+    assert.equal(stored.meta.compactionCount, 5)
+    assert.equal(stored.meta.lastCompactedAt, 'legacy opaque timestamp')
+
+    const resumed = buildPrimaryAgent({ ...options, restored: stored })
+    agents.push(resumed)
+    assert.equal(resumed.getCompactionCount(), 5)
+    assert.equal(resumed.getLastCompactedAt(), 'legacy opaque timestamp')
+    resumed.restoreMessages([
+      ...resumed.getMessages(),
+      { role: 'user', content: 'An unrelated later turn' },
+    ])
+    assert.ok(persistAgentSession(resumed, stored.meta))
+    const saved = loadSession(first.id)
+    assert.ok(saved)
+    assert.equal(saved.meta.compactionCount, 5)
+    assert.equal(saved.meta.lastCompactedAt, 'legacy opaque timestamp')
+    assert.equal(saved.meta.createdAt, first.createdAt)
+    assert.equal(saved.meta.title, 'Keep this title')
+
+    const legacy = structuredClone(stored)
+    delete legacy.meta.compactionCount
+    delete legacy.meta.lastCompactedAt
+    const legacyAgent = buildPrimaryAgent({ ...options, restored: legacy })
+    agents.push(legacyAgent)
+    assert.equal(legacyAgent.getCompactionCount(), 0)
+    assert.equal(legacyAgent.getLastCompactedAt(), null)
+
+    resumed.clearHistory()
+    resumed.resetSessionMetrics()
+    assert.ok(persistAgentSession(resumed, saved.meta))
+    const cleared = loadSession(first.id)
+    assert.equal(cleared?.meta.compactionCount, 0)
+    assert.equal(cleared?.meta.lastCompactedAt, undefined)
+  }
+  finally
+  {
+    await Promise.all(agents.map((agent) => agent.dispose()))
+  }
 })
 
 test('fork saves the complete parent, preserves files, and binds future saves only to the child', async () =>

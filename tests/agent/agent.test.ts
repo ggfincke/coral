@@ -2974,3 +2974,61 @@ test('Agent derives verification only from valid boolean project config', async 
     await Promise.all([malformed.dispose(), enabled.dispose()])
   }
 })
+
+test('Agent restores durable compaction metadata only while idle', async () =>
+{
+  const dir = await tempDir('coral-agent-compaction-metrics-')
+  const agent = new Agent('fake-model', undefined, dir, {
+    inferenceClient: {
+      startKeepAlive()
+      {},
+      async showModel()
+      {
+        assert.fail('metadata restoration must not resolve models')
+      },
+      async listModels()
+      {
+        assert.fail('metadata restoration must not resolve models')
+      },
+      chatStream()
+      {
+        assert.fail('metadata restoration must not start inference')
+      },
+    },
+    codeIntel: {
+      async query()
+      {
+        assert.fail('metadata restoration must not query LSP')
+      },
+      async dispose()
+      {},
+    },
+    tools: [],
+    permissions: {},
+    numCtx: 8_192,
+    verifyEdits: false,
+    mcpMode: 'off',
+  })
+  try
+  {
+    agent.restoreSuccessfulCompactionMetrics({
+      successfulCount: 5,
+      lastCompactedAt: '2026-09-23T11:00:00.000Z',
+    })
+    const turn = agent.acceptTurn('accepted request')
+    assert.throws(
+      () => agent.restoreSuccessfulCompactionMetrics({}),
+      /during an active turn/
+    )
+    assert.equal(agent.getCompactionCount(), 5)
+    assert.equal(agent.getLastCompactedAt(), '2026-09-23T11:00:00.000Z')
+    await agent.runAcceptedTurn(turn, makeAgentEvents(), AbortSignal.abort())
+    agent.restoreSuccessfulCompactionMetrics({})
+    assert.equal(agent.getCompactionCount(), 0)
+    assert.equal(agent.getLastCompactedAt(), null)
+  }
+  finally
+  {
+    await agent.dispose()
+  }
+})
