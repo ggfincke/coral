@@ -2,6 +2,7 @@
 // conversation state and revision-checked history transitions
 
 import {
+  alignToolRoundStart,
   buildCompactedMessages,
   countFrozenPrefix,
   estimateMessageTokens,
@@ -349,6 +350,17 @@ export class ConversationState
     this.frozenPrefixLength = countFrozenPrefix(this.messages)
     this.clearUndoRedoStacks()
     this.rebuildTokenEstimate()
+    this.touch()
+  }
+
+  // restore session-validated history metrics without importing runtime failures
+  restoreSuccessfulCompactionMetrics(metrics: {
+    successfulCount?: number
+    lastCompactedAt?: string
+  }): void
+  {
+    this.compactionCount = metrics.successfulCount ?? 0
+    this.lastCompactedAt = metrics.lastCompactedAt ?? null
     this.touch()
   }
 
@@ -843,24 +855,22 @@ export class ConversationState
 
     const frozen = this.messages.slice(0, this.frozenPrefixLength)
     const liveBudget = Math.max(maxHistory - this.frozenPrefixLength, 0)
-    let recent =
-      liveBudget === 0
-        ? []
-        : this.messages.slice(this.frozenPrefixLength).slice(-liveBudget)
+    let start = Math.max(
+      this.frozenPrefixLength,
+      this.messages.length - liveBudget
+    )
 
     if (preserve)
     {
       const preserveIndex = this.messages.indexOf(preserve)
-      if (
-        preserveIndex >= this.frozenPrefixLength &&
-        !recent.includes(preserve)
-      )
+      if (preserveIndex >= this.frozenPrefixLength && preserveIndex < start)
       {
-        recent = this.messages.slice(preserveIndex)
+        start = preserveIndex
       }
     }
 
-    this.messages = [...frozen, ...recent]
+    start = alignToolRoundStart(this.messages, start, this.frozenPrefixLength)
+    this.messages = [...frozen, ...this.messages.slice(start)]
     this.clearUndoRedoStacks()
     this.rebuildTokenEstimate()
   }

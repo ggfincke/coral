@@ -3,7 +3,7 @@
 
 import { strict as assert } from 'node:assert'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Agent, type AgentMcpManager } from '../../src/agent/agent.js'
@@ -1079,7 +1079,15 @@ test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o evic
 {
   const dir = await tempDir('coral-agent-dispose-lifecycle-')
   const sourcePath = join(dir, 'example.ts')
+  const dependencyPath = join(dir, 'dependency.ts')
+  const importerPath = join(dir, 'importer.ts')
   await writeFile(sourcePath, 'const value: number = 1\n', 'utf-8')
+  await writeFile(dependencyPath, 'export const importedValue: number = 1\n')
+  await writeFile(
+    importerPath,
+    'import { importedValue } from "./dependency"\n' +
+      'export const result: number = importedValue\n'
+  )
 
   let streamStarted!: () => void
   const streamStartedPromise = new Promise<void>((resolve) =>
@@ -1166,6 +1174,40 @@ test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o evic
   assert.equal(agent.codeIntel.child, languageServer)
   assert.equal(languageServer.exitCode, null)
   assert.equal(languageServer.signalCode, null)
+
+  await agent.codeIntel.query({
+    operation: 'hover',
+    path: 'dependency.ts',
+    line: 1,
+    character: 14,
+  })
+  const importerQuery = {
+    operation: 'diagnostics' as const,
+    path: 'importer.ts',
+  }
+  assert.equal(
+    await agent.codeIntel.query(importerQuery),
+    'No diagnostics reported for this file.'
+  )
+  await writeFile(
+    dependencyPath,
+    'export const importedValue: string = "changed"\n'
+  )
+  assert.match(
+    await agent.codeIntel.query(importerQuery),
+    /Type 'string' is not assignable to type 'number'/
+  )
+  await writeFile(dependencyPath, 'export const importedValue: number = 2\n')
+  assert.equal(
+    await agent.codeIntel.query(importerQuery),
+    'No diagnostics reported for this file.'
+  )
+  await rm(dependencyPath)
+  assert.match(
+    await agent.codeIntel.query(importerQuery),
+    /Cannot find module.*dependency/
+  )
+  assert.equal(agent.codeIntel.child, languageServer)
 
   let doneCalled = false
   const run = agent.run(
@@ -2930,5 +2972,63 @@ test('Agent derives verification only from valid boolean project config', async 
   finally
   {
     await Promise.all([malformed.dispose(), enabled.dispose()])
+  }
+})
+
+test('Agent restores durable compaction metadata only while idle', async () =>
+{
+  const dir = await tempDir('coral-agent-compaction-metrics-')
+  const agent = new Agent('fake-model', undefined, dir, {
+    inferenceClient: {
+      startKeepAlive()
+      {},
+      async showModel()
+      {
+        assert.fail('metadata restoration must not resolve models')
+      },
+      async listModels()
+      {
+        assert.fail('metadata restoration must not resolve models')
+      },
+      chatStream()
+      {
+        assert.fail('metadata restoration must not start inference')
+      },
+    },
+    codeIntel: {
+      async query()
+      {
+        assert.fail('metadata restoration must not query LSP')
+      },
+      async dispose()
+      {},
+    },
+    tools: [],
+    permissions: {},
+    numCtx: 8_192,
+    verifyEdits: false,
+    mcpMode: 'off',
+  })
+  try
+  {
+    agent.restoreSuccessfulCompactionMetrics({
+      successfulCount: 5,
+      lastCompactedAt: '2026-09-23T11:00:00.000Z',
+    })
+    const turn = agent.acceptTurn('accepted request')
+    assert.throws(
+      () => agent.restoreSuccessfulCompactionMetrics({}),
+      /during an active turn/
+    )
+    assert.equal(agent.getCompactionCount(), 5)
+    assert.equal(agent.getLastCompactedAt(), '2026-09-23T11:00:00.000Z')
+    await agent.runAcceptedTurn(turn, makeAgentEvents(), AbortSignal.abort())
+    agent.restoreSuccessfulCompactionMetrics({})
+    assert.equal(agent.getCompactionCount(), 0)
+    assert.equal(agent.getLastCompactedAt(), null)
+  }
+  finally
+  {
+    await agent.dispose()
   }
 })

@@ -31,6 +31,8 @@ Think flag, ask/yolo, `/verify`, pinned `num_ctx`, Ollama token totals, reliabil
 
 On restore, Coral keeps the **new** system prompt (current model and tools), not the saved system message. Frozen compaction prefix is reconstructed from `[Conversation handoff` markers in messages.
 
+Successful compaction count and timestamp survive first save, TUI/ACP resume, and subsequent saves. Legacy sessions without those fields start at zero with no timestamp. Runtime failure counters and token totals remain separate; clearing the session resets compaction metrics.
+
 ---
 
 ## When Coral writes

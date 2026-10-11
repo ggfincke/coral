@@ -54,6 +54,7 @@ export function buildPastePlaceholder(id: number, text: string): string
 }
 
 export const PASTE_STORE_LIMIT = 100_000
+export const MAX_STORED_PASTES = 32
 const PASTE_KEEP_HEAD = 50_000
 const PASTE_KEEP_TAIL = 50_000
 
