@@ -111,6 +111,7 @@ export async function runRep(
   let toolErrors = 0
   let lastUsage: TokenUsage | undefined
   let aborted = false
+  let iterationLimited = false
   let errored = false
   let agent: EvalAgent | undefined
 
@@ -164,6 +165,11 @@ export async function runRep(
       {},
       onDone: () =>
       {},
+      onIterationLimit: () =>
+      {
+        iterationLimited = true
+        aborted = true
+      },
       onError: () =>
       {
         errored = true
@@ -207,8 +213,15 @@ export async function runRep(
 
     if (aborted || errored)
     {
+      const stopReason = iterationLimited
+        ? 'iteration limit reached'
+        : 'aborted'
       const reason =
-        aborted && errored ? 'aborted/errored' : aborted ? 'aborted' : 'errored'
+        aborted && errored
+          ? `${stopReason}/errored`
+          : aborted
+            ? stopReason
+            : 'errored'
       passed = false
       detail = detail ? `${reason}: ${detail}` : reason
     }

@@ -101,6 +101,7 @@ function eventSink(counters: {
   calls: number
   errors: number
   agentErrors: number
+  iterationLimits: number
 }): AgentEvents
 {
   return {
@@ -127,6 +128,10 @@ function eventSink(counters: {
     {},
     onDone()
     {},
+    onIterationLimit()
+    {
+      counters.iterationLimits++
+    },
     onError()
     {
       counters.agentErrors++
@@ -134,7 +139,7 @@ function eventSink(counters: {
   }
 }
 
-async function runAgentCase(options: {
+export async function runAgentCase(options: {
   runtime: BenchmarkRuntime
   pair: ModelPair
   task?: EvalTask
@@ -154,9 +159,10 @@ async function runAgentCase(options: {
     rawClient,
     options.limits.maxOutputTokens
   )
-  const counters = { calls: 0, errors: 0, agentErrors: 0 }
+  const counters = { calls: 0, errors: 0, agentErrors: 0, iterationLimits: 0 }
   let agent: Agent | undefined
   let runError: string | undefined
+  let timedOut = false
   const sampler = new ProcessTreeRssSampler(
     () => [process.pid, ...options.runtime.processRoots()],
     BENCHMARK_POLICY.rssSampleIntervalMs,
@@ -180,14 +186,20 @@ async function runAgentCase(options: {
     await sampler.start()
     const started = performance.now()
     const controller = new AbortController()
-    const timer = setTimeout(
-      () => controller.abort(),
-      options.limits.requestTimeoutMs
-    ).unref()
+    const timer = setTimeout(() =>
+    {
+      timedOut = true
+      controller.abort()
+    }, options.limits.requestTimeoutMs).unref()
     try
     {
       await agent.run(options.prompt, eventSink(counters), controller.signal)
-      if (options.secondPrompt)
+      if (
+        options.secondPrompt &&
+        !controller.signal.aborted &&
+        counters.iterationLimits === 0 &&
+        counters.agentErrors === 0
+      )
       {
         await agent.run(
           options.secondPrompt,
@@ -207,12 +219,16 @@ async function runAgentCase(options: {
       samples = await sampler.stop()
     }
     const finalText = latestAssistant(agent)
-    let passed = !runError && counters.agentErrors === 0
-    let detail =
-      runError ??
-      (counters.agentErrors === 0
-        ? 'agent completed'
-        : `agent emitted ${counters.agentErrors} error event(s)`)
+    const failures = [
+      ...(runError ? [runError] : []),
+      ...(counters.agentErrors > 0
+        ? [`agent emitted ${counters.agentErrors} error event(s)`]
+        : []),
+      ...(counters.iterationLimits > 0 ? ['iteration limit reached'] : []),
+      ...(timedOut ? ['request timed out'] : []),
+    ]
+    let passed = failures.length === 0
+    let detail = failures.join('; ') || 'agent completed'
     if (options.task)
     {
       const grade = await options.task.grade({
@@ -221,10 +237,7 @@ async function runAgentCase(options: {
         finalText,
       })
       passed &&= grade.passed
-      detail =
-        runError || counters.agentErrors > 0
-          ? `${detail}; ${grade.detail}`
-          : grade.detail
+      detail = failures.length > 0 ? `${detail}; ${grade.detail}` : grade.detail
     }
     const measurements = measuredClient.takeMeasurements()
     return {

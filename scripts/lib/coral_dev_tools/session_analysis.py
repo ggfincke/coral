@@ -16,7 +16,7 @@ from .report_render import render_counter, render_counter_md
 
 JsonObject = dict[str, Any]
 
-# keep the token estimate aligned with src/utils/limits.ts CHARS_PER_TOKEN
+# share the runtime divisor; selected text lengths remain a diagnostic heuristic
 CHARS_PER_TOKEN = 4
 SESSION_FILE_PATTERN = re.compile(r"^[0-9a-f]{8}\.json$")
 # keep this policy aligned with the runtime catalog via scripts/check-dev-tools.mjs
@@ -613,7 +613,7 @@ def render_text(
         f"  Messages: {total_messages}",
         f"  Tool calls: {total_tool_calls}",
         f"  Compactions: {total_compactions}",
-        f"  Estimated live tokens scanned: {total_estimated_tokens}",
+        f"  Heuristic text-token estimate: {total_estimated_tokens}",
         f"  History entries: {report.history.entry_count}",
         f"  History corrupt lines: {report.history.corrupt_lines}",
         "",
@@ -670,7 +670,7 @@ def render_markdown(
                 ("Messages", str(total_messages)),
                 ("Tool calls", str(total_tool_calls)),
                 ("Compactions", str(total_compactions)),
-                ("Estimated live tokens scanned", str(total_estimated_tokens)),
+                ("Heuristic text-token estimate", str(total_estimated_tokens)),
                 ("History entries", str(report.history.entry_count)),
                 ("History corrupt lines", str(report.history.corrupt_lines)),
             ]

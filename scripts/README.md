@@ -43,6 +43,9 @@ authoritative eight-character session JSON files and `history.jsonl`, then
 reports aggregate usage, tool-call counts, largest tool outputs, repeated
 prompts, and session-file consistency checks. Legacy `sessions/index.json`
 files are ignored because the runtime no longer treats them as authoritative.
+Its text-token estimate counts selected stored text fields using a character
+heuristic. It is not the runtime request budget, which estimates serialized
+UTF-8 payloads; the JSON field remains `estimatedTokens`.
 
 `mine-reference.py` scans the git-excluded `reference/` tree for design-research
 candidates: prompt/instruction files, tool-related files, permission/policy
