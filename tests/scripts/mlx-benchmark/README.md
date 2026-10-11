@@ -62,6 +62,10 @@ npx --no-install tsx tests/scripts/mlx-benchmark/run.ts validate \
 
 Result files cannot choose weaker thresholds or omit a bad repetition:
 
+Agent iteration limits, timeouts, and runtime errors fail a run even if its task
+grader accepts the partial result. Stop diagnostics remain in the result, and a
+stopped or failed first prompt prevents any follow-up prompt from running.
+
 1. The pinned direct artifact must already exist locally at the exact revision;
    its tokenizer/template files and every shard referenced by the safetensors
    index must resolve to accessible regular files.
