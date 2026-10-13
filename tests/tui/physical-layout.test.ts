@@ -11,6 +11,8 @@ import stripAnsi from 'strip-ansi'
 import stringWidth from 'string-width'
 import PromptInput, {
   type PromptInputProps,
+  type PromptReset,
+  type PromptSubmitKind,
 } from '../../src/tui/prompt/prompt-input.js'
 import { LineList } from '../../src/tui/components/line-list.js'
 import {
@@ -52,6 +54,7 @@ interface FrameProps
   onOpenEditor?: PromptInputProps['onOpenEditor']
   viMode?: boolean
   fixedAllocation?: number
+  acceptSubmissions?: boolean
 }
 
 // mirror App's allocated composer and transcript contract with real Ink clipping
@@ -76,15 +79,26 @@ async function createFrameHarness(blocks: OutputBlock[], initial: FrameProps)
   })
   const controls = {
     setDraft: idle as (value: string) => void,
+    resetDraft: idle as (value: string, kind?: PromptReset['kind']) => void,
     value: '',
     submissions: [] as string[],
+    submissionKinds: [] as PromptSubmitKind[],
     desired: 1,
   }
   function FrameHarness(props: FrameProps)
   {
     const [value, setValue] = useState('')
     const [desired, setDesired] = useState(1)
+    const [reset, setReset] = useState<PromptReset>({
+      epoch: 0,
+      kind: 'external',
+    })
     controls.setDraft = setValue
+    controls.resetDraft = (draft, kind = 'external') =>
+    {
+      setValue(draft)
+      setReset((current) => ({ epoch: current.epoch + 1, kind }))
+    }
     controls.value = value
     controls.desired = desired
     const maxHeight = Math.min(17, props.rows - 7)
@@ -114,12 +128,18 @@ async function createFrameHarness(blocks: OutputBlock[], initial: FrameProps)
           onOpenEditor: props.onOpenEditor,
           viMode: props.viMode,
           value,
+          reset,
           width: props.columns,
           maxHeight,
           allocatedHeight: allocated,
           onHeightChange: setDesired,
           onChange: setValue,
-          onSubmit: (draft) => controls.submissions.push(draft),
+          onSubmit: (draft, kind) =>
+          {
+            controls.submissions.push(draft)
+            controls.submissionKinds.push(kind)
+            if (props.acceptSubmissions) controls.resetDraft('', kind)
+          },
           completionCommands: [
             { name: 'help', description: 'List available commands' },
             { name: 'history', description: 'View session history' },
@@ -426,6 +446,159 @@ test('composer preserves wrapped drafts, paste confirmation, and editor contents
       'safe\npaste',
       stripAnsi(harness.frames.at(-1)!)
     )
+  }
+  finally
+  {
+    await harness.close()
+  }
+})
+
+test('composer bounds paste lifetimes without losing undo or cross-prompt yanks', async () =>
+{
+  let finishEditor: ((value: string) => void) | undefined
+  const props: FrameProps = {
+    columns: 80,
+    rows: 8,
+    scrollOffset: 0,
+    tick: 0,
+    fixedAllocation: 1,
+    onOpenEditor: () =>
+      new Promise((resolve) =>
+      {
+        finishEditor = resolve
+      }),
+  }
+  const harness = await createFrameHarness([], props)
+  const paste = (text: string) => harness.input(`\x1b[200~${text}\x1b[201~`)
+  const escape = async () =>
+  {
+    await harness.input('\x1b')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    await harness.flush()
+  }
+  try
+  {
+    const payloads = Array.from({ length: 32 }, (_, index) =>
+      String.fromCharCode(65 + (index % 26)).repeat(1_001)
+    )
+    for (const payload of payloads) await paste(payload)
+    const acceptedDraft = harness.controls.value
+    await paste('refused'.repeat(200))
+    assert.equal(harness.controls.value, acceptedDraft)
+    // a one-row composer keeps the draft visible instead of the refusal hint
+    assert.match(stripAnsi(harness.frames.at(-1)!), /text #32 \+1 lines\]/)
+    await harness.input('\x1f')
+    assert.doesNotMatch(harness.controls.value, /Pasted text #32 /)
+    await harness.input('\x01')
+    await harness.input('\r')
+    await harness.input('\r')
+    assert.equal(
+      harness.controls.submissions.at(-1),
+      payloads.slice(0, 31).join('')
+    )
+    const declinedDraft = harness.controls.value
+    await harness.input('!')
+    assert.equal(harness.controls.value, '!' + declinedDraft)
+    await harness.input('\x1f')
+    assert.equal(harness.controls.value, declinedDraft)
+    await harness.input('\x1f')
+    assert.notEqual(harness.controls.value, declinedDraft)
+    assert.doesNotMatch(harness.controls.value, /Pasted text #31 /)
+
+    harness.controls.setDraft(acceptedDraft)
+    await harness.flush()
+    await harness.rerender({ ...props, acceptSubmissions: true })
+    await harness.input('\r')
+    assert.equal(harness.controls.submissions.at(-1), payloads.join(''))
+    assert.equal(harness.controls.submissionKinds.at(-1), 'standard')
+    assert.equal(harness.controls.value, '')
+    await harness.input('\x1f')
+    assert.equal(harness.controls.value, '')
+
+    const nextPayload = 'next prompt '.repeat(100)
+    await paste(nextPayload)
+    assert.match(harness.controls.value, /Pasted text #33 /)
+    await harness.rerender({ ...props, viMode: true, acceptSubmissions: true })
+    for (const key of ['0', 'y', '$']) await harness.input(key)
+    harness.controls.resetDraft('', 'standard')
+    await harness.flush()
+    await harness.input('p')
+    assert.equal(harness.controls.value, nextPayload)
+
+    await harness.input('\x07')
+    assert.ok(finishEditor)
+    harness.controls.resetDraft('new draft')
+    await harness.flush()
+    finishEditor('stale editor draft')
+    await harness.flush()
+    assert.equal(harness.controls.value, 'new draft')
+
+    harness.controls.resetDraft('')
+    await harness.flush()
+    await harness.input('i')
+    await paste('send\n')
+    const killedPayload = 'retained kill '.repeat(100)
+    await paste(killedPayload)
+    await harness.input('\x15')
+    assert.equal(harness.controls.value, 'send\n')
+    await escape()
+    const submissionsBeforeConfirmation = harness.controls.submissions.length
+    for (const key of [':', 'w', 'q', '\r']) await harness.input(key)
+    assert.equal(
+      harness.controls.submissions.length,
+      submissionsBeforeConfirmation
+    )
+    await harness.input('\r')
+    assert.equal(harness.controls.submissions.at(-1), 'send\n')
+    assert.equal(harness.controls.submissionKinds.at(-1), 'vim')
+    await harness.input('i')
+    await harness.input('\x1f')
+    assert.equal(harness.controls.value, '')
+    await harness.input('\x16')
+    assert.equal(harness.controls.value, killedPayload)
+  }
+  finally
+  {
+    await harness.close()
+  }
+})
+
+test('composer Vim routing preserves complete graphemes through edits and submission', async () =>
+{
+  const harness = await createFrameHarness([], {
+    columns: 80,
+    rows: 24,
+    scrollOffset: 0,
+    tick: 0,
+    viMode: true,
+    acceptSubmissions: true,
+  })
+  const escape = async () =>
+  {
+    await harness.input('\x1b')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    await harness.flush()
+  }
+  try
+  {
+    harness.controls.setDraft('😀e\u0301👩‍💻Z')
+    await harness.flush()
+    for (const key of ['0', 'l', 'x']) await harness.input(key)
+    assert.equal(harness.controls.value, '😀👩‍💻Z')
+    for (const key of ['h', 'x']) await harness.input(key)
+    assert.equal(harness.controls.value, '👩‍💻Z')
+    for (const key of ['l', 'h', 'a', 'e\u0301']) await harness.input(key)
+    await escape()
+    await harness.input('x')
+    assert.equal(harness.controls.value, '👩‍💻Z')
+    for (const key of ['$', 'a', '!']) await harness.input(key)
+    await escape()
+    for (const key of ['h', 'x']) await harness.input(key)
+    assert.equal(harness.controls.value, '👩‍💻!')
+    for (const key of [':', 'w', 'q', '\r']) await harness.input(key)
+    assert.deepEqual(harness.controls.submissions, ['👩‍💻!'])
+    assert.equal(harness.controls.submissions[0]!.isWellFormed(), true)
+    assert.equal(harness.controls.value, '')
   }
   finally
   {

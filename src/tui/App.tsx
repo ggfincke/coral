@@ -15,7 +15,10 @@ import {
   padLinesTop,
   sliceViewport,
 } from './transcript/transcript.js'
-import PromptInput from './prompt/prompt-input.js'
+import PromptInput, {
+  type PromptReset,
+  type PromptSubmitKind,
+} from './prompt/prompt-input.js'
 import { formatBlocksPlain } from './transcript/plain.js'
 import {
   toggleNewestToolResult,
@@ -161,6 +164,11 @@ export default function App({
     null
   )
   const [input, setInput] = useState('')
+  const [promptReset, setPromptReset] = useState<PromptReset>({
+    epoch: 0,
+    kind: 'external',
+  })
+  const composerSubmissionRef = useRef<{ kind: PromptSubmitKind } | null>(null)
   const [promptHeight, setPromptHeight] = useState(1)
   // prompts typed while a run is active; drained as autosends at the boundary
   const [queued, setQueued] = useState(emptyMessageQueue)
@@ -221,7 +229,14 @@ export default function App({
     resetNavigation,
     getEntries: getHistoryEntries,
   } = useInputHistory()
-  const clearInput = useCallback(() => setInput(''), [])
+  const clearInput = useCallback(() =>
+  {
+    const kind = composerSubmissionRef.current?.kind ?? 'external'
+    composerSubmissionRef.current = null
+    setInput('')
+    resetNavigation()
+    setPromptReset((current) => ({ epoch: current.epoch + 1, kind }))
+  }, [resetNavigation])
   const scrollToLatest = useCallback(() => setScrollOffset(0), [])
   const interactiveViewRef = useRef<InteractiveSessionView>({
     restoreSession()
@@ -1242,7 +1257,7 @@ export default function App({
             )
           )
             return { admitted: false, handled: true }
-          if (!preserveInput) setInput('')
+          if (!preserveInput) clearInput()
           setScrollOffset(0)
 
           const cmdCtx: CommandContext = {
@@ -1319,6 +1334,7 @@ export default function App({
       acceptsCommandTerminal,
       addHistoryEntry,
       beginOperation,
+      clearInput,
       clearSession,
       finishCommand,
       getSessionId,
@@ -1405,7 +1421,7 @@ export default function App({
 
       if (/^\/queue(?:\s|$)/i.test(trimmed))
       {
-        if (!preserveInput) setInput('')
+        if (!preserveInput) clearInput()
         await manageQueue(trimmed.slice(6).trim())
         return
       }
@@ -1429,7 +1445,7 @@ export default function App({
           }
           setQueued(next)
           resetNavigation()
-          if (!preserveInput) setInput('')
+          if (!preserveInput) clearInput()
         }
         return
       }
@@ -1449,6 +1465,7 @@ export default function App({
       })
     },
     [
+      clearInput,
       commandRunning,
       promptActive,
       queued,
@@ -1460,6 +1477,19 @@ export default function App({
       setOutput,
       transitioningSession,
     ]
+  )
+  const handleComposerSubmit = useCallback(
+    (value: string, kind: PromptSubmitKind) =>
+    {
+      const submission = { kind }
+      composerSubmissionRef.current = submission
+      void handleSubmit(value).finally(() =>
+      {
+        if (composerSubmissionRef.current === submission)
+          composerSubmissionRef.current = null
+      })
+    },
+    [handleSubmit]
   )
   const pendingInitialPrompt = useRef(initialPrompt)
   useEffect(() =>
@@ -2030,6 +2060,7 @@ export default function App({
               allocatedHeight={allocatedPromptHeight}
               onHeightChange={setPromptHeight}
               value={input}
+              reset={promptReset}
               focus={
                 !pickerVisible &&
                 !paletteVisible &&
@@ -2043,7 +2074,7 @@ export default function App({
               completionCommands={completionCommands}
               refreshFiles={refreshFiles}
               onChange={handleInputChange}
-              onSubmit={handleSubmit}
+              onSubmit={handleComposerSubmit}
               onEscape={handleComposerEscape}
               onInterrupt={abortOrExit}
               onPageUp={onPageUp}

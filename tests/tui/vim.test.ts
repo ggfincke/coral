@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import {
   applyVimInput,
   createVimEngine,
+  syncVimDraft,
   vimView,
   type VimEngine,
   type VimView,
@@ -268,6 +269,76 @@ test('x deletes the character under the cursor', () =>
   assert.equal(cut.cursorOffset, 1)
   press(engine, '$', 'x', 'x')
   assert.equal(vimView(engine).value, '')
+})
+
+test('Unicode modal editing preserves whole graphemes across motions, registers, and mode changes', () =>
+{
+  const original = '😀e\u0301👩‍💻 word'
+  const engine = createVimEngine(original)
+  assert.equal(press(engine, 'l').cursorOffset, 2)
+  assert.equal(press(engine, 'x').value, '😀👩‍💻 word')
+  assert.equal(press(engine, 'h', 'y', 'l', 'p').value, '😀😀👩‍💻 word')
+  assert.equal(vimView(engine).cursorOffset, 2)
+  assert.equal(press(engine, 'x').value, '😀👩‍💻 word')
+  press(engine, 'i', 'e\u0301')
+  const exited = applyVimInput(engine, { escape: true })
+  assert.equal(exited.value, original)
+  assert.equal(exited.cursorOffset, 2)
+  press(engine, 'a', '🇺🇸')
+  assert.equal(applyVimInput(engine, { backspace: true }).value, original)
+  assert.equal(applyVimInput(engine, { delete: true }).value, '😀e\u0301 word')
+  applyVimInput(engine, { escape: true })
+
+  // composer synchronization may supply an offset inside a UTF-16 character
+  syncVimDraft(engine, '😀e\u0301 word', 1)
+  assert.equal(vimView(engine).cursorOffset, 0)
+  assert.equal(press(engine, 'x').value, 'e\u0301 word')
+  assert.equal(press(engine, 'w').cursorOffset, 3)
+  assert.equal(press(engine, 'b').cursorOffset, 0)
+  assert.equal(press(engine, 'c', 'w').value, 'word')
+  press(engine, '🏳️‍🌈')
+  assert.equal(applyVimInput(engine, { escape: true }).cursorOffset, 0)
+  assert.equal(vimView(engine).value, '🏳️‍🌈word')
+  assert.ok(vimView(engine).value.isWellFormed())
+
+  const words = createVimEngine('cafe\u0301 next')
+  assert.equal(press(words, 'e').cursorOffset, 3)
+  assert.equal(press(words, '0', 'd', 'e').value, ' next')
+  assert.equal(press(words, 'P').value, 'cafe\u0301 next')
+
+  const rows = createVimEngine('😀ab\nxy😀z')
+  assert.equal(press(rows, 'l', 'l', 'j').cursorOffset, 7)
+  assert.equal(press(rows, 'x').value, '😀ab\nxyz')
+  assert.equal(press(rows, 'k').cursorOffset, 3)
+  assert.ok(vimView(rows).value.isWellFormed())
+
+  // inserted text can join the following cluster without moving INSERT backward
+  const joined = createVimEngine('x💻')
+  const inserted = press(joined, 'l', 'i', '👩\u200d')
+  assert.equal(inserted.value, 'x👩‍💻')
+  assert.equal(inserted.cursorOffset, 6)
+  assert.equal(press(joined, '!').value, 'x👩‍💻!')
+  assert.equal(applyVimInput(joined, { escape: true }).cursorOffset, 6)
+
+  const synced = createVimEngine('x💻')
+  press(synced, 'l', 'i')
+  syncVimDraft(synced, 'x👩‍💻', 4)
+  assert.equal(vimView(synced).cursorOffset, 6)
+  assert.equal(applyVimInput(synced, { escape: true }).cursorOffset, 1)
+  assert.equal(press(synced, 'x').value, 'x')
+})
+
+test('linewise P inserts above while p inserts below, including the final line', () =>
+{
+  const before = createVimEngine('first\nsecond')
+  const above = press(before, 'y', 'y', 'j', 'P')
+  assert.equal(above.value, 'first\nfirst\nsecond')
+  assert.equal(above.cursorOffset, 6)
+
+  const after = createVimEngine('first\nsecond')
+  const below = press(after, 'y', 'y', 'j', 'p')
+  assert.equal(below.value, 'first\nsecond\nfirst')
+  assert.equal(below.cursorOffset, 13)
 })
 
 test('p/P paste charwise and yy+p duplicate lines', () =>

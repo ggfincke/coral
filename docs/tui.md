@@ -192,6 +192,10 @@ Up/Down move through visual rows, including wrapped text, graphemes, and tabs. O
 
 Pastes of 1,000 characters or fewer stay inline, including multiline text. Larger pastes collapse. Multiline and large pastes require Enter to confirm, then Enter to send; ordinary edits do not remove that protection. Oversized pastes show dropped-character counts. Ctrl+G opens expanded paste contents in `$VISUAL` or `$EDITOR`; empty/unchanged output cancels, failures explain how to retry, and successful edits use normal composer undo/cursor handling.
 
+A draft retains at most 32 collapsed paste payloads. At capacity, payloads no longer reachable from the draft, undo history, kill ring, or Vim register are released first; if 32 remain reachable, another large paste is refused with a hint when the composer has room. Reachable payloads remain available through editing and undo. Successful submission releases that draft's payload storage and undo history, including `:wq`; declined submissions retain both. Any Vim register or kill-ring entry retained across prompts keeps its expanded text. An editor result from a retired draft is ignored.
+
+Vim character operations preserve whole graphemes, including emoji and combining marks. Linewise `P` inserts above the current line; `p` inserts below it.
+
 Ctrl+O targets the newest expandable output at the bottom. In scrollback it targets a visible output nearest the viewport center. Its status hint identifies the result and action. Expansion preserves its position, and the target stays selected until navigation changes. Unrelated output blocks do not advertise Ctrl+O. Palette and session results show position/count and allow navigation through all matches.
 
 Context occupancy starts with `~` after resume, fork, undo, redo, or transcript rebuilding, until measured usage arrives. Tokens “since open” are cumulative only for the current opening of a session.
