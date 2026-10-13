@@ -113,8 +113,9 @@ printed below the per-run report (suppressed under `--json`).
   (`coral-eval-*`, removed after the rep). It is not a sandbox — the agent can
   still run `bash`/`node` on the host, so only point it at models you trust.
 - Each run is bounded by a **`maxIterations` cap** (default 15) and a per-rep
-  timeout (default 120s); a hit cap or timeout yields a failed/aborted outcome
-  rather than hanging the suite.
+  timeout (default 120s); a hit cap, doom-loop stop, or timeout yields a failed/aborted outcome
+  even when the task grader accepts the partial result. Runtime errors also
+  override a successful grade, while the grader's diagnostics remain available.
 - Tasks run **sequentially**, not in parallel: a single local Ollama runner serves
   every rep, so concurrent reps would contend for the host. Each per-rep Agent is
   disposed before its throwaway workspace is removed, while Ollama's request

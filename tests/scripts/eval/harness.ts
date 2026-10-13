@@ -111,6 +111,8 @@ export async function runRep(
   let toolErrors = 0
   let lastUsage: TokenUsage | undefined
   let aborted = false
+  let iterationLimited = false
+  let doomLooped = false
   let errored = false
   let agent: EvalAgent | undefined
 
@@ -150,8 +152,13 @@ export async function runRep(
       },
       // keep eval runs headless by approving gated tools
       onToolApproval: async () => true,
-      // stop a run when the agent reports a doom loop
-      onDoomLoop: async () => false,
+      // stop a run when the agent reports a doom loop; the stop fails the rep
+      onDoomLoop: async () =>
+      {
+        doomLooped = true
+        aborted = true
+        return false
+      },
       onVerification: () =>
       {},
       onUsage: (usage) =>
@@ -164,6 +171,11 @@ export async function runRep(
       {},
       onDone: () =>
       {},
+      onIterationLimit: () =>
+      {
+        iterationLimited = true
+        aborted = true
+      },
       onError: () =>
       {
         errored = true
@@ -207,8 +219,17 @@ export async function runRep(
 
     if (aborted || errored)
     {
+      const stopReason = iterationLimited
+        ? 'iteration limit reached'
+        : doomLooped
+          ? 'doom loop stopped'
+          : 'aborted'
       const reason =
-        aborted && errored ? 'aborted/errored' : aborted ? 'aborted' : 'errored'
+        aborted && errored
+          ? `${stopReason}/errored`
+          : aborted
+            ? stopReason
+            : 'errored'
       passed = false
       detail = detail ? `${reason}: ${detail}` : reason
     }
