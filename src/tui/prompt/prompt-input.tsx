@@ -49,6 +49,7 @@ import {
   applyVimInput,
   createVimEngine,
   materializeVimRegister,
+  vimRegister,
   vimView,
   syncVimDraft,
   type VimEngine,
@@ -58,6 +59,7 @@ import {
   buildPastePlaceholder,
   expandPastePlaceholders,
   MAX_STORED_PASTES,
+  referencedPasteIds,
   sanitizePastedText,
   shouldPlaceholderize,
 } from './paste.js'
@@ -633,6 +635,21 @@ export default function PromptInput({
       const registry = pasteRegistryRef.current
       if (registry.size >= MAX_STORED_PASTES)
       {
+        // release payloads no draft, undo, yank, or vi register can reach
+        const referenced = referencedPasteIds([
+          value,
+          searchSavedRef.current.value,
+          ...memoryRef.current.undoStack.map((snapshot) => snapshot.value),
+          ...killRingRef.current,
+          ...(vimEngineRef.current ? [vimRegister(vimEngineRef.current)] : []),
+        ])
+        for (const id of registry.keys())
+        {
+          if (!referenced.has(id)) registry.delete(id)
+        }
+      }
+      if (registry.size >= MAX_STORED_PASTES)
+      {
         setPasteRejected(true)
         return
       }
@@ -647,7 +664,7 @@ export default function PromptInput({
       insertPastedText(buildPastePlaceholder(id, text))
       setPendingPasteConfirm(true)
     },
-    [getHistoryEntries, insertPastedText, search.active]
+    [getHistoryEntries, insertPastedText, search.active, value]
   )
   usePaste(handlePaste, { isActive: focus })
 
@@ -682,7 +699,7 @@ export default function PromptInput({
           : droppedChars
             ? `${droppedChars} pasted characters dropped · Ctrl+G to inspect`
             : null
-  const hintRows = hint && (rowBudget > 1 || pasteRejected) ? 1 : 0
+  const hintRows = hint && rowBudget > 1 ? 1 : 0
   const displayPlaceholder = displayValue.length === 0 && placeholder.length > 0
   const draft = useMemo(
     () =>
@@ -750,7 +767,7 @@ export default function PromptInput({
     1,
     Math.min(rowBudget, Math.floor(allocatedHeight))
   )
-  const visibleHintRows = hint && (allocatedRows > 1 || pasteRejected) ? 1 : 0
+  const visibleHintRows = hint && allocatedRows > 1 ? 1 : 0
   const visibleDraftRows = Math.min(
     draft.rows.length,
     allocatedRows - visibleHintRows

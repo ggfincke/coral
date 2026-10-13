@@ -223,10 +223,10 @@ test('computeDiff keeps its 200-line cap and summary marker', () =>
   assert.match(lines[200]!, /^… \+\d+ more changed lines$/)
 })
 
-test('computeDiff omits previews when edit or time budgets are exhausted', (t) =>
+test('computeDiff keeps large cheap diffs and omits time-exhausted ones', (t) =>
 {
   const clock = t.mock.method(Date, 'now', () => 0)
-  assert.equal(computeDiff('', 'added\n'.repeat(2_001)), null)
+  assert.ok(computeDiff('', 'added\n'.repeat(2_001)))
 
   let now = 0
   clock.mock.mockImplementation(() =>

@@ -102,6 +102,7 @@ function eventSink(counters: {
   errors: number
   agentErrors: number
   iterationLimits: number
+  doomLoops: number
 }): AgentEvents
 {
   return {
@@ -117,7 +118,11 @@ function eventSink(counters: {
       if (error !== undefined) counters.errors++
     },
     onToolApproval: async () => true,
-    onDoomLoop: async () => false,
+    onDoomLoop: async () =>
+    {
+      counters.doomLoops++
+      return false
+    },
     onVerification()
     {},
     onUsage()
@@ -159,7 +164,13 @@ export async function runAgentCase(options: {
     rawClient,
     options.limits.maxOutputTokens
   )
-  const counters = { calls: 0, errors: 0, agentErrors: 0, iterationLimits: 0 }
+  const counters = {
+    calls: 0,
+    errors: 0,
+    agentErrors: 0,
+    iterationLimits: 0,
+    doomLoops: 0,
+  }
   let agent: Agent | undefined
   let runError: string | undefined
   let timedOut = false
@@ -198,6 +209,7 @@ export async function runAgentCase(options: {
         options.secondPrompt &&
         !controller.signal.aborted &&
         counters.iterationLimits === 0 &&
+        counters.doomLoops === 0 &&
         counters.agentErrors === 0
       )
       {
@@ -225,6 +237,7 @@ export async function runAgentCase(options: {
         ? [`agent emitted ${counters.agentErrors} error event(s)`]
         : []),
       ...(counters.iterationLimits > 0 ? ['iteration limit reached'] : []),
+      ...(counters.doomLoops > 0 ? ['doom loop stopped'] : []),
       ...(timedOut ? ['request timed out'] : []),
     ]
     let passed = failures.length === 0

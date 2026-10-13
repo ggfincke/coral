@@ -99,3 +99,17 @@ export function expandPastePlaceholders(
     return resolve(id) ?? token
   })
 }
+
+// payload ids still reachable from any retained editor text
+export function referencedPasteIds(texts: Iterable<string>): Set<number>
+{
+  const ids = new Set<number>()
+  for (const text of texts)
+  {
+    for (const match of text.matchAll(PLACEHOLDER_PATTERN))
+    {
+      ids.add(Number.parseInt(match[1]!, 10))
+    }
+  }
+  return ids
+}

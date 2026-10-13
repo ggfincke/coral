@@ -999,6 +999,11 @@ export function syncVimDraft(
       : clampGraphemeOffset(value, cursorOffset, 'forward')
 }
 
+export function vimRegister(engine: VimEngine): string
+{
+  return (engine as unknown as VimState).register
+}
+
 // retain cross-prompt yanks after the composer releases its paste payloads
 export function materializeVimRegister(
   engine: VimEngine,

@@ -485,7 +485,8 @@ test('composer bounds paste lifetimes without losing undo or cross-prompt yanks'
     const acceptedDraft = harness.controls.value
     await paste('refused'.repeat(200))
     assert.equal(harness.controls.value, acceptedDraft)
-    assert.match(stripAnsi(harness.frames.at(-1)!), /Paste limit reached/)
+    // a one-row composer keeps the draft visible instead of the refusal hint
+    assert.match(stripAnsi(harness.frames.at(-1)!), /text #32 \+1 lines\]/)
     await harness.input('\x1f')
     assert.doesNotMatch(harness.controls.value, /Pasted text #32 /)
     await harness.input('\x01')

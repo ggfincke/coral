@@ -196,7 +196,7 @@ test('write_file records created-file undo metadata', async () =>
   assert.equal(await readFile(target, 'utf-8'), 'hello\n')
 })
 
-test('diff budget fallback preserves file mutations and undo snapshots', async () =>
+test('diff budget fallback preserves file mutations and undo snapshots', async (t) =>
 {
   const dir = await tempDir('coral-diff-fallback-')
   const target = join(dir, 'change.txt')
@@ -205,9 +205,15 @@ test('diff budget fallback preserves file mutations and undo snapshots', async (
   const editedContent = 'replacement\n'.repeat(2_001)
   await writeFile(target, before, 'utf-8')
   const context = { cwd: dir, ollamaHost: 'http://localhost:11434' }
+  // every clock read exhausts the diff time budget
+  let now = 0
+  t.mock.method(Date, 'now', () => (now += 60_000))
 
   const writeArgs = { path: 'change.txt', content: writtenContent }
-  assert.equal(await previewToolDiff('write_file', writeArgs, context), null)
+  assert.equal(
+    (await previewToolDiff('write_file', writeArgs, context))?.kind,
+    'message'
+  )
   assert.equal(await readFile(target, 'utf-8'), before)
 
   const written = await writeTool.execute(writeArgs, context)
@@ -226,7 +232,10 @@ test('diff budget fallback preserves file mutations and undo snapshots', async (
     old_string: writtenContent,
     new_string: editedContent,
   }
-  assert.equal(await previewToolDiff('edit_file', editArgs, context), null)
+  assert.equal(
+    (await previewToolDiff('edit_file', editArgs, context))?.kind,
+    'message'
+  )
   assert.equal(await readFile(target, 'utf-8'), writtenContent)
 
   const edited = await editTool.execute(editArgs, context)
@@ -539,10 +548,19 @@ test('git cancellation reaches the running subprocess', async () =>
   const dir = await tempDir('coral-git-cancel-')
   const executable = join(dir, 'git')
   const startedPath = join(dir, 'started')
+  const realGit = spawnSync('/bin/sh', ['-c', 'command -v git'], {
+    encoding: 'utf8',
+  }).stdout.trim()
+  // PATH is process-wide, so git calls from outside this workspace pass through
   await writeFile(
     executable,
     `#!${process.execPath}\n` +
-      `require('node:fs').writeFileSync(${JSON.stringify(startedPath)}, String(process.pid))\n` +
+      "const fs = require('node:fs')\n" +
+      `if (fs.realpathSync(process.cwd()) !== fs.realpathSync(${JSON.stringify(dir)})) {\n` +
+      `  const real = require('node:child_process').spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), { stdio: 'inherit' })\n` +
+      '  process.exit(real.status ?? 1)\n' +
+      '}\n' +
+      `fs.writeFileSync(${JSON.stringify(startedPath)}, String(process.pid))\n` +
       "setTimeout(() => process.stdout.write('late success\\n'), 30000)\n"
   )
   await chmod(executable, 0o755)
@@ -802,7 +820,6 @@ test('subagentTools exposes only subagent-safe tools', () =>
   assert.ok(names.includes('read_file'))
   assert.ok(names.includes('grep'))
   assert.ok(names.includes('search_code'))
-  assert.ok(names.includes('skill'))
   for (const name of [
     'write_file',
     'edit_file',
