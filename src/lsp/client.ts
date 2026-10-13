@@ -39,10 +39,16 @@ const PROCESS_EXIT_TIMEOUT_MS = 500
 const MAX_STDERR_CHARS = 8_000
 const MAX_START_ATTEMPTS = 2
 
+// undefined content marks an interrupted write; the next sync resends full text
 interface OpenDocument
 {
   version: number
-  content: string
+  content?: string
+}
+
+function isAbortError(error: unknown): boolean
+{
+  return (error as { name?: unknown } | null)?.name === 'AbortError'
 }
 
 function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void>
@@ -390,6 +396,12 @@ export class TypeScriptCodeIntel implements CodeIntelService
     }
     catch (error)
     {
+      // cancellation is not a server failure; keep the prior diagnostic
+      if (signal?.aborted && isAbortError(error))
+      {
+        await this.stopProcess()
+        throw error
+      }
       this.lastError = this.serverError(
         `Failed to start TypeScript language server: ${toErrorMessage(error)}`
       )
@@ -416,7 +428,7 @@ export class TypeScriptCodeIntel implements CodeIntelService
         .catch((error) =>
         {
           // intentional cancellation must not consume the failure restart budget
-          if (signal?.aborted) this.startAttempts--
+          if (isAbortError(error)) this.startAttempts--
           throw error
         })
         .finally(() =>
@@ -442,6 +454,8 @@ export class TypeScriptCodeIntel implements CodeIntelService
     method: string,
     params: unknown,
     signal: AbortSignal,
+    path: string,
+    version: number,
     commit: () => void
   ): Promise<void>
   {
@@ -459,12 +473,19 @@ export class TypeScriptCodeIntel implements CodeIntelService
     }
     catch (error)
     {
-      // a failed write may have reached the server; never reuse that overlay
       if (this.connection === connection)
       {
-        if (signal.aborted) this.startAttempts--
-        this.markStopped(new Error(toErrorMessage(error)))
-        await this.stopProcess()
+        if (signal.aborted)
+        {
+          // the write may have landed; full-text syncs repair it next query
+          this.documents.set(path, { version })
+        }
+        else
+        {
+          // a failed write may have reached the server; never reuse that overlay
+          this.markStopped(new Error(toErrorMessage(error)))
+          await this.stopProcess()
+        }
       }
       throw error
     }
@@ -490,10 +511,13 @@ export class TypeScriptCodeIntel implements CodeIntelService
           'textDocument/didClose',
           { textDocument: { uri } },
           signal,
+          path,
+          current.version,
           () => this.documents.delete(path)
         )
       }
-      if (required || file.reason !== 'missing') throw new Error(file.message)
+      // the server reads closed dependencies itself; only the target can fail
+      if (required) throw new Error(file.message)
       return
     }
 
@@ -511,6 +535,8 @@ export class TypeScriptCodeIntel implements CodeIntelService
           },
         },
         signal,
+        path,
+        1,
         () => this.documents.set(path, { version: 1, content: file.content })
       )
       return
@@ -527,6 +553,8 @@ export class TypeScriptCodeIntel implements CodeIntelService
           contentChanges: [{ text: file.content }],
         },
         signal,
+        path,
+        next,
         () => this.documents.set(path, { version: next, content: file.content })
       )
     }
@@ -631,11 +659,13 @@ export class TypeScriptCodeIntel implements CodeIntelService
       throw new Error('TypeScript language server is unavailable')
     this.assertConnection(connection, signal)
     // refresh only overlays we retained; unopened workspace files stay server-owned
-    for (const retained of this.documents.keys())
+    const retained = [...this.documents.keys()].filter((open) => open !== path)
+    const files = await Promise.all(
+      retained.map((open) => readRequiredTextFile(open, { signal }))
+    )
+    for (const [index, open] of retained.entries())
     {
-      if (retained === path) continue
-      const file = await readRequiredTextFile(retained, { signal })
-      await this.syncDocument(retained, file, connection, signal, false)
+      await this.syncDocument(open, files[index]!, connection, signal, false)
     }
     await this.syncDocument(path, target, connection, signal, true)
     if (request.operation === 'diagnostics')

@@ -70,7 +70,7 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
     started: boolean
     startAttempts: number
     queryTail: Promise<void>
-    documents: Map<string, { version: number; content: string }>
+    documents: Map<string, { version: number; content?: string }>
     handleUnexpectedClose: (connection: MessageConnection) => void
   }
   let starts = 0
@@ -184,8 +184,11 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
     Object.assign(new Error('unreadable'), { code: 'EACCES' })
   )
   const failureStart = events.length
-  await assert.rejects(hover('importer.ts'), /unreadable/)
-  assert.deepEqual(events.slice(failureStart), ['1:textDocument/didClose'])
+  assert.match(await hover('importer.ts'), /missing dependency/)
+  assert.deepEqual(events.slice(failureStart), [
+    '1:textDocument/didClose',
+    '1:textDocument/hover',
+  ])
   assert.equal(internal.documents.has(dependency), false)
 
   files.set(dependency, 'export const value = 3\n')
@@ -205,7 +208,7 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
   internal.handleUnexpectedClose(retired)
   assert.equal(internal.connection, current)
 
-  // keep the earlier real failure charged while cancelled writes retire generations
+  // cancelled writes keep the server and resend full text on the next sync
   for (const value of [5, 6, 7])
   {
     files.set(dependency, `export const value = ${value}\n`)
@@ -218,17 +221,19 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
     controller.abort()
     await cancelled
     await internal.queryTail
-    assert.equal(internal.connection, undefined)
-    assert.equal(internal.documents.size, 0)
-    assert.equal(internal.startAttempts, 1)
+    assert.equal(internal.connection, current)
+    assert.equal(internal.documents.get(dependency)?.content, undefined)
+    assert.equal(internal.startAttempts, 2)
     changeGate.release()
     changeGate = undefined
     changeEntered = undefined
     assert.match(await hover('dependency.ts'), new RegExp(`value = ${value}`))
-    assert.equal(internal.documents.get(dependency)?.version, 1)
-    assert.equal(internal.startAttempts, 2)
+    assert.equal(
+      internal.documents.get(dependency)?.content,
+      `export const value = ${value}\n`
+    )
   }
-  assert.equal(starts, 5)
+  assert.equal(starts, 2)
 
   holdRead = true
   const active = hover('importer.ts')
@@ -240,11 +245,11 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
   assert.equal(client.dispose(), disposal)
   await Promise.all([activeAborted, queuedAborted])
   assert.equal(readSignal?.aborted, true)
-  assert.equal(events.includes('5:shutdown'), false)
+  assert.equal(events.includes('2:shutdown'), false)
   readGate.release()
   await disposal
-  assert.equal(connectionDisposals, 5)
-  assert.equal(events.filter((event) => event === '5:shutdown').length, 1)
+  assert.equal(connectionDisposals, 2)
+  assert.equal(events.filter((event) => event === '2:shutdown').length, 1)
   assert.equal(internal.documents.size, 0)
   assert.deepEqual(new Set(reads), new Set([dependency, importer]))
   await assert.rejects(hover('dependency.ts'), { name: 'AbortError' })

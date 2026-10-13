@@ -20,9 +20,17 @@ export interface ToolDiffPreviewOptions
   allowOutsideWorkspace?: boolean
 }
 
-function diffPreview(diff: string | null): ToolDiffPreview | null
+// a changed file without a displayable diff still explains the missing preview
+function diffPreview(before: string, after: string): ToolDiffPreview | null
 {
-  return diff ? { kind: 'diff', diff } : null
+  if (before === after) return null
+  const diff = computeDiff(before, after)
+  return diff
+    ? { kind: 'diff', diff }
+    : {
+        kind: 'message',
+        message: 'Preview omitted: change is binary or too large to diff',
+      }
 }
 
 // compute an approval diff without touching disk; null means no preview
@@ -52,9 +60,7 @@ export async function previewToolDiff(
       {
         return { kind: 'message', message: formatPreviewSkipMessage(before) }
       }
-      return diffPreview(
-        computeDiff(before.content, String(args.content ?? ''))
-      )
+      return diffPreview(before.content, String(args.content ?? ''))
     }
 
     if (toolName === 'edit_file')
@@ -80,9 +86,7 @@ export async function previewToolDiff(
         String(args.new_string ?? ''),
         Boolean(args.replace_all)
       )
-      return result.ok
-        ? diffPreview(computeDiff(before.content, result.after))
-        : null
+      return result.ok ? diffPreview(before.content, result.after) : null
     }
   }
   catch

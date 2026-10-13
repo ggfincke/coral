@@ -62,7 +62,7 @@ npx --no-install tsx tests/scripts/mlx-benchmark/run.ts validate \
 
 Result files cannot choose weaker thresholds or omit a bad repetition:
 
-Agent iteration limits, timeouts, and runtime errors fail a run even if its task
+Agent iteration limits, doom-loop stops, timeouts, and runtime errors fail a run even if its task
 grader accepts the partial result. Stop diagnostics remain in the result, and a
 stopped or failed first prompt prevents any follow-up prompt from running.
 

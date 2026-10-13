@@ -203,7 +203,7 @@ Up/Down move through visual rows, including wrapped text, graphemes, and tabs. O
 
 Pastes of 1,000 characters or fewer stay inline, including multiline text. Larger pastes collapse. Multiline and large pastes require Enter to confirm, then Enter to send; ordinary edits do not remove that protection. Oversized pastes show dropped-character counts. Ctrl+G opens expanded paste contents in `$VISUAL` or `$EDITOR`; empty/unchanged output cancels, failures explain how to retry, and successful edits use normal composer undo/cursor handling.
 
-A draft retains at most 32 collapsed paste payloads. At capacity, another large paste is visibly refused; accepted payloads remain available through editing and undo. Successful submission releases that draft's payload storage and undo history, including `:wq`; declined submissions retain both. Any Vim register or kill-ring entry retained across prompts keeps its expanded text. An editor result from a retired draft is ignored.
+A draft retains at most 32 collapsed paste payloads. At capacity, payloads no longer reachable from the draft, undo history, kill ring, or Vim register are released first; if 32 remain reachable, another large paste is refused with a hint when the composer has room. Reachable payloads remain available through editing and undo. Successful submission releases that draft's payload storage and undo history, including `:wq`; declined submissions retain both. Any Vim register or kill-ring entry retained across prompts keeps its expanded text. An editor result from a retired draft is ignored.
 
 Vim character operations preserve whole graphemes, including emoji and combining marks. Linewise `P` inserts above the current line; `p` inserts below it.
 
@@ -215,7 +215,7 @@ Context occupancy starts with `~` after resume, fork, undo, redo, or transcript 
 
 Only unmodified `y/Y`, `n/N`, and the tool prompt's `a` can answer approvals. Ctrl/Alt variants do not settle them. Ctrl+Y explains that permission mode is locked; Ctrl+C interrupts. Esc rejects a tool, aborts MCP launch approval, or stops a doom loop. Full available diff previews scroll beneath pinned titles and action keys.
 
-Large or expensive diffs may omit the preview after reaching a source-size or computation limit. File edits and their undo snapshots remain available when a display diff is omitted.
+Large or expensive diffs may omit the preview after reaching a source-size or computation-time limit; the approval prompt then says the preview was omitted. File edits and their undo snapshots remain available when a display diff is omitted.
 
 Idle Esc twice opens **fork from this prompt**. The original is saved, files and current todos remain unchanged, and the selected prompt returns unsent in a fresh child session. See [Sessions](sessions.md).
 

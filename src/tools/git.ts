@@ -215,9 +215,7 @@ export const gitAddTool: Tool = {
 
     if (all)
     {
-      const result = await runGitCommand(['add', '-A'], cwd, {
-        signal: context?.signal,
-      })
+      const result = await runGitCommand(['add', '-A'], cwd)
       if (result.error) return result
       return { output: 'Staged all changes' }
     }
@@ -234,9 +232,7 @@ export const gitAddTool: Tool = {
       return { output: '', error: `Invalid path: ${unsafe}` }
     }
 
-    const result = await runGitCommand(['add', '--', ...paths], cwd, {
-      signal: context?.signal,
-    })
+    const result = await runGitCommand(['add', '--', ...paths], cwd)
     if (result.error) return result
     return { output: `Staged ${paths.length} path(s): ${paths.join(', ')}` }
   },
@@ -273,8 +269,7 @@ export const gitCommitTool: Tool = {
     return runGit(
       ['commit', '-m', message],
       context?.cwd ?? getCwd(),
-      '(commit created)',
-      { signal: context?.signal }
+      '(commit created)'
     )
   },
 }
@@ -358,15 +353,12 @@ export const gitSwitchTool: Tool = {
     flags.push(branch)
     if (startPoint) flags.push(startPoint)
 
-    const switched = await runGitCommand(flags, cwd, {
-      signal: context?.signal,
-    })
+    // once started, a mutation and its report finish so success is never shown as a cancellation
+    const switched = await runGitCommand(flags, cwd)
     if (switched.error) return switched
 
-    const currentBranch = await currentBranchLabel(cwd, context?.signal)
-    const status = await runGitCommand(['status', '--short'], cwd, {
-      signal: context?.signal,
-    })
+    const currentBranch = await currentBranchLabel(cwd)
+    const status = await runGitCommand(['status', '--short'], cwd)
     const statusBlock =
       !status.error && status.output.trim()
         ? `Status:\n${status.output}`
@@ -445,7 +437,6 @@ export const gitPushTool: Tool = {
     // pushes hit the network — allow more time than the default git timeout
     return runGit(flags, context?.cwd ?? getCwd(), '(pushed)', {
       timeout: 60_000,
-      signal: context?.signal,
     })
   },
 }

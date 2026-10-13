@@ -111,7 +111,7 @@ Chat requests send `keep_alive: '10m'` unless a caller overrides `ChatRequest.ke
 
 If `/api/chat` returns HTTP **400, 404, or 422** and the error body mentions `think` or `unknown field`, the client retries **once** without `think` and caches that the model does not support it. Other rejections are not retried.
 
-Every non-cancelled chat stream must end with a valid `done: true` record. The client accepts an unterminated final line and metadata-only completion records, preserves server error messages, and rejects malformed records or premature EOF. On failure, Agent retains streamed text and reasoning, discards incomplete tool calls, and reports failure without `onDone`.
+Every non-cancelled chat stream must end with a valid `done: true` record. The client accepts an unterminated final line and metadata-only completion records, preserves server error messages, and rejects malformed records or premature EOF. On failure, Agent retains streamed text with its reasoning (reasoning-only output is not stored), discards incomplete tool calls, and reports failure without `onDone`.
 
 `startKeepAlive(model)` only remembers `lastModel`. It does **not** send a keep-alive request. `evictModel` POSTs `keep_alive: 0`; Agent `dispose()` never calls it, so a loaded model stays on the Ollama host after Coral exits.
 
@@ -414,9 +414,9 @@ Each interactive Agent constructs one `TypeScriptCodeIntel` (`src/lsp/client.ts`
 
 No other languages, no rename/refactor, no workspace-wide diagnostic sweep.
 
-Each query serializes a disk refresh of previously opened documents plus its requested file before asking the same connection for semantic results. Changed documents receive `didChange`; missing or unreadable retained documents receive `didClose`, and unreadable files fail the query. Cancellation prevents queued work from starting. Disposal aborts and joins active work before releasing the owned server.
+Each query serializes a disk refresh of previously opened documents plus its requested file before asking the same connection for semantic results. Retained documents are read in parallel, then synchronized in order. Changed documents receive `didChange`; missing or unreadable retained documents receive `didClose` and fall back to the server's own disk reads, while only an unreadable requested file fails the query. Cancellation prevents queued work from starting. Disposal aborts and joins active work before releasing the owned server.
 
-Timeouts: 30s startup, 15s requests, 5s diagnostics, 2s shutdown, 500ms process-exit wait. The restart budget allows **2** start attempts; intentional cancellation during startup or a document notification refunds that attempt while retiring any uncertain overlay. Genuine startup/connection failures remain charged. Diagnostics synchronize the document and request complete syntax, semantic, and suggestion results through the bundled server's `typescript.tsserverRequest` command, sharing one 5s deadline. Partial push notifications cannot settle the result. A timeout reports an error; the project typecheck remains a manual fallback.
+Timeouts: 30s startup, 15s requests, 5s diagnostics, 2s shutdown, 500ms process-exit wait. The restart budget allows **2** start attempts; intentional cancellation during startup refunds that attempt. Cancellation during a document notification keeps the server and marks that overlay uncertain, so the next query resends its full text (or close). Genuine startup/connection failures remain charged and retire the server. Diagnostics synchronize the document and request complete syntax, semantic, and suggestion results through the bundled server's `typescript.tsserverRequest` command, sharing one 5s deadline. Partial push notifications cannot settle the result. A timeout reports an error; the project typecheck remains a manual fallback.
 
 ---
 

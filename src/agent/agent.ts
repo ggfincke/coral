@@ -1152,14 +1152,13 @@ export class Agent
   // retain streamed text without committing an unfinished tool invocation
   private recordPartialResponse(
     fullContent: string,
-    fullThinking: string,
-    placeholder = '(interrupted)'
+    fullThinking: string
   ): void
   {
     if (!fullContent && !fullThinking) return
     const partial: OllamaMessage = {
       role: 'assistant',
-      content: fullContent || placeholder,
+      content: fullContent || '(interrupted)',
     }
     if (fullThinking) partial.thinking = fullThinking
     this.pushMessage(partial)
@@ -1602,12 +1601,9 @@ export class Agent
             return finish()
           }
 
+          // keep visible text only; reasoning alone never becomes an assistant reply
+          if (fullContent) this.recordPartialResponse(fullContent, fullThinking)
           // record undo for prior mutations without signaling clean completion
-          this.recordPartialResponse(
-            fullContent,
-            fullThinking,
-            '(incomplete response)'
-          )
           return fail(toError(err))
         }
 

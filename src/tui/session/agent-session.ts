@@ -189,7 +189,12 @@ export function forkAgentSession(
       todos,
       [],
       [],
-      `${parent.title} (fork)`
+      `${parent.title} (fork)`,
+      // the prefix keeps the parent's handoffs, so it keeps their metrics too
+      {
+        compactionCount: agent.getCompactionCount(),
+        lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
+      }
     )
     childId = meta.id
     if (!actions.adopt({ meta, messages: prefix, todos, undo: [], redo: [] }))
