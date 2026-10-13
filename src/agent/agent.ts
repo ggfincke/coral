@@ -340,6 +340,7 @@ export class Agent
   private createReadOnlySubagent(): Agent
   {
     return new Agent(this.model, this.baseUrl, this.cwd, {
+      inferenceClient: this.client,
       think: this.thinkMode,
       tools: subagentTools,
       maxIterations: SUBAGENT_MAX_ITERATIONS,
@@ -477,6 +478,20 @@ export class Agent
   {
     this.turnContext.clearFileObservations()
     this.state.restoreMessages(savedMessages)
+  }
+
+  // restore durable session metrics before admitting another turn
+  restoreSuccessfulCompactionMetrics(metrics: {
+    successfulCount?: number
+    lastCompactedAt?: string
+  }): void
+  {
+    this.lifecycleAbort.signal.throwIfAborted()
+    if (this.acceptedTurn)
+    {
+      throw new Error('Cannot restore compaction metrics during an active turn')
+    }
+    this.state.restoreSuccessfulCompactionMetrics(metrics)
   }
 
   // native session watchers publish hints without mutating stored history
@@ -1101,8 +1116,8 @@ export class Agent
     events.onDone()
   }
 
-  // record streamed content as a partial assistant message on abort
-  private recordPartialOnAbort(
+  // retain streamed text without committing an unfinished tool invocation
+  private recordPartialResponse(
     fullContent: string,
     fullThinking: string
   ): void
@@ -1541,11 +1556,13 @@ export class Agent
           if (signal?.aborted)
           {
             // preserve streamed content as a partial message
-            this.recordPartialOnAbort(fullContent, fullThinking)
+            this.recordPartialResponse(fullContent, fullThinking)
             finish()
             return
           }
 
+          // keep visible text only; reasoning alone never becomes an assistant reply
+          if (fullContent) this.recordPartialResponse(fullContent, fullThinking)
           // record undo for prior mutations without signaling clean completion
           fail(toError(err))
           return
@@ -1554,7 +1571,7 @@ export class Agent
         // save partial content and stop after a mid-stream abort
         if (signal?.aborted)
         {
-          this.recordPartialOnAbort(fullContent, fullThinking)
+          this.recordPartialResponse(fullContent, fullThinking)
           finish()
           return
         }

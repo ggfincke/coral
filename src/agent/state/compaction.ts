@@ -349,6 +349,30 @@ export function countFrozenPrefix(messages: OllamaMessage[]): number
   return count
 }
 
+// move a retained result cutoff back to its assistant and all sibling results
+export function alignToolRoundStart(
+  messages: readonly OllamaMessage[],
+  start: number,
+  lowerBound = 0
+): number
+{
+  if (messages[start]?.role !== 'tool') return start
+  let firstResult = start
+  while (
+    firstResult > lowerBound &&
+    messages[firstResult - 1]?.role === 'tool'
+  )
+  {
+    firstResult--
+  }
+  const owner = messages[firstResult - 1]
+  return firstResult > lowerBound &&
+    owner?.role === 'assistant' &&
+    owner.tool_calls?.length
+    ? firstResult - 1
+    : start
+}
+
 // split the live region into messages to summarize and messages to retain
 // without changing the frozen prefix
 export function splitForCompaction(
@@ -374,10 +398,10 @@ export function splitForCompaction(
     splitIndex++
   }
 
-  // use the target when no user-message boundary exists
+  // keep a complete tool round when the retained tail has no user boundary
   if (splitIndex >= live.length)
   {
-    splitIndex = splitTarget
+    splitIndex = alignToolRoundStart(live, splitTarget)
   }
 
   return {

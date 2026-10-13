@@ -69,6 +69,10 @@ export function buildPrimaryAgent(options: PrimaryAgentOptions): Agent
   if (options.restored)
   {
     agent.restoreMessages(options.restored.messages)
+    agent.restoreSuccessfulCompactionMetrics({
+      successfulCount: options.restored.meta.compactionCount,
+      lastCompactedAt: options.restored.meta.lastCompactedAt,
+    })
     agent.restoreUndoStack(options.restored.undo, options.restored.redo)
   }
   return agent
@@ -108,7 +112,16 @@ export function persistAgentSession(
           undo,
           redo
         )
-      : createSession(model, cwd, messages, todos, undo, redo)
+      : createSession(
+          model,
+          cwd,
+          messages,
+          todos,
+          undo,
+          redo,
+          undefined,
+          metaHint
+        )
   }
   catch
   {
@@ -165,7 +178,12 @@ export function forkAgentSession(
       todos,
       [],
       [],
-      `${parent.title} (fork)`
+      `${parent.title} (fork)`,
+      // the prefix keeps the parent's handoffs, so it keeps their metrics too
+      {
+        compactionCount: agent.getCompactionCount(),
+        lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
+      }
     )
     childId = meta.id
     if (!actions.adopt({ meta, messages: prefix, todos, undo: [], redo: [] }))

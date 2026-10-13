@@ -111,6 +111,8 @@ Chat requests send `keep_alive: '10m'` unless a caller overrides `ChatRequest.ke
 
 If `/api/chat` returns HTTP **400, 404, or 422** and the error body mentions `think` or `unknown field`, the client retries **once** without `think` and caches that the model does not support it. Other rejections are not retried.
 
+Every non-cancelled chat stream must end with a valid `done: true` record. The client accepts an unterminated final line and metadata-only completion records, preserves server error messages, and rejects malformed records or premature EOF. On failure, Agent retains streamed text with its reasoning (reasoning-only output is not stored), discards incomplete tool calls, and reports failure without `onDone`.
+
 `startKeepAlive(model)` only remembers `lastModel`. It does **not** send a keep-alive request. `evictModel` POSTs `keep_alive: 0`; Agent `dispose()` never calls it, so a loaded model stays on the Ollama host after Coral exits.
 
 The client concatenates consecutive leading `system` messages into one wire system message (prompt + optional Git context). Frozen compaction handoffs are **user** messages, so they are not coalesced. Coral never adds Ollama's `format` field on tool-bearing requests because that drops `tool_calls`.
@@ -140,7 +142,7 @@ This layer exists so the TUI is not the source of truth for history, and so comp
 
 The Ink UI is not the Agent.
 
-- `InteractiveSessionRuntime` (`src/tui/session/interactive-runtime.ts`) is **framework-neutral**. It owns Agent generations, one active operation (`turn` or `command`), one lifecycle transition (`model`, `permission`, or `session`), blocking prompts (`tool`, `mcp`, `doom`), session binding, persist-on-complete, and Agent retirement. Process signals are handled by the React hook plus `src/tui/shell/shutdown.ts`.
+- `InteractiveSessionRuntime` (`src/runtime/interactive-session.ts`, re-exported by `src/tui/session/interactive-runtime.ts`) is **framework-neutral**. It owns Agent generations, one active operation (`turn` or `command`), one lifecycle transition (`model`, `permission`, or `session`), blocking prompts (`tool`, `mcp`, `doom`), session binding, persist-on-complete, and Agent retirement. Process signals are handled by the React hook plus `src/tui/shell/shutdown.ts`.
 - `useInteractiveSession` adapts that authority into React: construct/switch/resume Agents, MCP ask/yolo, persist/rename/clear, SIGINT/SIGTERM.
 - `useAgentTurn` projects Agent events into the transcript and run stage.
 - `useModelPicker` owns model discovery and selection presentation.
@@ -355,7 +357,7 @@ MCP tools cannot claim a built-in name (after normalization). They cannot self-g
 
 ### `task` subagents
 
-`task` runs a **read-only child Agent** with a 24-iteration cap, shared LSP client, inherited `num_ctx`, `mcpMode: 'off'`, `verifyEdits: false`, and tools limited to `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`. Unexpected `require_approval` calls are denied (no prompt). `task` itself is not subagent-safe (no recursion). The optional `description` argument is display-only; only `prompt` is forwarded.
+`task` runs a **read-only child Agent** with a 24-iteration cap, the parent's inference and LSP clients, inherited `num_ctx`, `mcpMode: 'off'`, `verifyEdits: false`, and tools limited to `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`. Unexpected `require_approval` calls are denied (no prompt). `task` itself is not subagent-safe (no recursion). The optional `description` argument is display-only; only `prompt` is forwarded.
 
 ---
 
@@ -515,7 +517,7 @@ flowchart TD
 | **hard-fit**            | Planner returned `needs_history_compaction`                | System + active turn; everything between is summarized                                                                                                                                                  | **Yes**      |
 | **manual** (`/compact`) | User command                                               | Frozen prefix is **system only**, then the new handoff. TUI refuses when **non-system** messages < 4; `forceCompact` / `prepareSummary('manual')` refuse when **total** messages (including system) < 4 | **Yes**      |
 
-A separate **hard message-count guard** runs every model-request iteration after `compactIfNeeded`: if stored messages exceed 100, Coral trims to 100 (preserving the active turn). That is independent of whether prune/summarize ran.
+A separate **message-count guard** runs every model-request iteration after `compactIfNeeded`: if stored messages exceed 100, Coral trims toward 100 while preserving the active turn and complete assistant/tool rounds. Compaction and trim boundaries move backward to the owning assistant when a cutoff would split its tool results; an indivisible group can therefore exceed the target. Summary preparation returns a no-op when no complete group can be summarized. The count guard is independent of whether prune/summarize ran.
 
 `onCompactionStart` fires only before a **summarization** model call, not before prune. Successful summarize/trim TUI notices include `Undo history cleared`. Prune notices do not.
 
