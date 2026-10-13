@@ -49,7 +49,9 @@ export const gitStatusTool: Tool = {
   {
     const short = (args.short as boolean) ?? true
     const flags = short ? ['status', '--short'] : ['status']
-    return runGit(flags, context?.cwd ?? getCwd())
+    return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
+      signal: context?.signal,
+    })
   },
 }
 
@@ -110,6 +112,7 @@ export const gitDiffTool: Tool = {
     // git diff can exit 1 with valid output in some configs, so trust stdout
     return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
       allowStdoutOnError: true,
+      signal: context?.signal,
     })
   },
 }
@@ -170,7 +173,9 @@ export const gitLogTool: Tool = {
     if (ref) flags.push(ref)
     if (path) flags.push('--', path)
 
-    return runGit(flags, context?.cwd ?? getCwd())
+    return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
+      signal: context?.signal,
+    })
   },
 }
 
@@ -334,7 +339,8 @@ export const gitSwitchTool: Tool = {
     {
       const branchCheck = await runGitCommand(
         ['check-ref-format', '--branch', branch],
-        cwd
+        cwd,
+        { signal: context?.signal }
       )
       if (branchCheck.error)
       {
@@ -347,6 +353,7 @@ export const gitSwitchTool: Tool = {
     flags.push(branch)
     if (startPoint) flags.push(startPoint)
 
+    // once started, a mutation and its report finish so success is never shown as a cancellation
     const switched = await runGitCommand(flags, cwd)
     if (switched.error) return switched
 

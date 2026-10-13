@@ -89,18 +89,25 @@ const ajvOptions: AjvOptions = {
   allErrors: true,
 }
 
-// compile each schema under its declared dialect because SDK servers may use draft-07
-const ajv2020 = addFormats(new Ajv2020(ajvOptions))
-const ajvDraft07 = addFormats(new Ajv(ajvOptions))
+// anonymous schemas share one compiler per dialect
+const sharedAjv2020 = addFormats(new Ajv2020(ajvOptions))
+const sharedAjvDraft07 = addFormats(new Ajv(ajvOptions))
 
+// keep schema IDs local to each contract while honoring its declared dialect
 function schemaValidator<T>(schema: JsonSchema): JsonSchemaValidator<T>
 {
   const declared = (schema as { $schema?: unknown }).$schema
-  const ajv =
-    typeof declared === 'string' && declared.includes('draft-07')
-      ? ajvDraft07
-      : ajv2020
+  const draft07 = typeof declared === 'string' && declared.includes('draft-07')
+  // any $id gets a private registry so reused IDs never collide across tools
+  const identified = JSON.stringify(schema).includes('"$id"')
+  const ajv = identified
+    ? addFormats(draft07 ? new Ajv(ajvOptions) : new Ajv2020(ajvOptions))
+    : draft07
+      ? sharedAjvDraft07
+      : sharedAjv2020
   const validate = ajv.compile(schema as Record<string, unknown>)
+  // drop the shared cache entry so retired tool contracts can be collected
+  if (!identified) ajv.removeSchema(schema as Record<string, unknown>)
   return (input) =>
     validate(input)
       ? { valid: true, data: input as T, errorMessage: undefined }

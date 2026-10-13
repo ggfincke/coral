@@ -40,6 +40,23 @@ describe('/copy helpers', () =>
     assert.equal(lastCodeBlock('just prose with `inline` only'), null)
     assert.equal(lastCodeBlock('plain paragraph text'), null)
   })
+
+  test('lastCodeBlock prefers the final list-nested fence in document order', () =>
+  {
+    const markdown = [
+      '```ts',
+      'const earlier = true',
+      '```',
+      '',
+      '> - Nested snippet',
+      '>',
+      '>   ```ts',
+      '>   const final = true',
+      '>   ```',
+    ].join('\n')
+
+    assert.equal(lastCodeBlock(markdown), 'const final = true')
+  })
 })
 
 describe('shutdown', () =>

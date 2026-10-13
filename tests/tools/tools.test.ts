@@ -4,10 +4,18 @@
 import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, symlink, utimes, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  readFile,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { setCwd } from '../../src/cwd.js'
+import { revertFileChanges } from '../../src/agent/effects/file-replay.js'
 import { bashTool } from '../../src/tools/bash.js'
 import { readTool } from '../../src/tools/read.js'
 import { globTool } from '../../src/tools/glob.js'
@@ -15,7 +23,9 @@ import { grepTool } from '../../src/tools/grep.js'
 import { listFilesTool } from '../../src/tools/list-files.js'
 import { writeTool } from '../../src/tools/write.js'
 import { editTool } from '../../src/tools/edit.js'
+import { previewToolDiff } from '../../src/tools/preview.js'
 import {
+  gitStatusTool,
   gitDiffTool,
   gitLogTool,
   gitAddTool,
@@ -184,6 +194,66 @@ test('write_file records created-file undo metadata', async () =>
     after: 'hello\n',
   })
   assert.equal(await readFile(target, 'utf-8'), 'hello\n')
+})
+
+test('diff budget fallback preserves file mutations and undo snapshots', async (t) =>
+{
+  const dir = await tempDir('coral-diff-fallback-')
+  const target = join(dir, 'change.txt')
+  const before = 'original\n'
+  const writtenContent = 'added\n'.repeat(2_001)
+  const editedContent = 'replacement\n'.repeat(2_001)
+  await writeFile(target, before, 'utf-8')
+  const context = { cwd: dir, ollamaHost: 'http://localhost:11434' }
+  // every clock read exhausts the diff time budget
+  let now = 0
+  t.mock.method(Date, 'now', () => (now += 60_000))
+
+  const writeArgs = { path: 'change.txt', content: writtenContent }
+  assert.equal(
+    (await previewToolDiff('write_file', writeArgs, context))?.kind,
+    'message'
+  )
+  assert.equal(await readFile(target, 'utf-8'), before)
+
+  const written = await writeTool.execute(writeArgs, context)
+  assert.equal(written.error, undefined)
+  assert.equal(written.diff, undefined)
+  assert.ok(written.change)
+  assert.deepEqual(written.change, {
+    path: target,
+    before,
+    after: writtenContent,
+  })
+  assert.equal(await readFile(target, 'utf-8'), writtenContent)
+
+  const editArgs = {
+    path: 'change.txt',
+    old_string: writtenContent,
+    new_string: editedContent,
+  }
+  assert.equal(
+    (await previewToolDiff('edit_file', editArgs, context))?.kind,
+    'message'
+  )
+  assert.equal(await readFile(target, 'utf-8'), writtenContent)
+
+  const edited = await editTool.execute(editArgs, context)
+  assert.equal(edited.error, undefined)
+  assert.equal(edited.diff, undefined)
+  assert.ok(edited.change)
+  assert.deepEqual(edited.change, {
+    path: target,
+    before: writtenContent,
+    after: editedContent,
+  })
+  assert.equal(await readFile(target, 'utf-8'), editedContent)
+
+  assert.deepEqual(
+    await revertFileChanges([written.change, edited.change], { cwd: dir }),
+    { ok: true, changedFiles: 1 }
+  )
+  assert.equal(await readFile(target, 'utf-8'), before)
 })
 
 test('edit_file refuses oversized results without mutating disk', async () =>
@@ -471,6 +541,100 @@ test('bash kills the spawned child when the run is aborted', async () =>
   // resolves on abort, not after the 30s child — proves the child was signaled
   assert.ok(Date.now() - startedAt < 5000)
   assert.ok(result.error)
+})
+
+test('git cancellation reaches the running subprocess', async () =>
+{
+  const dir = await tempDir('coral-git-cancel-')
+  const executable = join(dir, 'git')
+  const startedPath = join(dir, 'started')
+  const realGit = spawnSync('/bin/sh', ['-c', 'command -v git'], {
+    encoding: 'utf8',
+  }).stdout.trim()
+  // PATH is process-wide, so git calls from outside this workspace pass through
+  await writeFile(
+    executable,
+    `#!${process.execPath}\n` +
+      "const fs = require('node:fs')\n" +
+      `if (fs.realpathSync(process.cwd()) !== fs.realpathSync(${JSON.stringify(dir)})) {\n` +
+      `  const real = require('node:child_process').spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), { stdio: 'inherit' })\n` +
+      '  process.exit(real.status ?? 1)\n' +
+      '}\n' +
+      `fs.writeFileSync(${JSON.stringify(startedPath)}, String(process.pid))\n` +
+      "setTimeout(() => process.stdout.write('late success\\n'), 30000)\n"
+  )
+  await chmod(executable, 0o755)
+  const previousPath = process.env.PATH
+  const controller = new AbortController()
+  let pid: number | undefined
+  let running: Promise<unknown> | undefined
+  const waitUntil = async (predicate: () => Promise<boolean>) =>
+  {
+    const deadline = Date.now() + 5_000
+    while (!(await predicate()))
+    {
+      assert.ok(Date.now() < deadline, 'controlled git process did not settle')
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+  try
+  {
+    process.env.PATH = `${dir}:${previousPath ?? ''}`
+    running = gitStatusTool.execute(
+      {},
+      {
+        cwd: dir,
+        ollamaHost: 'http://unused.invalid',
+        signal: controller.signal,
+      }
+    )
+    // observe early failures while waiting for the child to announce startup
+    void running.catch(() => undefined)
+    await waitUntil(async () =>
+    {
+      try
+      {
+        pid = Number(await readFile(startedPath, 'utf8'))
+        return Number.isInteger(pid) && pid > 0
+      }
+      catch
+      {
+        return false
+      }
+    })
+    controller.abort()
+    await assert.rejects(running, { name: 'AbortError' })
+    await waitUntil(async () =>
+    {
+      try
+      {
+        process.kill(pid!, 0)
+        return false
+      }
+      catch (error)
+      {
+        return (error as NodeJS.ErrnoException).code === 'ESRCH'
+      }
+    })
+  }
+  finally
+  {
+    controller.abort()
+    if (pid)
+    {
+      try
+      {
+        process.kill(pid, 'SIGKILL')
+      }
+      catch
+      {
+        // cancellation may already have reaped the child
+      }
+    }
+    await running?.catch(() => undefined)
+    if (previousPath === undefined) delete process.env.PATH
+    else process.env.PATH = previousPath
+  }
 })
 
 test('git tools reject option-like inputs before shelling out', async () =>

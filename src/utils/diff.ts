@@ -5,6 +5,8 @@ import { structuredPatch } from 'diff'
 
 // skip diffing sources past this size — generation cost outweighs the value
 const MAX_DIFF_SOURCE_CHARS = 1_000_000
+// abandon expensive previews before they hold up tool execution or approval
+const DIFF_TIMEOUT_MS = 250
 // cap emitted diff lines; remaining changes collapse into a summary marker
 const MAX_DIFF_LINES = 200
 // hunk context lines (git default)
@@ -19,7 +21,7 @@ function isBinary(content: string): boolean
 }
 
 // build a unified diff body (hunk headers + lines) or null when there is
-// nothing displayable: no changes, binary content, or oversized input
+// nothing displayable: no changes, binary content, or exhausted size/time limits
 export function computeDiff(before: string, after: string): string | null
 {
   if (before === after) return null
@@ -34,8 +36,9 @@ export function computeDiff(before: string, after: string): string | null
 
   const patch = structuredPatch('', '', before, after, '', '', {
     context: DIFF_CONTEXT,
+    timeout: DIFF_TIMEOUT_MS,
   })
-  if (patch.hunks.length === 0) return null
+  if (!patch || patch.hunks.length === 0) return null
 
   const lines: string[] = []
   let truncatedChanges = 0
