@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-13
+
+### Fixed
+
+- **Chat streams:** require every Ollama stream to end with a valid completion
+  record. Malformed records, in-stream server errors, and early EOF now fail
+  the turn instead of completing silently; streamed text is kept, but partial
+  tool calls never run.
+- **Conversation history:** compaction and the message-count trim no longer
+  split an assistant's tool calls from their results. Compaction count and
+  timestamp survive save, resume (TUI and ACP), and forks.
+- **Code intelligence:** refresh previously opened files before each query so
+  diagnostics follow dependency edits on disk. A file that disappears or
+  becomes unreadable no longer fails queries about other files, and cancelling
+  a query no longer restarts the language server.
+- **Composer:** large pastes are no longer silently evicted while still in the
+  draft; at the 32-paste limit, unreachable payloads are released before a
+  paste is refused. Vim mode keeps emoji and combining marks whole, and
+  linewise `P` inserts above the current line. `/copy code` finds code blocks
+  nested in lists.
+- **Tools:** cancelling a turn stops running read-only git commands, while
+  add, commit, switch, and push finish so completed changes are never reported
+  as cancelled. Slow diff previews give up after 250 ms, and the approval
+  prompt says when a preview was omitted. MCP servers that reuse schema `$id`s
+  no longer collide.
+- **Model context sizing:** tagless model names (such as `gemma4`) resolve
+  through Ollama aliases instead of reading as zero bytes, which overstated the
+  available context. `task` subagents reuse the parent's inference client.
+- **Evaluation:** eval and benchmark runs that hit the iteration cap, a
+  doom-loop stop, or a timeout now fail even when the grader accepts the
+  partial result.
+
 ## [0.17.0] - 2026-10-09
 
 ### Added
@@ -775,7 +807,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
-[Unreleased]: https://github.com/ggfincke/coral/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/ggfincke/coral/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/ggfincke/coral/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/ggfincke/coral/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/ggfincke/coral/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/ggfincke/coral/compare/v0.14.0...v0.15.0
