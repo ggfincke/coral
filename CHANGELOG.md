@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Workspace tool grants:** `(p)` on a tool approval remembers the grant for
+  the current workspace, so the next session in that directory does not prompt
+  for that built-in tool again. Grants are user-owned, keyed to the tool and
+  the workspace realpath, and stored one file per grant under
+  `CORAL_HOME/tool-grants.d/`. MCP tools and outside-workspace promotions stay
+  session-scoped. `/permissions grants` lists them and `/permissions revoke
+<tool|all>` forgets them.
+
 ## [0.17.1] - 2026-10-13
 
 ### Fixed

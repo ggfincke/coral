@@ -2,6 +2,7 @@
 // format permission, MCP, and theme runtime command output
 
 import chalk from 'chalk'
+import type { ToolGrantRecord } from '../../config/tool-grants.js'
 import type { McpServerStatus, McpStatus } from '../../mcp/types.js'
 import {
   PERSONAL_SKILLS_HINT,
@@ -39,10 +40,53 @@ export function formatPermissionsHelp(yolo: boolean): string
     : 'prompt before writes, shell commands, & MCP tools'
   return (
     `Permission mode: ${chalk.bold(current)} (${description})\n\n` +
-    `  ${style('user')('/permissions ask')}   — prompt before gated calls; full permitted MCP allowlists\n` +
-    `  ${style('user')('/permissions yolo')}  — auto-approve gated calls; exact pre-trusted MCP yoloTools only\n` +
-    `  ${chalk.dim('ctrl+y')}             — quick toggle`
+    `  ${style('user')('/permissions ask')}             — prompt before gated calls; full permitted MCP allowlists\n` +
+    `  ${style('user')('/permissions yolo')}            — auto-approve gated calls; exact pre-trusted MCP yoloTools only\n` +
+    `  ${style('user')('/permissions grants')}          — list this workspace's persistent tool grants\n` +
+    `  ${style('user')('/permissions revoke <tool>')}   — forget a grant (or ${chalk.bold('all')}); the tool prompts again\n` +
+    `  ${chalk.dim('ctrl+y')}                       — quick toggle`
   )
+}
+
+// grants are user-owned per-workspace state, so always say which workspace
+export function formatToolGrants(
+  records: readonly ToolGrantRecord[],
+  workspace: string
+): string
+{
+  const where = sanitizeUntrustedText(workspace)
+  if (records.length === 0)
+  {
+    return `No persistent tool grants for ${where}\n${chalk.dim('Press (p) on a tool approval to remember it for this workspace.')}`
+  }
+  const lines = records.map(
+    (record) =>
+      `  ${style('warning')(record.toolName)}  ${chalk.dim(`granted ${record.approvedAt}`)}`
+  )
+  return `Persistent tool grants for ${where}:\n${lines.join('\n')}\n${chalk.dim('/permissions revoke <tool> forgets one; /permissions revoke all forgets every grant here.')}`
+}
+
+export function formatToolGrantRevoked(
+  toolName: string,
+  revoked: boolean
+): string
+{
+  const name = sanitizeUntrustedText(toolName)
+  return revoked
+    ? `Revoked the workspace grant for ${chalk.bold(name)}; it prompts again on its next call.`
+    : `No workspace grant for ${chalk.bold(name)}. Any session grant for it was dropped.`
+}
+
+export function formatToolGrantsRevoked(count: number): string
+{
+  return count === 0
+    ? 'No persistent tool grants to revoke for this workspace.'
+    : `Revoked ${count} workspace grant${count === 1 ? '' : 's'}; those tools prompt again on their next call.`
+}
+
+export function formatToolGrantRevokeUsage(): string
+{
+  return `Usage: ${style('user')('/permissions revoke <tool>')} or ${style('user')('/permissions revoke all')}`
 }
 
 export function formatPermissionModeChange(yolo: boolean): string

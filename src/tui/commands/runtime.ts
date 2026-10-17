@@ -27,6 +27,10 @@ import {
   describePermissionMode,
   formatMcpStatus,
   formatPermissionsHelp,
+  formatToolGrantRevoked,
+  formatToolGrantRevokeUsage,
+  formatToolGrants,
+  formatToolGrantsRevoked,
   formatSkillsStatus,
   formatThemeList,
   formatUnknownPermissionMode,
@@ -347,7 +351,8 @@ const modelCommand: Command = {
 const permissionsCommand: Command = {
   name: 'permissions',
   aliases: ['perm', 'perms'],
-  description: 'Show or set permission mode (ask / yolo)',
+  description:
+    'Show or set permission mode (ask / yolo); list or revoke workspace grants',
   async execute(args, ctx)
   {
     if (!args)
@@ -356,7 +361,42 @@ const permissionsCommand: Command = {
       return
     }
 
-    const mode = args.trim().toLowerCase()
+    const [verb = '', ...rest] = args.trim().split(/\s+/)
+    const mode = verb.toLowerCase()
+
+    if (mode === 'grants')
+    {
+      ctx.pushOutput(
+        systemBlock(formatToolGrants(ctx.toolGrants.list(), ctx.getCwd()))
+      )
+      return
+    }
+
+    if (mode === 'revoke')
+    {
+      const target = rest.join(' ')
+      if (!target)
+      {
+        ctx.pushOutput(systemBlock(formatToolGrantRevokeUsage()))
+        return
+      }
+      if (target.toLowerCase() === 'all')
+      {
+        let revoked = 0
+        for (const record of ctx.toolGrants.list())
+        {
+          if (ctx.toolGrants.revoke(record.toolName)) revoked += 1
+        }
+        ctx.pushOutput(systemBlock(formatToolGrantsRevoked(revoked)))
+        return
+      }
+      ctx.pushOutput(
+        systemBlock(
+          formatToolGrantRevoked(target, ctx.toolGrants.revoke(target))
+        )
+      )
+      return
+    }
 
     if (mode !== 'yolo' && mode !== 'ask')
     {

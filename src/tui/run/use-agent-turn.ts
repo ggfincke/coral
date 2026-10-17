@@ -377,7 +377,7 @@ export function useAgentTurn(
                 } satisfies ToolCallBlock,
               ])
             },
-            async onToolApproval(name, args, presentation)
+            async onToolApproval(name, args, presentation, _callId, promoted)
             {
               if (!acceptsEvent(operation)) return false
               if (isYolo()) return true
@@ -392,6 +392,7 @@ export function useAgentTurn(
                 previewMessage:
                   preview?.kind === 'message' ? preview.message : undefined,
                 presentation,
+                promoted: promoted === true,
               })
             },
             onMcpLaunchApproval(request)

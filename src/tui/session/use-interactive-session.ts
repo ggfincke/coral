@@ -27,6 +27,7 @@ import {
   type PromptSettlement,
   type SessionSaveResult,
   type ToolApprovalRequest,
+  type ToolGrantPersistence,
 } from './interactive-runtime.js'
 import { ProjectFileCatalog } from './project-file-catalog.js'
 import {
@@ -54,6 +55,8 @@ export interface UseInteractiveSessionOptions
   initialSession: SessionData | null
   exit: () => void
   view: InteractiveSessionView
+  // persistent per-workspace tool grants consulted by approval prompts
+  toolGrants?: ToolGrantPersistence
 }
 
 export type PermissionTransitionResult =
@@ -117,6 +120,8 @@ export interface InteractiveSession
     request: ToolApprovalRequest
   ) => Promise<boolean>
   settlePrompt: (id: number, settlement: PromptSettlement) => boolean
+  // drop a session grant after its persistent grant is revoked
+  forgetSessionToolGrant: (toolName: string) => void
   completeTurn: (handle: OperationHandle<Agent>) => OperationCompletion
   finishCommand: (handle: OperationHandle<Agent>) => boolean
   runOperation: <T>(
@@ -203,6 +208,7 @@ export function useInteractiveSession(
           onPromptChange: setActivePrompt,
           onSessionChange: setSessionMeta,
           onTransitionChange: setTransition,
+          toolGrants: options.toolGrants,
         },
         initialAgent,
         options.initialSession?.meta ?? null
@@ -727,6 +733,10 @@ export function useInteractiveSession(
       runtime.settlePrompt(id, settlement),
     [runtime]
   )
+  const forgetSessionToolGrant = useCallback(
+    (toolName: string) => runtime.forgetSessionToolGrant(toolName),
+    [runtime]
+  )
   const completeTurn = useCallback(
     (handle: OperationHandle<Agent>): OperationCompletion =>
     {
@@ -813,6 +823,7 @@ export function useInteractiveSession(
     requestPrompt,
     requestToolApproval,
     settlePrompt,
+    forgetSessionToolGrant,
     completeTurn,
     finishCommand,
     runOperation,

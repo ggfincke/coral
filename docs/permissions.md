@@ -7,6 +7,7 @@ Coral has **three different knobs**. Mixing them up is the usual source of confu
 | **Per-tool policy**     | `always_allow`, `require_approval`, `always_deny` | Built-in defaults, `~/.coral.json` `permissions`, project `.coral.json` `permissions`                          |
 | **TUI permission mode** | `ask` or `yolo`                                   | `--yolo`, `/permissions`, `Ctrl+Y`                                                                             |
 | **MCP mode**            | `off`, `ask`, `yolo`                              | Interactive TUI always passes ask or yolo. `off` is Agent default, subagents, and `coral exec` without `--mcp` |
+| **Workspace grants**    | per tool, per workspace                           | `(a)` for the session or `(p)` to persist, on a tool approval; `/permissions grants`, `/permissions revoke`    |
 
 Policy is not a mode. Mode is not a sandbox.
 
@@ -74,6 +75,7 @@ A batch of consecutive calls runs in parallel only if each tool is `parallelSafe
 - Widen `yoloTools` (only user `~/.coral.json` can list them, as a subset of `enabledTools`)
 - Sandbox `bash` or MCP processes
 - Change headless exec: exec **always rejects** approval prompts. Yolo is an interactive concept
+- Write workspace grants. Yolo never needs them; grants are written only by `(p)` on an ask-mode approval
 
 ---
 
@@ -82,6 +84,20 @@ A batch of consecutive calls runs in parallel only if each tool is `parallelSafe
 See [TUI](tui.md) for keys and scrolling. Tool reject message to the model: `Tool call rejected by user`. Deny: `Tool {name} is denied by permission policy`. Unknown: `Unknown tool: {name}`. Interrupt: `Tool call interrupted`.
 
 MCP launch body includes alias, command, resolved executable, args, home-directory working directory, forwarded **environment names** (not values), enabled tools, yolo tools, SHA-256 fingerprint, and a not-sandboxed warning.
+
+### Session and workspace grants
+
+On a tool approval, `(a)` approves and grants that tool identity, with **any arguments**, for the rest of the session. `(p)` does the same and also remembers the grant for this workspace, so the next Coral session in the same directory does not prompt for that tool again.
+
+- A grant covers a tool name, not its arguments. `bash` granted means any command in that workspace.
+- Grants are keyed to the tool and the realpath of the session cwd. A clone, a jobs worktree, or a different `CORAL_HOME` sees none of them.
+- Only trusted built-in tools can be persisted. MCP tools keep session-scoped `(a)`; their persistent authority is `~/.coral.json` `permissions` and `yoloTools`, fingerprinted by launch trust.
+- Outside-workspace promotions are never persisted. `(p)` is hidden on those prompts and `(a)` still works for the session.
+- `always_deny` is checked before any approval, so a grant can never override it. A project `require_approval` tightening does not block a grant, matching yolo.
+- Project config cannot create, read, or widen a grant. Only a key press in an interactive approval writes one.
+- `coral exec` and ACP never consult grants.
+
+`/permissions grants` lists this workspace's grants. `/permissions revoke <tool>` forgets one and also drops the matching session grant; `/permissions revoke all` forgets every grant for the workspace. Storage: `CORAL_HOME/tool-grants.d/<sha256>.json`, one file per grant, validated and fail-closed on read.
 
 ---
 

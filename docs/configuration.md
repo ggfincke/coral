@@ -152,6 +152,7 @@ Default root: `~/.coral`. Directories `0o700`, session/trust/index files typical
 | `eval-telemetry.json` + `eval-telemetry.d/`     | Eval harness only (`npm run eval -- --save-telemetry`), not the interactive CLI                                       |
 | `mcp-trust.json`                                | Legacy launch-trust baseline (read)                                                                                   |
 | `mcp-trust.d/<alias>.json`                      | Atomic per-alias approvals (write path for new trust)                                                                 |
+| `tool-grants.d/<64-hex>.json`                   | Persistent per-workspace tool grants from `(p)`; see [Permissions](permissions.md#session-and-workspace-grants)       |
 | `retrieval/v2/spaces/<64-hex>.chunks-v2.sqlite` | Semantic indexes, isolated by embedding space and chunker version                                                     |
 | `retrieval/index.sqlite`                        | Legacy cache; current Coral does **not** open it                                                                      |
 | `jobs/<8hex>/`                                  | Durable task record, events, checkpoints, command output, and worktree; see [Durable tasks](jobs.md#where-data-lives) |

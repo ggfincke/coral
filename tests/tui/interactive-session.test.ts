@@ -10,6 +10,7 @@ import {
   type ActivePrompt,
   type InteractiveLifetimeAgent,
   type PromptSettlement,
+  type ToolGrantPersistence,
 } from '../../src/tui/session/interactive-runtime.js'
 import { AgentTodoState } from '../../src/agent/state/todos.js'
 import type { AgentInferenceClient } from '../../src/agent/inference-client.js'
@@ -104,6 +105,7 @@ function makeRuntime(
     ) => SessionMeta | null
     recordTelemetry?: (model: string, trips: number) => void
     onPromptChange?: (prompt: ActivePrompt | null) => void
+    toolGrants?: ToolGrantPersistence
   } = {}
 ): InteractiveSessionRuntime<FakeAgent>
 {
@@ -117,6 +119,7 @@ function makeRuntime(
       onPromptChange: overrides.onPromptChange ?? (() => undefined),
       onSessionChange: () => undefined,
       onTransitionChange: () => undefined,
+      toolGrants: overrides.toolGrants,
     },
     agent,
     initialSession
@@ -610,6 +613,99 @@ test('always-approvals grant identical tool calls without prompting until reset'
   assert.equal(prompts.at(-1)?.kind, 'tool')
   settle(true)
   assert.equal(await afterReset, true)
+
+  await runtime.shutdown()
+})
+
+test('persistent workspace grants approve eligible built-ins and never MCP or promoted calls', async () =>
+{
+  const prompts: Array<ActivePrompt | null> = []
+  const persisted = new Set<string>(['bash'])
+  const trusted: string[] = []
+  const runtime = makeRuntime(new FakeAgent('grants'), null, {
+    onPromptChange: (prompt) => prompts.push(prompt),
+    toolGrants: {
+      isTrusted: (toolName) => persisted.has(toolName),
+      trust: (toolName) =>
+      {
+        trusted.push(toolName)
+        persisted.add(toolName)
+      },
+    },
+  })
+  const published = () => prompts.filter(Boolean).length
+  const settle = (settlement: PromptSettlement) =>
+  {
+    const prompt = prompts.at(-1)
+    assert.ok(prompt && prompt.kind === 'tool')
+    assert.equal(runtime.settlePrompt(prompt.id, settlement), true)
+  }
+  const run = runtime.beginOperation('turn')
+  assert.ok(run)
+
+  // a persisted grant approves without a prompt
+  assert.equal(
+    await runtime.requestToolApproval(run, {
+      toolName: 'bash',
+      args: { command: 'npm test' },
+    }),
+    true
+  )
+  assert.equal(published(), 0)
+
+  // a promoted outside-workspace call of the same tool still prompts, and a
+  // persist answer on it degrades to a session grant without touching the store
+  const promoted = runtime.requestToolApproval(run, {
+    toolName: 'read_file',
+    args: { path: '../secret' },
+    promoted: true,
+  })
+  assert.equal(published(), 1)
+  settle({ approved: true, always: true, persist: true })
+  assert.equal(await promoted, true)
+  assert.deepEqual(trusted, [])
+
+  // persisting an eligible tool writes the store and seeds the session set
+  const write = runtime.requestToolApproval(run, {
+    toolName: 'write_file',
+    args: { path: 'a.txt' },
+  })
+  assert.equal(published(), 2)
+  settle({ approved: true, always: true, persist: true })
+  assert.equal(await write, true)
+  assert.deepEqual(trusted, ['write_file'])
+  assert.equal(
+    await runtime.requestToolApproval(run, {
+      toolName: 'write_file',
+      args: { path: 'b.txt' },
+    }),
+    true
+  )
+  assert.equal(published(), 2)
+
+  // MCP tools ignore the store entirely, even when a name is planted in it
+  persisted.add('mcp__fixture__echo')
+  const mcp = runtime.requestToolApproval(run, {
+    toolName: 'mcp__fixture__echo',
+    args: {},
+    presentation: { label: 'echo', mcp: true },
+  })
+  assert.equal(published(), 3)
+  settle({ approved: true, always: true, persist: true })
+  assert.equal(await mcp, true)
+  assert.deepEqual(trusted, ['write_file'])
+
+  // forgetting a session grant makes the tool prompt again once the store
+  // no longer vouches for it
+  persisted.delete('write_file')
+  runtime.forgetSessionToolGrant('write_file')
+  const again = runtime.requestToolApproval(run, {
+    toolName: 'write_file',
+    args: { path: 'c.txt' },
+  })
+  assert.equal(published(), 4)
+  settle(true)
+  assert.equal(await again, true)
 
   await runtime.shutdown()
 })

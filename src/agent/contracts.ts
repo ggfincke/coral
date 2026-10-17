@@ -63,12 +63,14 @@ export interface AgentEvents
     callId: number,
     diff?: string
   ) => void
-  // approve or reject a require_approval invocation
+  // approve or reject a require_approval invocation; promoted marks an
+  // always_allow tool gated only because its path leaves the workspace
   onToolApproval: (
     name: string,
     args: Record<string, unknown>,
     presentation?: ToolCallPresentation,
-    callId?: number
+    callId?: number,
+    promoted?: boolean
   ) => Promise<boolean>
   // launch trust is separate from per-tool approval and is never automatic
   onMcpLaunchApproval?: (request: McpLaunchApprovalRequest) => Promise<boolean>
