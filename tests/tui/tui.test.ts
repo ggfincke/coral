@@ -97,6 +97,7 @@ function makeCommandContext(
     saveCurrentSession: () => ({ status: 'saved', id: 'abcd1234' }),
     renameCurrentSession: () => false,
     manageQueue: async () => undefined,
+    toolGrants: { list: () => [], revoke: () => false },
     notifyThemeChanged()
     {},
   }
@@ -1401,6 +1402,31 @@ test('approval shortcuts cannot grant permission and complete diffs remain inspe
   const always = toInputEvent('a')!
   assert.equal(resolveApprovalKey('tool', always.input, always.key), 'always')
   assert.equal(resolveApprovalKey('mcp', always.input, always.key), undefined)
+  const persist = toInputEvent('p')!
+  assert.equal(
+    resolveApprovalKey('tool', persist.input, persist.key),
+    'persist'
+  )
+  assert.equal(resolveApprovalKey('mcp', persist.input, persist.key), undefined)
+  assert.equal(
+    resolveApprovalKey('doom', persist.input, persist.key),
+    undefined
+  )
+  const sessionOnly = buildApprovalContent('bash', { command: 'ls' }, 80)
+  assert.doesNotMatch(stripAnsi(sessionOnly.actionLine), /\(p\)/)
+  const persistable = buildApprovalContent(
+    'bash',
+    { command: 'ls' },
+    80,
+    undefined,
+    undefined,
+    undefined,
+    true
+  )
+  assert.match(
+    stripAnsi(persistable.actionLine),
+    /\(p\) allow always \(workspace\)/
+  )
   const diff =
     '--- a/file\n+++ b/file\n@@ -1 +1,50 @@\n-old\n' +
     Array.from({ length: 50 }, (_, i) => `+line ${i}`).join('\n')

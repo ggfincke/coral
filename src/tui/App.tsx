@@ -27,6 +27,7 @@ import {
 } from './transcript/expansion.js'
 import { runInExternalEditor } from './prompt/editor-handoff.js'
 import { loadPrefs, savePrefs } from '../config/prefs.js'
+import { workspaceToolGrants } from '../config/tool-grants.js'
 import {
   buildBell,
   buildDesktopNotification,
@@ -103,7 +104,11 @@ import { useModelPicker } from './model/use-model-picker.js'
 import SessionPicker from './sessions/picker.js'
 import JobPanel from './jobs/panel.js'
 import { buildPaletteEntries, type PaletteEntry } from './palette/palette.js'
-import type { OperationHandle } from './session/interactive-runtime.js'
+import {
+  isPersistentGrantEligible,
+  type OperationHandle,
+  type ToolGrantPersistence,
+} from './session/interactive-runtime.js'
 import { useAgentTurn } from './run/use-agent-turn.js'
 import {
   dequeueOldestMessage,
@@ -260,6 +265,30 @@ export default function App({
     []
   )
 
+  // persistent per-workspace tool grants; a failed save degrades to a session
+  // grant and is reported once the transcript setter exists
+  const reportGrantError = useRef<(message: string) => void>(() => undefined)
+  const [toolGrants] = useState(() => workspaceToolGrants(cwd ?? getCwd()))
+  const toolGrantPersistence = useMemo<ToolGrantPersistence>(
+    () => ({
+      isTrusted: (toolName) => toolGrants.isTrusted(toolName),
+      trust: (toolName) =>
+      {
+        try
+        {
+          toolGrants.trust(toolName)
+        }
+        catch (error)
+        {
+          reportGrantError.current(
+            `Could not save the workspace grant for ${toolName}: ${toErrorMessage(error)}`
+          )
+        }
+      },
+    }),
+    [toolGrants]
+  )
+
   const interactive = useInteractiveSession({
     model,
     host,
@@ -269,6 +298,7 @@ export default function App({
     initialSession: resumeSession,
     exit,
     view: interactiveView,
+    toolGrants: toolGrantPersistence,
   })
   const {
     agent,
@@ -293,6 +323,7 @@ export default function App({
     acceptsCommandEvent,
     acceptsCommandTerminal,
     settlePrompt,
+    forgetSessionToolGrant,
     finishCommand,
     runOperation,
     abortActive,
@@ -366,6 +397,15 @@ export default function App({
       },
     ])
   }, [setOutput])
+
+  useEffect(() =>
+  {
+    reportGrantError.current = (message) =>
+      setOutput((previous) => [
+        ...previous,
+        { type: 'error', content: message },
+      ])
+  }, [setOutput])
   const {
     state: pickerState,
     visible: pickerVisible,
@@ -421,7 +461,8 @@ export default function App({
         transcriptWidth,
         activePrompt.diff,
         activePrompt.previewMessage,
-        activePrompt.presentation
+        activePrompt.presentation,
+        isPersistentGrantEligible(activePrompt)
       )
     }
     if (activePrompt?.kind === 'doom')
@@ -995,6 +1036,21 @@ export default function App({
         {
           settlePrompt(activePrompt.id, { approved: true, always: true })
         }
+        else if (action === 'persist')
+        {
+          // ineligible prompts (MCP, outside-workspace) ignore the key
+          if (
+            activePrompt.kind === 'tool' &&
+            isPersistentGrantEligible(activePrompt)
+          )
+          {
+            settlePrompt(activePrompt.id, {
+              approved: true,
+              always: true,
+              persist: true,
+            })
+          }
+        }
         else if (action === 'approve' || action === 'reject')
         {
           settlePrompt(activePrompt.id, action === 'approve')
@@ -1342,6 +1398,14 @@ export default function App({
             // /vim reads the live state back to toggle correctly
             isVimMode: () => viMode,
             manageQueue,
+            toolGrants: {
+              list: () => toolGrants.list(),
+              revoke: (toolName) =>
+              {
+                forgetSessionToolGrant(toolName)
+                return toolGrants.revoke(toolName)
+              },
+            },
           }
 
           // bare /resume opens the picker inside the joined command lifetime
@@ -1366,6 +1430,8 @@ export default function App({
       acceptsCommandEvent,
       acceptsCommandTerminal,
       addHistoryEntry,
+      forgetSessionToolGrant,
+      toolGrants,
       beginOperation,
       clearInput,
       clearSession,

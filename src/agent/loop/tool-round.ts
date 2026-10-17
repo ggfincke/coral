@@ -590,7 +590,8 @@ export class ToolRoundExecutor
               invocation.name,
               invocation.args,
               invocation.presentation,
-              invocation.id
+              invocation.id,
+              crossesWorkspace
             ),
             input.signal
           )

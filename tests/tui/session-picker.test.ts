@@ -634,6 +634,7 @@ function makeCommandContext(
     saveCurrentSession: () => ({ status: 'saved', id: 'abcd1234' }),
     renameCurrentSession: () => false,
     manageQueue: async () => undefined,
+    toolGrants: { list: () => [], revoke: () => false },
     notifyThemeChanged()
     {},
     ...overrides,

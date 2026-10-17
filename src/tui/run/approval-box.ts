@@ -19,7 +19,7 @@ const MAX_MCP_APPROVAL_ARG_CHARS = 8_000
 const MAX_APPROVAL_TOOL_NAME_CHARS = 256
 
 export type ApprovalKeyAction =
-  'approve' | 'always' | 'reject' | 'abort' | 'locked'
+  'approve' | 'always' | 'persist' | 'reject' | 'abort' | 'locked'
 
 // modifier shortcuts must never become a plain affirmative answer
 export function resolveApprovalKey(
@@ -36,6 +36,7 @@ export function resolveApprovalKey(
   if (letter === 'y') return 'approve'
   if (letter === 'n') return 'reject'
   if (letter === 'a' && kind === 'tool') return 'always'
+  if (letter === 'p' && kind === 'tool') return 'persist'
   return undefined
 }
 
@@ -119,7 +120,8 @@ export function buildApprovalContent(
   width: number,
   diff?: string,
   previewMessage?: string,
-  presentation?: ToolCallPresentation
+  presentation?: ToolCallPresentation,
+  persistable = false
 ): PromptBoxContent
 {
   const box = contentBuilder(width, 'tool approval')
@@ -130,7 +132,9 @@ export function buildApprovalContent(
   )
   box.title(`Allow ${cleanToolName}?`)
   box.title(
-    '(a) grants this tool with any arguments for this session.',
+    persistable
+      ? '(a) grants this tool with any arguments for this session; (p) also remembers it for this workspace until revoked.'
+      : '(a) grants this tool with any arguments for this session.',
     box.warn
   )
   box.push(formatApprovalArgs(toolName, args, presentation))
@@ -154,6 +158,7 @@ export function buildApprovalContent(
     [
       chalk.bold('(y) approve'),
       box.warn('(a) allow always (session)'),
+      ...(persistable ? [box.warn('(p) allow always (workspace)')] : []),
       '(n) reject',
       chalk.dim('(esc) reject · ctrl+c interrupts'),
     ].join('  ')

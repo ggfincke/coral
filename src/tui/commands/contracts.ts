@@ -2,6 +2,7 @@
 // neutral slash-command contracts
 
 import type { Agent } from '../../agent/agent.js'
+import type { ToolGrantRecord } from '../../config/tool-grants.js'
 import type { BuiltIndexer } from '../../retrieval/build.js'
 import type { CommandSummary } from '../prompt/completion.js'
 import type {
@@ -51,6 +52,11 @@ export interface CommandContext
   // live modal-editing state for toggle commands
   isVimMode: () => boolean
   manageQueue: (args: string) => Promise<void>
+  // persistent per-workspace tool grants; revoke also drops the session grant
+  toolGrants: {
+    list: () => ToolGrantRecord[]
+    revoke: (toolName: string) => boolean
+  }
 }
 
 export interface Command
