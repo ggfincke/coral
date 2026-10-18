@@ -40,6 +40,19 @@ export function buildEditorArgs(command: string, filePath: string): string[]
   return [...parts.slice(1), ...(needsWaitFlag ? ['-w'] : []), filePath]
 }
 
+// editors append a final newline; on a one-line draft that newline would turn
+// the next Enter into a paste confirmation, so drop exactly one when nothing
+// else in the result wraps. multi-line results are kept verbatim
+export function normalizeEditorResult(text: string): string
+{
+  const trimmed = text.endsWith('\r\n')
+    ? text.slice(0, -2)
+    : text.endsWith('\n')
+      ? text.slice(0, -1)
+      : text
+  return trimmed.includes('\n') ? text : trimmed
+}
+
 // an empty or unchanged result cancels: the caller keeps the pre-editor draft
 export function shouldApplyEdit(
   original: string,
@@ -86,7 +99,7 @@ export async function runInExternalEditor(
   {
     writeFileSync(filePath, draft, 'utf-8')
     runEditorOnce(filePath, command)
-    const edited = readFileSync(filePath, 'utf-8')
+    const edited = normalizeEditorResult(readFileSync(filePath, 'utf-8'))
     return { text: shouldApplyEdit(draft, edited) ? edited : null }
   }
   finally
