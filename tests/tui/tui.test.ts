@@ -34,6 +34,8 @@ import {
   buildApprovalContent,
   buildMcpApprovalContent,
   renderPromptBox,
+  formatRejectReasonRow,
+  reduceRejectReasonKey,
   resolveApprovalKey,
 } from '../../src/tui/run/approval-box.js'
 import {
@@ -1390,7 +1392,6 @@ test('approval shortcuts cannot grant permission and complete diffs remain inspe
     }
     for (const [raw, expected] of [
       ['y', 'approve'],
-      ['N', 'reject'],
       ['\x03', 'abort'],
     ] as const)
     {
@@ -1403,6 +1404,51 @@ test('approval shortcuts cannot grant permission and complete diffs remain inspe
       kind === 'mcp' ? 'abort' : 'reject'
     )
   }
+  // n opens the reason row on tool prompts and stays an instant reject elsewhere
+  const reject = toInputEvent('N')!
+  assert.equal(resolveApprovalKey('tool', reject.input, reject.key), 'reason')
+  assert.equal(resolveApprovalKey('mcp', reject.input, reject.key), 'reject')
+  assert.equal(resolveApprovalKey('doom', reject.input, reject.key), 'reject')
+  const noKey = {
+    return: false,
+    escape: false,
+    backspace: false,
+    delete: false,
+    ctrl: false,
+    meta: false,
+    tab: false,
+  }
+  assert.deepEqual(reduceRejectReasonKey('', 'use rg', noKey), {
+    kind: 'edit',
+    draft: 'use rg',
+  })
+  assert.deepEqual(reduceRejectReasonKey('a', '\x1b[31m b', noKey), {
+    kind: 'edit',
+    draft: 'a b',
+  })
+  assert.deepEqual(
+    reduceRejectReasonKey('ok 👨‍👩‍👧', '', { ...noKey, backspace: true }),
+    { kind: 'edit', draft: 'ok ' }
+  )
+  assert.deepEqual(
+    reduceRejectReasonKey('', '', { ...noKey, backspace: true }),
+    { kind: 'exit' }
+  )
+  assert.deepEqual(reduceRejectReasonKey('x', '', { ...noKey, return: true }), {
+    kind: 'submit',
+  })
+  assert.deepEqual(reduceRejectReasonKey('x', '', { ...noKey, escape: true }), {
+    kind: 'reject',
+  })
+  assert.deepEqual(reduceRejectReasonKey('x', 'y', { ...noKey, ctrl: true }), {
+    kind: 'ignore',
+  })
+  assert.equal(
+    reduceRejectReasonKey('', 'z'.repeat(600), noKey).kind === 'edit' &&
+      (reduceRejectReasonKey('', 'z'.repeat(600), noKey) as { draft: string })
+        .draft.length,
+    500
+  )
   const always = toInputEvent('a')!
   assert.equal(resolveApprovalKey('tool', always.input, always.key), 'always')
   assert.equal(resolveApprovalKey('mcp', always.input, always.key), undefined)
@@ -1418,6 +1464,19 @@ test('approval shortcuts cannot grant permission and complete diffs remain inspe
   )
   const sessionOnly = buildApprovalContent('bash', { command: 'ls' }, 80)
   assert.doesNotMatch(stripAnsi(sessionOnly.actionLine), /\(p\)/)
+  assert.match(stripAnsi(sessionOnly.actionLine), /\(n\) reject \+ reason/)
+  const reasonRows = stripAnsi(
+    renderPromptBox(
+      sessionOnly,
+      80,
+      15,
+      0,
+      formatRejectReasonRow('use rg', 76)
+    ).lines.join('\n')
+  )
+  assert.match(reasonRows, /reason › use rg▌/)
+  assert.doesNotMatch(reasonRows, /\(y\) approve/)
+  assert.match(stripAnsi(formatRejectReasonRow('', 76)), /why\? enter rejects/)
   const persistable = buildApprovalContent(
     'bash',
     { command: 'ls' },

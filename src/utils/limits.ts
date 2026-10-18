@@ -35,3 +35,6 @@ export const MAX_TOOL_OUTPUT_CHARS = 25_000 * CHARS_PER_TOKEN
 // keep errors short because multi-KB stacks drown the signal and can stall
 // prefill, especially on smaller models
 export const MAX_ERROR_MESSAGE_CHARS = 2_000 * CHARS_PER_TOKEN
+
+// a rejection reason is one sentence of feedback for the model, not a transcript
+export const REJECTION_REASON_MAX_CHARS = 500

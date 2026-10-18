@@ -1,6 +1,10 @@
 // tests/agent/loop/tool-round.test.ts
 // causal tests for tool-round settlement, effects, and abort cardinality
 
+import {
+  normalizeApprovalDecision,
+  rejectionError,
+} from '../../../src/agent/loop/tool-round.js'
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import type { CodeIntelService } from '../../../src/lsp/contracts.js'
@@ -625,4 +629,34 @@ test('ToolRoundExecutor fills every model reply after approval abort', async () 
   assert.deepEqual(calls, ['read_file', 'bash'])
   assert.deepEqual(results, ['read_file', 'bash'])
   assert.equal(bashExecutions, 0)
+})
+
+test('rejection reasons are sanitized, flattened, capped, and quoted after a stable prefix', () =>
+{
+  assert.deepEqual(normalizeApprovalDecision(false), { approved: false })
+  assert.deepEqual(normalizeApprovalDecision(true), { approved: true })
+  assert.deepEqual(normalizeApprovalDecision({ approved: true, reason: 'x' }), {
+    approved: true,
+  })
+  assert.deepEqual(
+    normalizeApprovalDecision({ approved: false, reason: ' \t ' }),
+    { approved: false }
+  )
+  assert.deepEqual(
+    normalizeApprovalDecision({
+      approved: false,
+      reason: 'use rg\n\x1b[31minstead',
+    }),
+    { approved: false, reason: 'use rg instead' }
+  )
+  const capped = normalizeApprovalDecision({
+    approved: false,
+    reason: 'z'.repeat(600),
+  })
+  assert.equal(capped.reason?.length, 500)
+  assert.equal(rejectionError(), 'Tool call rejected by user')
+  assert.equal(
+    rejectionError('use rg instead'),
+    'Tool call rejected by user: "use rg instead". Adjust your approach to follow this feedback instead of retrying the same call.'
+  )
 })

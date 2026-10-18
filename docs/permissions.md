@@ -81,7 +81,7 @@ A batch of consecutive calls runs in parallel only if each tool is `parallelSafe
 
 ## Approval UX
 
-See [TUI](tui.md) for keys and scrolling. Tool reject message to the model: `Tool call rejected by user`. Deny: `Tool {name} is denied by permission policy`. Unknown: `Unknown tool: {name}`. Interrupt: `Tool call interrupted`.
+See [TUI](tui.md) for keys and scrolling. Tool reject message to the model: `Tool call rejected by user`, or with a typed reason `Tool call rejected by user: "<reason>". Adjust your approach to follow this feedback instead of retrying the same call.` (reason sanitized, one line, max 500 characters). ACP, exec, and jobs never carry a reason. Deny: `Tool {name} is denied by permission policy`. Unknown: `Unknown tool: {name}`. Interrupt: `Tool call interrupted`.
 
 MCP launch body includes alias, command, resolved executable, args, home-directory working directory, forwarded **environment names** (not values), enabled tools, yolo tools, SHA-256 fingerprint, and a not-sandboxed warning.
 

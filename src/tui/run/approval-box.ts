@@ -12,14 +12,16 @@ import { boxFrame } from './status-line.js'
 import { style } from '../theme.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { stringifyForDisplay } from '../../utils/untrusted-text.js'
-import { visibleWidth } from '../wrap.js'
+import { truncateLine, visibleWidth } from '../wrap.js'
 import type { CoralKey } from '../input/terminal-input.js'
+import { previousGraphemeOffset } from '../prompt/grapheme.js'
+import { REJECTION_REASON_MAX_CHARS } from '../../utils/limits.js'
 
 const MAX_MCP_APPROVAL_ARG_CHARS = 8_000
 const MAX_APPROVAL_TOOL_NAME_CHARS = 256
 
 export type ApprovalKeyAction =
-  'approve' | 'always' | 'persist' | 'reject' | 'abort' | 'locked'
+  'approve' | 'always' | 'persist' | 'reason' | 'reject' | 'abort' | 'locked'
 
 // modifier shortcuts must never become a plain affirmative answer
 export function resolveApprovalKey(
@@ -34,10 +36,79 @@ export function resolveApprovalKey(
   if (key.escape) return kind === 'mcp' ? 'abort' : 'reject'
   if (key.ctrl || key.meta) return undefined
   if (letter === 'y') return 'approve'
-  if (letter === 'n') return 'reject'
+  // tool prompts open the reason row on n; esc stays the one-key reject
+  if (letter === 'n') return kind === 'tool' ? 'reason' : 'reject'
   if (letter === 'a' && kind === 'tool') return 'always'
   if (letter === 'p' && kind === 'tool') return 'persist'
   return undefined
+}
+
+export type RejectReasonStep =
+  | { kind: 'edit'; draft: string }
+  | { kind: 'submit' }
+  | { kind: 'reject' }
+  | { kind: 'exit' }
+  | { kind: 'ignore' }
+
+// keys while a rejection reason is typed: enter sends it, esc rejects w/o one,
+// backspace on an empty draft returns to the choices, and printable input of
+// any length is appended because fast typing arrives as one token
+export function reduceRejectReasonKey(
+  draft: string,
+  input: string,
+  key: Pick<
+    CoralKey,
+    'return' | 'escape' | 'backspace' | 'delete' | 'ctrl' | 'meta' | 'tab'
+  >
+): RejectReasonStep
+{
+  if (key.return) return { kind: 'submit' }
+  if (key.escape) return { kind: 'reject' }
+  if (key.backspace || key.delete)
+  {
+    if (!draft) return { kind: 'exit' }
+    return {
+      kind: 'edit',
+      draft: draft.slice(0, previousGraphemeOffset(draft, draft.length)),
+    }
+  }
+  if (key.ctrl || key.meta || key.tab || !input) return { kind: 'ignore' }
+  const clean = sanitizeUntrustedText(input).replace(/\s+/g, ' ')
+  if (!clean) return { kind: 'ignore' }
+  const next = `${draft}${clean}`
+  if (next.length <= REJECTION_REASON_MAX_CHARS)
+    return { kind: 'edit', draft: next }
+  return {
+    kind: 'edit',
+    draft: trimTrailingHighSurrogate(next.slice(0, REJECTION_REASON_MAX_CHARS)),
+  }
+}
+
+// one pinned row that replaces the action line while a reason is typed
+export function formatRejectReasonRow(draft: string, width: number): string
+{
+  const label = chalk.bold('reason ›')
+  const room = Math.max(width - visibleWidth(label) - 2, 1)
+  if (!draft)
+  {
+    return `${label} ${chalk.dim(
+      truncateLine(
+        'why? enter rejects · esc rejects without a reason · backspace returns',
+        room
+      )
+    )}`
+  }
+  let tail = draft
+  if (visibleWidth(tail) > room)
+  {
+    const chars = Array.from(draft)
+    while (chars.length > 0 && visibleWidth(`…${chars.join('')}`) > room)
+    {
+      chars.shift()
+    }
+    tail = `…${chars.join('')}`
+  }
+  return `${label} ${tail}▌`
 }
 
 // logical prompt content: title and actions stay pinned while the body scrolls
@@ -159,7 +230,7 @@ export function buildApprovalContent(
       chalk.bold('(y) approve'),
       box.warn('(a) allow always (session)'),
       ...(persistable ? [box.warn('(p) allow always (workspace)')] : []),
-      '(n) reject',
+      '(n) reject + reason',
       chalk.dim('(esc) reject · ctrl+c interrupts'),
     ].join('  ')
   )
@@ -284,17 +355,21 @@ export function renderPromptBox(
   content: PromptBoxContent,
   width: number,
   maxRows: number,
-  scrollOffset: number
+  scrollOffset: number,
+  actionOverride?: string
 ): PromptBoxRender
 {
   const frame = boxFrame(width, content.label, style('muted'))
   const rowLimit = Math.max(Math.floor(maxRows), 0)
   if (rowLimit === 0) return { lines: [], maxOffset: 0, pageSize: 1 }
 
-  const { titleLines, bodyLines, actionLines } = wrappedPromptContent(
-    content,
-    frame.innerWidth
-  )
+  const wrapped = wrappedPromptContent(content, frame.innerWidth)
+  const { titleLines, bodyLines } = wrapped
+  // the override is one row built per keystroke; the body wrap stays cached
+  const actionLines =
+    actionOverride === undefined
+      ? wrapped.actionLines
+      : [truncateLine(actionOverride, frame.innerWidth)]
 
   // retain the roomy presentation when every row fits
   const roomyRows =

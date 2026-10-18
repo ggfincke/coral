@@ -919,3 +919,46 @@ test('fork saves the complete parent, preserves files, and binds future saves on
     assert.ok(recovery.childId && loadSession(recovery.childId))
   await runtime.shutdown()
 })
+
+test('a rejection reason reaches the approval caller while plain answers stay booleans', async () =>
+{
+  const prompts: Array<ActivePrompt | null> = []
+  const runtime = makeRuntime(new FakeAgent('reason'), null, {
+    onPromptChange: (prompt) => prompts.push(prompt),
+  })
+  const settle = (settlement: PromptSettlement) =>
+  {
+    const prompt = prompts.at(-1)
+    assert.ok(prompt && prompt.kind === 'tool')
+    assert.equal(runtime.settlePrompt(prompt.id, settlement), true)
+  }
+  const run = runtime.beginOperation('turn')
+  assert.ok(run)
+  const request = { toolName: 'bash', args: { command: 'ls' } }
+
+  const withReason = runtime.requestToolApproval(run, request)
+  settle({ approved: false, reason: '  use list_files  ' })
+  assert.deepEqual(await withReason, {
+    approved: false,
+    reason: 'use list_files',
+  })
+
+  const blank = runtime.requestToolApproval(run, request)
+  settle({ approved: false, reason: '   ' })
+  assert.equal(await blank, false)
+
+  const plain = runtime.requestToolApproval(run, request)
+  settle(false)
+  assert.equal(await plain, false)
+
+  // a reason on an approval is ignored and the grant path is untouched
+  const approved = runtime.requestToolApproval(run, request)
+  settle({ approved: true, reason: 'ignored' })
+  assert.equal(await approved, true)
+  const again = runtime.requestToolApproval(run, request)
+  assert.equal(prompts.filter(Boolean).length, 5)
+  settle(true)
+  assert.equal(await again, true)
+
+  await runtime.shutdown()
+})

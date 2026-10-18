@@ -27,6 +27,7 @@ import {
   type PromptSettlement,
   type SessionSaveResult,
   type ToolApprovalRequest,
+  type ToolApprovalResult,
   type ToolGrantPersistence,
 } from './interactive-runtime.js'
 import { ProjectFileCatalog } from './project-file-catalog.js'
@@ -118,7 +119,7 @@ export interface InteractiveSession
   requestToolApproval: (
     handle: OperationHandle<Agent>,
     request: ToolApprovalRequest
-  ) => Promise<boolean>
+  ) => Promise<ToolApprovalResult>
   settlePrompt: (id: number, settlement: PromptSettlement) => boolean
   // drop a session grant after its persistent grant is revoked
   forgetSessionToolGrant: (toolName: string) => void
