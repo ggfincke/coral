@@ -18,6 +18,7 @@ export type KeybindingAction =
   | 'half-page-up'
   | 'half-page-down'
   | 'toggle-tool-output'
+  | 'open-transcript'
 
 export interface KeybindingSummary
 {
@@ -113,6 +114,11 @@ export const KEYBINDINGS: readonly KeybindingSummary[] = [
     description: 'Compose the draft in $EDITOR',
   },
   {
+    keys: 'ctrl+l',
+    description: 'Open the full-screen transcript pager (/ searches)',
+    action: 'open-transcript',
+  },
+  {
     keys: 'meta+backspace',
     description: 'Pause queue and edit newest entry (empty composer)',
   },
@@ -152,6 +158,8 @@ export function matchPromptKeybinding(
   if (letter === 'o') return 'toggle-tool-output'
   // ctrl+g is the readline convention for "edit in external editor"
   if (letter === 'g') return 'open-editor'
+  // ctrl+l: a reflexive "clear screen" press just opens a view esc closes
+  if (letter === 'l') return 'open-transcript'
   return undefined
 }
 
@@ -178,6 +186,7 @@ const OVERRIDABLE_ACTIONS: ReadonlySet<string> = new Set([
   'half-page-up',
   'half-page-down',
   'toggle-tool-output',
+  'open-transcript',
   'open-palette',
   'open-editor',
 ])

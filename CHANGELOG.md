@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Transcript pager:** `Ctrl+L` or `/transcript` opens the conversation
+  full-screen with every tool output expanded, less-style paging (`j`/`k`,
+  `Space`/`b`, `d`/`u`, `g`/`G`), and `/` search with `n`/`N` and a match count
+  in the footer. It opens pinned to the newest rows and follows a streaming
+  turn only while already at the bottom. `q` or Esc closes; an approval prompt
+  closes it. The chord is rebindable as `open-transcript`.
+
 ### Fixed
 
 - **Composer:** pressing Enter on an exactly typed slash command such as `/new`
