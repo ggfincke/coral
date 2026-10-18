@@ -1037,10 +1037,22 @@ export default function PromptInput({
           setSelectedIndex((i) => Math.min(items.length - 1, i + 1))
           return
         }
-        if (key.tab || key.return)
+        if (key.tab)
         {
           acceptCompletion()
           return
+        }
+        // enter on a suggestion that only pads the already-typed token has
+        // nothing to insert, so it sends instead of eating the keypress
+        if (key.return)
+        {
+          const item = items[safeIndex]!
+          const applied = applyCompletion(value, query!, item)
+          if (applied.value.trim() !== value.trim())
+          {
+            acceptCompletion()
+            return
+          }
         }
         if (key.escape)
         {
@@ -1179,8 +1191,10 @@ export default function PromptInput({
       finishSearch,
       getHistoryEntries,
       handleSearchInput,
-      items.length,
+      items,
       menuOpen,
+      query,
+      safeIndex,
       onEscape,
       onHistoryDown,
       onHistoryUp,

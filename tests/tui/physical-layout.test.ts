@@ -605,3 +605,33 @@ test('composer Vim routing preserves complete graphemes through edits and submis
     await harness.close()
   }
 })
+
+test('Enter sends an exactly typed slash command instead of re-accepting its own completion', async () =>
+{
+  const harness = await createFrameHarness([], {
+    columns: 80,
+    rows: 16,
+    scrollOffset: 0,
+    acceptSubmissions: true,
+  })
+  try
+  {
+    // a prefix still accepts the highlighted suggestion w/o sending
+    await harness.input('/he')
+    await harness.input('\r')
+    assert.deepEqual(harness.controls.submissions, [])
+    assert.equal(harness.controls.value, '/help ')
+
+    // the exact command has nothing left to complete, so Enter submits
+    harness.controls.resetDraft('')
+    await harness.flush()
+    await harness.input('/help')
+    await harness.input('\r')
+    assert.deepEqual(harness.controls.submissions, ['/help'])
+    assert.equal(harness.controls.value, '')
+  }
+  finally
+  {
+    await harness.close()
+  }
+})
