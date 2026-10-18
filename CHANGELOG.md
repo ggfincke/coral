@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now sends it. The completion menu used to swallow that first Enter by
   re-accepting the suggestion it already matched, so the command only ran on
   the second press and anything typed in between was appended to it.
+- **External editor:** a one-line result from `$VISUAL`/`$EDITOR` no longer
+  keeps its trailing newline, so the next Enter sends it instead of confirming
+  a paste. A result that arrives after the draft was reset is now reported
+  instead of dropped silently.
 
 ### Added
 

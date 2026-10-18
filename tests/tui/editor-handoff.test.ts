@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   buildEditorArgs,
+  normalizeEditorResult,
   runInExternalEditor,
   resolveEditorCommand,
   shouldApplyEdit,
@@ -97,4 +98,13 @@ test('external editing receives expanded pasted text and preserves the original 
   {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('one-line editor results drop a single trailing newline; multi-line results stay verbatim', () =>
+{
+  assert.equal(normalizeEditorResult('hello\n'), 'hello')
+  assert.equal(normalizeEditorResult('hello\r\n'), 'hello')
+  assert.equal(normalizeEditorResult('hello'), 'hello')
+  assert.equal(normalizeEditorResult('a\nb\n'), 'a\nb\n')
+  assert.equal(normalizeEditorResult('\n'), '')
 })

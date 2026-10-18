@@ -1879,6 +1879,18 @@ export default function App({
     [resetNavigation, suspendTerminal, setOutput]
   )
 
+  // the composer drops an editor result when the draft was reset meanwhile;
+  // say so instead of losing the edit silently
+  const handleEditorDiscarded = useCallback(() =>
+  {
+    setOutput((blocks) => [
+      ...blocks,
+      systemBlock(
+        'Editor result discarded: the draft changed while the editor was open.'
+      ),
+    ])
+  }, [setOutput])
+
   const onScrollUp = useCallback(() =>
   {
     stickyResult.current = null
@@ -2302,6 +2314,7 @@ export default function App({
               onHalfPageDown={onHalfPageDown}
               onToggleToolOutput={onToggleToolOutput}
               onOpenEditor={handleOpenEditor}
+              onEditorDiscarded={handleEditorDiscarded}
               viMode={viMode}
               chordOverrides={chordOverrides}
               onScrollUp={onScrollUp}
