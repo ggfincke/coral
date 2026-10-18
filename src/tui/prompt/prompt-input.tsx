@@ -126,6 +126,8 @@ export interface PromptInputProps
   getHistoryEntries?: () => readonly HistoryEntry[]
   // hand the draft to $EDITOR; resolves after Ink suspends & resumes
   onOpenEditor?: (draft: string) => Promise<string | null>
+  // the editor result arrived after the draft was reset and was dropped
+  onEditorDiscarded?: () => void
   // route composer keys through the vi engine (NORMAL/INSERT)
   viMode?: boolean
   // canonical chord -> action overrides resolved from prefs at startup
@@ -176,6 +178,7 @@ export default function PromptInput({
   onQueueEdit,
   getHistoryEntries,
   onOpenEditor,
+  onEditorDiscarded,
   viMode = false,
   chordOverrides,
 }: PromptInputProps)
@@ -926,6 +929,10 @@ export default function PromptInput({
                 if (edited.includes('\n') || shouldPlaceholderize(edited))
                   setPendingPasteConfirm(true)
               }
+              else if (edited !== null && mountedRef.current)
+              {
+                onEditorDiscarded?.()
+              }
             })
             .finally(() =>
             {
@@ -1215,6 +1222,7 @@ export default function PromptInput({
       onToggleThinking,
       onToggleToolOutput,
       onOpenEditor,
+      onEditorDiscarded,
       onQueueEdit,
       pendingPasteConfirm,
       resolvedCursor,
