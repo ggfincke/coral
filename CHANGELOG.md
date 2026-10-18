@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Reject with a reason:** on a tool approval, `n` now opens a one-row reason
+  field. Enter rejects with the reason quoted in the tool error the model sees,
+  Enter on an empty row rejects plainly, Esc still rejects instantly, and
+  Backspace on an empty row returns to the choices. MCP launch and doom-loop
+  prompts keep `n` as an instant reject; ACP, exec, and jobs never carry a
+  reason.
+
 ### Fixed
 
 - **Composer:** pressing Enter on an exactly typed slash command such as `/new`

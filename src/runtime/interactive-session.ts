@@ -115,6 +115,8 @@ export interface ToolPromptAnswer
   always?: boolean
   // also remember the grant for this workspace; implies always
   persist?: boolean
+  // free-text feedback for the model on a rejection; ignored on approval
+  reason?: string
 }
 
 export type PromptSettlement = boolean | ToolPromptAnswer
@@ -141,6 +143,21 @@ export function sessionToolGrantFingerprint(
 export function settlementApproved(settlement: PromptSettlement): boolean
 {
   return typeof settlement === 'object' ? settlement.approved : settlement
+}
+
+// a rejection keeps its reason; approvals and plain answers stay booleans
+export type ToolApprovalResult = boolean | { approved: false; reason: string }
+
+export function toolApprovalResult(
+  settlement: PromptSettlement
+): ToolApprovalResult
+{
+  if (typeof settlement === 'object' && !settlement.approved)
+  {
+    const reason = settlement.reason?.trim()
+    if (reason) return { approved: false, reason }
+  }
+  return settlementApproved(settlement)
 }
 
 // persistent grants cover trusted built-ins gated by policy alone; dynamic
@@ -489,7 +506,7 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
   async requestToolApproval(
     handle: OperationHandle<A>,
     request: ToolApprovalRequest
-  ): Promise<boolean>
+  ): Promise<ToolApprovalResult>
   {
     if (!this.acceptsEvent(handle)) return false
 
@@ -511,7 +528,7 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
       kind: 'tool',
       ...request,
     })
-    return settlementApproved(settlement)
+    return toolApprovalResult(settlement)
   }
 
   settlePrompt(promptId: number, settlement: PromptSettlement): boolean

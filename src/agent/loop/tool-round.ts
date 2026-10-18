@@ -15,16 +15,19 @@ import { cloneTodoItems, type TodoState } from '../../types/todo.js'
 import type { UndoFileChange, UndoTodoChange } from '../../types/undo.js'
 import { raceAbort } from '../../utils/abort.js'
 import {
+  ellipsize,
   trimLeadingLowSurrogate,
   trimTrailingHighSurrogate,
 } from '../../utils/ellipsize.js'
 import { toError, toErrorMessage } from '../../utils/errors.js'
 import {
   MAX_TOOL_OUTPUT_CHARS,
+  REJECTION_REASON_MAX_CHARS,
   estimateUtf8Tokens,
 } from '../../utils/limits.js'
 import { normalizeToolName } from '../../utils/tool-name.js'
-import type { AgentEvents } from '../contracts.js'
+import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
+import type { AgentEvents, ToolApprovalDecision } from '../contracts.js'
 import type { DoomLoopDetector, DoomLoopTrip } from './doom-loop.js'
 import { estimateModelRequestMessageTokens } from '../request/projection.js'
 
@@ -263,6 +266,31 @@ function isolatedOutcome(outcome: MutableToolRoundOutcome): ToolRoundOutcome
 }
 
 // coordinate one exact catalog snapshot without owning conversation history
+// a rejection reason is user-authored but still untrusted text headed for the
+// model: strip controls, flatten whitespace, cap it, and drop it when empty
+export function normalizeApprovalDecision(decision: ToolApprovalDecision): {
+  approved: boolean
+  reason?: string
+}
+{
+  if (typeof decision === 'boolean') return { approved: decision }
+  if (decision.approved) return { approved: true }
+  const reason = ellipsize(
+    sanitizeUntrustedText(decision.reason ?? '')
+      .replace(/\s+/g, ' ')
+      .trim(),
+    REJECTION_REASON_MAX_CHARS
+  )
+  return reason ? { approved: false, reason } : { approved: false }
+}
+
+// the fixed prefix stays byte-identical so existing readers keep matching
+export function rejectionError(reason?: string): string
+{
+  if (!reason) return 'Tool call rejected by user'
+  return `Tool call rejected by user: "${reason}". Adjust your approach to follow this feedback instead of retrying the same call.`
+}
+
 export class ToolRoundExecutor
 {
   private readonly cwd: string
@@ -582,10 +610,10 @@ export class ToolRoundExecutor
 
       if (policy === 'require_approval')
       {
-        let approved: boolean
+        let decision: ToolApprovalDecision
         try
         {
-          approved = await raceAbort(
+          decision = await raceAbort(
             input.events.onToolApproval(
               invocation.name,
               invocation.args,
@@ -619,11 +647,12 @@ export class ToolRoundExecutor
           continue
         }
 
+        const { approved, reason } = normalizeApprovalDecision(decision)
         if (!approved)
         {
           this.recordToolOutcome({
             invocation,
-            result: toolError('Tool call rejected by user'),
+            result: toolError(rejectionError(reason)),
             budget: input.budget,
             events: input.events,
             doomLoop: input.doomLoop,

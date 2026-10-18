@@ -84,6 +84,8 @@ import {
   buildApprovalContent,
   buildConfirmContent,
   buildMcpApprovalContent,
+  formatRejectReasonRow,
+  reduceRejectReasonKey,
   renderPromptBox,
   resolveApprovalKey,
 } from './run/approval-box.js'
@@ -223,6 +225,11 @@ export default function App({
   const [commandRunning, setCommandRunning] = useState(false)
   // body scroll position inside the active approval/confirm prompt
   const [lockedPromptId, setLockedPromptId] = useState<number | null>(null)
+  // rejection reason being typed for one tool prompt; keyed so it self-resets
+  const [rejectReason, setRejectReason] = useState<{
+    promptId: number
+    draft: string
+  } | null>(null)
   const [promptScrollOffset, setPromptScrollOffset] = useState(0)
   const [scrollOffset, setScrollOffset] = useState(0)
   const [terminalSize, setTerminalSize] = useState({
@@ -480,6 +487,10 @@ export default function App({
     [todos, transcriptWidth]
   )
   const promptActive = Boolean(activePromptContent)
+  const reasonDraft =
+    activePrompt?.kind === 'tool' && rejectReason?.promptId === activePrompt.id
+      ? rejectReason.draft
+      : null
   const pickerOverlay =
     pickerVisible ||
     paletteVisible ||
@@ -539,6 +550,9 @@ export default function App({
   }
   else if (promptActive)
   {
+    if (reasonDraft !== null)
+      activityHint =
+        'enter rejects with reason · esc rejects · backspace on empty returns'
     if (lockedPromptId === activePrompt?.id)
       activityHint = 'Permission mode is locked during approval.'
     activity = style('warning')(
@@ -690,10 +704,22 @@ export default function App({
             activePromptContent,
             transcriptWidth,
             maxPromptRows,
-            promptScrollOffset
+            promptScrollOffset,
+            reasonDraft !== null
+              ? formatRejectReasonRow(
+                  reasonDraft,
+                  Math.max(transcriptWidth - 4, 1)
+                )
+              : undefined
           )
         : null,
-    [activePromptContent, maxPromptRows, promptScrollOffset, transcriptWidth]
+    [
+      activePromptContent,
+      maxPromptRows,
+      promptScrollOffset,
+      reasonDraft,
+      transcriptWidth,
+    ]
   )
   const promptBoxLines = promptRender?.lines ?? []
   const approvalHeight = promptActive ? promptBoxLines.length : 0
@@ -1027,11 +1053,43 @@ export default function App({
         }
       }
 
+      if (activePrompt && reasonDraft !== null)
+      {
+        // modifier chords keep their meaning; everything else edits the reason
+        if (key.ctrl || key.meta)
+        {
+          const chord = resolveApprovalKey(activePrompt.kind, ch, key)
+          if (chord === 'abort') abortRun()
+          else if (chord === 'locked') setLockedPromptId(activePrompt.id)
+          return
+        }
+        const step = reduceRejectReasonKey(reasonDraft, ch, key)
+        if (step.kind === 'edit')
+        {
+          setRejectReason({ promptId: activePrompt.id, draft: step.draft })
+        }
+        else if (step.kind === 'submit')
+        {
+          const reason = reasonDraft.trim()
+          settlePrompt(
+            activePrompt.id,
+            reason ? { approved: false, reason } : false
+          )
+        }
+        else if (step.kind === 'reject') settlePrompt(activePrompt.id, false)
+        else if (step.kind === 'exit') setRejectReason(null)
+        return
+      }
+
       if (activePrompt)
       {
         const action = resolveApprovalKey(activePrompt.kind, ch, key)
         if (action === 'abort') abortRun()
         else if (action === 'locked') setLockedPromptId(activePrompt.id)
+        else if (action === 'reason')
+        {
+          setRejectReason({ promptId: activePrompt.id, draft: '' })
+        }
         else if (action === 'always')
         {
           settlePrompt(activePrompt.id, { approved: true, always: true })

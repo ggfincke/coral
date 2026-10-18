@@ -45,6 +45,10 @@ export type AgentRunOutcome =
   | { status: 'failed'; error: Error }
 
 // callbacks for streaming tokens, tool calls, and completion
+// a rejection may carry the user's free-text reason; plain booleans stay valid
+export type ToolApprovalDecision =
+  boolean | { approved: boolean; reason?: string }
+
 export interface AgentEvents
 {
   onToken: (token: string) => void
@@ -71,7 +75,7 @@ export interface AgentEvents
     presentation?: ToolCallPresentation,
     callId?: number,
     promoted?: boolean
-  ) => Promise<boolean>
+  ) => Promise<ToolApprovalDecision>
   // launch trust is separate from per-tool approval and is never automatic
   onMcpLaunchApproval?: (request: McpLaunchApprovalRequest) => Promise<boolean>
   // continue or stop after a stuck loop is detected

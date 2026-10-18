@@ -2728,6 +2728,51 @@ test('Agent only asks approval for dangerous tools & records rejections as tool 
   assert.equal(bashToolMessage.content, 'Error: Tool call rejected by user')
 })
 
+test('a rejection reason is quoted in the tool message the model sees', async () =>
+{
+  const dir = await tempDir('coral-approval-reason-')
+  const { agent } = makeFakeAgent(dir, [
+    [
+      {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              type: 'function',
+              function: { name: 'bash', arguments: { command: 'ls' } },
+            },
+          ],
+        },
+        done: true,
+      },
+    ],
+    [{ message: { role: 'assistant', content: 'done' }, done: true }],
+  ])
+
+  await agent.run(
+    'list the files',
+    makeAgentEvents({
+      onToolApproval()
+      {
+        return Promise.resolve({
+          approved: false,
+          reason: 'use list_files\n\x1b[31minstead of bash',
+        })
+      },
+    })
+  )
+
+  const bashToolMessage = agent
+    .getMessages()
+    .find((message) => message.role === 'tool' && message.tool_name === 'bash')
+  assert.ok(bashToolMessage)
+  assert.equal(
+    bashToolMessage.content,
+    'Error: Tool call rejected by user: "use list_files instead of bash". Adjust your approach to follow this feedback instead of retrying the same call.'
+  )
+})
+
 test('aborting mid-tools records a reply for every announced tool_call', async () =>
 {
   const dir = await tempDir('coral-abort-')
