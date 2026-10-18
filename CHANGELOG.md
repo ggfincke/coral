@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **External editor:** a one-line result from `$VISUAL`/`$EDITOR` no longer
+  keeps its trailing newline, so the next Enter sends it instead of confirming
+  a paste. A result that arrives after the draft was reset is now reported
+  instead of dropped silently.
+
 ### Added
 
 - **Workspace tool grants:** `(p)` on a tool approval remembers the grant for
