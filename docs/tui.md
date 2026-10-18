@@ -55,6 +55,7 @@ synthetic instruction to load the selected skill.
 | `/resume`      |                   | none or id/prefix        | Prefix match allowed. No args: searchable session picker; Tab toggles current-project filtering. Saves current first; save error cancels (`Current session could not be saved; resume was canceled.`). Cwd must still exist                    |
 | `/rename`      |                   | title                    | Rename the bound session. No args: print current id/title and `Usage: /rename <new title>`. No session: `No active session to rename. Send a message first.`                                                                                   |
 | `/new`         |                   |                          | Save first, then clear history and unbind. Does not delete the old file. Save `error`/`stale` **aborts**: `Current session could not be saved; the new conversation was not started.`                                                          |
+| `/transcript`  |                   |                          | Open the full-screen transcript pager; see [Transcript pager](#transcript-pager)                                                                                                                                                               |
 | `/jobs`        |                   |                          | Open the durable task panel: list, create, edit drafts, approve with explicit host-shell acknowledgement, and follow overview, transcript, events, checks, and diff tabs. Closing the panel leaves tasks running. See [Durable tasks](jobs.md) |
 | `/telemetry`   |                   |                          | Lifetime local reliability counters per model                                                                                                                                                                                                  |
 | `/exit`        | `/quit`           |                          | Shutdown                                                                                                                                                                                                                                       |
@@ -160,6 +161,10 @@ Gated tool calls, MCP launch trust, and doom-loop pauses open a modal. If the bo
 Yolo auto-approves `require_approval` **tool** calls (including outside-workspace promotions). Yolo **never** auto-approves MCP launch trust.
 
 ---
+
+## Transcript pager
+
+`Ctrl+L` or `/transcript` opens the whole transcript full-screen with every tool output expanded; the header, status lines, and composer hide until it closes and the draft survives. Keys: `j`/`k` or arrows one row, `Space`/`f`/`PgDn` and `b`/`PgUp` one page, `d`/`u` or `Ctrl+D`/`Ctrl+U` half a page, `g`/`Home` and `G`/`End` top and bottom, mouse wheel three rows. `/` types a case-insensitive search; Enter commits it and jumps to the first match at or below the top row, `n`/`N` cycle matches, Esc while typing keeps the previous query. The footer shows the visible row range, the current match count, and how many rows wait below. The pager opens pinned to the newest rows and follows new output only while already at the bottom; a streaming turn keeps the top row in place otherwise. `q` or Esc closes; `Ctrl+C` stops a running turn if there is one, otherwise closes. An approval prompt closes the pager. Search runs over wrapped rows, so a match split across a soft wrap is not found. Rebind the chord through `keybindings` in prefs (`open-transcript`).
 
 ## Themes
 

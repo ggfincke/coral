@@ -9,12 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Transcript pager:** `Ctrl+L` or `/transcript` opens the conversation
+  full-screen with every tool output expanded, less-style paging (`j`/`k`,
+  `Space`/`b`, `d`/`u`, `g`/`G`), and `/` search with `n`/`N` and a match count
+  in the footer. It opens pinned to the newest rows and follows a streaming
+  turn only while already at the bottom. `q` or Esc closes; an approval prompt
+  closes it. The chord is rebindable as `open-transcript`.
 - **Reject with a reason:** on a tool approval, `n` now opens a one-row reason
   field. Enter rejects with the reason quoted in the tool error the model sees,
   Enter on an empty row rejects plainly, Esc still rejects instantly, and
   Backspace on an empty row returns to the choices. MCP launch and doom-loop
   prompts keep `n` as an instant reject; ACP, exec, and jobs never carry a
   reason.
+
+- **Workspace tool grants:** `(p)` on a tool approval remembers the grant for
+  the current workspace, so the next session in that directory does not prompt
+  for that built-in tool again. Grants are user-owned, keyed to the tool and
+  the workspace realpath, and stored one file per grant under
+  `CORAL_HOME/tool-grants.d/`. MCP tools and outside-workspace promotions stay
+  session-scoped. `/permissions grants` lists them and `/permissions revoke
+<tool|all>` forgets them.
 
 ### Fixed
 
@@ -26,16 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps its trailing newline, so the next Enter sends it instead of confirming
   a paste. A result that arrives after the draft was reset is now reported
   instead of dropped silently.
-
-### Added
-
-- **Workspace tool grants:** `(p)` on a tool approval remembers the grant for
-  the current workspace, so the next session in that directory does not prompt
-  for that built-in tool again. Grants are user-owned, keyed to the tool and
-  the workspace realpath, and stored one file per grant under
-  `CORAL_HOME/tool-grants.d/`. MCP tools and outside-workspace promotions stay
-  session-scoped. `/permissions grants` lists them and `/permissions revoke
-<tool|all>` forgets them.
 
 ## [0.17.1] - 2026-10-13
 

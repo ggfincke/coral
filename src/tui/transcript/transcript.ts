@@ -4,7 +4,11 @@
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import { renderUnifiedDiff } from './diff.js'
-import { resolveToolResultView, toolResultExpansionKey } from './expansion.js'
+import {
+  resolveToolResultView,
+  toolResultCacheKey,
+  toolResultExpansionRevision,
+} from './expansion.js'
 import { renderMarkdownToAnsi } from './markdown.js'
 import { renderStreamingMarkdown } from './stream-markdown.js'
 import {
@@ -89,10 +93,11 @@ function getCachedBlockLines(
   width: number,
   generation: number,
   render: () => string[],
-  cwd?: string
+  cwd?: string,
+  forceExpanded = false
 ): string[]
 {
-  const key = blockCacheKey(width, toolResultExpansionKey(block))
+  const key = blockCacheKey(width, toolResultCacheKey(block, forceExpanded))
   const widthCache = FINALIZED_BLOCK_CACHE.get(block)
   const cached = widthCache?.get(key)
   if (
@@ -314,7 +319,8 @@ function maybeLinkifyPathArg(
 function formatFinalizedBlock(
   block: OutputBlock,
   width: number,
-  cwd?: string
+  cwd?: string,
+  forceExpanded = false
 ): string[]
 {
   switch (block.type)
@@ -383,7 +389,7 @@ function formatFinalizedBlock(
     {
       // collapse is decided here, not at construction, so ctrl+o reaches the
       // full (bounded) content the block retained
-      const view = resolveToolResultView(block)
+      const view = resolveToolResultView(block, forceExpanded)
       if (!view.text) return []
       return formatToolResultLines(view.text, block.isError ?? false, width)
     }
@@ -431,7 +437,8 @@ function formatBlock(
   width: number,
   spinnerTick: number,
   themeGeneration: number,
-  cwd?: string
+  cwd?: string,
+  forceExpanded = false
 ): string[]
 {
   if (block.type === 'tool_call' && !block.status)
@@ -446,8 +453,9 @@ function formatBlock(
     block,
     width,
     themeGeneration,
-    () => formatFinalizedBlock(block, width, cwd),
-    cwd
+    () => formatFinalizedBlock(block, width, cwd, forceExpanded),
+    cwd,
+    forceExpanded
   )
 }
 
@@ -496,6 +504,8 @@ export interface TranscriptOptions
   showThinking?: boolean
   // memoization input: callers re-render when the active theme changes
   themeGeneration?: number
+  // render every tool result in full (the pager); default keeps the budgets
+  forceExpanded?: boolean
 }
 
 export interface ToolResultSpan
@@ -510,10 +520,97 @@ export function buildTranscriptLines(opts: TranscriptOptions): string[]
   return buildTranscriptLayout(opts).lines
 }
 
-export function buildTranscriptLayout(opts: TranscriptOptions): {
+export interface CommittedTranscript
+{
+  // shared w/ every caller: never mutate these arrays
   lines: string[]
   results: ToolResultSpan[]
+  // blocks before the first pending tool call; everything after ticks live
+  blockCount: number
 }
+
+const COMMITTED_CACHE = new WeakMap<
+  readonly OutputBlock[],
+  Map<string, CommittedTranscript>
+>()
+const MAX_COMMITTED_CACHE_ENTRIES = 4
+
+function committedBoundary(blocks: readonly OutputBlock[]): number
+{
+  const pending = blocks.findIndex(
+    (block) => block.type === 'tool_call' && !block.status
+  )
+  return pending < 0 ? blocks.length : pending
+}
+
+// rows for the settled prefix of the transcript, cached on the blocks array
+// identity: React replaces that array on every block change but not on the
+// spinner tick or the stream flush, so ticks cost only the live tail
+export function buildCommittedTranscript(
+  opts: TranscriptOptions
+): CommittedTranscript
+{
+  const {
+    blocks,
+    width,
+    showThinking = true,
+    themeGeneration = getThemeGeneration(),
+    forceExpanded = false,
+  } = opts
+  const blockCount = committedBoundary(blocks)
+  const key = [
+    width,
+    forceExpanded ? 1 : 0,
+    showThinking ? 1 : 0,
+    themeGeneration,
+    chalk.level,
+    opts.cwd ?? '',
+    forceExpanded ? 0 : toolResultExpansionRevision(),
+    blockCount,
+  ].join('|')
+  let byKey = COMMITTED_CACHE.get(blocks)
+  const cached = byKey?.get(key)
+  if (cached)
+  {
+    byKey!.delete(key)
+    byKey!.set(key, cached)
+    return cached
+  }
+
+  const lines: string[] = []
+  const results: ToolResultSpan[] = []
+  for (const block of blocks.slice(0, blockCount))
+  {
+    if (!showThinking && block.type === 'thinking') continue
+    const start = lines.length
+    lines.push(
+      ...formatBlock(block, width, 0, themeGeneration, opts.cwd, forceExpanded)
+    )
+    if (block.type === 'tool_result')
+      results.push({ block, start, end: lines.length })
+  }
+  const built = { lines, results, blockCount }
+  if (!byKey)
+  {
+    byKey = new Map()
+    COMMITTED_CACHE.set(blocks, byKey)
+  }
+  byKey.set(key, built)
+  while (byKey.size > MAX_COMMITTED_CACHE_ENTRIES)
+  {
+    const oldest = byKey.keys().next().value
+    if (oldest === undefined) break
+    byKey.delete(oldest)
+  }
+  return built
+}
+
+// rows after the committed prefix: pending calls, streaming reasoning and
+// text, and the waiting indicator. spans are relative to this tail
+export function buildLiveTranscript(
+  opts: TranscriptOptions,
+  fromBlock: number
+): { lines: string[]; results: ToolResultSpan[] }
 {
   const {
     blocks,
@@ -525,11 +622,12 @@ export function buildTranscriptLayout(opts: TranscriptOptions): {
     streamingThinking = '',
     showThinking = true,
     themeGeneration = getThemeGeneration(),
+    forceExpanded = false,
   } = opts
   const transcript: string[] = []
   const results: ToolResultSpan[] = []
 
-  for (const block of blocks)
+  for (const block of blocks.slice(fromBlock))
   {
     if (!showThinking && block.type === 'thinking')
     {
@@ -537,7 +635,14 @@ export function buildTranscriptLayout(opts: TranscriptOptions): {
     }
     const start = transcript.length
     transcript.push(
-      ...formatBlock(block, width, spinnerTick, themeGeneration, opts.cwd)
+      ...formatBlock(
+        block,
+        width,
+        spinnerTick,
+        themeGeneration,
+        opts.cwd,
+        forceExpanded
+      )
     )
     if (block.type === 'tool_result')
       results.push({ block, start, end: transcript.length })
@@ -585,6 +690,27 @@ export function buildTranscriptLayout(opts: TranscriptOptions): {
 
   transcript.push(...physicalLines(live, width))
   return { lines: transcript, results }
+}
+
+export function buildTranscriptLayout(opts: TranscriptOptions): {
+  lines: string[]
+  results: ToolResultSpan[]
+}
+{
+  const committed = buildCommittedTranscript(opts)
+  const live = buildLiveTranscript(opts, committed.blockCount)
+  const offset = committed.lines.length
+  return {
+    lines: [...committed.lines, ...live.lines],
+    results: [
+      ...committed.results,
+      ...live.results.map((span) => ({
+        block: span.block,
+        start: span.start + offset,
+        end: span.end + offset,
+      })),
+    ],
+  }
 }
 
 export function maxScrollOffset(

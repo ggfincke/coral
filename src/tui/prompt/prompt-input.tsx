@@ -118,6 +118,7 @@ export interface PromptInputProps
   onToggleThinking: () => void
   onTogglePermissions: () => void
   onOpenPalette: () => void
+  onOpenTranscript?: () => void
   onHistoryUp: () => void
   onHistoryDown: () => void
   // pull the newest queued message into an empty composer; false = no queue
@@ -173,6 +174,7 @@ export default function PromptInput({
   onToggleThinking,
   onTogglePermissions,
   onOpenPalette,
+  onOpenTranscript,
   onHistoryUp,
   onHistoryDown,
   onQueueEdit,
@@ -899,6 +901,11 @@ export default function PromptInput({
         onOpenPalette()
         return
       }
+      if (binding === 'open-transcript')
+      {
+        onOpenTranscript?.()
+        return
+      }
       if (binding === 'open-editor' && onOpenEditor)
       {
         if (!editorBusyRef.current)
@@ -1213,6 +1220,7 @@ export default function PromptInput({
       onHalfPageDown,
       onHalfPageUp,
       onOpenPalette,
+      onOpenTranscript,
       onPageDown,
       onPageUp,
       onScrollDown,

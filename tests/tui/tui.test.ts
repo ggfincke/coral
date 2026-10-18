@@ -16,6 +16,9 @@ import {
   maxScrollOffset,
   sliceViewport,
   summarizeToolArgs,
+  buildCommittedTranscript,
+  buildLiveTranscript,
+  buildTranscriptLayout,
 } from '../../src/tui/transcript/transcript.js'
 import type { OutputBlock } from '../../src/tui/transcript/types.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
@@ -134,6 +137,7 @@ test('command registry preserves order, aliases, help, and dispatch', async () =
     'rename',
     'new',
     'jobs',
+    'transcript',
     'telemetry',
     'exit',
   ]
@@ -1493,4 +1497,40 @@ test('approval shortcuts cannot grant permission and complete diffs remain inspe
   assert.match(stripAnsi(content.bodyLines.join('\n')), /line 49/)
   const bottom = renderPromptBox(content, 80, 15, 10000)
   assert.match(stripAnsi(bottom.lines.join('\n')), /line 49/)
+})
+
+test('the committed transcript is cached on the blocks array and the layout equals committed plus live', () =>
+{
+  const blocks: OutputBlock[] = [
+    { type: 'user', content: 'first' },
+    {
+      type: 'tool_result',
+      toolName: 'bash',
+      content: Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n'),
+      isError: false,
+    },
+    { type: 'tool_call', toolName: 'bash', args: {}, callId: 2 },
+    { type: 'assistant', content: 'after the pending call' },
+  ]
+  const base = { blocks, streaming: 'streaming tail', width: 60 }
+
+  const committedA = buildCommittedTranscript({ ...base, spinnerTick: 1 })
+  const committedB = buildCommittedTranscript({ ...base, spinnerTick: 7 })
+  // the boundary sits at the pending tool call, and ticks reuse the same rows
+  assert.equal(committedA.blockCount, 2)
+  assert.equal(committedA.lines, committedB.lines)
+  assert.match(committedA.lines.join('\n'), /more lines/)
+
+  const expanded = buildCommittedTranscript({ ...base, forceExpanded: true })
+  assert.doesNotMatch(expanded.lines.join('\n'), /more lines/)
+  assert.match(expanded.lines.join('\n'), /line 39/)
+
+  const live = buildLiveTranscript({ ...base, spinnerTick: 1 }, 2)
+  assert.match(live.lines.join('\n'), /after the pending call/)
+  assert.match(live.lines.join('\n'), /streaming tail/)
+
+  const layout = buildTranscriptLayout({ ...base, spinnerTick: 1 })
+  assert.deepEqual(layout.lines, [...committedA.lines, ...live.lines])
+  assert.equal(layout.results.length, 1)
+  assert.equal(layout.results[0]!.start, committedA.results[0]!.start)
 })

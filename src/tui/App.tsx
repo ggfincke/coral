@@ -97,6 +97,7 @@ import {
 import { LineList } from './components/line-list.js'
 import { buildTodoPanel } from './transcript/todo-panel.js'
 import BacktrackSelector from './transcript/backtrack-selector.js'
+import TranscriptPager from './transcript/transcript-pager.js'
 import {
   buildBacktrackTurns,
   type BacktrackTurn,
@@ -163,6 +164,8 @@ export default function App({
     () => resolveStartupSession(resumeSessionId).session
   )
   const [paletteOpen, setPaletteOpen] = useState(false)
+  // full-screen transcript pager; it yields to approval prompts (one effect below)
+  const [pagerOpen, setPagerOpen] = useState(false)
   // /resume overlay: fuzzy saved-session picker with transcript previews
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false)
   const [jobsOpen, setJobsOpen] = useState(false)
@@ -497,6 +500,8 @@ export default function App({
     backtrackOpen ||
     sessionPickerVisible ||
     jobsOpen
+  const pagerVisible =
+    pagerOpen && Boolean(agent) && !promptActive && !pickerVisible && !rawMode
   const showComposer = Boolean(agent) && !pickerOverlay && !promptActive
   const metricLines = agent
     ? buildMetricLines(
@@ -631,16 +636,21 @@ export default function App({
       ).length +
       3
     : 0
-  const terminalTooSmall =
-    terminalSize.columns < 24 ||
-    availableHeight <
-      (promptActive
-        ? approvalPinnedRows
-        : jobsOpen
-          ? 10
-          : pickerOverlay
-            ? 4
-            : 5)
+  useEffect(() =>
+  {
+    if (promptActive) setPagerOpen(false)
+  }, [promptActive])
+  const terminalTooSmall = pagerVisible
+    ? terminalSize.columns < 24 || terminalSize.rows < 4
+    : terminalSize.columns < 24 ||
+      availableHeight <
+        (promptActive
+          ? approvalPinnedRows
+          : jobsOpen
+            ? 10
+            : pickerOverlay
+              ? 4
+              : 5)
   // the editor budget does not depend on its reported height, avoiding a
   // render-measure feedback loop while hints and suggestions appear
   const queueCapacity = showComposer
@@ -1351,6 +1361,13 @@ export default function App({
     ]
   )
 
+  // the pager may open during a run so a streaming turn can be read in full
+  const openTranscript = useCallback(() =>
+  {
+    if (!agent || rawMode) return
+    setPagerOpen(true)
+  }, [agent, rawMode])
+
   const runSlashCommand = useCallback(
     async (
       value: string,
@@ -1479,6 +1496,12 @@ export default function App({
             return { admitted: true, handled: true }
           }
 
+          if (value.trim().toLowerCase() === '/transcript')
+          {
+            openTranscript()
+            return { admitted: true, handled: true }
+          }
+
           const handled = await dispatchCommand(value.trim(), cmdCtx)
           return { admitted: true, handled }
         }
@@ -1488,6 +1511,7 @@ export default function App({
       acceptsCommandEvent,
       acceptsCommandTerminal,
       addHistoryEntry,
+      openTranscript,
       forgetSessionToolGrant,
       toolGrants,
       beginOperation,
@@ -2034,8 +2058,18 @@ export default function App({
       {
         onPageDown()
       }
+      else if (action === 'open-transcript')
+      {
+        openTranscript()
+      }
     },
-    [onPageDown, onPageUp, onTogglePermissions, onToggleThinking]
+    [
+      onPageDown,
+      onPageUp,
+      onTogglePermissions,
+      onToggleThinking,
+      openTranscript,
+    ]
   )
 
   const onPaletteSelect = useCallback(
@@ -2159,7 +2193,34 @@ export default function App({
           Resize terminal to show controls and stats
         </Text>
       )}
-      <Box flexDirection="column" display={terminalTooSmall ? 'none' : 'flex'}>
+      {pagerVisible && !terminalTooSmall && (
+        <TranscriptPager
+          active
+          width={transcriptWidth}
+          height={Math.max(terminalSize.rows, 1)}
+          transcript={{
+            cwd: currentCwd,
+            blocks: output,
+            streaming: streamBuf.text,
+            spinnerTick,
+            showWaitingIndicator,
+            waitingElapsed,
+            streamingThinking: streamBuf.thinking,
+            showThinking,
+            themeGeneration,
+          }}
+          onClose={() => setPagerOpen(false)}
+          onInterrupt={() =>
+          {
+            if (hasActiveOperation()) abortRun()
+            else setPagerOpen(false)
+          }}
+        />
+      )}
+      <Box
+        flexDirection="column"
+        display={terminalTooSmall || pagerVisible ? 'none' : 'flex'}
+      >
         <LineList lines={[headerLine, headerSep]} />
         <Box
           flexDirection="column"
@@ -2291,6 +2352,7 @@ export default function App({
                 !backtrackOpen &&
                 !sessionPickerVisible &&
                 !jobsOpen &&
+                !pagerVisible &&
                 Boolean(agent) &&
                 !promptActive &&
                 !terminalTooSmall
@@ -2318,6 +2380,7 @@ export default function App({
               onToggleThinking={onToggleThinking}
               onTogglePermissions={onTogglePermissions}
               onOpenPalette={openPalette}
+              onOpenTranscript={openTranscript}
               onHistoryUp={onHistoryUp}
               onHistoryDown={onHistoryDown}
               onQueueEdit={handleQueueEdit}
