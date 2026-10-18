@@ -27,6 +27,7 @@ import { runtimeCommands } from './runtime.js'
 import { sessionCommands } from './sessions.js'
 import { workspaceCommands } from './workspace.js'
 import { jobsCommand } from './jobs.js'
+import { transcriptCommand } from './transcript.js'
 
 const SKILL_DETAIL_MAX = 80
 
@@ -171,6 +172,7 @@ const commands: readonly Command[] = [
   sessionCommands.rename,
   sessionCommands.new,
   jobsCommand,
+  transcriptCommand,
   runtimeCommands.telemetry,
   runtimeCommands.exit,
 ]

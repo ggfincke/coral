@@ -29,6 +29,15 @@ export function isExpandableBlock(block: OutputBlock): boolean
 // TUI-only values that never persist, and restored sessions start collapsed
 const EXPANDED_RESULTS = new WeakMap<OutputBlock, true>()
 
+// bumps on every toggle so a joined-rows cache can key on expansion state
+// without walking every block
+let expansionRevision = 0
+
+export function toolResultExpansionRevision(): number
+{
+  return expansionRevision
+}
+
 // flip the newest expandable block's expansion state; returns it or null when
 // the transcript has no tool results yet
 export function toggleNewestToolResult(
@@ -48,6 +57,7 @@ export function toggleNewestToolResult(
       {
         EXPANDED_RESULTS.set(block, true)
       }
+      expansionRevision += 1
       return block
     }
   }
@@ -78,6 +88,17 @@ export function toolResultExpansionKey(block: OutputBlock): 0 | 1
   return block.type === 'tool_result' && EXPANDED_RESULTS.has(block) ? 1 : 0
 }
 
+// a forced (pager) view renders exactly like a manually expanded one, so it
+// shares that cache slot instead of growing the per-block key space
+export function toolResultCacheKey(
+  block: OutputBlock,
+  forceExpanded: boolean
+): 0 | 1
+{
+  if (forceExpanded && block.type === 'tool_result') return 1
+  return toolResultExpansionKey(block)
+}
+
 export interface CollapsedResultView
 {
   text: string
@@ -88,14 +109,17 @@ export interface CollapsedResultView
 
 // render-time truncation for one tool result: collapsed views apply the
 // per-kind budget w/ a count-carrying suffix; expanded views pass through
-export function resolveToolResultView(block: OutputBlock): CollapsedResultView
+export function resolveToolResultView(
+  block: OutputBlock,
+  forceExpanded = false
+): CollapsedResultView
 {
   if (block.type !== 'tool_result')
   {
     return { text: '', hiddenLines: 0, expanded: false }
   }
 
-  const expanded = toolResultExpansionKey(block) === 1
+  const expanded = forceExpanded || toolResultExpansionKey(block) === 1
   if (expanded) return { text: block.content, hiddenLines: 0, expanded: true }
 
   const budget = toolResultBudgetLines(block.toolName)
