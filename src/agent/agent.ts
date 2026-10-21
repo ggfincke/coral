@@ -43,7 +43,7 @@ import {
   type ConversationMessageAnchor,
 } from './state/conversation.js'
 import { MIN_NUM_CTX, resolvePinnedContextWindow } from '../config/context.js'
-import { totalmem } from 'node:os'
+import { resolveMemoryBudget } from '../config/memory-budget.js'
 
 export type { CompactionResult } from './state/compaction.js'
 export type { AgentInferenceClient } from './inference-client.js'
@@ -838,7 +838,7 @@ export class Agent
       {
         model: requestedModel,
         cwd: this.cwd,
-        totalMemBytes: totalmem(),
+        memory: resolveMemoryBudget(),
         showModel: (model, requestSignal) =>
           this.client.showModel(model, requestSignal),
         listModels: (requestSignal) => this.client.listModels(requestSignal),

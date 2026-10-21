@@ -5,12 +5,17 @@ import { loadProjectConfig } from './project-config.js'
 import { modelLookupKey } from '../ollama/model-name.js'
 import type { Model, ModelInfo } from '../types/inference.js'
 import { isPlainObject } from '../utils/guards.js'
+import type { MemoryBudget, MemoryKind } from './memory-budget.js'
 
 // reserve a fixed fraction of unified memory for the GPU on Apple Silicon
 const USABLE_MEMORY_FRACTION = 0.75
 
 // reserve memory for weights, KV cache, compute buffers, Ollama, and the OS
 const MEMORY_RESERVE_BYTES = 6 * 1024 ** 3
+
+// dedicated VRAM only needs room for the CUDA context, compute graph, and any
+// display server sharing the GPU
+const DISCRETE_RESERVE_BYTES = 2 * 1024 ** 3
 
 // estimate KV elements at f16 width so the memory bound stays conservative
 const KV_ELEMENT_BYTES = 2
@@ -35,7 +40,8 @@ export interface ContextWindowResolverDependencies
 {
   model: string
   cwd: string
-  totalMemBytes: number
+  // awaited after the model lookups so a slow GPU probe never delays them
+  memory: MemoryBudget | Promise<MemoryBudget>
   showModel: (model: string, signal?: AbortSignal) => Promise<ModelInfo>
   listModels: (signal?: AbortSignal) => Promise<Model[]>
 }
@@ -88,6 +94,8 @@ export function estimateKvBytesPerToken(info: ModelInfo): number | undefined
 export interface BudgetInputs
 {
   totalMemBytes: number
+  // defaults to unified memory
+  memoryKind?: MemoryKind
   weightBytes: number
   nativeContext: number
   // undefined means the KV bound cannot be estimated
@@ -98,8 +106,12 @@ export interface BudgetInputs
 export function computeMemoryCappedContext(inputs: BudgetInputs): number
 {
   const { totalMemBytes, weightBytes, nativeContext, kvBytesPerToken } = inputs
-  const usable = totalMemBytes * USABLE_MEMORY_FRACTION
-  const forKv = usable - weightBytes - MEMORY_RESERVE_BYTES
+  const forKv =
+    inputs.memoryKind === 'discrete'
+      ? totalMemBytes - weightBytes - DISCRETE_RESERVE_BYTES
+      : totalMemBytes * USABLE_MEMORY_FRACTION -
+        weightBytes -
+        MEMORY_RESERVE_BYTES
 
   // fall back to the minimum when weights and reserve already exhaust memory
   if (forKv <= 0) return MIN_NUM_CTX
@@ -141,8 +153,10 @@ export async function resolvePinnedContextWindow(
     deps.listModels,
     signal
   )
+  const memory = await deps.memory
   const memoryCap = computeMemoryCappedContext({
-    totalMemBytes: deps.totalMemBytes,
+    totalMemBytes: memory.totalBytes,
+    memoryKind: memory.kind,
     weightBytes,
     nativeContext,
     kvBytesPerToken: estimateKvBytesPerToken(info),

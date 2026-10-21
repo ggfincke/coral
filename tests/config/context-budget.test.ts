@@ -186,7 +186,7 @@ test('resolvePinnedContextWindow applies the explicit num_ctx ceiling', async ()
     const resolved = await resolvePinnedContextWindow({
       model: 'gemma4:31b-mlx',
       cwd,
-      totalMemBytes: M4_MAX_MEM,
+      memory: { kind: 'unified', totalBytes: M4_MAX_MEM },
       showModel: async () => GEMMA,
       listModels: async (): Promise<Model[]> => [
         {
@@ -212,7 +212,7 @@ test('resolvePinnedContextWindow floors a too-small num_ctx override', async () 
     const resolved = await resolvePinnedContextWindow({
       model: 'gemma4:31b-mlx',
       cwd,
-      totalMemBytes: M4_MAX_MEM,
+      memory: { kind: 'unified', totalBytes: M4_MAX_MEM },
       showModel: async () => GEMMA,
       listModels: async (): Promise<Model[]> => [
         {
@@ -237,7 +237,7 @@ test('resolvePinnedContextWindow treats model-list failure as unknown weight', a
     const resolved = await resolvePinnedContextWindow({
       model: 'mistral-medium-3.5:128b',
       cwd,
-      totalMemBytes: 512 * 1e9,
+      memory: { kind: 'unified', totalBytes: 512 * 1e9 },
       showModel: async () => MISTRAL,
       listModels: async () =>
       {
@@ -269,7 +269,7 @@ test('canonical and tagless model names share memory budgets without collapsing 
       resolvePinnedContextWindow({
         model,
         cwd,
-        totalMemBytes: 32 * GiB,
+        memory: { kind: 'unified', totalBytes: 32 * GiB },
         showModel: async () => ({
           contextLength: 131_072,
           architecture: 'full-attention',
@@ -304,7 +304,7 @@ test('resolvePinnedContextWindow returns undefined without model metadata', asyn
   const resolved = await resolvePinnedContextWindow({
     model: 'missing:model',
     cwd,
-    totalMemBytes: M4_MAX_MEM,
+    memory: { kind: 'unified', totalBytes: M4_MAX_MEM },
     showModel: async () =>
     {
       throw new Error('show failed')

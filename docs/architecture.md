@@ -498,7 +498,7 @@ Formula (`src/config/context.ts`):
 
 1. Read native context length from Ollama `showModel`.
 2. Estimate weights from `/api/tags` `size` (missing → 0).
-3. Memory cap: `0.75 × total RAM − weights − 6 GiB` for KV. Sliding-window architectures (`gemma`, `gemma2`, `gemma3`, `gemma4`) and unknown KV dims are treated as KV-light and pin **native** after the weight check. Full-attention models divide remaining bytes by estimated f16 KV bytes/token and round down to 1024.
+3. Memory cap: `0.75 × total RAM − weights − 6 GiB` for KV on unified memory, or `total VRAM − weights − 2 GiB` when `nvidia-smi` reports a discrete GPU (`src/config/memory-budget.ts`). Sliding-window architectures (`gemma`, `gemma2`, `gemma3`, `gemma4`) and unknown KV dims are treated as KV-light and pin **native** after the weight check. Full-attention models divide remaining bytes by estimated f16 KV bytes/token and round down to 1024.
 4. Apply user ceiling: `CORAL_NUM_CTX` if it parses as an integer `> 0`, else project `.coral.json` `context.maxNumCtx` (number only; strings ignored).
 5. Clamp: `min(native, max(8192, min(memoryCap, ceiling)))`. If native is **smaller** than 8192, the pin is native. A tiny `CORAL_NUM_CTX` (for example 512) still floors at 8192 unless native is smaller.
 
