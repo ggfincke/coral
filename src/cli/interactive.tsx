@@ -10,6 +10,7 @@ import { loadPrefs } from '../config/prefs.js'
 import { listSessions } from '../session/store.js'
 import { resolveResumeSession } from '../session/resume.js'
 import { setTheme } from '../tui/theme.js'
+import { tapTerminalControls } from '../tui/input/control-tap.js'
 import { findTheme, THEMES } from '../tui/themes.js'
 import {
   kittyKeyboardOptIn,
@@ -147,6 +148,7 @@ export async function runInteractiveCli(
     (props) =>
     {
       render(<App {...props} />, {
+        stdin: tapTerminalControls(process.stdin),
         exitOnCtrlC: false,
         // kitty keyboard protocol is opt-in; the tokenizer learns CSI-u
         // shapes independently (src/tui/input/keypress.ts)
