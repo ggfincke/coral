@@ -4,6 +4,7 @@
 import type { EventEmitter } from 'node:events'
 import { useEffect, useRef } from 'react'
 import { useStdin } from 'ink'
+import { terminalControlEvents } from './control-tap.js'
 import {
   tokenizeTerminalChunk,
   toInputEvent,
@@ -73,12 +74,21 @@ export function useCoralInput(
       }
     }
 
+    // wheel packets arrive whole from the stdin tap, not Ink's input event
+    const handlePacket = (packet: string) =>
+    {
+      const event = toInputEvent(packet)
+      if (event) handlerRef.current(event.input, event.key)
+    }
+
     internal_eventEmitter.on('input', handleData)
+    terminalControlEvents.on('packet', handlePacket)
 
     return () =>
     {
       pendingRef.current = ''
       internal_eventEmitter.removeListener('input', handleData)
+      terminalControlEvents.removeListener('packet', handlePacket)
     }
   }, [internal_eventEmitter, internal_exitOnCtrlC, isActive])
 }

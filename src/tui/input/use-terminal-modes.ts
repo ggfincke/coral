@@ -5,6 +5,7 @@ import type { EventEmitter } from 'node:events'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useApp, useStdin, useStdout } from 'ink'
 import { tokenizeTerminalChunk, toInputEvent } from './terminal-input.js'
+import { terminalControlEvents } from './control-tap.js'
 
 const ENABLE_MOUSE = '\x1b[?1000h\x1b[?1006h'
 const DISABLE_MOUSE = '\x1b[?1006l\x1b[?1000l'
@@ -20,7 +21,8 @@ export function useTerminalModes({
 }
 {
   const { suspendTerminal: suspendInk } = useApp()
-  const { stdout } = useStdout()
+  // ink 8 types stdout as a bare WritableStream; render() still uses process.stdout
+  const stdout = useStdout().stdout as typeof process.stdout
   const { internal_eventEmitter } = useStdin() as unknown as {
     internal_eventEmitter: EventEmitter
   }
@@ -103,22 +105,27 @@ export function useTerminalModes({
       pending = parsed.pending
       for (const token of parsed.tokens)
       {
-        if (token === '\x1b[I' || token === '\x1b[O')
-        {
-          setFocused(token === '\x1b[I')
-          continue
-        }
         const event = toInputEvent(token)
         if (event?.key.ctrl && event.input === 'z') suspendJob()
       }
     }
+    // focus reports arrive from the stdin tap, not Ink's input event
+    const handlePacket = (packet: string) =>
+    {
+      if (packet === '\x1b[I' || packet === '\x1b[O')
+      {
+        setFocused(packet === '\x1b[I')
+      }
+    }
     internal_eventEmitter.on('input', handleData)
+    terminalControlEvents.on('packet', handlePacket)
     if (process.platform !== 'win32') process.on('SIGTSTP', suspendJob)
 
     return () =>
     {
       mountedRef.current = false
       internal_eventEmitter.removeListener('input', handleData)
+      terminalControlEvents.removeListener('packet', handlePacket)
       process.removeListener('SIGTSTP', suspendJob)
       writeModes(false)
     }

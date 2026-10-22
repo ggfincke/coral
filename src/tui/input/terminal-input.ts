@@ -134,6 +134,12 @@ function isIgnoredControlPacket(input: string): boolean
   return BRACKETED_PASTE_PACKET_RE.test(input) || FOCUS_PACKET_RE.test(input)
 }
 
+// the complete packets Ink 8 drops; see tapTerminalControls in control-tap.ts
+export function isMouseOrFocusPacket(packet: string): boolean
+{
+  return SGR_MOUSE_PACKET_RE.test(packet) || FOCUS_PACKET_RE.test(packet)
+}
+
 function findNextControlIndex(input: string): number
 {
   const indexes = CONTROL_PREFIXES.map((p) => input.indexOf(p)).filter(
