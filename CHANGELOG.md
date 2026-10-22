@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Context sizing on discrete GPUs:** the pinned `num_ctx` is now budgeted
+  from total VRAM (via `nvidia-smi`) instead of system RAM when an NVIDIA GPU
+  is present, so the model and its KV cache stay on the GPU instead of
+  spilling to CPU. Unified memory and machines without `nvidia-smi` keep the
+  RAM budget (#128).
 - **Composer:** pressing Enter on an exactly typed slash command such as `/new`
   now sends it. The completion menu used to swallow that first Enter by
   re-accepting the suggestion it already matched, so the command only ran on

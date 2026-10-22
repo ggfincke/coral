@@ -12,8 +12,9 @@ On first need (and again after `/model`), Coral chooses `num_ctx` and sends it a
 
 Constants in `src/config/context.ts`:
 
-- Usable RAM: **75%** of `os.totalmem()`
-- Reserve: **6 GiB** plus model weight bytes (from `/api/tags` `size`; missing → 0)
+- Memory pool (`src/config/memory-budget.ts`, probed once per process): on Linux and Windows, total VRAM summed across GPUs from `nvidia-smi`; otherwise (macOS, no NVIDIA GPU, or the probe fails) `os.totalmem()`. AMD and Intel discrete GPUs fall back to RAM, so set `CORAL_NUM_CTX` there. The probe runs on the Coral machine, so a remote `--host` is sized by local memory
+- Unified memory: **75%** of RAM, minus a **6 GiB** reserve and model weight bytes (from `/api/tags` `size`; missing → 0)
+- Discrete GPU: all of VRAM, minus a **2 GiB** reserve and model weight bytes. Weights larger than VRAM fall to the minimum window
 - Minimum window: **8,192** tokens
 - Full-attention KV estimate: f16 (2 bytes/element) × layers × KV heads × (key + value length)
 - Sliding-window architectures **`gemma` / `gemma2` / `gemma3` / `gemma4`**: treated as KV-light → pin **native** context after the weight check (no 1024 rounding from KV math)
