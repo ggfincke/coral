@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.10] - 2026-10-21
+
 ### Added
 
 - **Transcript pager:** `Ctrl+L` or `/transcript` opens the conversation
@@ -21,7 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Backspace on an empty row returns to the choices. MCP launch and doom-loop
   prompts keep `n` as an instant reject; ACP, exec, and jobs never carry a
   reason.
-
 - **Workspace tool grants:** `(p)` on a tool approval remembers the grant for
   the current workspace, so the next session in that directory does not prompt
   for that built-in tool again. Grants are user-owned, keyed to the tool and
@@ -29,6 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CORAL_HOME/tool-grants.d/`. MCP tools and outside-workspace promotions stay
   session-scoped. `/permissions grants` lists them and `/permissions revoke
 <tool|all>` forgets them.
+
+### Changed
+
+- **Dependencies:** update Ink to 8.0.0, the ACP SDK to 1.9.0, and React to
+  19.3.1, and refresh runtime, development, and CI dependencies. Mouse wheel
+  and terminal focus reports, which Ink 8 no longer delivers to input
+  handlers, are read from stdin directly.
 
 ### Fixed
 
@@ -846,7 +854,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `bash` tool — execute shell commands with timeout (30s default)
   - ESM throughout with `NodeNext` module resolution
 
-[Unreleased]: https://github.com/ggfincke/coral/compare/v0.17.1...HEAD
+[Unreleased]: https://github.com/ggfincke/coral/compare/v0.17.10...HEAD
+[0.17.10]: https://github.com/ggfincke/coral/compare/v0.17.1...v0.17.10
 [0.17.1]: https://github.com/ggfincke/coral/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/ggfincke/coral/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/ggfincke/coral/compare/v0.15.0...v0.16.0
