@@ -28,6 +28,8 @@ If `showModel` fails or native length is `<= 0`, Coral falls back to **8192**. C
 
 The pin is what Ollama allocates for KV. **Each request is then budgeted more tightly** (`src/agent/request/budget.ts`): response reserve ≈ 1/8 of the window (cap **16,384**, sent as `num_predict`); prompt limit = `window − reserve`, then capped at **32,768**. A large native pin does not mean Coral sends a 32k+ prompt. Attachments may use up to half of the remaining flexible budget, with a **4 MiB** aggregate capture cap.
 
+Hosted models (`anthropic/<id>`, `openai/<id>`) skip the memory math. Their window is the model's input limit capped by `providers.<name>.maxContextTokens` (default **200,000**) and then by `CORAL_NUM_CTX`; project `context.maxNumCtx` does not apply. The 32,768 prompt cap is lifted, the whole window is prompt budget, and the response reserve (up to **64,000**, within the model's output limit) is sent as `max_tokens` on top of it.
+
 `/status` shows estimated tokens (history + tool defs + framing) and, when Ollama has reported them, prompt/decode counts and average speeds.
 
 ---

@@ -66,6 +66,19 @@ Permission mode starts as **ask** (prompt before gated calls) unless you pass `-
 
 `--resume` loads the newest usable session by `updatedAt`, skipping unavailable directories. Add `-C /path/to/project` to restrict selection. Explicit `--session` targets never substitute another session. Details: [CLI](cli.md), [Sessions](sessions.md).
 
+## Hosted models (optional)
+
+Claude Max and ChatGPT Pro subscriptions include monthly API credits you can claim from each provider's billing page. Coral can spend them on hosted models alongside Ollama:
+
+```bash
+export ANTHROPIC_API_KEY=...
+export OPENAI_API_KEY=...
+npm run dev -- --model anthropic/claude-opus-5-5
+npm run dev -- --model openai/gpt-6-astra
+```
+
+With a key set, the picker also lists that provider's models (shown as `cloud`), and `/model` can switch between local and hosted models mid-session. Hosted requests send your prompts, attached files, and tool results to that provider. Coral caps hosted context at 200,000 tokens and uses `high` reasoning effort unless you change `providers` in `~/.coral.json` (see [Configuration](configuration.md)). `/status` shows cached prompt tokens.
+
 ## Semantic search (optional)
 
 ```bash

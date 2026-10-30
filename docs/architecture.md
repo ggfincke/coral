@@ -16,7 +16,7 @@ That loop — stream, tools, settle, repeat — is the product. Conversational Q
 
 Facts that follow from that:
 
-- **Inference is Ollama-only.** Every chat request goes to the host you configure (`http://localhost:11434` by default). There is no built-in cloud inference API and no provider matrix.
+- **Inference is Ollama by default.** Bare model names go to the host you configure (`http://localhost:11434` by default). The only hosted options are `anthropic/<id>` (Anthropic Messages API) and `openai/<id>` (OpenAI Responses API), used only when you pick such a model and export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Embeddings stay on Ollama.
 - **No remote telemetry.** Reliability counters stay in files under `CORAL_HOME` (default `~/.coral`). Coral does not upload them.
 - **MCP is an extra data boundary you opt into.** Local stdio subprocesses you define in `~/.coral.json` may reach files, the host, or remote APIs according to _their_ behavior. Coral does not sandbox them.
 - **Coding agent, not chatbot wrapper.** The model sees a structured tool catalog, a system prompt that lists those tools as exhaustive, Git snapshots at request time, optional `@` file attachments, and conversation history that Coral compact/prune/trims when the window fills.
@@ -648,7 +648,7 @@ These names and strings are what a stuck session actually prints. They are not a
 
 ## Explicit non-goals
 
-- Cloud inference providers or an OpenAI-compatible “just add another client” matrix.
+- A general provider matrix or OpenAI-compatible “just add another client” shim beyond the two hosted APIs.
 - Remote telemetry, crash reporting, or usage analytics.
 - Sandboxing `bash` or MCP (no seccomp, no containers-by-default).
 - Remote MCP transports, OAuth, MCP resources/prompts/sampling/elicitation as first-class, hot reload of MCP config, MCP inside subagents, parallel MCP calls.
