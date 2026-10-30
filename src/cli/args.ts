@@ -50,7 +50,7 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .addHelpText('after', '\nDurable coding tasks: coral jobs --help')
     .option(
       '-m, --model <model>',
-      'Ollama model, or anthropic/<id> for a hosted API'
+      'Ollama model, or anthropic/<id> or openai/<id> for a hosted API'
     )
     .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
     .option('--no-think', 'disable streamed reasoning requests')
@@ -103,7 +103,7 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .option('--no-mcp', 'disable configured MCP servers')
     .addHelpText(
       'after',
-      '\nShared options: -m/--model, --host, --no-think, -C/--cwd, -V/--version.\nA model is required for exec. Bare names use the Ollama host; anthropic/ refs use ANTHROPIC_API_KEY.'
+      '\nShared options: -m/--model, --host, --no-think, -C/--cwd, -V/--version.\nA model is required for exec. Bare names use the Ollama host; anthropic/ and openai/ refs use ANTHROPIC_API_KEY or OPENAI_API_KEY.'
     )
     .action((prompt: string | undefined, _opts, command: Command) =>
     {

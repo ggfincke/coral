@@ -17,6 +17,7 @@ export interface HostedProviderSettings
 
 const API_KEY_ENV: Record<HostedProvider, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
 }
 
 export const DEFAULT_HOSTED_EFFORT: HostedEffort = 'high'

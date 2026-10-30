@@ -27,6 +27,11 @@ const DEFAULT_LOADERS: Record<HostedProvider, HostedClientLoader> = {
     const { AnthropicClient } = await import('./anthropic/client.js')
     return new AnthropicClient(resolveHostedSettings('anthropic'))
   },
+  openai: async () =>
+  {
+    const { OpenAIClient } = await import('./openai/client.js')
+    return new OpenAIClient(resolveHostedSettings('openai'))
+  },
 }
 
 export interface RoutingInferenceClientOptions
@@ -39,8 +44,8 @@ export interface RoutingInferenceClientOptions
 
 /**
  * Inference client that dispatches each call by its model ref. Bare model
- * strings stay on Ollama; `anthropic/` refs go to lazily constructed
- * hosted clients that receive the unprefixed native name.
+ * strings stay on Ollama; `anthropic/` and `openai/` refs go to lazily
+ * constructed hosted clients that receive the unprefixed native name.
  */
 export class RoutingInferenceClient implements AgentInferenceClient
 {

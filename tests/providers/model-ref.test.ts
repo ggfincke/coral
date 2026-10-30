@@ -11,6 +11,10 @@ test('exact hosted prefixes route to their provider with the native id', () =>
     provider: 'anthropic',
     name: 'claude-opus-5-5',
   })
+  assert.deepEqual(parseModelRef('openai/gpt-6-astra'), {
+    provider: 'openai',
+    name: 'gpt-6-astra',
+  })
 })
 
 test('Ollama names, tags, and other namespaces stay on Ollama untouched', () =>

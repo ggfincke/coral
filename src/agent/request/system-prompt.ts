@@ -144,6 +144,7 @@ function formatSupplementalContext(
 // build the complete system prompt for a model and project context
 const HOSTED_BACKEND_LABELS = {
   anthropic: 'the Anthropic API',
+  openai: 'the OpenAI API',
 } as const
 
 // name the backend that actually serves this model ref

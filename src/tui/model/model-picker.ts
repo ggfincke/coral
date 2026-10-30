@@ -59,7 +59,7 @@ export function buildModelPickerLines(
     return [
       style('error').bold('No models found'),
       chalk.dim(
-        'Pull an Ollama model, set ANTHROPIC_API_KEY, or pass --model.'
+        'Pull an Ollama model, set ANTHROPIC_API_KEY or OPENAI_API_KEY, or pass --model.'
       ),
     ]
       .slice(0, rows)

@@ -38,8 +38,12 @@ const SESSION_CODEC_RUNTIME_DEPS = new Set([
 ])
 const HOSTED_SDK_BOUNDARIES = [
   ['@anthropic-ai/sdk', 'src/providers/anthropic/'],
+  ['openai', 'src/providers/openai/'],
 ]
-const HOSTED_CLIENTS = ['src/providers/anthropic/client.ts']
+const HOSTED_CLIENTS = [
+  'src/providers/anthropic/client.ts',
+  'src/providers/openai/client.ts',
+]
 const SESSION_LAYER_RANKS = new Map([
   ['src/session/types.ts', 0],
   ['src/session/undo-state.ts', 1],

@@ -1,10 +1,13 @@
 // src/providers/model-ref.ts
 // split a Coral model string into its inference provider and native name
 
-export type HostedProvider = 'anthropic'
+export type HostedProvider = 'anthropic' | 'openai'
 export type InferenceProvider = 'ollama' | HostedProvider
 
-export const HOSTED_PROVIDERS: readonly HostedProvider[] = ['anthropic']
+export const HOSTED_PROVIDERS: readonly HostedProvider[] = [
+  'anthropic',
+  'openai',
+]
 
 export interface ModelRef
 {
