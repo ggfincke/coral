@@ -84,7 +84,7 @@ test('model configuration uses exact installed identities', () =>
         },
         names
       ),
-    /Unknown Ollama model/
+    /Unknown model/
   )
 })
 

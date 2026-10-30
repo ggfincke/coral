@@ -12,10 +12,16 @@ import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
 // preferred default model, pinned to the top and selected at startup
 const DEFAULT_MODEL = 'gemma4:31b-mlx'
 
-function parseModifiedAt(value: string): number
+function parseModifiedAt(value: string | undefined): number
 {
-  const timestamp = Date.parse(value)
+  const timestamp = Date.parse(value ?? '')
   return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+// hosted models have no local weights to size
+function modelSizeLabel(model: Model): string
+{
+  return model.size === undefined ? 'cloud' : formatBytes(model.size)
 }
 
 export function sortModels(models: Model[]): Model[]
@@ -51,8 +57,10 @@ export function buildModelPickerLines(
   if (models.length === 0)
   {
     return [
-      style('error').bold('No Ollama models found'),
-      chalk.dim('Pull a model or pass --model explicitly.'),
+      style('error').bold('No models found'),
+      chalk.dim(
+        'Pull an Ollama model, set ANTHROPIC_API_KEY, or pass --model.'
+      ),
     ]
       .slice(0, rows)
       .map((line) => truncateLine(line, columns))
@@ -61,7 +69,7 @@ export function buildModelPickerLines(
   const safeIndex = clamp(selectedIndex, 0, models.length - 1)
   const selected = models[safeIndex]!
   const lines: string[] = []
-  if (rows >= 2) lines.push(style('primary').bold('Select an Ollama model'))
+  if (rows >= 2) lines.push(style('primary').bold('Select a model'))
   if (rows >= 3)
   {
     lines.push(
@@ -86,7 +94,7 @@ export function buildModelPickerLines(
   {
     const model = models[index]!
     const active = index === safeIndex
-    const size = columns >= 32 ? formatBytes(model.size) : ''
+    const size = columns >= 32 ? modelSizeLabel(model) : ''
     const nameWidth = Math.max(
       columns - 3 - (size ? visibleWidth(size) + 2 : 0),
       0
@@ -110,7 +118,9 @@ export function buildModelPickerLines(
   {
     lines.push(
       chalk.dim(
-        `Size: ${formatBytes(selected.size)} · Modified: ${clean(selected.modified_at)}`
+        selected.size === undefined
+          ? 'Hosted API · billed per token'
+          : `Size: ${formatBytes(selected.size)} · Modified: ${clean(selected.modified_at ?? '')}`
       )
     )
   }

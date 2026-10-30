@@ -43,6 +43,10 @@ export function toModelRequestMessage(
   {
     projected.tool_calls = message.tool_calls.map(projectToolCall)
   }
+  if (message.providerState !== undefined)
+  {
+    projected.providerState = message.providerState
+  }
 
   return projected
 }
@@ -56,6 +60,7 @@ function projectToolCall(call: OllamaToolCall): OllamaToolCall
     },
   }
 
+  if (call.id !== undefined) projected.id = call.id
   if (call.type !== undefined) projected.type = call.type
   if (call.function.index !== undefined)
   {
@@ -76,11 +81,15 @@ function projectToolDefinition(tool: OllamaTool): OllamaTool
   }
 }
 
+// opaque replay data is signatures and ciphertext the provider does not bill
+// as prompt text, so it stays out of the estimate
 export function estimateModelRequestMessageTokens(
   message: OllamaMessage | ModelRequestMessage
 ): number
 {
-  return estimateModelRequestValue(toModelRequestMessage(message)).tokens
+  const projected = toModelRequestMessage(message)
+  delete projected.providerState
+  return estimateModelRequestValue(projected).tokens
 }
 
 export function estimateModelRequestMessagesTokens(

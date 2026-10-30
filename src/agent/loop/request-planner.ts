@@ -161,9 +161,20 @@ interface RequestCandidate
 // plan exact model requests without owning conversation state or compaction
 export class RequestPlanner
 {
+  // hosted output cap from model metadata; undefined keeps the local profile
+  private hostedOutputTokens?: number
+
+  setHostedOutputTokens(tokens: number | undefined): void
+  {
+    this.hostedOutputTokens = tokens
+  }
+
   fitSystemPrompt(input: SystemPromptFitInput): SystemPromptPlan
   {
-    const capacity = requestBudgetCapacity(input.contextWindow)
+    const capacity = requestBudgetCapacity(
+      input.contextWindow,
+      this.hostedOutputTokens
+    )
     const baseContent = input.systemContentAt(0)
     const baseMessage: ModelRequestMessage = {
       role: 'system',
@@ -181,7 +192,8 @@ export class RequestPlanner
     }
     const baseBudget = createRequestBudgetBreakdown(
       input.contextWindow,
-      fixedCategories
+      fixedCategories,
+      this.hostedOutputTokens
     )
     if (!baseBudget.fits)
     {
@@ -258,7 +270,10 @@ export class RequestPlanner
       }) +
       estimateModelRequestToolTokens(input.tools) +
       estimateRequestFramingTokens(2)
-    const capacity = requestBudgetCapacity(input.contextWindow)
+    const capacity = requestBudgetCapacity(
+      input.contextWindow,
+      this.hostedOutputTokens
+    )
     return (
       attachmentAllowanceForFixedCost(capacity.promptLimit, fixedPromptTokens) *
       CHARS_PER_TOKEN
@@ -483,7 +498,10 @@ export class RequestPlanner
     }
 
     const baseMessages = this.toolResultMessages(input, systemContent, false)
-    const capacity = requestBudgetCapacity(input.contextWindow)
+    const capacity = requestBudgetCapacity(
+      input.contextWindow,
+      this.hostedOutputTokens
+    )
     const basePromptTokens =
       estimateModelRequestMessagesTokens(baseMessages) +
       estimateModelRequestToolTokens(input.tools) +
@@ -559,23 +577,27 @@ export class RequestPlanner
       0
     )
 
-    return createRequestBudgetBreakdown(input.contextWindow, {
-      systemBase: estimateModelRequestMessageTokens(baseSystem),
-      projectContext: estimateModelRequestMessageDeltaTokens(
-        baseSystem,
-        system
-      ),
-      storedHistory,
-      activeTurnBase: estimateModelRequestMessageTokens(baseActive),
-      activeAttachments: estimateModelRequestMessageDeltaTokens(
-        baseActive,
-        active
-      ),
-      toolDefinitions: estimateModelRequestToolTokens(input.tools),
-      gitContext: gitContextTokens,
-      fileChanges: fileChangeTokens,
-      framing: estimateRequestFramingTokens(input.messages.length),
-    })
+    return createRequestBudgetBreakdown(
+      input.contextWindow,
+      {
+        systemBase: estimateModelRequestMessageTokens(baseSystem),
+        projectContext: estimateModelRequestMessageDeltaTokens(
+          baseSystem,
+          system
+        ),
+        storedHistory,
+        activeTurnBase: estimateModelRequestMessageTokens(baseActive),
+        activeAttachments: estimateModelRequestMessageDeltaTokens(
+          baseActive,
+          active
+        ),
+        toolDefinitions: estimateModelRequestToolTokens(input.tools),
+        gitContext: gitContextTokens,
+        fileChanges: fileChangeTokens,
+        framing: estimateRequestFramingTokens(input.messages.length),
+      },
+      this.hostedOutputTokens
+    )
   }
 
   private systemPromptBudget(
@@ -590,13 +612,17 @@ export class RequestPlanner
     content: string
   ): RequestBudgetBreakdown
   {
-    return createRequestBudgetBreakdown(contextWindow, {
-      ...fixedCategories,
-      projectContext: estimateModelRequestMessageDeltaTokens(baseMessage, {
-        role: 'system',
-        content,
-      }),
-    })
+    return createRequestBudgetBreakdown(
+      contextWindow,
+      {
+        ...fixedCategories,
+        projectContext: estimateModelRequestMessageDeltaTokens(baseMessage, {
+          role: 'system',
+          content,
+        }),
+      },
+      this.hostedOutputTokens
+    )
   }
 
   private activeMessage(input: RequestPlanningSnapshot): OllamaMessage

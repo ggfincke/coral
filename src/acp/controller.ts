@@ -8,7 +8,7 @@ import { Agent } from '../agent/agent.js'
 import type { AcceptedTurn, AgentEvents } from '../agent/contracts.js'
 import { AgentTodoState } from '../agent/state/todos.js'
 import type { McpConfigResolution } from '../config/mcp.js'
-import { OllamaClient } from '../ollama/client.js'
+import { createInferenceClient } from '../providers/router.js'
 import {
   InteractiveSessionRuntime,
   type InteractiveLifetimeAgent,
@@ -247,7 +247,7 @@ export class CoralAcpController
     dependencies: Partial<CoralAcpControllerDependencies> = {}
   )
   {
-    const client = new OllamaClient(options.host)
+    const client = createInferenceClient(options.host)
     this.dependencies = {
       createAgent: (model, cwd, restored, binding) =>
         defaultCreateAgent(options, model, cwd, restored, binding),
@@ -387,7 +387,7 @@ export class CoralAcpController
     {
       throw coralAcpError(
         'invalid_session',
-        'No Ollama models are installed for Coral'
+        'No Ollama models are installed and no hosted API key is set'
       )
     }
     return names
@@ -400,7 +400,7 @@ export class CoralAcpController
     {
       if (!names.includes(configured))
       {
-        throw invalidAcpParams(`Unknown Ollama model: ${configured}`)
+        throw invalidAcpParams(`Unknown model: ${configured}`)
       }
       return configured
     }

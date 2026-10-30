@@ -217,7 +217,10 @@ export async function runJobsCli(args: string[]): Promise<number>
     .description(
       'Inspect committed code and save an editable proposal without executing it'
     )
-    .requiredOption('-m, --model <model>', 'Ollama model to use')
+    .requiredOption(
+      '-m, --model <model>',
+      'Ollama model, or anthropic/<id> for a hosted API'
+    )
     .option('--prompt-file <path>', 'read the objective from a UTF-8 file')
     .option('--cwd <path>', 'source Git checkout', process.cwd())
     .option(

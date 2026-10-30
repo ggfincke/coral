@@ -12,6 +12,7 @@ import {
 import { formatSkillCatalog, type SkillIndex } from '../../skills/discover.js'
 import { truncateUtf8 } from '../../utils/ellipsize.js'
 import { CHARS_PER_TOKEN } from '../../utils/limits.js'
+import { parseModelRef } from '../../providers/model-ref.js'
 
 // standing instructions & the skill catalog share an allowance that scales w/
 // the context window; instructions take at most half while skills are
@@ -141,6 +142,19 @@ function formatSupplementalContext(
 }
 
 // build the complete system prompt for a model and project context
+const HOSTED_BACKEND_LABELS = {
+  anthropic: 'the Anthropic API',
+} as const
+
+// name the backend that actually serves this model ref
+function backendDescription(model: string): string
+{
+  const { provider } = parseModelRef(model)
+  return provider === 'ollama'
+    ? 'a local coding agent running via Ollama'
+    : `a coding agent running via ${HOSTED_BACKEND_LABELS[provider]}`
+}
+
 export function buildSystemPrompt(ctx: {
   model: string
   cwd: string
@@ -339,7 +353,7 @@ export function buildSystemPrompt(ctx: {
     )
   }
 
-  let prompt = `You are Coral, a local coding agent running via Ollama. You help developers work with codebases by using only the capabilities listed below & answering questions directly.
+  let prompt = `You are Coral, ${backendDescription(ctx.model)}. You help developers work with codebases by using only the capabilities listed below & answering questions directly.
 
 Running model: ${ctx.model}
 

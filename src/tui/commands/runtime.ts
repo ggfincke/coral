@@ -3,7 +3,7 @@
 
 import chalk from 'chalk'
 import { loadPrefs, savePrefs } from '../../config/prefs.js'
-import { OllamaClient } from '../../ollama/client.js'
+import { createInferenceClient } from '../../providers/router.js'
 import { formatTelemetry, loadTelemetry } from '../../telemetry/store.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { runGitCommand } from '../../utils/git.js'
@@ -62,12 +62,26 @@ const statusCommand: Command = {
       `  Tokens (est): ${chalk.dim(`~${formatTokenCount(tokens)}`)}`,
     ]
 
-    // tokens actually seen by Ollama this session (authoritative, not estimated)
+    // tokens the backend reported this session (authoritative, not estimated)
     if (usage.promptTokens > 0 || usage.completionTokens > 0)
     {
       lines.push(
         `  Prompt toks:  ${chalk.dim(formatTokenCount(usage.promptTokens))}`,
         `  Decode toks:  ${chalk.dim(formatTokenCount(usage.completionTokens))}`
+      )
+    }
+    // hosted prompt caching is what keeps resent history affordable
+    if (usage.cachedPromptTokens > 0)
+    {
+      lines.push(
+        `  Cached toks:  ${chalk.dim(formatTokenCount(usage.cachedPromptTokens))}`
+      )
+    }
+    // replayed reasoning the API discarded after Coral edited earlier turns
+    if (usage.droppedThinkingBlocks > 0)
+    {
+      lines.push(
+        `  Dropped thinking: ${chalk.dim(String(usage.droppedThinkingBlocks))}`
       )
     }
 
@@ -228,13 +242,13 @@ const modelCommand: Command = {
 
     const requestedModel = args.trim()
 
-    // validate model exists in Ollama
+    // validate the model against every reachable backend
     ctx.pushOutput(systemBlock(`Looking up model: ${requestedModel}...`))
 
     let availableModels: string[]
     try
     {
-      const client = new OllamaClient(ctx.host)
+      const client = createInferenceClient(ctx.host)
       const models = await client.listModels(ctx.signal)
       if (ctx.signal?.aborted)
       {
@@ -251,7 +265,9 @@ const modelCommand: Command = {
         return
       }
       ctx.pushOutput(
-        systemBlock('Failed to fetch models from Ollama — is it running?')
+        systemBlock(
+          'Failed to fetch models; is Ollama running or an API key set?'
+        )
       )
       return
     }
@@ -283,7 +299,7 @@ const modelCommand: Command = {
       {
         ctx.pushOutput(
           systemBlock(
-            `Model "${requestedModel}" not found in Ollama.\n` +
+            `Model "${requestedModel}" not found.\n` +
               `Use ${style('user')('/model')} to open the picker, or pull it first.`
           )
         )

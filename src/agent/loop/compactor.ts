@@ -35,6 +35,8 @@ export interface CompactionRuntime
   model: string
   contextWindow: number
   numCtx?: number
+  // hosted output cap; undefined keeps the local request profile
+  hostedOutputTokens?: number
   toolDefinitionTokens: number
 }
 
@@ -319,7 +321,10 @@ export class CompactionCoordinator
   {
     const cleaned = stripThinkingForCompaction(messagesToSummarize)
     const fullPrompt = buildCompactionPrompt(cleaned)
-    const capacity = requestBudgetCapacity(runtime.contextWindow)
+    const capacity = requestBudgetCapacity(
+      runtime.contextWindow,
+      runtime.hostedOutputTokens
+    )
     const systemMessage: ModelRequestMessage = {
       role: 'system',
       content: COMPACTION_SYSTEM_PROMPT,
@@ -345,6 +350,8 @@ export class CompactionCoordinator
           ],
           num_ctx: runtime.numCtx,
           num_predict: capacity.summaryResponseReserve,
+          // summaries need little reasoning, and hosted effort is billed
+          ...(capacity.hosted ? { think: 'low' as const } : {}),
         },
         signal
       ))

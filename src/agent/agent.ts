@@ -1,13 +1,14 @@
 // src/agent/agent.ts
 // conversation loop and tool dispatch
 
-import { OllamaClient } from '../ollama/client.js'
+import { createInferenceClient } from '../providers/router.js'
 import type { AgentInferenceClient } from './inference-client.js'
 import {
   makeReliabilityStats,
   type ModelRequestMessage,
   type OllamaMessage,
   type OllamaToolCall,
+  type ProviderState,
   type ReliabilityStats,
 } from '../types/inference.js'
 import { allTools, subagentTools } from '../tools/registry.js'
@@ -241,6 +242,8 @@ export class Agent
   private maxIterations?: number
   // hold options.num_ctx constant so Ollama does not reload the runner per session
   private numCtx = 0
+  // hosted output cap from model metadata; undefined means a local model
+  private hostedOutputTokens?: number
   // share one in-flight context-window resolution and clear it after settlement
   private contextWindowPromise?: Promise<number>
   private contextResolutionAbort?: AbortController
@@ -248,6 +251,8 @@ export class Agent
   private totalCompletionTokens = 0
   private totalPromptEvalDurationNs = 0
   private totalEvalDurationNs = 0
+  private totalCachedPromptTokens = 0
+  private totalDroppedThinkingBlocks = 0
   private contextWindowSize = 0
   private lastRequestBudget?: RequestBudgetBreakdown
   private reliabilityStats: ReliabilityStats = makeReliabilityStats()
@@ -282,7 +287,7 @@ export class Agent
     this.model = model
     this.baseUrl = baseUrl
     this.cwd = resolve(cwd ?? getCwd())
-    this.client = options.inferenceClient ?? new OllamaClient(baseUrl)
+    this.client = options.inferenceClient ?? createInferenceClient(baseUrl)
     this.thinkMode = options.think ?? true
     this.skills = options.skills ?? EMPTY_SKILL_INDEX
     this.userInstructions = options.userInstructions ?? ''
@@ -326,6 +331,8 @@ export class Agent
     {
       this.numCtx = options.numCtx
       this.contextWindowSize = options.numCtx
+      this.hostedOutputTokens = options.hostedOutputTokens
+      this.requestPlanner.setHostedOutputTokens(this.hostedOutputTokens)
     }
 
     const systemContent = this.buildSystemContent(model)
@@ -335,7 +342,8 @@ export class Agent
     if (options.numCtx && options.numCtx > 0)
     {
       this.compactor.setPromptLimit(
-        requestBudgetCapacity(options.numCtx).promptLimit
+        requestBudgetCapacity(options.numCtx, this.hostedOutputTokens)
+          .promptLimit
       )
     }
 
@@ -366,6 +374,7 @@ export class Agent
       tools: subagentTools,
       maxIterations: SUBAGENT_MAX_ITERATIONS,
       numCtx: this.numCtx,
+      hostedOutputTokens: this.hostedOutputTokens,
       verifyEdits: false,
       codeIntel: this.codeIntel,
       mcpMode: 'off',
@@ -481,7 +490,8 @@ export class Agent
   private dynamicToolTokenBudget(): number
   {
     const promptLimit = requestBudgetCapacity(
-      this.contextWindowSize || MIN_NUM_CTX
+      this.contextWindowSize || MIN_NUM_CTX,
+      this.hostedOutputTokens
     ).promptLimit
     const totalToolBudget = Math.floor(promptLimit * 0.5)
     return Math.max(
@@ -660,6 +670,8 @@ export class Agent
     this.model = nextModel
     this.contextWindowSize = 0
     this.numCtx = 0
+    this.hostedOutputTokens = undefined
+    this.requestPlanner.setHostedOutputTokens(undefined)
 
     // rebuild the system prompt with the new model name
     this.replaceSystemPrompt(systemContent)
@@ -721,6 +733,8 @@ export class Agent
     completionTokens: number
     promptEvalDurationNs: number
     evalDurationNs: number
+    cachedPromptTokens: number
+    droppedThinkingBlocks: number
   }
   {
     return {
@@ -728,6 +742,8 @@ export class Agent
       completionTokens: this.totalCompletionTokens,
       promptEvalDurationNs: this.totalPromptEvalDurationNs,
       evalDurationNs: this.totalEvalDurationNs,
+      cachedPromptTokens: this.totalCachedPromptTokens,
+      droppedThinkingBlocks: this.totalDroppedThinkingBlocks,
     }
   }
 
@@ -738,6 +754,8 @@ export class Agent
     this.totalCompletionTokens = 0
     this.totalPromptEvalDurationNs = 0
     this.totalEvalDurationNs = 0
+    this.totalCachedPromptTokens = 0
+    this.totalDroppedThinkingBlocks = 0
   }
 
   resetSessionMetrics(): void
@@ -852,8 +870,10 @@ export class Agent
     const contextWindow = resolved?.contextWindow ?? MIN_NUM_CTX
     this.contextWindowSize = contextWindow
     this.numCtx = contextWindow
+    this.hostedOutputTokens = resolved?.hostedOutputTokens
+    this.requestPlanner.setHostedOutputTokens(this.hostedOutputTokens)
     this.compactor.setPromptLimit(
-      requestBudgetCapacity(contextWindow).promptLimit
+      requestBudgetCapacity(contextWindow, this.hostedOutputTokens).promptLimit
     )
     this.replaceSystemPrompt(this.buildSystemContent(this.model))
 
@@ -878,6 +898,7 @@ export class Agent
       model: this.model,
       contextWindow: this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
       numCtx: this.numCtx || undefined,
+      hostedOutputTokens: this.hostedOutputTokens,
       toolDefinitionTokens: this.toolCatalog.definitionTokens,
     }
   }
@@ -1373,6 +1394,7 @@ export class Agent
         let fullContent = ''
         let fullThinking = ''
         let toolCalls: OllamaToolCall[] = []
+        let providerState: ProviderState | undefined
         // retain the first doom-loop trip from this round
         let doomTrip: DoomLoopTrip | null = null
 
@@ -1560,6 +1582,10 @@ export class Agent
             {
               toolCalls = mergeToolCalls(toolCalls, chunk.message.tool_calls)
             }
+            if (chunk.message.providerState)
+            {
+              providerState = chunk.message.providerState
+            }
             // capture token usage and model time from the final chunk
             if (chunk.done)
             {
@@ -1567,8 +1593,12 @@ export class Agent
               const completionTokens = chunk.eval_count ?? 0
               const promptEvalDurationNs = chunk.prompt_eval_duration
               const evalDurationNs = chunk.eval_duration
+              const cachedPromptTokens = chunk.cached_prompt_count
               this.totalPromptTokens += promptTokens
               this.totalCompletionTokens += completionTokens
+              this.totalCachedPromptTokens += cachedPromptTokens ?? 0
+              this.totalDroppedThinkingBlocks +=
+                chunk.dropped_thinking_count ?? 0
               if (promptEvalDurationNs && promptEvalDurationNs > 0)
               {
                 this.totalPromptEvalDurationNs += promptEvalDurationNs
@@ -1583,6 +1613,8 @@ export class Agent
                 totalPromptTokens: this.totalPromptTokens,
                 totalCompletionTokens: this.totalCompletionTokens,
                 contextTokens: requestBudget.promptTokens,
+                cachedPromptTokens,
+                totalCachedPromptTokens: this.totalCachedPromptTokens,
                 promptEvalDurationNs,
                 evalDurationNs,
                 totalPromptEvalDurationNs: this.totalPromptEvalDurationNs,
@@ -1614,8 +1646,13 @@ export class Agent
           return finish()
         }
 
-        // recover tool calls emitted as text content
-        if (toolCalls.length === 0 && fullContent.trim())
+        // recover tool calls emitted as text content; hosted models call
+        // tools natively, so JSON in their answers is never executed
+        if (
+          toolCalls.length === 0 &&
+          this.hostedOutputTokens === undefined &&
+          fullContent.trim()
+        )
         {
           const repaired = parseToolCallsFromContent(
             fullContent,
@@ -1650,6 +1687,10 @@ export class Agent
         if (preparedToolRound)
         {
           assistantMessage.tool_calls = [...preparedToolRound.storedCalls]
+        }
+        if (providerState)
+        {
+          assistantMessage.providerState = providerState
         }
 
         let toolResultAllowance: ToolResultRoundAllowance | undefined
@@ -1696,6 +1737,7 @@ export class Agent
           // reprompt a botched call that repair could not recover
           if (
             reprompts < MAX_REPROMPTS &&
+            this.hostedOutputTokens === undefined &&
             fullContent.trim() &&
             looksLikeAttemptedToolCall(fullContent, this.toolCatalog.names)
           )

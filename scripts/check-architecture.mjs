@@ -36,6 +36,10 @@ const SESSION_CODEC_RUNTIME_DEPS = new Set([
   'src/types/todo.ts',
   'src/utils/guards.ts',
 ])
+const HOSTED_SDK_BOUNDARIES = [
+  ['@anthropic-ai/sdk', 'src/providers/anthropic/'],
+]
+const HOSTED_CLIENTS = ['src/providers/anthropic/client.ts']
 const SESSION_LAYER_RANKS = new Map([
   ['src/session/types.ts', 0],
   ['src/session/undo-state.ts', 1],
@@ -562,6 +566,24 @@ function dependencyErrors(edges)
     )
   }
 
+  // hosted SDK graphs load only when the router first needs that provider
+  for (const client of HOSTED_CLIENTS)
+  {
+    for (const edge of edges)
+    {
+      if (edge.target !== client || !edge.runtime) continue
+      if (
+        edge.kind !== 'dynamic' ||
+        edge.source !== 'src/providers/router.ts'
+      )
+      {
+        errors.push(
+          `hosted clients load only through the router's dynamic import: ${edge.kind} ${edge.source} -> ${client}`
+        )
+      }
+    }
+  }
+
   return errors
 }
 
@@ -590,6 +612,17 @@ function externalDependencyErrors(external)
       edge.specifier.startsWith('ajv/') ||
       edge.specifier === 'ajv-formats' ||
       edge.specifier.startsWith('ajv-formats/')
+    for (const [sdk, boundary] of HOSTED_SDK_BOUNDARIES)
+    {
+      const isSdk =
+        edge.specifier === sdk || edge.specifier.startsWith(`${sdk}/`)
+      if (isSdk && !edge.source.startsWith(boundary))
+      {
+        errors.push(
+          `hosted SDKs must stay inside their provider directory: ${edge.source} -> ${edge.specifier}`
+        )
+      }
+    }
     if (!isMcpSdk && !isAjv) continue
     if (!edge.source.startsWith('src/mcp/'))
     {

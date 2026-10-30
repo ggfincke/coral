@@ -40,6 +40,7 @@ function isNonNegativeInteger(value: unknown): boolean
 function isToolCall(value: unknown): boolean
 {
   if (!isPlainObject(value)) return false
+  if (value.id !== undefined && typeof value.id !== 'string') return false
   if (value.type !== undefined && value.type !== 'function') return false
 
   const fn = value.function
@@ -95,6 +96,17 @@ function isAttachmentReport(value: unknown): boolean
   )
 }
 
+// replay items stay opaque; only the routing envelope is validated
+function isProviderState(value: unknown): boolean
+{
+  return (
+    isPlainObject(value) &&
+    typeof value.provider === 'string' &&
+    typeof value.model === 'string' &&
+    Array.isArray(value.items)
+  )
+}
+
 function isOllamaMessage(value: unknown): value is OllamaMessage
 {
   if (!isPlainObject(value)) return false
@@ -128,6 +140,13 @@ function isOllamaMessage(value: unknown): value is OllamaMessage
   if (
     value.tool_calls !== undefined &&
     (!Array.isArray(value.tool_calls) || !value.tool_calls.every(isToolCall))
+  )
+  {
+    return false
+  }
+  if (
+    value.providerState !== undefined &&
+    !isProviderState(value.providerState)
   )
   {
     return false

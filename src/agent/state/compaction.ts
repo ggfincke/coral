@@ -226,6 +226,8 @@ export function pruneToolResults(
       {
         const pruned = { ...msg }
         delete pruned.thinking
+        // signed replay data embeds the pruned reasoning, so it goes too
+        delete pruned.providerState
         if (!pruned.content.trim() && !pruned.tool_calls?.length)
         {
           pruned.content = '[reasoning pruned]'

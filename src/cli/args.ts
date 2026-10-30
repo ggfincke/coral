@@ -42,11 +42,16 @@ export function parseCliArgs(argv: string[]): ParsedCli
   let parsed: ParsedCli | undefined
   const program = new Command()
     .name('coral')
-    .description('A local-first CLI/TUI coding agent for Ollama')
+    .description(
+      'A local-first CLI/TUI coding agent for Ollama, with optional hosted models'
+    )
     .version(version)
     .addHelpCommand('help [command]', 'display help for a command')
     .addHelpText('after', '\nDurable coding tasks: coral jobs --help')
-    .option('-m, --model <model>', 'Ollama model to use')
+    .option(
+      '-m, --model <model>',
+      'Ollama model, or anthropic/<id> for a hosted API'
+    )
     .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
     .option('--no-think', 'disable streamed reasoning requests')
     .option(
@@ -98,7 +103,7 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .option('--no-mcp', 'disable configured MCP servers')
     .addHelpText(
       'after',
-      '\nShared options: -m/--model, --host, --no-think, -C/--cwd, -V/--version.\nA model is required for exec. Inference uses only the configured Ollama host.'
+      '\nShared options: -m/--model, --host, --no-think, -C/--cwd, -V/--version.\nA model is required for exec. Bare names use the Ollama host; anthropic/ refs use ANTHROPIC_API_KEY.'
     )
     .action((prompt: string | undefined, _opts, command: Command) =>
     {

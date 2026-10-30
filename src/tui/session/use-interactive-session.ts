@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../agent/agent.js'
 import { ProjectWatcher } from '../../agent/watcher.js'
 import { resolveMcpConfig } from '../../config/mcp.js'
-import { OllamaClient } from '../../ollama/client.js'
+import { createInferenceClient } from '../../providers/router.js'
 import type { ActiveMcpMode } from '../../mcp/types.js'
 import { loadSession, renameSession } from '../../session/store.js'
 import type { SessionData, SessionMeta } from '../../session/types.js'
@@ -150,7 +150,7 @@ export function useInteractiveSession(
   const [mcpConfig] = useState(resolveMcpConfig)
   // one shared transport for every primary Agent this hook builds; the Agent
   // owns it, subagents inherit it, and background titles reuse the same one
-  const [inferenceClient] = useState(() => new OllamaClient(options.host))
+  const [inferenceClient] = useState(() => createInferenceClient(options.host))
   const [initialAgent] = useState(() =>
   {
     if (!options.model) return null

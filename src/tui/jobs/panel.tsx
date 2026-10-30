@@ -57,7 +57,7 @@ interface CreationFields
 const CREATE_FIELDS: { key: keyof CreationFields; label: string }[] = [
   { key: 'objective', label: 'Objective' },
   { key: 'cwd', label: 'Repository' },
-  { key: 'model', label: 'Ollama model' },
+  { key: 'model', label: 'Model' },
   { key: 'ref', label: 'Committed ref' },
   { key: 'minutes', label: 'Active minutes' },
   { key: 'repairs', label: 'Repair attempts' },
