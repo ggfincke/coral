@@ -1,7 +1,7 @@
 // src/acp/errors.ts
 // stable ACP request errors and bounded diagnostics
 
-import { RequestError } from '@agentclientprotocol/sdk'
+import { RequestError } from '@agentclientprotocol/sdk/unstable'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 
 export type CoralAcpErrorCode =

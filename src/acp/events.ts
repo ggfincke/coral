@@ -9,8 +9,8 @@ import type {
   ToolCallUpdate,
   ToolKind,
   Usage,
-} from '@agentclientprotocol/sdk'
-import { methods } from '@agentclientprotocol/sdk'
+} from '@agentclientprotocol/sdk/unstable'
+import { methods } from '@agentclientprotocol/sdk/unstable'
 import type { AgentEvents } from '../agent/contracts.js'
 import type { ToolCallPresentation } from '../tools/tool.js'
 import type { TodoItem } from '../types/todo.js'

@@ -5,7 +5,7 @@ import type {
   SessionConfigOption,
   SessionModeState,
   SetSessionConfigOptionRequest,
-} from '@agentclientprotocol/sdk'
+} from '@agentclientprotocol/sdk/unstable'
 import { invalidAcpParams } from './errors.js'
 
 export type CoralRuntimeMode = 'approval-required'

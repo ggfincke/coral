@@ -4,7 +4,7 @@
 import type {
   SessionConfigOption,
   SetSessionConfigOptionRequest,
-} from '@agentclientprotocol/sdk'
+} from '@agentclientprotocol/sdk/unstable'
 import type { Model } from '../types/inference.js'
 import { invalidAcpParams } from './errors.js'
 

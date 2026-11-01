@@ -1,7 +1,7 @@
 // src/acp/prompt.ts
 // normalize baseline ACP prompt content into one Coral turn
 
-import type { ContentBlock } from '@agentclientprotocol/sdk'
+import type { ContentBlock } from '@agentclientprotocol/sdk/unstable'
 import { invalidAcpParams } from './errors.js'
 
 const MAX_PROMPT_BYTES = 1_048_576

@@ -12,7 +12,7 @@ import { Writable } from 'node:stream'
 import { TransformStream } from 'node:stream/web'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import * as acp from '@agentclientprotocol/sdk'
+import * as acp from '@agentclientprotocol/sdk/unstable'
 import { runAcpCli } from '../../src/cli/acp.js'
 
 const REPOSITORY_ROOT = resolve(
