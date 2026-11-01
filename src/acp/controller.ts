@@ -3,7 +3,7 @@
 
 import { realpathSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import * as acp from '@agentclientprotocol/sdk'
+import * as acp from '@agentclientprotocol/sdk/unstable'
 import { Agent } from '../agent/agent.js'
 import type { AcceptedTurn, AgentEvents } from '../agent/contracts.js'
 import { AgentTodoState } from '../agent/state/todos.js'

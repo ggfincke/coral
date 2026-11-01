@@ -9,7 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
-import * as acp from '@agentclientprotocol/sdk'
+import * as acp from '@agentclientprotocol/sdk/unstable'
 import type { AcceptedTurn, AgentEvents } from '../../src/agent/contracts.js'
 import type {
   CoralInteractionMode,

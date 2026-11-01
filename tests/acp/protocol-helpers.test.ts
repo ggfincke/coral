@@ -6,7 +6,7 @@ import { test } from 'node:test'
 import type {
   AgentContext,
   SessionNotification,
-} from '@agentclientprotocol/sdk'
+} from '@agentclientprotocol/sdk/unstable'
 import { AcpEventProjection, AcpIdAllocator } from '../../src/acp/events.js'
 import {
   availableModelNames,
