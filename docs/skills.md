@@ -7,7 +7,9 @@ auto-executes files under `scripts/`.
 ## Prompt and loading
 
 Coral reads standing rules from `AGENTS_HOME/AGENTS.md` (default
-`~/.agents/AGENTS.md`) through an 8 KiB file limit. Standing rules and the
+`~/.agents/AGENTS.md`) through a 32 KiB file limit. Hosted models
+(`anthropic/` and `openai/` refs) get the standing rules as loaded, plus a
+skill catalog of up to 6 KiB. For Ollama models, standing rules and the
 discovered skill catalog (`name` and bounded `description`) share a prompt
 allowance of one eighth of the context window, between 4 KiB and 10 KiB. While
 skills are available, standing rules take at most half of it (and never more

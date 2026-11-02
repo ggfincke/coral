@@ -28,7 +28,8 @@ import {
 export { EMPTY_SKILL_INDEX, SkillIndex } from './types.js'
 export type { SkillCollision, SkillRecord, SkillSource } from './types.js'
 
-export const USER_INSTRUCTIONS_READ_LIMIT_BYTES = 8_192
+// local prompts trim further; hosted prompts carry the whole loaded body
+export const USER_INSTRUCTIONS_READ_LIMIT_BYTES = 32_768
 const CATALOG_DESCRIPTION_MAX_CHARS = 400
 const SKILL_FILE_READ_LIMIT_BYTES = 1_048_576
 

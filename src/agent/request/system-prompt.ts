@@ -12,9 +12,11 @@ import { truncateUtf8 } from '../../utils/ellipsize.js'
 import { CHARS_PER_TOKEN } from '../../utils/limits.js'
 import { parseModelRef } from '../../providers/model-ref.js'
 
-// standing instructions & the skill catalog share an allowance that scales w/
-// the context window; instructions take at most half while skills are
-// available so a long AGENTS.md can never starve the catalog
+// local prompts: standing instructions & the skill catalog share an allowance
+// that scales w/ the context window; instructions take at most half while
+// skills are available so a long AGENTS.md can never starve the catalog.
+// hosted prompts carry instructions as loaded (the read limit bounds them) &
+// give the catalog its own cap
 export const USER_INSTRUCTIONS_MAX_BYTES = 4_096
 export const SKILL_CATALOG_MAX_BYTES = 6_144
 const SUPPLEMENTAL_MIN_BYTES = 4_096
@@ -78,28 +80,37 @@ function formatSupplementalContext(
   userInstructions: string,
   skills: SkillIndex | undefined,
   skillAvailable: boolean,
-  totalBytes: number
+  totalBytes: number,
+  hosted: boolean
 ): string
 {
   const includeSkills =
     skillAvailable && skills !== undefined && skills.size > 0
   const trimmedInstructions = userInstructions.trim()
-  const userSection = trimmedInstructions
-    ? boundedSection(
-        USER_INSTRUCTIONS_PREFIX,
-        trimmedInstructions,
-        Math.min(
-          USER_INSTRUCTIONS_MAX_BYTES,
-          includeSkills ? Math.floor(totalBytes / 2) : totalBytes
-        )
+  let userSection = ''
+  if (trimmedInstructions && hosted)
+  {
+    userSection = `${USER_INSTRUCTIONS_PREFIX}${trimmedInstructions}`
+  }
+  else if (trimmedInstructions)
+  {
+    userSection = boundedSection(
+      USER_INSTRUCTIONS_PREFIX,
+      trimmedInstructions,
+      Math.min(
+        USER_INSTRUCTIONS_MAX_BYTES,
+        includeSkills ? Math.floor(totalBytes / 2) : totalBytes
       )
-    : ''
+    )
+  }
   if (!includeSkills) return userSection
 
-  const catalogBytes = Math.min(
-    SKILL_CATALOG_MAX_BYTES,
-    totalBytes - Buffer.byteLength(userSection, 'utf-8')
-  )
+  const catalogBytes = hosted
+    ? SKILL_CATALOG_MAX_BYTES
+    : Math.min(
+        SKILL_CATALOG_MAX_BYTES,
+        totalBytes - Buffer.byteLength(userSection, 'utf-8')
+      )
   const catalog = formatSkillCatalog(skills, {
     descriptionMaxChars: SKILL_CATALOG_DESCRIPTION_MAX_CHARS,
     maxBytes: Math.max(
@@ -152,7 +163,8 @@ export function buildSystemPrompt(ctx: {
     ctx.userInstructions ?? '',
     ctx.skills,
     ctx.catalog.has('skill'),
-    ctx.supplementalBudget ?? SUPPLEMENTAL_MAX_BYTES
+    ctx.supplementalBudget ?? SUPPLEMENTAL_MAX_BYTES,
+    parseModelRef(ctx.model).provider !== 'ollama'
   )
 
   const canReadFiles = ctx.catalog.has('read_file')
