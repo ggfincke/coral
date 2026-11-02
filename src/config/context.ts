@@ -53,13 +53,23 @@ export interface ResolvedContextWindow
   memoryCap: number
   weightBytes: number
   maxNumCtx?: number
+  // set for hosted APIs, which size the response separately from the window
+  hostedOutputTokens?: number
+  // uncapped hosted model limit, for explaining a capped window
+  hostedNativeContext?: number
+}
+
+function envNumCtx(): number | undefined
+{
+  const env = Number.parseInt(process.env.CORAL_NUM_CTX ?? '', 10)
+  return Number.isFinite(env) && env > 0 ? env : undefined
 }
 
 // resolve the explicit context ceiling, with the environment taking precedence
 export function resolveContextConfig(cwd: string): ContextConfig
 {
-  const env = Number.parseInt(process.env.CORAL_NUM_CTX ?? '', 10)
-  if (Number.isFinite(env) && env > 0) return { maxNumCtx: env }
+  const env = envNumCtx()
+  if (env !== undefined) return { maxNumCtx: env }
 
   const raw = loadProjectConfig(cwd).context
   const configured = isPlainObject(raw) ? raw.maxNumCtx : undefined
@@ -147,6 +157,26 @@ export async function resolvePinnedContextWindow(
   if (info.contextLength <= 0) return undefined
 
   const nativeContext = info.contextLength
+  // hosted windows arrive already capped by the provider's cost ceiling, so
+  // only the explicit environment override narrows them further; project
+  // ceilings exist for local memory and do not apply
+  if (info.hosted)
+  {
+    const maxNumCtx = envNumCtx()
+    const contextWindow = Math.min(
+      nativeContext,
+      Math.max(MIN_NUM_CTX, maxNumCtx ?? Number.POSITIVE_INFINITY)
+    )
+    return {
+      contextWindow,
+      nativeContext,
+      memoryCap: nativeContext,
+      weightBytes: 0,
+      maxNumCtx,
+      hostedOutputTokens: info.hosted.maxOutputTokens,
+      hostedNativeContext: info.hosted.nativeContextTokens,
+    }
+  }
   const maxNumCtx = resolveContextConfig(deps.cwd).maxNumCtx
   const weightBytes = await resolveModelWeightBytes(
     deps.model,
@@ -193,7 +223,7 @@ async function resolveModelWeightBytes(
   {
     const models = await listModels(signal)
     const exact = models.find((candidate) => candidate.name === model)
-    if (exact) return exact.size
+    if (exact) return exact.size ?? 0
 
     const key = modelLookupKey(model)
     let weightBytes = 0
@@ -202,10 +232,11 @@ async function resolveModelWeightBytes(
       const matches = [candidate.name, candidate.model].some(
         (name) => typeof name === 'string' && modelLookupKey(name) === key
       )
-      if (matches && Number.isFinite(candidate.size) && candidate.size >= 0)
+      const size = candidate.size ?? 0
+      if (matches && Number.isFinite(size) && size >= 0)
       {
         // ambiguous aliases use the conservative weight without selecting a model
-        weightBytes = Math.max(weightBytes, candidate.size)
+        weightBytes = Math.max(weightBytes, size)
       }
     }
     return weightBytes

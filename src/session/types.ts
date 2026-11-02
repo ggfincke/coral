@@ -4,6 +4,7 @@
 import type { OllamaMessage } from '../types/inference.js'
 import type { TodoItem } from '../types/todo.js'
 import type { UndoTurn } from '../types/undo.js'
+import type { SessionCostSnapshot } from '../types/session-cost.js'
 
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}$/
 
@@ -33,6 +34,7 @@ export interface SessionData
 {
   meta: SessionMeta
   messages: OllamaMessage[]
+  sessionCost?: SessionCostSnapshot
   // restore the task list with /resume
   todos?: TodoItem[]
   // live-tail turns that can still be reverted

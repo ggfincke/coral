@@ -2,6 +2,7 @@
 // shared inference message, tool, and model metadata types
 
 import type { AttachmentReport } from './attachments.js'
+import type { BillingUsage } from './session-cost.js'
 
 export type JsonSchemaType =
   'array' | 'boolean' | 'integer' | 'null' | 'number' | 'object' | 'string'
@@ -62,6 +63,15 @@ export function jsonSchemaTypeLabel(schema: JsonSchemaNode): string
   return 'unknown'
 }
 
+// opaque provider replay data (signed thinking blocks, encrypted reasoning
+// items) that a hosted API needs back verbatim on later requests
+export interface ProviderState
+{
+  provider: string
+  model: string
+  items: unknown[]
+}
+
 // exact semantic message shape allowed in a model request
 export interface ModelRequestMessage
 {
@@ -70,6 +80,7 @@ export interface ModelRequestMessage
   thinking?: string
   tool_name?: string
   tool_calls?: OllamaToolCall[]
+  providerState?: ProviderState
 }
 
 // stored conversation message; display metadata belongs to persistence/ui only
@@ -81,6 +92,8 @@ export interface OllamaMessage extends ModelRequestMessage
 
 export interface OllamaToolCall
 {
+  // provider call id; Ollama omits it and adapters pair results by position
+  id?: string
   type?: 'function'
   function: {
     index?: number
@@ -117,10 +130,17 @@ export interface ChatResponse
 {
   message: OllamaMessage
   done: boolean
+  // emitted independently of semantic response validation and token counters
+  billingUsage?: BillingUsage
+  billingRejected?: boolean
   prompt_eval_count?: number
   prompt_eval_duration?: number
   eval_count?: number
   eval_duration?: number
+  // hosted prompt tokens served from the provider's prompt cache
+  cached_prompt_count?: number
+  // replayed thinking blocks the provider dropped as no longer valid
+  dropped_thinking_count?: number
 }
 
 export interface EmbedResponse
@@ -128,12 +148,13 @@ export interface EmbedResponse
   embeddings: number[][]
 }
 
+// hosted models have no local weights or modification time
 export interface Model
 {
   name: string
   model?: string
-  size: number
-  modified_at: string
+  size?: number
+  modified_at?: string
   digest?: string
 }
 
@@ -150,6 +171,9 @@ export interface ModelInfo
   // per-head key and value dimensions
   keyLength?: number
   valueLength?: number
+  // present for hosted APIs, which skip local memory sizing; contextLength there
+  // is already capped, so nativeContextTokens keeps the model's own limit
+  hosted?: { maxOutputTokens: number; nativeContextTokens?: number }
 }
 
 // reliability counters for model tool-call recovery, surfaced in /status,

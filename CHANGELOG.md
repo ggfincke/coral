@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Hosted models:** pick `anthropic/<id>` (Anthropic Messages API) or
+  `openai/<id>` (OpenAI Responses API) with `-m`, the picker, or `/model` to
+  spend subscription API credits from Coral. Keys come from
+  `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`; bare model names stay on Ollama and
+  embeddings never leave it. Signed thinking and encrypted reasoning carry
+  across tool rounds, prompt caching is on, and `/status` reports cached
+  prompt tokens. Hosted context defaults to a 200,000-token ceiling and
+  `high` effort, tunable in `~/.coral.json` `providers`.
+
 ## [0.17.10] - 2026-10-21
 
 ### Added

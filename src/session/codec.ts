@@ -8,6 +8,7 @@ import {
   MAX_ATTACHMENT_REPORT_PATH_CHARS,
 } from '../types/attachments.js'
 import type { OllamaMessage } from '../types/inference.js'
+import type { SessionCostSnapshot } from '../types/session-cost.js'
 import { isTodoStatus, type TodoItem } from '../types/todo.js'
 import { isPlainObject } from '../utils/guards.js'
 import {
@@ -27,6 +28,7 @@ interface SessionFileData
 {
   meta: SessionMeta
   messages: OllamaMessage[]
+  sessionCost?: SessionCostSnapshot
   todos?: TodoItem[]
   undo?: PersistedUndoTurn[]
   redo?: PersistedUndoTurn[]
@@ -40,6 +42,7 @@ function isNonNegativeInteger(value: unknown): boolean
 function isToolCall(value: unknown): boolean
 {
   if (!isPlainObject(value)) return false
+  if (value.id !== undefined && typeof value.id !== 'string') return false
   if (value.type !== undefined && value.type !== 'function') return false
 
   const fn = value.function
@@ -95,6 +98,17 @@ function isAttachmentReport(value: unknown): boolean
   )
 }
 
+// replay items stay opaque; only the routing envelope is validated
+function isProviderState(value: unknown): boolean
+{
+  return (
+    isPlainObject(value) &&
+    typeof value.provider === 'string' &&
+    typeof value.model === 'string' &&
+    Array.isArray(value.items)
+  )
+}
+
 function isOllamaMessage(value: unknown): value is OllamaMessage
 {
   if (!isPlainObject(value)) return false
@@ -128,6 +142,13 @@ function isOllamaMessage(value: unknown): value is OllamaMessage
   if (
     value.tool_calls !== undefined &&
     (!Array.isArray(value.tool_calls) || !value.tool_calls.every(isToolCall))
+  )
+  {
+    return false
+  }
+  if (
+    value.providerState !== undefined &&
+    !isProviderState(value.providerState)
   )
   {
     return false
@@ -214,10 +235,73 @@ function isSessionMeta(value: unknown): value is SessionMeta
   return true
 }
 
+function isSessionCost(value: unknown): boolean
+{
+  if (
+    !isPlainObject(value) ||
+    value.version !== 1 ||
+    value.currency !== 'USD' ||
+    typeof value.trackingStartedAt !== 'string' ||
+    !Number.isFinite(Date.parse(value.trackingStartedAt)) ||
+    typeof value.historicalUsageUnknown !== 'boolean' ||
+    !Array.isArray(value.entries)
+  )
+    return false
+  const keys = new Set<string>()
+  return value.entries.every((entry: unknown) =>
+  {
+    if (
+      !isPlainObject(entry) ||
+      typeof entry.model !== 'string' ||
+      !/^(anthropic|openai)\/.+/.test(entry.model) ||
+      typeof entry.serviceTier !== 'string' ||
+      typeof entry.usd !== 'number' ||
+      !Number.isFinite(entry.usd) ||
+      entry.usd < 0 ||
+      !isPlainObject(entry.tokens)
+    )
+      return false
+    for (const field of [
+      'requests',
+      'unpricedRequests',
+      'missingUsageRequests',
+    ])
+    {
+      if (!Number.isSafeInteger(entry[field]) || Number(entry[field]) < 0)
+        return false
+    }
+    if (
+      Number(entry.unpricedRequests) + Number(entry.missingUsageRequests) >
+      Number(entry.requests)
+    )
+      return false
+    for (const field of [
+      'inputTokens',
+      'cacheReadTokens',
+      'cacheWriteShortTokens',
+      'cacheWriteLongTokens',
+      'outputTokens',
+    ])
+    {
+      if (
+        !Number.isSafeInteger(entry.tokens[field]) ||
+        Number(entry.tokens[field]) < 0
+      )
+        return false
+    }
+    const key = JSON.stringify([entry.model, entry.serviceTier])
+    if (keys.has(key)) return false
+    keys.add(key)
+    return true
+  })
+}
+
 function isSessionFileData(value: unknown): value is SessionFileData
 {
   if (!isPlainObject(value)) return false
   if (!isSessionMeta(value.meta)) return false
+  if (value.sessionCost !== undefined && !isSessionCost(value.sessionCost))
+    return false
   if (
     !Array.isArray(value.messages) ||
     !value.messages.every(isOllamaMessage)
@@ -258,6 +342,7 @@ export function decodeSessionData(value: unknown): SessionData | undefined
   return {
     meta: value.meta,
     messages: value.messages,
+    sessionCost: value.sessionCost,
     todos: value.todos,
     undo: value.undo === undefined ? undefined : undoState.undo,
     redo: value.redo === undefined ? undefined : undoState.redo,
@@ -283,6 +368,7 @@ export function encodeSessionData(session: SessionData): object
   const file: SessionFileData = {
     meta: session.meta,
     messages: session.messages,
+    sessionCost: session.sessionCost,
     todos: session.todos,
     undo: session.undo === undefined ? undefined : undoState.undo,
     redo: session.redo === undefined ? undefined : undoState.redo,

@@ -176,6 +176,7 @@ export async function executeJob(
         messageCount: agent.getMessages().length,
       },
       messages: agent.getMessages(),
+      sessionCost: agent.getSessionCost(),
       todos: agent.getTodos(),
       ...agent.exportUndoStateForPersistence(),
     }
@@ -319,6 +320,10 @@ export async function executeJob(
       mcpMode: 'off',
       verifyEdits: false,
       todoState: new AgentTodoState(restored?.todos),
+      sessionCost: restored?.sessionCost,
+      historicalUsageUnknown: Boolean(
+        restored?.meta.messageCount && !restored.sessionCost
+      ),
     }
     const next =
       dependencies.createAgent?.(job, options) ??

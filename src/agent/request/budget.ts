@@ -7,11 +7,14 @@ export const MAX_RESPONSE_RESERVE_TOKENS = 16_384
 export const MAX_SUMMARY_RESPONSE_RESERVE_TOKENS = 8_192
 export const MAX_REQUEST_PROMPT_TOKENS = 32_768
 export const RESPONSE_RESERVE_FRACTION = 0.125
+export const MAX_HOSTED_RESPONSE_RESERVE_TOKENS = 64_000
 export const ATTACHMENT_FLEXIBLE_SHARE = 0.5
 export const MAX_ATTACHMENT_TOKENS = MAX_TOOL_OUTPUT_CHARS / CHARS_PER_TOKEN
 
 export interface RequestBudgetCapacity
 {
+  // hosted windows bound the prompt alone; the response reserve sits on top
+  hosted: boolean
   contextWindow: number
   responseReserve: number
   promptLimit: number
@@ -99,11 +102,33 @@ function normalizedWindow(contextWindow: number): number
   return Math.floor(contextWindow)
 }
 
+// hosted APIs bill per token instead of stalling on local prefill, so their
+// prompt is bounded by the pinned window alone and output by the model cap
 export function requestBudgetCapacity(
-  contextWindow: number
+  contextWindow: number,
+  hostedOutputTokens?: number
 ): RequestBudgetCapacity
 {
   const window = normalizedWindow(contextWindow)
+  if (hostedOutputTokens !== undefined)
+  {
+    const responseReserve = Math.max(
+      1,
+      Math.min(MAX_HOSTED_RESPONSE_RESERVE_TOKENS, hostedOutputTokens)
+    )
+    return {
+      hosted: true,
+      contextWindow: window,
+      responseReserve,
+      promptLimit: window,
+      summaryResponseReserve: Math.min(
+        MAX_SUMMARY_RESPONSE_RESERVE_TOKENS,
+        responseReserve
+      ),
+      summaryPromptLimit: window,
+    }
+  }
+
   const responseReserve = Math.max(
     1,
     Math.min(
@@ -125,6 +150,7 @@ export function requestBudgetCapacity(
   )
 
   return {
+    hosted: false,
     contextWindow: window,
     responseReserve,
     promptLimit,
@@ -135,10 +161,11 @@ export function requestBudgetCapacity(
 
 export function createRequestBudgetBreakdown(
   contextWindow: number,
-  input: Partial<RequestBudgetCategories>
+  input: Partial<RequestBudgetCategories>,
+  hostedOutputTokens?: number
 ): RequestBudgetBreakdown
 {
-  const capacity = requestBudgetCapacity(contextWindow)
+  const capacity = requestBudgetCapacity(contextWindow, hostedOutputTokens)
   const categories = {} as RequestBudgetCategories
 
   for (const category of REQUEST_BUDGET_CATEGORIES)
@@ -157,8 +184,11 @@ export function createRequestBudgetBreakdown(
     categories.toolDefinitions +
     categories.framing
   const totalTokens = promptTokens + capacity.responseReserve
+  const contextLimit = capacity.hosted
+    ? capacity.contextWindow + capacity.responseReserve
+    : capacity.contextWindow
   const promptOverflow = Math.max(promptTokens - capacity.promptLimit, 0)
-  const contextOverflow = Math.max(totalTokens - capacity.contextWindow, 0)
+  const contextOverflow = Math.max(totalTokens - contextLimit, 0)
   const overflowTokens = Math.max(promptOverflow, contextOverflow)
 
   return {
@@ -168,7 +198,7 @@ export function createRequestBudgetBreakdown(
     promptTokens,
     totalTokens,
     remainingPromptTokens: Math.max(capacity.promptLimit - promptTokens, 0),
-    remainingContextTokens: Math.max(capacity.contextWindow - totalTokens, 0),
+    remainingContextTokens: Math.max(contextLimit - totalTokens, 0),
     overflowTokens,
     fits: overflowTokens === 0,
   }

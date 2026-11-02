@@ -4,9 +4,10 @@ Coral is a local-first CLI/TUI coding agent powered by Ollama. It can inspect a
 codebase, search by text or meaning, edit files, run commands, work with Git,
 delegate read-only research, and preserve multi-turn sessions from a terminal.
 
-Coral has no cloud inference API or remote telemetry. Model requests go only to
-the Ollama host you configure (`http://localhost:11434` by default), and Coral's
-reliability telemetry stays in local files under `CORAL_HOME`. Optional MCP
+Coral has no remote telemetry. Model requests go to the Ollama host you
+configure (`http://localhost:11434` by default) unless you pick an
+`anthropic/<id>` or `openai/<id>` model and export that provider's API key, and
+Coral's reliability telemetry stays in local files under `CORAL_HOME`. Optional MCP
 servers are separate subprocesses that you explicitly configure and trust; they
 may access local files, the host, or remote services according to their own
 behavior.
@@ -68,7 +69,7 @@ ollama pull nomic-embed-text
 | Option                  | Behavior                                                                             |
 | ----------------------- | ------------------------------------------------------------------------------------ |
 | `-V`, `--version`       | Print the Coral version                                                              |
-| `-m`, `--model <model>` | Use an installed Ollama model without opening the picker                             |
+| `-m`, `--model <model>` | Use an Ollama model, or `anthropic/<id>` / `openai/<id>`, without opening the picker |
 | `--host <url>`          | Set the Ollama host; defaults to `http://localhost:11434`                            |
 | `-C, --cwd <path>`      | Use a workspace; with `--resume`, restrict selection to that workspace               |
 | `--no-think`            | Disable streamed reasoning requests                                                  |

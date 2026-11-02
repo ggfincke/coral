@@ -4,7 +4,7 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import type { AgentInferenceClient } from '../agent/inference-client.js'
-import { OllamaClient } from '../ollama/client.js'
+import { createInferenceClient } from '../providers/router.js'
 import { normalizeOllamaHost } from '../ollama/host.js'
 import type {
   ModelRequestMessage,
@@ -153,8 +153,7 @@ export async function createJobPlan(
     throw new Error(
       'Task objective must contain between 1 and 32768 characters'
     )
-  if (!options.model.trim())
-    throw new Error('Choose an Ollama model for the task')
+  if (!options.model.trim()) throw new Error('Choose a model for the task')
   const activeTimeLimitMs = options.activeTimeLimitMs ?? DEFAULT_JOB_ACTIVE_MS
   const maxRepairs = options.maxRepairs ?? DEFAULT_JOB_REPAIRS
   // reject limits the draft record would refuse before spending a planning run
@@ -208,7 +207,7 @@ export async function createJobPlan(
       content: `Objective:\n${objective}\n\nSelected commit: ${repository.commit}\nModel: ${options.model}\nActive execution limit: ${activeTimeLimitMs}ms; repair attempts: ${maxRepairs}.\n\nCommitted files (bounded):\n${files.slice(0, 1000).join('\n').slice(0, 32_768)}\n\n${seeds.join('\n\n')}`,
     },
   ]
-  const client = dependencies.client ?? new OllamaClient(host)
+  const client = dependencies.client ?? createInferenceClient(host)
   let proposal: Proposal | undefined
   for (let round = 0; round < MAX_PLANNING_ROUNDS; round++)
   {

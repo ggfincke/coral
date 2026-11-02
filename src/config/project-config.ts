@@ -14,6 +14,8 @@ interface SharedCoralConfig
 export interface UserCoralConfig extends SharedCoralConfig
 {
   mcp?: unknown
+  // hosted inference tuning stays user-only so a cloned repo cannot raise spend
+  providers?: unknown
 }
 
 export interface ProjectCoralConfig extends SharedCoralConfig
@@ -59,6 +61,7 @@ export function loadUserConfig(): UserCoralConfig
   const result: UserCoralConfig = {}
   if (config.permissions !== undefined) result.permissions = config.permissions
   if (config.mcp !== undefined) result.mcp = config.mcp
+  if (config.providers !== undefined) result.providers = config.providers
   return result
 }
 

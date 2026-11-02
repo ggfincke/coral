@@ -181,6 +181,7 @@ function frozenToolCall(
     arguments: cloneFrozenJson(call.function.arguments),
   })
   return Object.freeze({
+    ...(call.id === undefined ? {} : { id: call.id }),
     ...(call.type === undefined ? {} : { type: call.type }),
     function: fn,
   })
@@ -197,6 +198,7 @@ function storedToolCall(call: OllamaToolCall): OllamaToolCall
   }
 
   return frozenToolCall({
+    id: call.id,
     type: call.type,
     function: {
       index: call.function.index,

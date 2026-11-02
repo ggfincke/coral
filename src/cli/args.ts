@@ -28,12 +28,13 @@ export interface CliOptions
   outputFormat: ExecOutputFormat
   resultFile?: string
   mcp: boolean
+  json?: boolean
 }
 
 export type SkillsCliAction = 'list' | 'path'
 
 export type ParsedCli =
-  | { kind: 'interactive' | 'exec' | 'acp'; options: CliOptions }
+  | { kind: 'interactive' | 'exec' | 'acp' | 'models'; options: CliOptions }
   | { kind: 'skills'; action: SkillsCliAction; options: CliOptions }
   | { kind: 'exit'; code: number }
 
@@ -42,11 +43,16 @@ export function parseCliArgs(argv: string[]): ParsedCli
   let parsed: ParsedCli | undefined
   const program = new Command()
     .name('coral')
-    .description('A local-first CLI/TUI coding agent for Ollama')
+    .description(
+      'A local-first CLI/TUI coding agent for Ollama, with optional hosted models'
+    )
     .version(version)
     .addHelpCommand('help [command]', 'display help for a command')
     .addHelpText('after', '\nDurable coding tasks: coral jobs --help')
-    .option('-m, --model <model>', 'Ollama model to use')
+    .option(
+      '-m, --model <model>',
+      'Ollama model, or anthropic/<id> or openai/<id> for a hosted API'
+    )
     .option('--host <url>', 'Ollama host URL', DEFAULT_OLLAMA_HOST)
     .option('--no-think', 'disable streamed reasoning requests')
     .option(
@@ -98,7 +104,7 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .option('--no-mcp', 'disable configured MCP servers')
     .addHelpText(
       'after',
-      '\nShared options: -m/--model, --host, --no-think, -C/--cwd, -V/--version.\nA model is required for exec. Inference uses only the configured Ollama host.'
+      '\nShared options: -m/--model, --host, --no-think, -C/--cwd, -V/--version.\nA model is required for exec. Bare names use the Ollama host; anthropic/ and openai/ refs use ANTHROPIC_API_KEY or OPENAI_API_KEY.'
     )
     .action((prompt: string | undefined, _opts, command: Command) =>
     {
@@ -115,6 +121,17 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .action((_opts, command: Command) =>
     {
       parsed = { kind: 'acp', options: command.optsWithGlobals<CliOptions>() }
+    })
+  program
+    .command('models')
+    .description('List reachable Ollama and configured hosted models')
+    .option('--json', 'print the model inventory as JSON', false)
+    .action((_opts, command: Command) =>
+    {
+      parsed = {
+        kind: 'models',
+        options: command.optsWithGlobals<CliOptions>(),
+      }
     })
   const skills = program
     .command('skills')

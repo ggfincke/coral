@@ -3,7 +3,8 @@
 
 import chalk from 'chalk'
 import { loadPrefs, savePrefs } from '../../config/prefs.js'
-import { OllamaClient } from '../../ollama/client.js'
+import { parseModelRef } from '../../providers/model-ref.js'
+import { createInferenceClient } from '../../providers/router.js'
 import { formatTelemetry, loadTelemetry } from '../../telemetry/store.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { runGitCommand } from '../../utils/git.js'
@@ -23,6 +24,7 @@ import {
   resolveKeybindingConfig,
 } from '../input/keybindings.js'
 import { padEnd } from '../wrap.js'
+import { sessionCostStatusLines } from '../shell/session-cost.js'
 import {
   describePermissionMode,
   formatMcpStatus,
@@ -61,13 +63,40 @@ const statusCommand: Command = {
       `  Messages:     ${chalk.dim(String(messages))}`,
       `  Tokens (est): ${chalk.dim(`~${formatTokenCount(tokens)}`)}`,
     ]
+    // hosted windows are capped below the model limit to bound per-turn cost
+    const cap = ctx.agent.getContextCap()
+    if (cap)
+    {
+      const source = cap.byEnv
+        ? 'CORAL_NUM_CTX'
+        : `providers.${parseModelRef(model).provider}.maxContextTokens`
+      lines.push(
+        `  Context:      ${chalk.dim(`${formatTokenCount(cap.window)} cap (model allows ${formatTokenCount(cap.native)}; ${source})`)}`
+      )
+    }
+    lines.push(...sessionCostStatusLines(ctx.agent.getSessionCost()))
 
-    // tokens actually seen by Ollama this session (authoritative, not estimated)
+    // tokens the backend reported for main agent turns; titles & other
+    // background requests only show up in the cost breakdown above
     if (usage.promptTokens > 0 || usage.completionTokens > 0)
     {
       lines.push(
-        `  Prompt toks:  ${chalk.dim(formatTokenCount(usage.promptTokens))}`,
-        `  Decode toks:  ${chalk.dim(formatTokenCount(usage.completionTokens))}`
+        `  Prompt toks:  ${chalk.dim(`${formatTokenCount(usage.promptTokens)} (agent turns)`)}`,
+        `  Decode toks:  ${chalk.dim(`${formatTokenCount(usage.completionTokens)} (agent turns)`)}`
+      )
+    }
+    // hosted prompt caching is what keeps resent history affordable
+    if (usage.cachedPromptTokens > 0)
+    {
+      lines.push(
+        `  Cached toks:  ${chalk.dim(formatTokenCount(usage.cachedPromptTokens))}`
+      )
+    }
+    // replayed reasoning the API discarded after Coral edited earlier turns
+    if (usage.droppedThinkingBlocks > 0)
+    {
+      lines.push(
+        `  Dropped thinking: ${chalk.dim(String(usage.droppedThinkingBlocks))}`
       )
     }
 
@@ -228,13 +257,13 @@ const modelCommand: Command = {
 
     const requestedModel = args.trim()
 
-    // validate model exists in Ollama
+    // validate the model against every reachable backend
     ctx.pushOutput(systemBlock(`Looking up model: ${requestedModel}...`))
 
     let availableModels: string[]
     try
     {
-      const client = new OllamaClient(ctx.host)
+      const client = createInferenceClient(ctx.host)
       const models = await client.listModels(ctx.signal)
       if (ctx.signal?.aborted)
       {
@@ -251,7 +280,9 @@ const modelCommand: Command = {
         return
       }
       ctx.pushOutput(
-        systemBlock('Failed to fetch models from Ollama — is it running?')
+        systemBlock(
+          'Failed to fetch models; is Ollama running or an API key set?'
+        )
       )
       return
     }
@@ -283,7 +314,7 @@ const modelCommand: Command = {
       {
         ctx.pushOutput(
           systemBlock(
-            `Model "${requestedModel}" not found in Ollama.\n` +
+            `Model "${requestedModel}" not found.\n` +
               `Use ${style('user')('/model')} to open the picker, or pull it first.`
           )
         )

@@ -312,6 +312,7 @@ export default function App({
   })
   const {
     agent,
+    sessionCost,
     activeModel,
     yolo,
     contextWindow,
@@ -512,6 +513,7 @@ export default function App({
           contextEstimated: tokenUsage.contextEstimated,
           contextWindow,
           sessionTokens: tokenUsage.prompt + tokenUsage.completion,
+          sessionCost,
         },
         transcriptWidth
       )
@@ -544,7 +546,7 @@ export default function App({
   {
     activity =
       pickerState === 'loading'
-        ? 'loading models from Ollama…'
+        ? 'loading models…'
         : pickerState === 'error'
           ? 'model unavailable'
           : `${models.length} models available`
@@ -894,8 +896,8 @@ export default function App({
           Boolean(agent)
         )
       : pickerState === 'loading'
-        ? ['Loading Ollama models…', `Host: ${host}`]
-        : [pickerErrorTitle, `Host: ${host}`, '', pickerError]
+        ? ['Loading models…', `Ollama host: ${host}`]
+        : [pickerErrorTitle, `Ollama host: ${host}`, '', pickerError]
   const visiblePicker = padLinesTop(
     pickerLines.slice(-pickerViewportHeight),
     pickerViewportHeight

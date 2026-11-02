@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../agent/agent.js'
-import { OllamaClient } from '../../ollama/client.js'
+import { createInferenceClient } from '../../providers/router.js'
 import type { SessionData } from '../../session/types.js'
 import type { Model } from '../../types/inference.js'
 import { clamp } from '../../utils/clamp.js'
@@ -59,7 +59,7 @@ export function useModelPicker(
   const [state, setState] = useState<ModelPickerState>(
     requestedModel ? 'hidden' : 'loading'
   )
-  const [errorTitle, setErrorTitle] = useState('Failed to load Ollama models')
+  const [errorTitle, setErrorTitle] = useState('Failed to load models')
   const [error, setError] = useState('')
   const [models, setModels] = useState<Model[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -114,12 +114,12 @@ export function useModelPicker(
     const loadGeneration = ++loadGenerationRef.current
     selectionPendingRef.current = false
     setState('loading')
-    setErrorTitle('Failed to load Ollama models')
+    setErrorTitle('Failed to load models')
     setError('')
 
     try
     {
-      const client = new OllamaClient(host)
+      const client = createInferenceClient(host)
       const loadedModels = sortModels(
         await client.listModels(controller.signal)
       )

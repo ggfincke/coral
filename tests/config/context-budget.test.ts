@@ -314,3 +314,39 @@ test('resolvePinnedContextWindow returns undefined without model metadata', asyn
 
   assert.equal(resolved, undefined)
 })
+
+test('hosted models ignore the memory budget and honor only CORAL_NUM_CTX', async () =>
+{
+  const cwd = await tempProject()
+  await writeFile(
+    join(cwd, '.coral.json'),
+    JSON.stringify({ context: { maxNumCtx: 16_384 } })
+  )
+  const hosted: ModelInfo = {
+    contextLength: 200_000,
+    hosted: { maxOutputTokens: 128_000 },
+  }
+  const resolve = () =>
+    resolvePinnedContextWindow({
+      model: 'anthropic/claude-opus-5-5',
+      cwd,
+      // a host this small would pin any local model to the floor
+      memory: { kind: 'unified', totalBytes: 4 * GiB },
+      showModel: async () => hosted,
+      listModels: async () =>
+      {
+        throw new Error('hosted sizing must not list local models')
+      },
+    })
+
+  await withNumCtx(undefined, async () =>
+  {
+    const resolved = await resolve()
+    assert.equal(resolved?.contextWindow, 200_000)
+    assert.equal(resolved?.hostedOutputTokens, 128_000)
+  })
+  await withNumCtx('65536', async () =>
+  {
+    assert.equal((await resolve())?.contextWindow, 65_536)
+  })
+})

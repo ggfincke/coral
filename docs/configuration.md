@@ -82,6 +82,24 @@ Empty `mcp: {}` (object without a `servers` object) yields issue `mcp.servers mu
 
 MCP field contract: [MCP](mcp.md). Permission values: `always_allow` | `require_approval` | `always_deny`.
 
+Hosted model tuning lives only in the user file, so a cloned repository cannot raise spend:
+
+```json
+{
+  "providers": {
+    "anthropic": { "effort": "high", "maxContextTokens": 200000 },
+    "openai": { "effort": "medium", "maxContextTokens": 128000 }
+  }
+}
+```
+
+| Key                                 | Type                                                    | Default if missing/malformed |
+| ----------------------------------- | ------------------------------------------------------- | ---------------------------- |
+| `providers.<name>.effort`           | `low` \| `medium` \| `high` \| `xhigh` \| `max`         | `high`                       |
+| `providers.<name>.maxContextTokens` | number `> 0` (floored), capped by the model's own limit | `200000`                     |
+
+Coral resends history on every turn, so `maxContextTokens` is effectively the per-turn cost ceiling. `--no-think` maps to effort `low` on Anthropic and `none` on OpenAI models that support it.
+
 ---
 
 ## Project `<workspace>/.coral.json`
@@ -122,12 +140,18 @@ MCP field contract: [MCP](mcp.md). Permission values: `always_allow` | `require_
 
 Coral-owned reads in `src/`:
 
-| Variable                | Behavior                                                                                                                                                                                                                  |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CORAL_HOME`            | If set and nonempty, `resolve` that path (cwd-relative allowed). Else `~/.coral`. Relocates **mutable state only**, not `~/.coral.json`                                                                                   |
-| `CORAL_NUM_CTX`         | `parseInt` base 10. Used iff finite and `> 0`. Wins over project `maxNumCtx`. Still floored at **8192** unless native is smaller, and capped by native/memory. Request prompts are separately capped at **32,768** tokens |
-| `CORAL_EMBEDDING_MODEL` | Trimmed nonempty wins over project embedding model                                                                                                                                                                        |
-| `AGENTS_HOME`           | Shared Agents directory; defaults to `~/.agents`. Personal skills use `skills/`, and standing instructions use `AGENTS.md`                                                                                                |
+| Variable                | Behavior                                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CORAL_HOME`            | If set and nonempty, `resolve` that path (cwd-relative allowed). Else `~/.coral`. Relocates **mutable state only**, not `~/.coral.json`                                                                                         |
+| `CORAL_NUM_CTX`         | `parseInt` base 10. Used iff finite and `> 0`. Wins over project `maxNumCtx`. Still floored at **8192** unless native is smaller, and capped by native/memory. Local request prompts are separately capped at **32,768** tokens |
+| `CORAL_EMBEDDING_MODEL` | Trimmed nonempty wins over project embedding model                                                                                                                                                                              |
+| `ANTHROPIC_API_KEY`     | Enables `anthropic/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                            |
+| `OPENAI_API_KEY`        | Enables `openai/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                               |
+| `AGENTS_HOME`           | Shared Agents directory; defaults to `~/.agents`. Personal skills use `skills/`, and standing instructions use `AGENTS.md`                                                                                                      |
+
+On Linux, hosted credentials can also be stored in the desktop keyring with
+`secret-tool`, using attributes `application coral` and `provider anthropic` or
+`provider openai`. Environment variables take precedence over keyring entries.
 
 No other `CORAL_*` variables are read by the product. Coral does not read `OLLAMA_HOST`.
 `AGENTS_HOME` is separate from `CORAL_HOME` and is not relocated with it.

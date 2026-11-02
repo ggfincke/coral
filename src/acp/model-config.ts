@@ -13,7 +13,7 @@ export const DEFAULT_ACP_MODEL = 'gemma4:31b-mlx'
 
 function modifiedAt(model: Model): number
 {
-  const timestamp = Date.parse(model.modified_at)
+  const timestamp = Date.parse(model.modified_at ?? '')
   return Number.isNaN(timestamp) ? 0 : timestamp
 }
 
@@ -51,7 +51,7 @@ export function buildModelConfigOption(
   return {
     id: CORAL_MODEL_CONFIG_ID,
     name: 'Model',
-    description: 'Ollama model used for this Coral session',
+    description: 'Ollama or hosted model used for this Coral session',
     category: 'model',
     type: 'select',
     currentValue: currentModel,
@@ -76,7 +76,7 @@ export function selectedModelFromRequest(
   }
   if (!availableModels.includes(request.value))
   {
-    throw invalidAcpParams(`Unknown Ollama model: ${request.value}`)
+    throw invalidAcpParams(`Unknown model: ${request.value}`)
   }
   return request.value
 }

@@ -22,8 +22,9 @@ import type {
   TurnInput,
 } from './request/turn-context.js'
 import type { VerificationResult } from './loop/edit-verification.js'
+import type { SessionCostSnapshot } from '../types/session-cost.js'
 
-// token usage reported by Ollama; durations use nanoseconds
+// token usage reported by the inference backend; durations use nanoseconds
 export interface TokenUsage
 {
   promptTokens: number
@@ -32,6 +33,9 @@ export interface TokenUsage
   totalCompletionTokens: number
   // current context occupancy used by compaction
   contextTokens: number
+  // prompt tokens a hosted API served from its prompt cache
+  cachedPromptTokens?: number
+  totalCachedPromptTokens: number
   // current-turn durations when the server reports them
   promptEvalDurationNs?: number
   evalDurationNs?: number
@@ -117,6 +121,8 @@ export interface AgentOptions
   maxIterations?: number
   // inherit the parent's num_ctx so subagents preserve the Ollama KV cache
   numCtx?: number
+  // inherit the parent's hosted output cap alongside its pinned window
+  hostedOutputTokens?: number
   // run a read-only self-check after edit-producing turns
   verifyEdits?: boolean
   // override local and user tool policy for deterministic callers
@@ -133,8 +139,11 @@ export interface AgentOptions
   turnContext?: TurnContextDependencies
   // primary interactive sessions observe files; exec and subagents stay opt-in
   trackFileChanges?: boolean
-  // narrow transport seam; production uses the Ollama client by default
+  // narrow transport seam; production routes by model ref by default
   inferenceClient?: AgentInferenceClient
+  // restore paid usage separately from editable conversation history
+  sessionCost?: SessionCostSnapshot
+  historicalUsageUnknown?: boolean
   // composition roots discover and inject skills; Agent never scans the home
   skills?: SkillIndex
   // capped AGENTS_HOME/AGENTS.md body; omit when empty

@@ -430,7 +430,7 @@ export async function runExecCli(
     if (!(await stat(cwd)).isDirectory())
       throw new Error(`not a directory: ${cwd}`)
     const model = opts.model?.trim()
-    if (!model) throw new Error('model must be nonempty; use -m <Ollama model>')
+    if (!model) throw new Error('model must be nonempty; use -m <model>')
     const host = normalizeOllamaHost(opts.host)
     const prompt = await resolveExecPrompt(
       opts.prompt,

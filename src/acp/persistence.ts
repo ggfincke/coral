@@ -16,7 +16,8 @@ export type ProviderTurnSnapshotAgent = Pick<
   | 'getMessages'
   | 'getModel'
   | 'getTodos'
->
+> &
+  Partial<Pick<Agent, 'getSessionCost'>>
 
 export function buildProviderTurnSaveInput(
   agent: ProviderTurnSnapshotAgent,
@@ -42,6 +43,7 @@ export function buildProviderTurnSaveInput(
       lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
     },
     messages,
+    sessionCost: agent.getSessionCost?.() ?? previous.sessionCost,
     todos: agent.getTodos(),
     ...undoState,
   })
