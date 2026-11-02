@@ -79,6 +79,10 @@ npm run dev -- --model openai/gpt-6-astra
 
 With a key set, the picker also lists that provider's models (shown as `cloud`), and `/model` can switch between local and hosted models mid-session. Hosted requests send your prompts, attached files, and tool results to that provider. Coral caps hosted context at 200,000 tokens and uses `high` reasoning effort unless you change `providers` in `~/.coral.json` (see [Configuration](configuration.md)). `/status` shows cached prompt tokens.
 
+On Linux, Coral also reads keys from the desktop keyring through `secret-tool`.
+Store each key with `secret-tool store --label="Coral API key" application coral provider anthropic`
+or the same command with `provider openai`. An environment variable takes precedence.
+
 ## Semantic search (optional)
 
 ```bash

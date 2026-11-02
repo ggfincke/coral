@@ -25,12 +25,12 @@ const DEFAULT_LOADERS: Record<HostedProvider, HostedClientLoader> = {
   anthropic: async () =>
   {
     const { AnthropicClient } = await import('./anthropic/client.js')
-    return new AnthropicClient(resolveHostedSettings('anthropic'))
+    return new AnthropicClient(await resolveHostedSettings('anthropic'))
   },
   openai: async () =>
   {
     const { OpenAIClient } = await import('./openai/client.js')
-    return new OpenAIClient(resolveHostedSettings('openai'))
+    return new OpenAIClient(await resolveHostedSettings('openai'))
   },
 }
 
@@ -38,8 +38,8 @@ export interface RoutingInferenceClientOptions
 {
   ollama?: AgentInferenceClient
   loaders?: Partial<Record<HostedProvider, HostedClientLoader>>
-  // credential probe seam for tests; production reads the environment
-  hasCredentials?: (provider: HostedProvider) => boolean
+  // credential probe seam for tests
+  hasCredentials?: (provider: HostedProvider) => boolean | Promise<boolean>
 }
 
 /**
@@ -51,7 +51,9 @@ export class RoutingInferenceClient implements AgentInferenceClient
 {
   private readonly ollama: AgentInferenceClient
   private readonly loaders: Record<HostedProvider, HostedClientLoader>
-  private readonly hasCredentials: (provider: HostedProvider) => boolean
+  private readonly hasCredentials: (
+    provider: HostedProvider
+  ) => boolean | Promise<boolean>
   private readonly hosted = new Map<
     HostedProvider,
     Promise<AgentInferenceClient>
@@ -102,7 +104,10 @@ export class RoutingInferenceClient implements AgentInferenceClient
   // list every reachable backend; one failing backend only hides its models
   async listModels(signal?: AbortSignal): Promise<Model[]>
   {
-    const providers = HOSTED_PROVIDERS.filter(this.hasCredentials)
+    const available = await Promise.all(
+      HOSTED_PROVIDERS.map((provider) => this.hasCredentials(provider))
+    )
+    const providers = HOSTED_PROVIDERS.filter((_, index) => available[index])
     const results = await Promise.allSettled([
       this.ollama.listModels(signal),
       ...providers.map(async (provider) =>

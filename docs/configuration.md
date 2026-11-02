@@ -149,6 +149,10 @@ Coral-owned reads in `src/`:
 | `OPENAI_API_KEY`        | Enables `openai/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                               |
 | `AGENTS_HOME`           | Shared Agents directory; defaults to `~/.agents`. Personal skills use `skills/`, and standing instructions use `AGENTS.md`                                                                                                      |
 
+On Linux, hosted credentials can also be stored in the desktop keyring with
+`secret-tool`, using attributes `application coral` and `provider anthropic` or
+`provider openai`. Environment variables take precedence over keyring entries.
+
 No other `CORAL_*` variables are read by the product. Coral does not read `OLLAMA_HOST`.
 `AGENTS_HOME` is separate from `CORAL_HOME` and is not relocated with it.
 

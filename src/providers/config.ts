@@ -3,6 +3,7 @@
 
 import { loadUserConfig } from '../config/project-config.js'
 import { isPlainObject } from '../utils/guards.js'
+import { execFileCommand } from '../utils/process.js'
 import type { HostedProvider } from './model-ref.js'
 
 export type HostedEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -30,21 +31,40 @@ export function apiKeyEnvName(provider: HostedProvider): string
   return API_KEY_ENV[provider]
 }
 
-export function hasHostedCredentials(provider: HostedProvider): boolean
+// environment keys take precedence; linux desktop keys use the user's keyring
+async function resolveApiKey(
+  provider: HostedProvider
+): Promise<string | undefined>
 {
-  return Boolean(process.env[API_KEY_ENV[provider]]?.trim())
+  const envKey = process.env[API_KEY_ENV[provider]]?.trim()
+  if (envKey) return envKey
+  if (process.platform !== 'linux') return undefined
+
+  const result = await execFileCommand(
+    'secret-tool',
+    ['lookup', 'application', 'coral', 'provider', provider],
+    { timeout: 2_000, maxBuffer: 16_384 }
+  )
+  return result.ok ? result.stdout.trim() || undefined : undefined
+}
+
+export async function hasHostedCredentials(
+  provider: HostedProvider
+): Promise<boolean>
+{
+  return Boolean(await resolveApiKey(provider))
 }
 
 // read ~/.coral.json providers.<name>; malformed fields fall back to defaults
-export function resolveHostedSettings(
+export async function resolveHostedSettings(
   provider: HostedProvider
-): HostedProviderSettings
+): Promise<HostedProviderSettings>
 {
-  const apiKey = process.env[API_KEY_ENV[provider]]?.trim()
+  const apiKey = await resolveApiKey(provider)
   if (!apiKey)
   {
     throw new Error(
-      `${API_KEY_ENV[provider]} is not set; export it to use ${provider}/ models`
+      `${API_KEY_ENV[provider]} is not set and no keyring credential was found for ${provider}/ models`
     )
   }
 
