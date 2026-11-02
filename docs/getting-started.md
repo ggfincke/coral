@@ -103,7 +103,7 @@ Then `/index` in the TUI, or just use `search_code` — the first search also re
 
 ## Project instructions
 
-If the workspace contains `.coral.md` (then `AGENTS.md`, `README.md`, and other known files), Coral may inject excerpts into the system prompt as **Loaded Project Context**. That text cannot grant tools or permissions. See [Architecture](architecture.md) and [Configuration](configuration.md).
+If the workspace contains `.coral.md` (or else `AGENTS.md`, or else `CLAUDE.md`), Coral injects the first one it finds into the system prompt as **Loaded Project Context**. That text cannot grant tools or permissions. See [Architecture](architecture.md) and [Configuration](configuration.md).
 
 ## What to read next
 

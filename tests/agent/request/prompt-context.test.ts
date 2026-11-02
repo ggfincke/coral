@@ -29,7 +29,7 @@ describe('project-context', () =>
 
   const tempProject = () => tempDir('coral-ctx-')
 
-  test('gatherProjectContext loads project instructions and key metadata', async () =>
+  test('gatherProjectContext loads only the first instruction file', async () =>
   {
     const dir = await tempProject()
     await writeFile(
@@ -44,22 +44,26 @@ describe('project-context', () =>
     await mkdir(join(dir, 'src'))
     await writeFile(join(dir, 'src', 'index.ts'), '// entry\n')
 
+    await writeFile(join(dir, 'AGENTS.md'), '# Agents\nSecondary.\n')
+
     const ctx = gatherProjectContext(dir)
 
     assert.match(ctx, /Project Instructions/)
-    assert.match(ctx, /Detected project type: Node\.js\/JavaScript/)
-    assert.match(ctx, /package\.json/)
-    assert.match(ctx, /my-app/)
-    assert.match(ctx, /Directory structure/)
-    assert.match(ctx, /src\//)
-    assert.match(ctx, /index\.ts/)
+    assert.ok(!ctx.includes('Secondary.'))
+    assert.ok(!ctx.includes('My App'))
+    assert.ok(!ctx.includes('my-app'))
+    assert.ok(!ctx.includes('index.ts'))
+    assert.match(
+      captureProjectContext(dir).rootSummary,
+      /Project type: Node\.js\/JavaScript/
+    )
   })
 
   test('gatherProjectContext truncates oversized context files', async () =>
   {
     const dir = await tempProject()
     const bigContent = 'x'.repeat(10_000)
-    await writeFile(join(dir, 'README.md'), bigContent)
+    await writeFile(join(dir, 'AGENTS.md'), bigContent)
 
     const ctx = gatherProjectContext(dir)
 
@@ -109,26 +113,25 @@ describe('project-context', () =>
     assert.equal(opens.mock.callCount(), 0)
     assert.equal(directories.mock.callCount(), 0)
     const snapshot = captureProjectContext(dir)
-    assert.equal(opens.mock.callCount(), 17)
+    assert.equal(opens.mock.callCount(), 1)
     assert.equal(
       directories.mock.calls.filter((call) => call.arguments[0] === dir).length,
       1
     )
     assert.deepEqual(
       snapshot.files.map((file) => file.name),
-      ['.coral.md', 'AGENTS.md', 'package.json']
+      ['.coral.md']
     )
     assert.equal(
       snapshot.files[0]!.content,
       'i'.repeat(8_191) + '\n… (truncated)'
     )
     assert.match(snapshot.rootSummary, /\.hidden\//)
-    assert.ok(!snapshot.directoryTree.includes('.hidden'))
     assert.ok(Object.isFrozen(snapshot) && Object.isFrozen(snapshot.files))
     assert.ok(snapshot.files.every(Object.isFrozen))
     assert.equal(
       reads.mock.calls.reduce((total, call) => total + Number(call.result), 0),
-      8_193 * 2 + Buffer.byteLength('{"name":"fixture"}')
+      8_193
     )
     for (const call of reads.mock.calls)
     {
@@ -142,7 +145,7 @@ describe('project-context', () =>
     await writeFile(join(dir, '.coral.md'), 'new content after capture')
     let builds = 0
     const plan = new RequestPlanner().fitSystemPrompt({
-      contextWindow: 4_096,
+      contextWindow: 2_048,
       activeContent: 'inspect this project',
       tools: [],
       desiredProjectContextBudget: 32_768,
@@ -164,7 +167,7 @@ describe('project-context', () =>
     })
     assert.ok(builds > 2)
     assert.equal(plan.budget.fits, true)
-    assert.match(plan.content, /Detected project type: Node\.js\/JavaScript/)
+    assert.match(plan.content, /Project type: Node\.js\/JavaScript/)
     assert.ok(!plan.content.includes('new content after capture'))
     assert.deepEqual(
       [
