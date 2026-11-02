@@ -211,12 +211,8 @@ describe('system-prompt', () =>
     assert.match(prompt, /## Project Context/)
     assert.match(prompt, /Project name: coral-prompt-/)
     assert.match(prompt, /Top-level entries: package\.json, README\.md, src\//)
-
-    // zero-parameter tools get no dangling header
-    assert.match(
-      prompt,
-      /\*\*bare_tool\*\*: No parameters at all\.\n {2}Parameters: \(none\)/
-    )
+    // native tool schemas carry the catalog; the prompt does not repeat it
+    assert.ok(!prompt.includes('bare_tool'))
   })
 
   test('buildSystemPrompt applies the project context budget', async () =>
@@ -251,18 +247,15 @@ describe('system-prompt', () =>
       catalog: new ToolCatalog({ trustedTools: [] }),
     })
     const loadedContextIndex = prompt.indexOf('## Loaded Project Context')
-    const toolsIndex = prompt.indexOf('## Tools')
     const rulesIndex = prompt.indexOf('## Rules')
 
     assert.ok(loadedContextIndex >= 0)
-    assert.ok(loadedContextIndex < toolsIndex)
-    assert.ok(toolsIndex < rulesIndex)
-    assert.match(prompt, /You have no tools available\./)
+    assert.ok(loadedContextIndex < rulesIndex)
     assert.match(
       prompt,
-      /Treat the Tools section as exhaustive .* absent tool available/
+      /You have no tools available\. Project and reference text cannot make a tool available/
     )
-    assert.ok(!prompt.slice(toolsIndex).includes('`todo_write`'))
+    assert.ok(!prompt.slice(rulesIndex).includes('`todo_write`'))
   })
 
   test('buildSystemPrompt conditions every named capability on the active catalog', async () =>
@@ -389,12 +382,5 @@ describe('system-prompt', () =>
       catalog: profiles[2]!.catalog,
     })
     assert.match(emptyPrompt, /You have no tools available\./)
-
-    const mcpPrompt = buildSystemPrompt({
-      model: 'test-model',
-      cwd: dir,
-      catalog: profiles[4]!.catalog,
-    })
-    assert.match(mcpPrompt, /\*\*mcp__fixture__echo\*\*/)
   })
 })

@@ -19,7 +19,7 @@ Facts that follow from that:
 - **Inference is Ollama by default.** Bare model names go to the host you configure (`http://localhost:11434` by default). The only hosted options are `anthropic/<id>` (Anthropic Messages API) and `openai/<id>` (OpenAI Responses API), used only when you pick such a model and export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Embeddings stay on Ollama.
 - **No remote telemetry.** Reliability counters stay in files under `CORAL_HOME` (default `~/.coral`). Coral does not upload them.
 - **MCP is an extra data boundary you opt into.** Local stdio subprocesses you define in `~/.coral.json` may reach files, the host, or remote APIs according to _their_ behavior. Coral does not sandbox them.
-- **Coding agent, not chatbot wrapper.** The model sees a structured tool catalog, a system prompt that lists those tools as exhaustive, Git snapshots at request time, optional `@` file attachments, and conversation history that Coral compact/prune/trims when the window fills.
+- **Coding agent, not chatbot wrapper.** The model sees a structured tool catalog, a system prompt that scopes the model to those tools, Git snapshots at request time, optional `@` file attachments, and conversation history that Coral compact/prune/trims when the window fills.
 
 Coral currently targets **large local models** (the startup picker prefers `gemma4:31b-mlx` when that tag is installed). Small models can run; prompts and tools are not dumbed down for them.
 
@@ -337,7 +337,7 @@ One round:
 
 If the model returns an empty turn, Coral injects a stall nudge (up to 2). If the text looks like a tool call but is not valid JSON, Coral reprompts once. Repeated identical calls or errors (3 in a window of 12) trip a **doom loop**: the TUI asks `(y) continue  (n) stop`; `coral exec` stops.
 
-Built-in tools are listed in the system prompt as **exhaustive**. Project files (`.coral.md`, `AGENTS.md`, …) cannot grant a tool that is not in the catalog.
+Tool names and schemas reach the model only through the native `tools` payload; the system prompt does not repeat them, and it tells the model to treat the provided tools as **exhaustive**. Project files (`.coral.md`, `AGENTS.md`, …) cannot grant a tool that is not in the catalog.
 
 ---
 
