@@ -19,6 +19,10 @@ import {
   sanitizeUntrustedText,
   stringifyForDisplay,
 } from '../utils/untrusted-text.js'
+import {
+  runtimeModeAutoApproves,
+  type CoralRuntimeMode,
+} from './session-policy.js'
 
 const MAX_TOOL_OUTPUT_CHARS = 32_768
 const MAX_TOOL_TITLE_CHARS = 240
@@ -41,6 +45,10 @@ export interface AcpEventProjectionOptions
   isCurrent: () => boolean
   getTodos: () => TodoItem[]
   getContextWindow: () => number
+  // read at each approval so a mid-turn mode change applies to the next call
+  getRuntimeMode: () => CoralRuntimeMode
+  // in-memory allow-always grants owned by the session binding
+  sessionToolGrants: Set<string>
 }
 
 export class AcpIdAllocator
@@ -165,7 +173,8 @@ export class AcpEventProjection
   private async requestToolApproval(
     name: string,
     args: Record<string, unknown>,
-    callId: number | undefined
+    callId: number | undefined,
+    crossesWorkspace: boolean
   ): Promise<boolean>
   {
     if (callId === undefined) return false
@@ -180,10 +189,23 @@ export class AcpEventProjection
     }
     if (call.permissionRequested) return false
     call.permissionRequested = true
+    // auto-approved calls skip only the prompt; tool_call & its update still flow
+    if (
+      this.options.sessionToolGrants.has(name) ||
+      runtimeModeAutoApproves(
+        this.options.getRuntimeMode(),
+        name,
+        crossesWorkspace
+      )
+    )
+    {
+      return true
+    }
     await this.drain()
     if (!this.options.isCurrent()) return false
 
     const allowId = `${call.acpId}:allow-once`
+    const alwaysId = `${call.acpId}:allow-always`
     const rejectId = `${call.acpId}:reject-once`
     const response = await this.options.client.request(
       methods.client.session.requestPermission,
@@ -197,6 +219,11 @@ export class AcpEventProjection
             kind: 'allow_once',
           },
           {
+            optionId: alwaysId,
+            name: 'Always allow this session',
+            kind: 'allow_always',
+          },
+          {
             optionId: rejectId,
             name: 'Reject once',
             kind: 'reject_once',
@@ -207,6 +234,13 @@ export class AcpEventProjection
     )
     if (!this.options.isCurrent()) return false
     if (response.outcome.outcome !== 'selected') return false
+    // like the TUI's (a), the grant covers the tool name w/ any arguments,
+    // including outside-workspace paths, until the binding is released
+    if (response.outcome.optionId === alwaysId)
+    {
+      this.options.sessionToolGrants.add(name)
+      return true
+    }
     return response.outcome.optionId === allowId
   }
 
@@ -291,8 +325,14 @@ export class AcpEventProjection
         this.tools.delete(callId)
         if (name === 'todo_write') this.emitPlan()
       },
-      onToolApproval: (name, args, _presentation, callId) =>
-        this.requestToolApproval(name, args, callId),
+      onToolApproval: (name, args, _presentation, callId, crossesWorkspace) =>
+        this.requestToolApproval(
+          name,
+          args,
+          callId,
+          // fail closed: only an explicit in-workspace call can auto-accept edits
+          crossesWorkspace !== false
+        ),
       onMcpLaunchApproval: async () => false,
       onDoomLoop: async () => false,
       onUsage: (usage) =>

@@ -71,8 +71,9 @@ export interface AgentEvents
     callId: number,
     diff?: string
   ) => void
-  // approve or reject a require_approval invocation; promoted marks an
-  // always_allow tool gated only because its path leaves the workspace
+  // approve or reject a require_approval invocation; promoted marks any
+  // call whose path leaves the workspace, which is the only reason an
+  // always_allow tool gets gated
   onToolApproval: (
     name: string,
     args: Record<string, unknown>,

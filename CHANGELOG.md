@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across tool rounds, prompt caching is on, and `/status` reports cached
   prompt tokens. Hosted context defaults to a 200,000-token ceiling and
   `high` effort, tunable in `~/.coral.json` `providers`.
+- **ACP runtime modes:** the `coral.runtime-mode` config option accepts
+  `approval-required`, `auto-accept-edits` (in-workspace `write_file` /
+  `edit_file` run without asking), and `full-access` (every gated call, like
+  TUI yolo). The mode can change mid-turn, resets to `approval-required` for
+  every new or resumed session, and never overrides `always_deny`. Approval
+  prompts add an "Always allow this session" option kept in memory only.
 
 ### Changed
 

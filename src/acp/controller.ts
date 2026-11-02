@@ -130,6 +130,9 @@ interface BoundSession
   pendingWrite?: PendingWrite
   dirtyError?: Error
   activeTask?: Promise<unknown>
+  // in-memory permission state; never persisted & reset on every binding
+  runtimeMode: CoralRuntimeMode
+  sessionToolGrants: Set<string>
 }
 
 type ControllerPhase =
@@ -419,12 +422,13 @@ export class CoralAcpController
 
   private configOptions(
     agent: CoralAcpAgent,
-    names: readonly string[]
+    names: readonly string[],
+    runtimeMode: CoralRuntimeMode
   ): acp.SessionConfigOption[]
   {
     return [
       buildModelConfigOption(agent.getModel(), names),
-      buildRuntimeModeConfigOption('approval-required'),
+      buildRuntimeModeConfigOption(runtimeMode),
     ]
   }
 
@@ -496,6 +500,8 @@ export class CoralAcpController
       runtimeIdentity,
       runtime,
       ids: new AcpIdAllocator(session.meta.id),
+      runtimeMode: 'approval-required',
+      sessionToolGrants: new Set(),
     }
     holder.binding = binding
     return binding
@@ -576,7 +582,11 @@ export class CoralAcpController
       return {
         sessionId: binding.session.meta.id,
         modes: buildInteractionModes('default'),
-        configOptions: this.configOptions(binding.agent, names),
+        configOptions: this.configOptions(
+          binding.agent,
+          names,
+          binding.runtimeMode
+        ),
       }
     }
     catch (error)
@@ -664,9 +674,14 @@ export class CoralAcpController
         else await lease.release()
         throw error
       }
+      const binding = this.binding!
       return {
         modes: buildInteractionModes('default'),
-        configOptions: this.configOptions(this.binding!.agent, names),
+        configOptions: this.configOptions(
+          binding.agent,
+          names,
+          binding.runtimeMode
+        ),
       }
     }
     catch (error)
@@ -761,6 +776,8 @@ export class CoralAcpController
         isCurrent: () => binding.runtime.acceptsEvent(handle),
         getTodos: () => handle.agent.getTodos(),
         getContextWindow: () => handle.agent.getFrozenPrefix().contextWindow,
+        getRuntimeMode: () => binding.runtimeMode,
+        sessionToolGrants: binding.sessionToolGrants,
       },
       binding.ids
     )
@@ -893,6 +910,10 @@ export class CoralAcpController
     {
       const binding = this.requireBinding(request.sessionId)
       this.recoverPendingWrite(binding)
+      // runtime mode is a binding flag read at approval time, so it may change
+      // mid-turn w/o an operation; everything else stays idle-only
+      if (isRuntimeModeConfigRequest(request))
+        return this.setRuntimeMode(binding, request, requestSignal)
       if (binding.activeTask)
       {
         throw coralAcpError(
@@ -900,9 +921,7 @@ export class CoralAcpController
           'Session configuration is available only while Coral is idle'
         )
       }
-      const task = isRuntimeModeConfigRequest(request)
-        ? this.executeSetRuntimeMode(binding, request, requestSignal)
-        : this.executeSetConfigOption(binding, request, requestSignal)
+      const task = this.executeSetConfigOption(binding, request, requestSignal)
       binding.activeTask = task
       try
       {
@@ -971,7 +990,7 @@ export class CoralAcpController
             binding.dirtyError = toError(error)
             throw error
           }
-          return this.configOptions(handle.agent, names)
+          return this.configOptions(handle.agent, names, binding.runtimeMode)
         }
       )
       return { configOptions }
@@ -982,36 +1001,21 @@ export class CoralAcpController
     }
   }
 
-  private async executeSetRuntimeMode(
+  // synchronous so it cannot interleave w/ the turn or command it runs beside
+  private setRuntimeMode(
     binding: BoundSession,
     request: acp.SetSessionConfigOptionRequest,
     requestSignal: AbortSignal
-  ): Promise<acp.SetSessionConfigOptionResponse>
+  ): acp.SetSessionConfigOptionResponse
   {
-    const handle = binding.runtime.beginOperation('command')
-    if (!handle)
-    {
-      throw coralAcpError(
-        'session_busy',
-        'Session configuration is available only while Coral is idle'
-      )
-    }
-    const signal = AbortSignal.any([handle.signal, requestSignal])
-    try
-    {
-      return await binding.runtime.runOperation(handle, async () =>
-      {
-        signal.throwIfAborted()
-        const mode = selectedRuntimeMode(request)
-        void mode
-        return {
-          configOptions: this.configOptions(handle.agent, binding.modelNames),
-        }
-      })
-    }
-    finally
-    {
-      binding.runtime.finishCommand(handle)
+    requestSignal.throwIfAborted()
+    binding.runtimeMode = selectedRuntimeMode(request)
+    return {
+      configOptions: this.configOptions(
+        binding.agent,
+        binding.modelNames,
+        binding.runtimeMode
+      ),
     }
   }
 

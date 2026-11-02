@@ -20,13 +20,29 @@ load that TUI.
 - Initialize protocol version 1 without creating a session or loading a model.
   No authentication method is advertised or required.
 - Create one session per connection, send text turns, and receive streamed text,
-  thinking, usage and tool evidence. Approvals allow or reject one tool call.
+  thinking, usage and tool evidence. Approvals allow one call, always allow
+  that tool for the rest of the session, or reject one call.
+- Pick a runtime mode with the `coral.runtime-mode` session config option, even
+  mid-turn; the next approval uses the new mode.
 - Cancel an active turn, then continue the same session.
 - Change the model while idle using session config options.
 - Resume an existing native session using `session/resume`, without replaying
   its messages to the client. Close the session and release its resources.
 
-Only supervised/default mode is supported. Attachments, additional directories,
+Runtime modes:
+
+- `approval-required` (Supervised): every gated call asks. Each new or resumed
+  session starts here; Coral does not save the mode.
+- `auto-accept-edits`: `write_file` and `edit_file` inside the workspace run
+  without asking. Shell, git, outside-workspace paths, and other gated tools
+  still ask.
+- `full-access`: every gated call runs without asking, like TUI yolo, including
+  outside-workspace paths.
+
+No mode overrides `always_deny`. Always-allow grants live in memory for the
+session binding only and are never written to workspace grants.
+
+Only the default session mode is supported. Attachments, additional directories,
 and client-supplied MCP servers are rejected. MCP is disabled, including the
 user's configured servers. App MCP, session import/replacement, and speculative
 plan publishing are outside this integration.

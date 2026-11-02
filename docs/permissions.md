@@ -95,7 +95,7 @@ On a tool approval, `(a)` approves and grants that tool identity, with **any arg
 - Outside-workspace promotions are never persisted. `(p)` is hidden on those prompts and `(a)` still works for the session.
 - `always_deny` is checked before any approval, so a grant can never override it. A project `require_approval` tightening does not block a grant, matching yolo.
 - Project config cannot create, read, or widen a grant. Only a key press in an interactive approval writes one.
-- `coral exec` and ACP never consult grants.
+- `coral exec` and ACP never consult workspace grants. ACP's "Always allow this session" option keeps an in-memory grant for its session binding only.
 
 `/permissions grants` lists this workspace's grants. `/permissions revoke <tool>` forgets one and also drops the matching session grant; `/permissions revoke all` forgets every grant for the workspace. Storage: `CORAL_HOME/tool-grants.d/<sha256>.json`, one file per grant, validated and fail-closed on read.
 

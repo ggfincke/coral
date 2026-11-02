@@ -88,7 +88,7 @@ test('model configuration uses exact installed identities', () =>
   )
 })
 
-test('session policy advertises supervised operation and rejects other modes', () =>
+test('session policy advertises the supported runtime modes and rejects others', () =>
 {
   assert.deepEqual(
     buildInteractionModes('default').availableModes.map((mode) => mode.id),
@@ -99,10 +99,10 @@ test('session policy advertises supervised operation and rejects other modes', (
     option.type === 'select'
       ? option.options.map((entry) => 'value' in entry && entry.value)
       : [],
-    ['approval-required']
+    ['approval-required', 'auto-accept-edits', 'full-access']
   )
   assert.throws(() => selectedInteractionMode('plan'), /Unsupported/)
-  for (const value of ['auto', 'full-access', 'auto-accept-edits'])
+  for (const value of ['auto', 'plan'])
     assert.throws(
       () =>
         selectedRuntimeMode({
@@ -110,7 +110,7 @@ test('session policy advertises supervised operation and rejects other modes', (
           configId: 'coral.runtime-mode',
           value,
         }),
-      /only approval-required/
+      /Unsupported Coral runtime mode/
     )
 })
 
@@ -148,6 +148,8 @@ test('event projection preserves exact tool identity and session permission', as
       isCurrent: () => true,
       getTodos: () => [],
       getContextWindow: () => 32_768,
+      getRuntimeMode: () => 'approval-required',
+      sessionToolGrants: new Set(),
     },
     new AcpIdAllocator('session-1')
   )
@@ -202,6 +204,6 @@ test('event projection preserves exact tool identity and session permission', as
         options: Array<{ kind: string }>
       }
     ).options.map((option) => option.kind),
-    ['allow_once', 'reject_once']
+    ['allow_once', 'allow_always', 'reject_once']
   )
 })
