@@ -279,6 +279,7 @@ export class Agent
   private readonly mcpScope: McpToolScope
   private readonly skills: SkillIndex
   private readonly userInstructions: string
+  private readonly projectContext: boolean
   private readonly activeRuns = new Set<Promise<AgentRunOutcome>>()
   private disposePromise?: Promise<void>
 
@@ -307,6 +308,7 @@ export class Agent
     this.thinkMode = options.think ?? true
     this.skills = options.skills ?? EMPTY_SKILL_INDEX
     this.userInstructions = options.userInstructions ?? ''
+    this.projectContext = options.projectContext ?? true
     // bind skill to this Agent's index; with nothing installed it is omitted
     // rather than advertised as a tool that can only fail
     this.baseTools = (options.tools ?? allTools)
@@ -381,7 +383,9 @@ export class Agent
     this.client.startKeepAlive(model)
   }
 
-  // create one read-only child with borrowed integration resources
+  // create one read-only child with borrowed integration resources; it gets a
+  // bare prompt (no project file, skills, or standing instructions) because
+  // each delegation pays its own cold prefill
   private createReadOnlySubagent(): Agent
   {
     return new Agent(this.model, this.baseUrl, this.cwd, {
@@ -394,9 +398,16 @@ export class Agent
       verifyEdits: false,
       codeIntel: this.codeIntel,
       mcpMode: 'off',
-      skills: this.skills,
-      userInstructions: this.userInstructions,
+      projectContext: false,
     })
+  }
+
+  // size injected project files for a window, or skip them for a bare prompt
+  private projectContextBudget(contextWindow: number): number
+  {
+    return this.projectContext
+      ? projectContextBudgetForWindow(contextWindow)
+      : 0
   }
 
   // run a bounded read-only subagent and close its local scope
@@ -972,7 +983,7 @@ export class Agent
     const catalog = this.createToolCatalog()
     const systemContent = this.buildSystemContent(
       this.model,
-      projectContextBudgetForWindow(this.contextWindowSize),
+      this.projectContextBudget(this.contextWindowSize),
       catalog
     )
     this.toolCatalog = catalog
@@ -1015,8 +1026,7 @@ export class Agent
         contextWindow,
         activeContent: activeMessage.content,
         tools: catalog.ollamaTools,
-        desiredProjectContextBudget:
-          projectContextBudgetForWindow(contextWindow),
+        desiredProjectContextBudget: this.projectContextBudget(contextWindow),
         systemContentAt: (projectContextBudget) =>
           this.buildSystemContent(
             this.model,
@@ -1037,7 +1047,7 @@ export class Agent
     {
       systemContent = this.buildSystemContent(
         this.model,
-        projectContextBudgetForWindow(this.contextWindowSize),
+        this.projectContextBudget(this.contextWindowSize),
         catalog
       )
     }
@@ -1053,9 +1063,7 @@ export class Agent
   // build the system prompt with the same wiring at construction and switch
   private buildSystemContent(
     model: string,
-    projectContextBudget = projectContextBudgetForWindow(
-      this.contextWindowSize
-    ),
+    projectContextBudget = this.projectContextBudget(this.contextWindowSize),
     catalog: ToolCatalog = this.toolCatalog,
     projectContextSnapshot?: ProjectContextSnapshot
   ): string
@@ -1088,7 +1096,7 @@ export class Agent
       contextWindow,
       activeContent: activeMessage.content,
       tools: this.toolCatalog.ollamaTools,
-      desiredProjectContextBudget: projectContextBudgetForWindow(contextWindow),
+      desiredProjectContextBudget: this.projectContextBudget(contextWindow),
       systemContentAt: (projectContextBudget) =>
         this.buildSystemContent(
           this.model,

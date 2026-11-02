@@ -384,7 +384,7 @@ MCP tools cannot claim a built-in name (after normalization). They cannot self-g
 
 ### `task` subagents
 
-`task` runs a **read-only child Agent** with a 24-iteration cap, the parent's inference and LSP clients, inherited `num_ctx`, `mcpMode: 'off'`, `verifyEdits: false`, and tools limited to `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`. Unexpected `require_approval` calls are denied (no prompt). `task` itself is not subagent-safe (no recursion). The optional `description` argument is display-only; only `prompt` is forwarded.
+`task` runs a **read-only child Agent** with a 24-iteration cap, the parent's inference and LSP clients, inherited `num_ctx`, `mcpMode: 'off'`, `verifyEdits: false`, a bare system prompt (no project instruction file, skills catalog, or `AGENTS_HOME` instructions, so each delegation's cold prefill stays small), and tools limited to `read_file`, `grep`, `glob`, `list_files`, `search_code`, `code_intel`, `git_status`, `git_diff`, `git_log`. Unexpected `require_approval` calls are denied (no prompt). `task` itself is not subagent-safe (no recursion). The optional `description` argument is display-only; only `prompt` is forwarded.
 
 ---
 
