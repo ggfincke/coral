@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Standing instructions:** `AGENTS_HOME/AGENTS.md` is read up to 32 KiB, and
   hosted models now receive it in full. Ollama models keep the 4 KiB share.
 
+### Fixed
+
+- **Ollama prompt cache:** the per-round Git context snapshot no longer rewrites
+  the leading system message, so an edit no longer forces Ollama to re-prefill
+  the whole conversation on the next round. Later system text now stays in
+  place as user text, as the hosted adapters already did.
+
 ## [0.17.10] - 2026-10-21
 
 ### Added
