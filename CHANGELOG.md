@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt tokens. Hosted context defaults to a 200,000-token ceiling and
   `high` effort, tunable in `~/.coral.json` `providers`.
 
+### Fixed
+
+- **Ollama prompt cache:** the per-round Git context snapshot no longer rewrites
+  the leading system message, so an edit no longer forces Ollama to re-prefill
+  the whole conversation on the next round. Later system text now stays in
+  place as user text, as the hosted adapters already did.
+
 ## [0.17.10] - 2026-10-21
 
 ### Added
