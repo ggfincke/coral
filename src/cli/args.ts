@@ -28,12 +28,13 @@ export interface CliOptions
   outputFormat: ExecOutputFormat
   resultFile?: string
   mcp: boolean
+  json?: boolean
 }
 
 export type SkillsCliAction = 'list' | 'path'
 
 export type ParsedCli =
-  | { kind: 'interactive' | 'exec' | 'acp'; options: CliOptions }
+  | { kind: 'interactive' | 'exec' | 'acp' | 'models'; options: CliOptions }
   | { kind: 'skills'; action: SkillsCliAction; options: CliOptions }
   | { kind: 'exit'; code: number }
 
@@ -120,6 +121,17 @@ export function parseCliArgs(argv: string[]): ParsedCli
     .action((_opts, command: Command) =>
     {
       parsed = { kind: 'acp', options: command.optsWithGlobals<CliOptions>() }
+    })
+  program
+    .command('models')
+    .description('List reachable Ollama and configured hosted models')
+    .option('--json', 'print the model inventory as JSON', false)
+    .action((_opts, command: Command) =>
+    {
+      parsed = {
+        kind: 'models',
+        options: command.optsWithGlobals<CliOptions>(),
+      }
     })
   const skills = program
     .command('skills')

@@ -83,6 +83,9 @@ On Linux, Coral also reads keys from the desktop keyring through `secret-tool`.
 Store each key with `secret-tool store --label="Coral API key" application coral provider anthropic`
 or the same command with `provider openai`. An environment variable takes precedence.
 
+`coral models --json` lists the same reachable local and configured hosted models
+for external model pickers. This only discovers models; it does not run inference.
+
 ## Semantic search (optional)
 
 ```bash

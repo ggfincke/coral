@@ -25,6 +25,11 @@ else
     const { runAcpCli } = await import('./acp.js')
     process.exitCode = await runAcpCli(parsed.options)
   }
+  else if (parsed.kind === 'models')
+  {
+    const { runModelsCli } = await import('./models.js')
+    process.exitCode = await runModelsCli(parsed.options)
+  }
   else if (parsed.kind === 'exec')
   {
     const { runExecCli } = await import('./exec.js')
