@@ -128,7 +128,8 @@ CORAL_HOME=/path/to/separate-coral-home coral acp \
   --host http://localhost:11434 --model qwen3.8:27b-mlx
 ```
 
-It supports supervised approvals, streamed text/tool evidence, cancellation,
+It supports supervised, auto-accept-edits, and full-access runtime modes,
+session-scoped always-allow approvals, streamed text/tool evidence, cancellation,
 model changes, and native `session/resume`. Attachments and client-supplied MCP
 servers are rejected; MCP is disabled. Use a separate home for each app instance.
 See [ACP setup and recovery](docs/acp.md) for protocol boundaries, native session

@@ -690,9 +690,9 @@ test('ACP refuses client MCP and unsupported modes before running an Agent', asy
         cx.request(acp.methods.agent.session.setConfigOption, {
           sessionId,
           configId: 'coral.runtime-mode',
-          value: 'full-access',
+          value: 'auto',
         }),
-        /only approval-required/
+        /Unsupported Coral runtime mode/
       )
       await assert.rejects(
         cx.request(acp.methods.agent.session.setMode, {
@@ -910,7 +910,7 @@ test('iteration limits and failures map after the accepted turn is persisted', a
   })
 })
 
-test('session policy changes are idle-only and close joins cancellation and disposal', async () =>
+test('model and session mode changes are idle-only, runtime mode is live, and close joins cancellation and disposal', async () =>
 {
   await withCoralHome(async (cwd) =>
   {
@@ -949,13 +949,19 @@ test('session policy changes are idle-only and close joins cancellation and disp
         }),
         /only while Coral is idle/
       )
-      await assert.rejects(
-        cx.request(acp.methods.agent.session.setConfigOption, {
+      const modeChange = await cx.request(
+        acp.methods.agent.session.setConfigOption,
+        {
           sessionId,
           configId: 'coral.runtime-mode',
           value: 'full-access',
-        }),
-        /only while Coral is idle/
+        }
+      )
+      assert.equal(
+        modeChange.configOptions.find(
+          (option) => option.id === 'coral.runtime-mode'
+        )?.currentValue,
+        'full-access'
       )
       await assert.rejects(
         cx.request(acp.methods.agent.session.setMode, {
