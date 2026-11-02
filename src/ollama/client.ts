@@ -82,20 +82,27 @@ function wireMessage(message: ChatMessage): ModelRequestMessage
   return projected
 }
 
-// preserve system authority while satisfying Ollama's leading-message contract
+// merge the leading system run to satisfy Ollama's leading-message contract;
+// later system text (per-round git context, undo warnings) stays in place as
+// user text so a volatile snapshot never rewrites the cached prompt prefix
 function wireMessages(messages: ChatMessage[]): ModelRequestMessage[]
 {
   const wired = messages.map(wireMessage)
-  const systemMessages = wired.filter((message) => message.role === 'system')
-  if (systemMessages.length === 0) return wired
+  const leadingCount = wired.findIndex((message) => message.role !== 'system')
+  const leading = leadingCount < 0 ? wired : wired.slice(0, leadingCount)
+  const rest = leadingCount < 0 ? [] : wired.slice(leadingCount)
 
-  const systemContent = systemMessages
-    .map((message) => message.content)
-    .join('\n\n')
-  return [
-    { role: 'system', content: systemContent },
-    ...wired.filter((message) => message.role !== 'system'),
-  ]
+  const later = rest.flatMap((message): ModelRequestMessage[] =>
+  {
+    if (message.role !== 'system') return [message]
+    return message.content.trim()
+      ? [{ role: 'user', content: message.content }]
+      : []
+  })
+  if (leading.length === 0) return later
+
+  const systemContent = leading.map((message) => message.content).join('\n\n')
+  return [{ role: 'system', content: systemContent }, ...later]
 }
 
 function wireTool(tool: OllamaTool): OllamaTool
