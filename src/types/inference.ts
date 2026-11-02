@@ -167,8 +167,9 @@ export interface ModelInfo
   // per-head key and value dimensions
   keyLength?: number
   valueLength?: number
-  // present for hosted APIs, which skip local memory sizing
-  hosted?: { maxOutputTokens: number }
+  // present for hosted APIs, which skip local memory sizing; contextLength there
+  // is already capped, so nativeContextTokens keeps the model's own limit
+  hosted?: { maxOutputTokens: number; nativeContextTokens?: number }
 }
 
 // reliability counters for model tool-call recovery, surfaced in /status,

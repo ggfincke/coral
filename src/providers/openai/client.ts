@@ -81,7 +81,10 @@ export class OpenAIClient implements AgentInferenceClient
         limits.contextLength,
         this.settings.maxContextTokens
       ),
-      hosted: { maxOutputTokens: limits.maxOutputTokens },
+      hosted: {
+        maxOutputTokens: limits.maxOutputTokens,
+        nativeContextTokens: limits.contextLength,
+      },
     }
   }
 

@@ -92,7 +92,7 @@ export class AnthropicClient implements AgentInferenceClient
     }
     return {
       contextLength: Math.min(nativeInput, this.settings.maxContextTokens),
-      hosted: { maxOutputTokens },
+      hosted: { maxOutputTokens, nativeContextTokens: nativeInput },
     }
   }
 

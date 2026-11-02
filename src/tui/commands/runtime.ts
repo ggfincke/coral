@@ -3,6 +3,7 @@
 
 import chalk from 'chalk'
 import { loadPrefs, savePrefs } from '../../config/prefs.js'
+import { parseModelRef } from '../../providers/model-ref.js'
 import { createInferenceClient } from '../../providers/router.js'
 import { formatTelemetry, loadTelemetry } from '../../telemetry/store.js'
 import { toErrorMessage } from '../../utils/errors.js'
@@ -61,6 +62,17 @@ const statusCommand: Command = {
       `  Messages:     ${chalk.dim(String(messages))}`,
       `  Tokens (est): ${chalk.dim(`~${formatTokenCount(tokens)}`)}`,
     ]
+    // hosted windows are capped below the model limit to bound per-turn cost
+    const cap = ctx.agent.getContextCap()
+    if (cap)
+    {
+      const source = cap.byEnv
+        ? 'CORAL_NUM_CTX'
+        : `providers.${parseModelRef(model).provider}.maxContextTokens`
+      lines.push(
+        `  Context:      ${chalk.dim(`${formatTokenCount(cap.window)} cap (model allows ${formatTokenCount(cap.native)}; ${source})`)}`
+      )
+    }
 
     // tokens the backend reported this session (authoritative, not estimated)
     if (usage.promptTokens > 0 || usage.completionTokens > 0)

@@ -244,6 +244,8 @@ export class Agent
   private numCtx = 0
   // hosted output cap from model metadata; undefined means a local model
   private hostedOutputTokens?: number
+  // set when a hosted window is narrower than the model allows
+  private contextCap?: { native: number; byEnv: boolean }
   // share one in-flight context-window resolution and clear it after settlement
   private contextWindowPromise?: Promise<number>
   private contextResolutionAbort?: AbortController
@@ -671,6 +673,7 @@ export class Agent
     this.contextWindowSize = 0
     this.numCtx = 0
     this.hostedOutputTokens = undefined
+    this.contextCap = undefined
     this.requestPlanner.setHostedOutputTokens(undefined)
 
     // rebuild the system prompt with the new model name
@@ -725,6 +728,15 @@ export class Agent
   getMessageCount(): number
   {
     return Math.max(this.state.getMessageCount() - 1, 0)
+  }
+
+  // hosted window narrower than the model's own limit, for /status
+  getContextCap():
+    { window: number; native: number; byEnv: boolean } | undefined
+    {
+    return this.contextCap
+      ? { window: this.contextWindowSize, ...this.contextCap }
+      : undefined
   }
 
   // expose accumulated Ollama token usage and model time
@@ -871,6 +883,13 @@ export class Agent
     this.contextWindowSize = contextWindow
     this.numCtx = contextWindow
     this.hostedOutputTokens = resolved?.hostedOutputTokens
+    // resolved.nativeContext is already the provider-capped window, so a
+    // smaller pinned window means CORAL_NUM_CTX narrowed it further
+    const native = resolved?.hostedNativeContext
+    this.contextCap =
+      resolved && native !== undefined && native > contextWindow
+        ? { native, byEnv: contextWindow < resolved.nativeContext }
+        : undefined
     this.requestPlanner.setHostedOutputTokens(this.hostedOutputTokens)
     this.compactor.setPromptLimit(
       requestBudgetCapacity(contextWindow, this.hostedOutputTokens).promptLimit

@@ -55,6 +55,8 @@ export interface ResolvedContextWindow
   maxNumCtx?: number
   // set for hosted APIs, which size the response separately from the window
   hostedOutputTokens?: number
+  // uncapped hosted model limit, for explaining a capped window
+  hostedNativeContext?: number
 }
 
 function envNumCtx(): number | undefined
@@ -172,6 +174,7 @@ export async function resolvePinnedContextWindow(
       weightBytes: 0,
       maxNumCtx,
       hostedOutputTokens: info.hosted.maxOutputTokens,
+      hostedNativeContext: info.hosted.nativeContextTokens,
     }
   }
   const maxNumCtx = resolveContextConfig(deps.cwd).maxNumCtx
