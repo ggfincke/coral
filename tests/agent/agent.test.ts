@@ -2049,11 +2049,11 @@ test('a failed MCP retirement keeps the old model prompt and catalog aligned', a
   )
 
   await agent.run('install the manager', makeAgentEvents())
-  assert.match(agent.getMessages()[0]!.content, /mcp__demo__ping/)
+  assert.match(agent.getMessages()[0]!.content, /Running model: fake-model/)
 
   await assert.rejects(agent.switchModel('next-model'), /retirement failed/)
   assert.equal(agent.getModel(), 'fake-model')
-  assert.doesNotMatch(agent.getMessages()[0]!.content, /mcp__demo__ping/)
+  assert.match(agent.getMessages()[0]!.content, /Running model: fake-model/)
 
   await agent.dispose()
 })
@@ -2365,7 +2365,7 @@ test('Agent.run leaves history untouched when automatic compaction is aborted', 
   agent.restoreMessages(
     Array.from({ length: 120 }, (_unused, index) => ({
       role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
-      content: `msg ${index + 1} ${'x'.repeat(40)}`,
+      content: `msg ${index + 1} ${'x'.repeat(100)}`,
     }))
   )
 
@@ -2463,7 +2463,7 @@ test('Agent reuses ordinary file observations and refreshes after awaited summar
             (_unused, index) => ({
               role:
                 index % 2 === 0 ? ('user' as const) : ('assistant' as const),
-              content: `msg ${index + 1} ${'x'.repeat(outcome === 'hard-fit' ? 4_000 : 40)}`,
+              content: `msg ${index + 1} ${'x'.repeat(outcome === 'hard-fit' ? 4_000 : 100)}`,
             })
           )
         )

@@ -42,7 +42,7 @@ interface JsonSchemaParamEntry
   required: boolean
 }
 
-// pair schema properties with the required set for validators and prompt rendering
+// pair schema properties with the required set for validators
 export function paramEntries(schema: JsonSchema): JsonSchemaParamEntry[]
 {
   const requiredSet = new Set(schema.required ?? [])
@@ -51,16 +51,6 @@ export function paramEntries(schema: JsonSchema): JsonSchemaParamEntry[]
     schema: propSchema,
     required: requiredSet.has(name),
   }))
-}
-
-export function jsonSchemaTypeLabel(schema: JsonSchemaNode): string
-{
-  if (typeof schema === 'boolean') return schema ? 'any' : 'never'
-  if (Array.isArray(schema.type)) return schema.type.join(' | ')
-  if (schema.type) return schema.type
-  if (schema.enum) return 'enum'
-  if (schema.anyOf || schema.oneOf) return 'value'
-  return 'unknown'
 }
 
 // opaque provider replay data (signed thinking blocks, encrypted reasoning

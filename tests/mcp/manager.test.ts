@@ -186,10 +186,6 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
           JSON.stringify(echo?.function.parameters ?? {}),
           /bridge|\\u001b|\[31m/
         )
-        assert.match(
-          String(request?.messages[0]?.content),
-          /mcp__fixture__echo/
-        )
         // valid 2020-12 tuple: a draft-07 validator falsely rejects prefixItems
         yield toolCalls([
           {

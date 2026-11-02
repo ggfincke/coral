@@ -148,6 +148,8 @@ export interface AgentOptions
   skills?: SkillIndex
   // capped AGENTS_HOME/AGENTS.md body; omit when empty
   userInstructions?: string
+  // inject the project instruction file; read-only subagents opt out
+  projectContext?: boolean
   // share one runner between the task tool and post-edit verification
   readOnlySubagentRunner?: SubagentRunner
   // preserve lazy MCP SDK loading while allowing manager test doubles

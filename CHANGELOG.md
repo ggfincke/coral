@@ -18,6 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt tokens. Hosted context defaults to a 200,000-token ceiling and
   `high` effort, tunable in `~/.coral.json` `providers`.
 
+### Changed
+
+- **Leaner system prompt:** the prompt no longer repeats the tool catalog that
+  every provider already receives as native tool schemas, and drops rules that
+  pushed the model to stop and ask or to re-read files after each edit.
+- **Project context:** Coral injects only the first of `.coral.md`,
+  `AGENTS.md`, or `CLAUDE.md` instead of also loading the README, manifests,
+  and a directory tree. The root summary still names the project type.
+- **Subagents:** `task` and edit-verification subagents get a bare prompt
+  without the project file, skills catalog, or standing instructions, so each
+  delegation's cold prefill is much smaller.
+- **Standing instructions:** `AGENTS_HOME/AGENTS.md` is read up to 32 KiB, and
+  hosted models now receive it in full. Ollama models keep the 4 KiB share.
+
 ### Fixed
 
 - **Ollama prompt cache:** the per-round Git context snapshot no longer rewrites
