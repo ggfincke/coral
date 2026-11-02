@@ -2,6 +2,7 @@
 // shared inference message, tool, and model metadata types
 
 import type { AttachmentReport } from './attachments.js'
+import type { BillingUsage } from './session-cost.js'
 
 export type JsonSchemaType =
   'array' | 'boolean' | 'integer' | 'null' | 'number' | 'object' | 'string'
@@ -129,6 +130,9 @@ export interface ChatResponse
 {
   message: OllamaMessage
   done: boolean
+  // emitted independently of semantic response validation and token counters
+  billingUsage?: BillingUsage
+  billingRejected?: boolean
   prompt_eval_count?: number
   prompt_eval_duration?: number
   eval_count?: number

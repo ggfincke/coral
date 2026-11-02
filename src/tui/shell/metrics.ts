@@ -6,6 +6,8 @@ import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import { visibleWidth } from '../wrap.js'
 import { style } from '../theme.js'
+import type { SessionCostSnapshot } from '../../types/session-cost.js'
+import { formatSessionCost } from './session-cost.js'
 
 export interface MetricValues
 {
@@ -15,6 +17,7 @@ export interface MetricValues
   contextTokens: number
   contextWindow: number
   sessionTokens: number
+  sessionCost?: SessionCostSnapshot | null
 }
 
 // keep each measurement intact where possible, wrapping instead of dropping it
@@ -44,6 +47,8 @@ export function buildMetricLines(
     context,
     value(formatTokenCount(values.sessionTokens)) + label(' tok since open'),
   ]
+  const cost = values.sessionCost && formatSessionCost(values.sessionCost)
+  if (cost) groups.push(value(cost) + label(' session'))
   const budget = Math.max(width, 1)
   const lines: string[] = []
   let row = ''

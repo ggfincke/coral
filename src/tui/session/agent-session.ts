@@ -5,6 +5,7 @@ import { isSessionDirectory } from '../../session/resume.js'
 import { Agent } from '../../agent/agent.js'
 import type { AgentInferenceClient } from '../../agent/inference-client.js'
 import { AgentTodoState } from '../../agent/state/todos.js'
+import { SessionCostTracker } from '../../agent/session-cost.js'
 import type { McpConfigResolution } from '../../config/mcp.js'
 import type { McpMode } from '../../mcp/types.js'
 import {
@@ -73,6 +74,10 @@ export function buildPrimaryAgent(options: PrimaryAgentOptions): Agent
     mcpConfig: options.mcpConfig,
     todoState: new AgentTodoState(options.restored?.todos),
     inferenceClient: options.inferenceClient,
+    sessionCost: options.restored?.sessionCost,
+    historicalUsageUnknown: Boolean(
+      options.restored?.meta.messageCount && !options.restored.sessionCost
+    ),
     trackFileChanges: true,
     skills,
     userInstructions: loadUserInstructions(agentsHome),
@@ -121,7 +126,8 @@ export function persistAgentSession(
           metaHint,
           todos,
           undo,
-          redo
+          redo,
+          agent.getSessionCost()
         )
       : createSession(
           model,
@@ -131,7 +137,8 @@ export function persistAgentSession(
           undo,
           redo,
           undefined,
-          metaHint
+          metaHint,
+          agent.getSessionCost()
         )
   }
   catch
@@ -182,6 +189,7 @@ export function forkAgentSession(
     }
     const prefix = structuredClone(messages.slice(0, startIndex))
     const todos = structuredClone(agent.getTodos())
+    const sessionCost = new SessionCostTracker().snapshot()
     const meta = createSession(
       agent.getModel(),
       agent.getCwd(),
@@ -194,10 +202,20 @@ export function forkAgentSession(
       {
         compactionCount: agent.getCompactionCount(),
         lastCompactedAt: agent.getLastCompactedAt() ?? undefined,
-      }
+      },
+      sessionCost
     )
     childId = meta.id
-    if (!actions.adopt({ meta, messages: prefix, todos, undo: [], redo: [] }))
+    if (
+      !actions.adopt({
+        meta,
+        messages: prefix,
+        todos,
+        undo: [],
+        redo: [],
+        sessionCost,
+      })
+    )
     {
       throw new Error('could not activate the fork')
     }
@@ -320,6 +338,7 @@ export interface SessionTitleGeneratorDependencies
   applyTitle: (sessionId: string, title: string) => void
   // applies only while its session is still the active one
   isActiveSession: (sessionId: string) => boolean
+  onSettled?: (sessionId: string) => void
 }
 
 // at-most-once background titles from the already-loaded local model; every
@@ -351,7 +370,8 @@ export class SessionTitleGenerator
     meta: SessionMeta,
     model: string,
     signal?: AbortSignal,
-    numCtx?: number
+    numCtx?: number,
+    client = this.dependencies.client
   ): void
   {
     if (this.attempted.has(meta.id)) return
@@ -378,7 +398,7 @@ export class SessionTitleGenerator
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal
     const task = requestSessionTitle(
-      this.dependencies.client,
+      client,
       model,
       exchange,
       titleSignal,
@@ -400,6 +420,14 @@ export class SessionTitleGenerator
       .finally(() =>
       {
         this.pending.delete(controller)
+        try
+        {
+          this.dependencies.onSettled?.(meta.id)
+        }
+        catch
+        {
+          // title cleanup must never interrupt the next turn
+        }
       })
     this.pending.set(controller, task)
   }

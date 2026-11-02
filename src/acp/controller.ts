@@ -212,6 +212,10 @@ function defaultCreateAgent(
     mcpMode: 'off',
     mcpConfig: binding.mcpConfig,
     todoState: new AgentTodoState(restored?.todos),
+    sessionCost: restored?.sessionCost,
+    historicalUsageUnknown: Boolean(
+      restored?.meta.messageCount && !restored.sessionCost
+    ),
     skills: discoverSkills({ cwd, agentsHome }),
     userInstructions: loadUserInstructions(agentsHome),
   })

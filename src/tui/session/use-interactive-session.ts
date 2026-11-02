@@ -12,6 +12,7 @@ import { loadSession, renameSession } from '../../session/store.js'
 import type { SessionData, SessionMeta } from '../../session/types.js'
 import { recordReliability } from '../../telemetry/store.js'
 import type { TodoItem } from '../../types/todo.js'
+import type { SessionCostSnapshot } from '../../types/session-cost.js'
 import {
   createShutdownCoordinator,
   registerSignalHandlers,
@@ -82,6 +83,7 @@ export interface InteractiveSession
   activePrompt: ActivePrompt | null
   sessionLabelId: string | null
   todos: TodoItem[]
+  sessionCost: SessionCostSnapshot | null
   listProjectFiles: (cwd: string) => Promise<string[]>
   refreshProjectFiles: (cwd: string) => Promise<string[]>
   invalidateProjectFiles: (cwd?: string) => void
@@ -166,6 +168,9 @@ export function useInteractiveSession(
     })
   })
   const [agent, setAgent] = useState<Agent | null>(initialAgent)
+  const [sessionCost, setSessionCost] = useState<SessionCostSnapshot | null>(
+    () => initialAgent?.getSessionCost() ?? null
+  )
   const [activeModel, setActiveModel] = useState(
     options.model ?? options.initialSession?.meta.model ?? ''
   )
@@ -226,6 +231,10 @@ export function useInteractiveSession(
         {
           const renamed = renameSession(id, title)
           if (renamed) runtime.updateCurrentSession(renamed)
+        },
+        onSettled: (id) =>
+        {
+          if (runtime.getSessionId() === id) runtime.saveCurrent()
         },
       })
   )
@@ -304,6 +313,7 @@ export function useInteractiveSession(
         .catch(() => undefined)
       setTodos(nextAgent.getTodos())
       setAgent(nextAgent)
+      setSessionCost(nextAgent.getSessionCost())
       setActiveModel(nextAgent.getModel())
       setContextWindow(0)
       if (restored)
@@ -350,6 +360,7 @@ export function useInteractiveSession(
 
       const task: Promise<ModelTransitionResult> = (async () =>
       {
+        await titleGenerator.cancel()
         if (transition.signal.aborted) return { status: 'aborted' }
         try
         {
@@ -612,6 +623,7 @@ export function useInteractiveSession(
   const closeRuntime = useCallback((): Promise<void> =>
   {
     closingRef.current = true
+    const finalAgent = runtime.getAgent()
     void retireProjectWatcher()
     closeRuntimeRef.current ??= Promise.allSettled([
       titleGenerator.cancel(),
@@ -620,6 +632,13 @@ export function useInteractiveSession(
       ...watcherCleanups.current,
     ]).then((results) =>
     {
+      if (
+        finalAgent &&
+        (finalAgent.getMessageCount() > 0 || runtime.getSessionId())
+      )
+      {
+        persistAgentSession(finalAgent, runtime.getSessionMeta())
+      }
       const failure = results.find((result) => result.status === 'rejected')
       if (failure?.status === 'rejected') throw failure.reason
     })
@@ -650,6 +669,19 @@ export function useInteractiveSession(
     {
       if (runtime.isCurrentAgent(agent, generation)) setTodos(nextTodos)
     })
+  }, [agent, runtime])
+
+  useEffect(() =>
+  {
+    if (!agent) return
+    const generation = runtime.getGeneration()
+    const update = () =>
+    {
+      if (runtime.isCurrentAgent(agent, generation))
+        setSessionCost(agent.getSessionCost())
+    }
+    update()
+    return agent.subscribeSessionCost(update)
   }, [agent, runtime])
 
   useEffect(() =>
@@ -750,7 +782,8 @@ export function useInteractiveSession(
           completion.session,
           handle.agent.getModel(),
           undefined,
-          handle.agent.getFrozenPrefix().contextWindow
+          handle.agent.getFrozenPrefix().contextWindow,
+          handle.agent.getSessionInferenceClient()
         )
       }
       return completion
@@ -765,8 +798,14 @@ export function useInteractiveSession(
     <T>(
       handle: OperationHandle<Agent>,
       work: () => Promise<T> | T
-    ): Promise<T> => runtime.runOperation(handle, work),
-    [runtime]
+    ): Promise<T> =>
+      runtime.runOperation(handle, async () =>
+      {
+        // join title accounting before commands can clear or replace its owner
+        await titleGenerator.cancel()
+        return work()
+      }),
+    [runtime, titleGenerator]
   )
   const abortActive = useCallback(() => runtime.abortActive(), [runtime])
   const hasActiveOperation = useCallback(
@@ -797,6 +836,7 @@ export function useInteractiveSession(
 
   return {
     agent,
+    sessionCost,
     activeModel,
     yolo,
     contextWindow,

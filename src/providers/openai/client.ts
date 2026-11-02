@@ -11,6 +11,7 @@ import type {
 } from '../../types/inference.js'
 import type { HostedProviderSettings } from '../config.js'
 import {
+  billingUsageFrom,
   finalChunkFrom,
   isOpenAIChatModel,
   openAIModelLimits,
@@ -144,12 +145,35 @@ export class OpenAIClient implements AgentInferenceClient
       }
       const final = await stream.finalResponse()
       settled = true
+      const billingUsage = billingUsageFrom(final)
+      if (billingUsage)
+      {
+        yield {
+          message: { role: 'assistant', content: '' },
+          done: false,
+          billingUsage,
+        }
+      }
       if (signal?.aborted) return
       yield finalChunkFrom(final, request.model)
     }
     catch (err)
     {
       settled = true
+      if (
+        err instanceof OpenAI.APIError &&
+        err.status !== undefined &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        err.status !== 408
+      )
+      {
+        yield {
+          message: { role: 'assistant', content: '' },
+          done: false,
+          billingRejected: true,
+        }
+      }
       if (signal?.aborted) return
       throw describeError(err, request.model)
     }

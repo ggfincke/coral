@@ -22,6 +22,7 @@ import type {
   TurnInput,
 } from './request/turn-context.js'
 import type { VerificationResult } from './loop/edit-verification.js'
+import type { SessionCostSnapshot } from '../types/session-cost.js'
 
 // token usage reported by the inference backend; durations use nanoseconds
 export interface TokenUsage
@@ -140,6 +141,9 @@ export interface AgentOptions
   trackFileChanges?: boolean
   // narrow transport seam; production routes by model ref by default
   inferenceClient?: AgentInferenceClient
+  // restore paid usage separately from editable conversation history
+  sessionCost?: SessionCostSnapshot
+  historicalUsageUnknown?: boolean
   // composition roots discover and inject skills; Agent never scans the home
   skills?: SkillIndex
   // capped AGENTS_HOME/AGENTS.md body; omit when empty

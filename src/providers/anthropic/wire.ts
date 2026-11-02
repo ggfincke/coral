@@ -18,6 +18,7 @@ import type {
   ProviderState,
 } from '../../types/inference.js'
 import type { HostedEffort } from '../config.js'
+import type { BillingUsage } from '../../types/session-cost.js'
 
 export const ANTHROPIC_PROVIDER = 'anthropic'
 
@@ -292,6 +293,22 @@ function providerStateFrom(
     provider: ANTHROPIC_PROVIDER,
     model,
     items: structuredClone(message.content),
+  }
+}
+
+export function billingUsageFrom(message: BetaMessage): BillingUsage
+{
+  const usage = message.usage
+  const long = usage.cache_creation?.ephemeral_1h_input_tokens ?? 0
+  return {
+    model: `anthropic/${message.model}`,
+    serviceTier:
+      usage.speed === 'fast' ? 'fast' : (usage.service_tier ?? 'standard'),
+    inputTokens: usage.input_tokens,
+    cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+    cacheWriteShortTokens: (usage.cache_creation_input_tokens ?? 0) - long,
+    cacheWriteLongTokens: long,
+    outputTokens: usage.output_tokens,
   }
 }
 

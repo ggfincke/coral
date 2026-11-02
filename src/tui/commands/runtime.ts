@@ -24,6 +24,7 @@ import {
   resolveKeybindingConfig,
 } from '../input/keybindings.js'
 import { padEnd } from '../wrap.js'
+import { sessionCostStatusLines } from '../shell/session-cost.js'
 import {
   describePermissionMode,
   formatMcpStatus,
@@ -73,13 +74,15 @@ const statusCommand: Command = {
         `  Context:      ${chalk.dim(`${formatTokenCount(cap.window)} cap (model allows ${formatTokenCount(cap.native)}; ${source})`)}`
       )
     }
+    lines.push(...sessionCostStatusLines(ctx.agent.getSessionCost()))
 
-    // tokens the backend reported this session (authoritative, not estimated)
+    // tokens the backend reported for main agent turns; titles & other
+    // background requests only show up in the cost breakdown above
     if (usage.promptTokens > 0 || usage.completionTokens > 0)
     {
       lines.push(
-        `  Prompt toks:  ${chalk.dim(formatTokenCount(usage.promptTokens))}`,
-        `  Decode toks:  ${chalk.dim(formatTokenCount(usage.completionTokens))}`
+        `  Prompt toks:  ${chalk.dim(`${formatTokenCount(usage.promptTokens)} (agent turns)`)}`,
+        `  Decode toks:  ${chalk.dim(`${formatTokenCount(usage.completionTokens)} (agent turns)`)}`
       )
     }
     // hosted prompt caching is what keeps resent history affordable

@@ -17,6 +17,7 @@ import { randomBytes } from 'node:crypto'
 import type { OllamaMessage } from '../types/inference.js'
 import type { TodoItem } from '../types/todo.js'
 import type { UndoTurn } from '../types/undo.js'
+import type { SessionCostSnapshot } from '../types/session-cost.js'
 import { coralHomePath } from '../utils/coral-home.js'
 import { ellipsize } from '../utils/ellipsize.js'
 import { ensurePrivateDir } from '../utils/fs.js'
@@ -241,7 +242,8 @@ export function createSession(
   undo: UndoTurn[] = [],
   redo: UndoTurn[] = [],
   title?: string,
-  compaction?: Pick<SessionMetaHint, 'compactionCount' | 'lastCompactedAt'>
+  compaction?: Pick<SessionMetaHint, 'compactionCount' | 'lastCompactedAt'>,
+  sessionCost?: SessionCostSnapshot
 ): SessionMeta
 {
   ensureDir()
@@ -264,7 +266,7 @@ export function createSession(
       : {}),
   }
 
-  writeSessionData({ meta, messages, todos, undo, redo })
+  writeSessionData({ meta, messages, todos, undo, redo, sessionCost })
 
   return meta
 }
@@ -278,7 +280,8 @@ export function saveSession(
   metaHint?: SessionMetaHint,
   todos: TodoItem[] = [],
   undo: UndoTurn[] = [],
-  redo: UndoTurn[] = []
+  redo: UndoTurn[] = [],
+  sessionCost?: SessionCostSnapshot
 ): SessionMeta
 {
   if (!isValidSessionId(id))
@@ -288,10 +291,11 @@ export function saveSession(
   ensureDir()
 
   const now = new Date().toISOString()
-  const storedMeta =
-    metaHint?.createdAt && metaHint?.title
+  const stored =
+    metaHint?.createdAt && metaHint?.title && sessionCost !== undefined
       ? undefined
-      : readSessionData(sessionPath(id))?.meta
+      : readSessionData(sessionPath(id))
+  const storedMeta = stored?.meta
   const meta: SessionMeta = {
     id,
     model,
@@ -304,7 +308,14 @@ export function saveSession(
     lastCompactedAt: metaHint?.lastCompactedAt ?? storedMeta?.lastCompactedAt,
   }
 
-  writeSessionData({ meta, messages, todos, undo, redo })
+  writeSessionData({
+    meta,
+    messages,
+    todos,
+    undo,
+    redo,
+    sessionCost: sessionCost ?? stored?.sessionCost,
+  })
 
   return meta
 }

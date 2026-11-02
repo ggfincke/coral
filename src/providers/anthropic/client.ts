@@ -10,7 +10,7 @@ import type {
   ModelInfo,
 } from '../../types/inference.js'
 import type { HostedProviderSettings } from '../config.js'
-import { finalChunkFrom, toAnthropicRequest } from './wire.js'
+import { billingUsageFrom, finalChunkFrom, toAnthropicRequest } from './wire.js'
 
 // used only when the Models API omits a limit
 const FALLBACK_INPUT_TOKENS = 200_000
@@ -158,12 +158,31 @@ export class AnthropicClient implements AgentInferenceClient
       }
       const final = await stream.finalMessage()
       settled = true
+      yield {
+        message: { role: 'assistant', content: '' },
+        done: false,
+        billingUsage: billingUsageFrom(final),
+      }
       if (signal?.aborted) return
       yield finalChunkFrom(final, request.model)
     }
     catch (err)
     {
       settled = true
+      if (
+        err instanceof Anthropic.APIError &&
+        err.status !== undefined &&
+        err.status >= 400 &&
+        err.status < 500 &&
+        err.status !== 408
+      )
+      {
+        yield {
+          message: { role: 'assistant', content: '' },
+          done: false,
+          billingRejected: true,
+        }
+      }
       if (signal?.aborted) return
       throw describeError(err, request.model)
     }

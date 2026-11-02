@@ -312,6 +312,7 @@ export default function App({
   })
   const {
     agent,
+    sessionCost,
     activeModel,
     yolo,
     contextWindow,
@@ -512,6 +513,7 @@ export default function App({
           contextEstimated: tokenUsage.contextEstimated,
           contextWindow,
           sessionTokens: tokenUsage.prompt + tokenUsage.completion,
+          sessionCost,
         },
         transcriptWidth
       )

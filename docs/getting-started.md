@@ -86,6 +86,13 @@ or the same command with `provider openai`. An environment variable takes preced
 `coral models --json` lists the same reachable local and configured hosted models
 for external model pickers. This only discovers models; it does not run inference.
 
+The TUI footer shows estimated USD spent in the session, including tool rounds,
+compaction, subagents, and automatic titles. `/status` breaks it down by provider
+and model. Costs survive resume and undo; a new or forked session starts at zero.
+`+` means the total is incomplete, such as an interrupted request with missing
+usage or a model without bundled pricing. These estimates do not track your
+account balance or included plan allowance.
+
 ## Semantic search (optional)
 
 ```bash

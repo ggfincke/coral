@@ -2,6 +2,8 @@
 // conversation loop and tool dispatch
 
 import { createInferenceClient } from '../providers/router.js'
+import { SessionCostTracker, SessionInferenceClient } from './session-cost.js'
+import type { SessionCostSnapshot } from '../types/session-cost.js'
 import type { AgentInferenceClient } from './inference-client.js'
 import {
   makeReliabilityStats,
@@ -229,6 +231,7 @@ interface ActiveAcceptedTurn
 export class Agent
 {
   private client: AgentInferenceClient
+  private readonly sessionCosts: SessionCostTracker
   private state!: ConversationState
   private model: string
   private baseUrl?: string
@@ -289,7 +292,18 @@ export class Agent
     this.model = model
     this.baseUrl = baseUrl
     this.cwd = resolve(cwd ?? getCwd())
-    this.client = options.inferenceClient ?? createInferenceClient(baseUrl)
+    const transport = options.inferenceClient ?? createInferenceClient(baseUrl)
+    this.sessionCosts =
+      transport instanceof SessionInferenceClient
+        ? transport.costs
+        : new SessionCostTracker(
+            options.sessionCost,
+            options.historicalUsageUnknown
+          )
+    this.client =
+      transport instanceof SessionInferenceClient
+        ? transport
+        : new SessionInferenceClient(transport, this.sessionCosts)
     this.thinkMode = options.think ?? true
     this.skills = options.skills ?? EMPTY_SKILL_INDEX
     this.userInstructions = options.userInstructions ?? ''
@@ -730,6 +744,22 @@ export class Agent
     return Math.max(this.state.getMessageCount() - 1, 0)
   }
 
+  getSessionCost(): SessionCostSnapshot
+  {
+    return this.sessionCosts.snapshot()
+  }
+
+  subscribeSessionCost(listener: () => void): () => void
+  {
+    return this.sessionCosts.subscribe(listener)
+  }
+
+  // optional title requests borrow the session-bound client, never the raw transport
+  getSessionInferenceClient(): AgentInferenceClient
+  {
+    return this.client
+  }
+
   // hosted window narrower than the model's own limit, for /status
   getContextCap():
     { window: number; native: number; byEnv: boolean } | undefined
@@ -772,6 +802,7 @@ export class Agent
 
   resetSessionMetrics(): void
   {
+    this.sessionCosts.reset()
     this.turnContext.clearFileObservations()
     this.resetTokenUsage()
     this.state.resetCompactionMetrics()

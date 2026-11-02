@@ -18,6 +18,8 @@ import type {
   ProviderState,
 } from '../../types/inference.js'
 import type { HostedEffort } from '../config.js'
+import type { BillingUsage } from '../../types/session-cost.js'
+import { isPlainObject } from '../../utils/guards.js'
 
 export const OPENAI_PROVIDER = 'openai'
 
@@ -299,6 +301,34 @@ function providerStateFrom(
     provider: OPENAI_PROVIDER,
     model,
     items: structuredClone(reasoning),
+  }
+}
+
+// input totals include reads and writes; reasoning is already part of output
+export function billingUsageFrom(response: Response): BillingUsage | undefined
+{
+  const usage = response.usage
+  if (!usage) return undefined
+  const details = usage.input_tokens_details
+  const reads = details?.cached_tokens ?? 0
+  const writes = details?.cache_write_tokens ?? 0
+  const rawDetails: unknown = details
+  const split = isPlainObject(rawDetails)
+    ? rawDetails.cache_write_tokens_details
+    : undefined
+  const long =
+    isPlainObject(split) && typeof split.ttl_12h_tokens === 'number'
+      ? split.ttl_12h_tokens
+      : 0
+  return {
+    model: `openai/${response.model}`,
+    serviceTier: response.service_tier ?? 'default',
+    inputTokens: usage.input_tokens - reads - writes,
+    cacheReadTokens: reads,
+    // use the default 30m lifetime when no split is returned
+    cacheWriteShortTokens: writes - long,
+    cacheWriteLongTokens: long,
+    outputTokens: usage.output_tokens,
   }
 }
 
