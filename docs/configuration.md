@@ -22,19 +22,20 @@ Numeric `context.maxNumCtx` is still clamped to supported token bounds later. St
 
 ## Precedence
 
-| Concern         | Winner                                                                                                     |
-| --------------- | ---------------------------------------------------------------------------------------------------------- |
-| Tool policy     | Built-in defaults ← user `permissions` (may loosen defaults) ← project `permissions` (**tighten only**)    |
-| Context ceiling | `CORAL_NUM_CTX` (integer `> 0`) **replaces** project `context.maxNumCtx`                                   |
-| Embedding model | `CORAL_EMBEDDING_MODEL` (nonempty trimmed) else project `retrieval.embeddingModel` else `nomic-embed-text` |
-| Tool profile    | User + project `tools.disabled` union; project `tools.localTask` boolean overrides user; default `false`   |
-| Verify          | Project `verify.enabled` boolean; otherwise `false`                                                        |
-| MCP servers     | User `mcp` only                                                                                            |
-| Theme           | `--theme` > `prefs.json` > `coral-reef`                                                                    |
-| Ollama host     | `--host` else `http://localhost:11434` (not `OLLAMA_HOST`)                                                 |
-| Model           | `--model` else picker / resume session model                                                               |
-| Think requests  | `--no-think` else on                                                                                       |
-| Permission mode | `--yolo` else ask                                                                                          |
+| Concern          | Winner                                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| Tool policy      | Built-in defaults ← user `permissions` (may loosen defaults) ← project `permissions` (**tighten only**)    |
+| Local prompt cap | `CORAL_MAX_PROMPT_TOKENS` (integer `> 0`) **replaces** project `context.maxPromptTokens`; default `32768`  |
+| Context ceiling  | `CORAL_NUM_CTX` (integer `> 0`) **replaces** project `context.maxNumCtx`                                   |
+| Embedding model  | `CORAL_EMBEDDING_MODEL` (nonempty trimmed) else project `retrieval.embeddingModel` else `nomic-embed-text` |
+| Tool profile     | User + project `tools.disabled` union; project `tools.localTask` overrides user; default `false`           |
+| Verify           | Project `verify.enabled` boolean; otherwise `false`                                                        |
+| MCP servers      | User `mcp` only                                                                                            |
+| Theme            | `--theme` > `prefs.json` > `coral-reef`                                                                    |
+| Ollama host      | `--host` else `http://localhost:11434` (not `OLLAMA_HOST`)                                                 |
+| Model            | `--model` else picker / resume session model                                                               |
+| Think requests   | `--no-think` else on                                                                                       |
+| Permission mode  | `--yolo` else ask                                                                                          |
 
 Project policy rank: `always_allow` < `require_approval` < `always_deny`. A clone can deny `bash`; it cannot silently make a user-gated tool `always_allow`. Unknown tool names (including `mcp__…` you have not set) default to `require_approval`.
 
@@ -48,6 +49,7 @@ Coral does **not** live-reload JSON on an existing Agent:
 | ---------------------------- | -------------------------------------------------------------- |
 | Permissions + tools + verify | Agent construction                                             |
 | MCP config snapshot          | Interactive session hook mount (app start)                     |
+| Local prompt cap             | Agent construction                                             |
 | Context window               | First need for this Agent/model; `/model` re-resolves          |
 | Retrieval / embedding        | Whenever an indexer is constructed (`search_code` or `/index`) |
 
@@ -134,7 +136,8 @@ Ollama and 120 for hosted models. See [Skills](skills.md).
     "embeddingModel": "nomic-embed-text"
   },
   "context": {
-    "maxNumCtx": 32768
+    "maxNumCtx": 32768,
+    "maxPromptTokens": 16384
   },
   "verify": {
     "enabled": true
@@ -142,12 +145,15 @@ Ollama and 120 for hosted models. See [Skills](skills.md).
 }
 ```
 
-| Key                        | Type                      | Default if missing/malformed                        |
-| -------------------------- | ------------------------- | --------------------------------------------------- |
-| `permissions`              | map of tool name → policy | built-in + user                                     |
-| `retrieval.embeddingModel` | trimmed string            | `nomic-embed-text` unless env set                   |
-| `context.maxNumCtx`        | number `> 0` (floored)    | no extra ceiling (memory + native only)             |
-| `verify.enabled`           | boolean                   | `false` (non-booleans, including `"true"`, → false) |
+| Key                        | Type                           | Default if missing/malformed                        |
+| -------------------------- | ------------------------------ | --------------------------------------------------- |
+| `permissions`              | map of tool name → policy      | built-in + user                                     |
+| `retrieval.embeddingModel` | trimmed string                 | `nomic-embed-text` unless env set                   |
+| `context.maxPromptTokens`  | finite number `>= 1` (floored) | `32768`                                             |
+| `context.maxNumCtx`        | number `> 0` (floored)         | no extra ceiling (memory + native only)             |
+| `verify.enabled`           | boolean                        | `false` (non-booleans, including `"true"`, → false) |
+
+`context.maxPromptTokens` limits local request and compaction prompts to the smaller of this cap and the pinned context window minus the applicable response reserve. It does not change the pinned window or apply to hosted models. Invalid values fall back to `32768`.
 
 `context.maxNumCtx` is a **ceiling**, not a fixed allocation. See [Context](context.md).
 
@@ -178,14 +184,15 @@ Both user and project files accept:
 
 Coral-owned reads in `src/`:
 
-| Variable                | Behavior                                                                                                                                                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CORAL_HOME`            | If set and nonempty, `resolve` that path (cwd-relative allowed). Else `~/.coral`. Relocates **mutable state only**, not `~/.coral.json`                                                                                         |
-| `CORAL_NUM_CTX`         | `parseInt` base 10. Used iff finite and `> 0`. Wins over project `maxNumCtx`. Still floored at **8192** unless native is smaller, and capped by native/memory. Local request prompts are separately capped at **32,768** tokens |
-| `CORAL_EMBEDDING_MODEL` | Trimmed nonempty wins over project embedding model                                                                                                                                                                              |
-| `ANTHROPIC_API_KEY`     | Enables `anthropic/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                            |
-| `OPENAI_API_KEY`        | Enables `openai/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                               |
-| `AGENTS_HOME`           | Shared Agents directory; defaults to `~/.agents`. Personal skills use `skills/`, and standing instructions use `AGENTS.md`                                                                                                      |
+| Variable                  | Behavior                                                                                                                                                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CORAL_HOME`              | If set and nonempty, `resolve` that path (cwd-relative allowed). Else `~/.coral`. Relocates **mutable state only**, not `~/.coral.json`                                                                                                    |
+| `CORAL_NUM_CTX`           | `parseInt` base 10. Used iff finite and `> 0`. Wins over project `maxNumCtx`. Still floored at **8192** unless native is smaller, and capped by native/memory. Local request prompts default to **32,768** tokens, configurable separately |
+| `CORAL_MAX_PROMPT_TOKENS` | `parseInt` base 10. Used iff finite and `> 0`; otherwise falls back to project `context.maxPromptTokens`, then `32768`. Local models only; bounded by the window minus response reserve                                                    |
+| `CORAL_EMBEDDING_MODEL`   | Trimmed nonempty wins over project embedding model                                                                                                                                                                                         |
+| `ANTHROPIC_API_KEY`       | Enables `anthropic/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                                       |
+| `OPENAI_API_KEY`          | Enables `openai/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                                          |
+| `AGENTS_HOME`             | Shared Agents directory; defaults to `~/.agents`. Personal skills use `skills/`, and standing instructions use `AGENTS.md`                                                                                                                 |
 
 On Linux, hosted credentials can also be stored in the desktop keyring with
 `secret-tool`, using attributes `application coral` and `provider anthropic` or
