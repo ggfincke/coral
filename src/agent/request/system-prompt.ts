@@ -210,7 +210,9 @@ export function buildSystemPrompt(ctx: {
   if (ctx.catalog.has('todo_write'))
   {
     planningRules.push(
-      '- For a multi-step task, call `todo_write` to lay out the steps, then keep it current: mark one item in_progress as you work it & completed when done. Skip it for simple single-step tasks'
+      parseModelRef(ctx.model).provider === 'ollama'
+        ? '- Use `todo_write` only for tasks with 4+ distinct steps. Lay out the steps, then update at milestones: mark one item in_progress as you work it & completed when done. Skip it for shorter tasks'
+        : '- For a multi-step task, call `todo_write` to lay out the steps, then keep it current: mark one item in_progress as you work it & completed when done. Skip it for simple single-step tasks'
     )
   }
   if (ctx.catalog.has('search_code'))

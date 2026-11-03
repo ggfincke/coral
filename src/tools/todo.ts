@@ -44,7 +44,17 @@ export const todoWriteTool: Tool = {
     properties: {
       todos: {
         type: 'array',
-        items: { type: 'object' },
+        items: {
+          type: 'object',
+          properties: {
+            content: { type: 'string' },
+            status: {
+              type: 'string',
+              enum: ['pending', 'in_progress', 'completed'],
+            },
+          },
+          required: ['content', 'status'],
+        },
         description:
           'The full task list — each item has content (string) & status ' +
           '(pending | in_progress | completed)',
