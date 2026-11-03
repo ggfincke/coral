@@ -203,6 +203,14 @@ function streamResponse(line: string): ChatResponse
     },
     done: value.done,
   }
+  if (value.done_reason !== undefined)
+  {
+    if (typeof value.done_reason !== 'string')
+    {
+      throw new Error('Invalid Ollama chat stream done_reason')
+    }
+    response.done_reason = value.done_reason
+  }
   for (const field of [
     'prompt_eval_count',
     'prompt_eval_duration',

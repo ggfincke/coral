@@ -57,8 +57,20 @@ export interface RunMetrics
 // a single rep: metrics plus its pass/fail verdict
 export interface RunOutcome extends RunMetrics
 {
+  rounds: RoundSample[]
   passed: boolean
   detail: string
+}
+
+export interface RoundSample
+{
+  round: number
+  promptTokens: number
+  completionTokens: number
+  contextTokens: number
+  promptEvalDurationNs: number | null
+  evalDurationNs: number | null
+  doneReason: string | null
 }
 
 // one task aggregated across reps; metrics are the mean across reps
@@ -70,6 +82,7 @@ export interface TaskResult
   passed: boolean
   detail: string
   metrics: RunMetrics
+  runs: RunOutcome[]
 }
 
 export interface ModelReport

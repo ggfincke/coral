@@ -164,7 +164,10 @@ export class RequestPlanner
   // hosted output cap from model metadata; undefined keeps the local profile
   private hostedOutputTokens?: number
 
-  constructor(private readonly maxPromptTokens?: number)
+  constructor(
+    private readonly maxPromptTokens?: number,
+    private readonly thinking = true
+  )
   {}
 
   setHostedOutputTokens(tokens: number | undefined): void
@@ -177,7 +180,8 @@ export class RequestPlanner
     const capacity = requestBudgetCapacity(
       input.contextWindow,
       this.hostedOutputTokens,
-      this.maxPromptTokens
+      this.maxPromptTokens,
+      this.thinking
     )
     const baseContent = input.systemContentAt(0)
     const baseMessage: ModelRequestMessage = {
@@ -198,7 +202,8 @@ export class RequestPlanner
       input.contextWindow,
       fixedCategories,
       this.hostedOutputTokens,
-      this.maxPromptTokens
+      this.maxPromptTokens,
+      this.thinking
     )
     if (!baseBudget.fits)
     {
@@ -278,7 +283,8 @@ export class RequestPlanner
     const capacity = requestBudgetCapacity(
       input.contextWindow,
       this.hostedOutputTokens,
-      this.maxPromptTokens
+      this.maxPromptTokens,
+      this.thinking
     )
     return (
       attachmentAllowanceForFixedCost(capacity.promptLimit, fixedPromptTokens) *
@@ -507,7 +513,8 @@ export class RequestPlanner
     const capacity = requestBudgetCapacity(
       input.contextWindow,
       this.hostedOutputTokens,
-      this.maxPromptTokens
+      this.maxPromptTokens,
+      this.thinking
     )
     const basePromptTokens =
       estimateModelRequestMessagesTokens(baseMessages) +
@@ -564,10 +571,17 @@ export class RequestPlanner
       role: 'user',
       content: input.cleanActiveContent,
     }
+    const activeWithoutGit = input.gitContext
+      ? {
+          ...active,
+          content: active.content.slice(
+            0,
+            -`\n\n${input.gitContext.content}`.length
+          ),
+        }
+      : active
     const gitContextTokens = input.gitContext
-      ? estimateModelRequestMessageTokens(
-          toModelRequestMessage(input.gitContext)
-        )
+      ? estimateModelRequestMessageDeltaTokens(activeWithoutGit, active)
       : 0
     const fileChangeTokens = input.fileChanges
       ? estimateModelRequestMessageTokens(
@@ -579,7 +593,6 @@ export class RequestPlanner
       messageTokens -
         estimateModelRequestMessageTokens(system) -
         estimateModelRequestMessageTokens(active) -
-        gitContextTokens -
         fileChangeTokens,
       0
     )
@@ -596,7 +609,7 @@ export class RequestPlanner
         activeTurnBase: estimateModelRequestMessageTokens(baseActive),
         activeAttachments: estimateModelRequestMessageDeltaTokens(
           baseActive,
-          active
+          activeWithoutGit
         ),
         toolDefinitions: estimateModelRequestToolTokens(input.tools),
         gitContext: gitContextTokens,
@@ -604,7 +617,8 @@ export class RequestPlanner
         framing: estimateRequestFramingTokens(input.messages.length),
       },
       this.hostedOutputTokens,
-      this.maxPromptTokens
+      this.maxPromptTokens,
+      this.thinking
     )
   }
 
@@ -630,7 +644,8 @@ export class RequestPlanner
         }),
       },
       this.hostedOutputTokens,
-      this.maxPromptTokens
+      this.maxPromptTokens,
+      this.thinking
     )
   }
 
@@ -664,7 +679,14 @@ export class RequestPlanner
         ),
       }
     }
-    if (gitContext) messages.push(toModelRequestMessage(gitContext))
+    if (gitContext)
+    {
+      const active = messages[input.activeIndex]!
+      messages[input.activeIndex] = {
+        ...active,
+        content: `${active.content}\n\n${gitContext.content}`,
+      }
+    }
     if (fileChanges) messages.push(toModelRequestMessage(fileChanges))
 
     return {

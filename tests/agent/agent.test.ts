@@ -1311,7 +1311,7 @@ test(
       const messages = request.messages
       assert.equal(
         messages.filter((message) =>
-          message.content.startsWith(GIT_CONTEXT_HEADING)
+          message.content.includes(GIT_CONTEXT_HEADING)
         ).length,
         1
       )
@@ -1319,7 +1319,7 @@ test(
     assert.equal(
       agent
         .getMessages()
-        .some((message) => message.content.startsWith(GIT_CONTEXT_HEADING)),
+        .some((message) => message.content.includes(GIT_CONTEXT_HEADING)),
       false
     )
   }
@@ -1370,15 +1370,18 @@ test(
 
     assert.equal(requests.length, 2)
     const secondContext = requests[1]!.find((message) =>
-      message.content.startsWith(GIT_CONTEXT_HEADING)
+      message.content.includes(GIT_CONTEXT_HEADING)
     )
     assert.ok(secondContext)
     assert.deepEqual(
       secondContext,
       requests[0]!.find((message) =>
-        message.content.startsWith(GIT_CONTEXT_HEADING)
+        message.content.includes(GIT_CONTEXT_HEADING)
       )
     )
+    assert.equal(secondContext.role, 'user')
+    assert.deepEqual(requests[1]!.slice(0, 2), requests[0]!.slice(0, 2))
+    assert.equal(requests[1]![2]!.role, 'assistant')
   }
 )
 

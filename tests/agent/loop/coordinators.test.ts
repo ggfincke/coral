@@ -190,7 +190,10 @@ describe('RequestPlanner', () =>
       content: '## Git Context\n- branch: main\n- status: clean',
     }
     const retained = prepared(plan({ gitContext: smallGit }))
-    assert.equal(retained.messages.at(-1)!.content, smallGit.content)
+    assert.equal(
+      retained.messages[1]!.content,
+      `${CLEAN_TURN}\n\n${smallGit.content}`
+    )
 
     const fullGit: OllamaMessage = {
       role: 'system',
@@ -306,4 +309,85 @@ describe('RequestPlanner', () =>
       true
     )
   })
+})
+
+test('git context remains in the active user prefix across tool rounds with exact accounting', () =>
+{
+  const planner = new RequestPlanner()
+  const gitContext: OllamaMessage = {
+    role: 'system',
+    content:
+      '## Git Context\nAutomatic Coral repository snapshot taken at turn start, not a user message;\n- branch: main',
+  }
+  const storedMessages: OllamaMessage[] = [
+    { role: 'system', content: 'system' },
+    { role: 'user', content: 'inspect' },
+  ]
+  const input = {
+    contextWindow: 8192,
+    storedMessages,
+    activeIndex: 1,
+    cleanActiveContent: 'inspect',
+    baseSystemContent: 'system',
+    tools: [],
+    gitContext,
+    historyCompactionAvailable: false,
+    pendingAttachments: {
+      capture: {
+        entries: [
+          {
+            status: 'captured' as const,
+            path: 'a.txt',
+            resolvedPath: '/a.txt',
+            content: 'attachment text',
+          },
+        ],
+      },
+      maxChars: 1000,
+    },
+  }
+  const first = planner.planModelRequest(input)
+  assert.equal(first.kind, 'prepared')
+  if (first.kind !== 'prepared') throw new Error('request not prepared')
+  assert.equal(storedMessages[1]!.content, 'inspect')
+  assert.doesNotMatch(first.request.attachmentCommit!.content, /Git Context/)
+  storedMessages[1] = {
+    role: 'user',
+    content: first.request.attachmentCommit!.content,
+  }
+  storedMessages.push(
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        { function: { name: 'read_file', arguments: { path: 'a.txt' } } },
+      ],
+    },
+    { role: 'tool', content: 'result', tool_name: 'read_file' }
+  )
+  const second = planner.planModelRequest({
+    ...input,
+    pendingAttachments: undefined,
+  })
+  assert.equal(second.kind, 'prepared')
+  if (second.kind !== 'prepared') throw new Error('request not prepared')
+  assert.deepEqual(second.request.messages.slice(0, 2), first.request.messages)
+  assert.equal(second.request.messages[2]!.role, 'assistant')
+  assert.equal(
+    second.request.messages.filter((message) =>
+      message.content.includes('## Git Context')
+    ).length,
+    1
+  )
+  for (const request of [first.request, second.request])
+  {
+    assert.ok(request.budget.categories.gitContext > 0)
+    assert.ok(request.budget.categories.activeAttachments > 0)
+    assert.equal(
+      request.budget.promptTokens,
+      estimateModelRequestMessagesTokens(request.messages) +
+        estimateRequestFramingTokens(request.messages.length) +
+        estimateModelRequestToolTokens([])
+    )
+  }
 })

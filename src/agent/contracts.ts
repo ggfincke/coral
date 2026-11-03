@@ -27,6 +27,7 @@ import type { SessionCostSnapshot } from '../types/session-cost.js'
 // token usage reported by the inference backend; durations use nanoseconds
 export interface TokenUsage
 {
+  doneReason?: string
   promptTokens: number
   completionTokens: number
   totalPromptTokens: number

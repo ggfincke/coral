@@ -13,6 +13,7 @@ export interface FakeChunk
 {
   message: OllamaMessage
   done: boolean
+  done_reason?: string
   prompt_eval_count?: number
   prompt_eval_duration?: number
   eval_count?: number
