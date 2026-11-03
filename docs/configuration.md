@@ -6,11 +6,11 @@ Coral reads JSON from two files, environment variables, and CLI flags. Mutable s
 
 ## Files
 
-| File                      | What is read                                                               |
-| ------------------------- | -------------------------------------------------------------------------- |
-| `~/.coral.json`           | `permissions`, `mcp` only. Path is always `join(homedir(), '.coral.json')` |
-| `<workspace>/.coral.json` | `permissions`, `retrieval`, `context`, `verify` only                       |
-| `CORAL_HOME/prefs.json`   | UI prefs; the code writes `theme`                                          |
+| File                      | What is read                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------ |
+| `~/.coral.json`           | `permissions`, `tools`, `providers`, `mcp` only. Path is always `join(homedir(), '.coral.json')` |
+| `<workspace>/.coral.json` | `permissions`, `tools`, `retrieval`, `context`, `verify` only                                    |
+| `CORAL_HOME/prefs.json`   | UI prefs; the code writes `theme`                                                                |
 
 Unknown top-level keys are ignored. User file ignores `retrieval` / `context` / `verify` even if present. Project file ignores `mcp` even if present.
 
@@ -27,6 +27,7 @@ Numeric `context.maxNumCtx` is still clamped to supported token bounds later. St
 | Tool policy     | Built-in defaults ← user `permissions` (may loosen defaults) ← project `permissions` (**tighten only**)    |
 | Context ceiling | `CORAL_NUM_CTX` (integer `> 0`) **replaces** project `context.maxNumCtx`                                   |
 | Embedding model | `CORAL_EMBEDDING_MODEL` (nonempty trimmed) else project `retrieval.embeddingModel` else `nomic-embed-text` |
+| Tool profile    | User + project `tools.disabled` union; project `tools.localTask` boolean overrides user; default `false`   |
 | Verify          | Project `verify.enabled` boolean; otherwise `false`                                                        |
 | MCP servers     | User `mcp` only                                                                                            |
 | Theme           | `--theme` > `prefs.json` > `coral-reef`                                                                    |
@@ -43,12 +44,12 @@ Project policy rank: `always_allow` < `require_approval` < `always_deny`. A clon
 
 Coral does **not** live-reload JSON on an existing Agent:
 
-| Section               | When resolved                                                  |
-| --------------------- | -------------------------------------------------------------- |
-| Permissions + verify  | Agent construction                                             |
-| MCP config snapshot   | Interactive session hook mount (app start)                     |
-| Context window        | First need for this Agent/model; `/model` re-resolves          |
-| Retrieval / embedding | Whenever an indexer is constructed (`search_code` or `/index`) |
+| Section                      | When resolved                                                  |
+| ---------------------------- | -------------------------------------------------------------- |
+| Permissions + tools + verify | Agent construction                                             |
+| MCP config snapshot          | Interactive session hook mount (app start)                     |
+| Context window               | First need for this Agent/model; `/model` re-resolves          |
+| Retrieval / embedding        | Whenever an indexer is constructed (`search_code` or `/index`) |
 
 `/new` and `/clear` keep the same Agent, so they do **not** re-read `.coral.json`. Restart Coral (or replace the Agent via resume/model flows that construct a new one) to pick up permission file edits. When `/mcp` lists at least one server, the footer says `Config changes require a new Coral session.`
 
@@ -133,6 +134,25 @@ Coral resends history on every turn, so `maxContextTokens` is effectively the pe
 `context.maxNumCtx` is a **ceiling**, not a fixed allocation. See [Context](context.md).
 
 `verify.enabled` only affects **new** Agents. `/verify on|off` toggles the live Agent and is not written back to this file. `coral exec` always uses `verifyEdits: false`.
+
+---
+
+## Tool profiles
+
+Both user and project files accept:
+
+```json
+{
+  "tools": {
+    "disabled": ["search_code"],
+    "localTask": false
+  }
+}
+```
+
+`tools.disabled` removes built-in tools from the Agent's active catalog, schemas, and prompt guidance. User and project lists are combined, so a project cannot re-enable a tool disabled by the user. Entries must be exact built-in tool names; unknown names, non-string entries, and malformed fields are silently ignored. MCP tools remain controlled by the user MCP configuration and permissions. Disabled built-in names remain reserved and cannot be claimed by MCP tools.
+
+`task` is omitted for Ollama models unless `tools.localTask` is `true`. A valid project boolean overrides the user boolean; the default is `false`. An explicit `"task"` in either disabled list always wins. Switching models rebuilds the catalog for the selected provider and retires the previous model's MCP tools. Switching to a hosted provider restores `task` only if it was included in the Agent's original tool set and was not explicitly disabled. Tool profile config is read at Agent construction and is not reloaded on model switches.
 
 ---
 

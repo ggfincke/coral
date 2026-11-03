@@ -2510,6 +2510,10 @@ test('Agent reuses ordinary file observations and refreshes after awaited summar
 test('Agent injects one read-only runner into task execution while borrowed LSP stays usable', async () =>
 {
   const dir = await tempDir('coral-subagent-lifecycle-')
+  await writeFile(
+    join(dir, '.coral.json'),
+    JSON.stringify({ tools: { localTask: true } })
+  )
   let borrowedDisposals = 0
   let borrowedQueries = 0
   const borrowedCodeIntel: CodeIntelService = {
