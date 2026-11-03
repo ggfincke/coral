@@ -700,7 +700,8 @@ export class RequestPlanner
 
   private compactGitContext(gitContext: OllamaMessage): OllamaMessage | null
   {
-    const keep = /^(## Git Context|- (root|cwd|branch|operation|status):)/
+    const keep =
+      /^(## Git Context|Automatic Coral repository snapshot taken at turn start, not a user message;|- (root|cwd|branch|operation|status):)/
     const lines = gitContext.content
       .split('\n')
       .filter((line) => keep.test(line))

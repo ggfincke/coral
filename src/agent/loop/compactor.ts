@@ -353,7 +353,7 @@ export class CompactionCoordinator
           num_ctx: runtime.numCtx,
           num_predict: capacity.summaryResponseReserve,
           // summaries need little reasoning, and hosted effort is billed
-          ...(capacity.hosted ? { think: 'low' as const } : {}),
+          think: capacity.hosted ? 'low' : false,
         },
         signal
       ))

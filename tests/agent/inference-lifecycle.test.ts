@@ -3,6 +3,7 @@
 
 import { strict as assert } from 'node:assert'
 import { tmpdir } from 'node:os'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Agent, type AgentInferenceClient } from '../../src/agent/agent.js'
@@ -187,7 +188,13 @@ test('the default task child shares parent inference and leaves borrowed resourc
       }
     },
   }
-  const parent = new Agent('fake-model', undefined, mockCwd, {
+  const dir = await mkdtemp(join(tmpdir(), 'coral-task-child-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  await writeFile(
+    join(dir, '.coral.json'),
+    JSON.stringify({ tools: { localTask: true } })
+  )
+  const parent = new Agent('fake-model', undefined, dir, {
     inferenceClient: client,
     tools: [taskTool],
     permissions: { task: 'always_allow' },
