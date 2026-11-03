@@ -18,6 +18,25 @@ project roots are marked `(project)` so the model can tell repository-supplied
 packages from personal ones. A catalog that does not fit ends with an
 omitted-count line, and calling `skill` with an unknown name lists every winner.
 
+Catalog descriptions are capped at 80 characters for Ollama and 120 for hosted
+models. To limit which skills appear in Ollama's catalog, set
+`skills.localAllowlist` in your user `~/.coral.json`:
+
+```json
+{
+  "skills": {
+    "localAllowlist": ["code-review", "simplification-review"]
+  }
+}
+```
+
+Names match case-insensitively. An empty array hides the local catalog; missing
+or malformed values keep all discovered names eligible for the prompt budget.
+Unknown names are ignored. Hosted catalogs are unaffected, and project
+`.coral.json` cannot set this preference. This filters only the prompt catalog:
+the `skill` tool can still load any installed skill by name, and `/skills`,
+`coral skills`, and slash commands still expose the full discovery index.
+
 Interactive, exec, and ACP sessions all load skills and standing rules. With no
 skills installed, the `skill` tool is not offered. Skills are discovered once
 per Agent, so new packages appear after a restart or session switch.

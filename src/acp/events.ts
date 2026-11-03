@@ -13,6 +13,7 @@ import type {
 import { methods } from '@agentclientprotocol/sdk/unstable'
 import type { AgentEvents } from '../agent/contracts.js'
 import type { ToolCallPresentation } from '../tools/tool.js'
+import type { SessionCostSnapshot } from '../types/session-cost.js'
 import type { TodoItem } from '../types/todo.js'
 import { truncateToLineBoundary } from '../utils/truncate-output.js'
 import {
@@ -45,6 +46,7 @@ export interface AcpEventProjectionOptions
   isCurrent: () => boolean
   getTodos: () => TodoItem[]
   getContextWindow: () => number
+  getSessionCost?: () => SessionCostSnapshot | undefined
   // read at each approval so a mid-turn mode change applies to the next call
   getRuntimeMode: () => CoralRuntimeMode
   // in-memory allow-always grants owned by the session binding
@@ -140,6 +142,8 @@ export class AcpEventProjection
   private latestUsage?: Usage
   private promptInputTokens = 0
   private promptOutputTokens = 0
+  private promptCachedReadTokens?: number
+  private promptCachedWriteTokens?: number
   private agentError?: Error
   private iterationLimited = false
 
@@ -339,17 +343,50 @@ export class AcpEventProjection
       {
         this.promptInputTokens += usage.promptTokens
         this.promptOutputTokens += usage.completionTokens
+        if (usage.cachedPromptTokens !== undefined)
+          this.promptCachedReadTokens =
+            (this.promptCachedReadTokens ?? 0) + usage.cachedPromptTokens
+        if (usage.cacheWriteTokens !== undefined)
+          this.promptCachedWriteTokens =
+            (this.promptCachedWriteTokens ?? 0) + usage.cacheWriteTokens
         this.latestUsage = {
           totalTokens: this.promptInputTokens + this.promptOutputTokens,
           inputTokens: this.promptInputTokens,
           outputTokens: this.promptOutputTokens,
+          ...(this.promptCachedReadTokens !== undefined
+            ? { cachedReadTokens: this.promptCachedReadTokens }
+            : {}),
+          ...(this.promptCachedWriteTokens !== undefined
+            ? { cachedWriteTokens: this.promptCachedWriteTokens }
+            : {}),
         }
         const size = this.options.getContextWindow()
         if (size <= 0) return
+        const costs = this.options.getSessionCost?.()
+        // ACP cannot mark partial estimates, so omit an incomplete session total
+        const knownCost =
+          costs &&
+          !costs.historicalUsageUnknown &&
+          costs.entries.length > 0 &&
+          costs.entries.every(
+            (entry) =>
+              entry.unpricedRequests === 0 && entry.missingUsageRequests === 0
+          )
         this.enqueue({
           sessionUpdate: 'usage_update',
           used: Math.min(Math.max(usage.contextTokens, 0), size),
           size,
+          ...(knownCost
+            ? {
+                cost: {
+                  amount: costs.entries.reduce(
+                    (sum, entry) => sum + entry.usd,
+                    0
+                  ),
+                  currency: 'USD',
+                },
+              }
+            : {}),
         })
       },
       onIterationLimit: () =>

@@ -5,6 +5,7 @@ import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readJsonObjectFile } from '../utils/json.js'
+import { isPlainObject } from '../utils/guards.js'
 
 interface SharedCoralConfig
 {
@@ -17,6 +18,8 @@ export interface UserCoralConfig extends SharedCoralConfig
   mcp?: unknown
   // hosted inference tuning stays user-only so a cloned repo cannot raise spend
   providers?: unknown
+  // catalog preferences stay user-only; installed skills remain loadable
+  skills?: { localAllowlist?: string[] }
 }
 
 export interface ProjectCoralConfig extends SharedCoralConfig
@@ -64,6 +67,14 @@ export function loadUserConfig(): UserCoralConfig
   if (config.tools !== undefined) result.tools = config.tools
   if (config.mcp !== undefined) result.mcp = config.mcp
   if (config.providers !== undefined) result.providers = config.providers
+  if (
+    isPlainObject(config.skills) &&
+    Array.isArray(config.skills.localAllowlist) &&
+    config.skills.localAllowlist.every((name) => typeof name === 'string')
+  )
+  {
+    result.skills = { localAllowlist: [...config.skills.localAllowlist] }
+  }
   return result
 }
 

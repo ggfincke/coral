@@ -8,6 +8,7 @@ import { Agent } from '../agent/agent.js'
 import type { AcceptedTurn, AgentEvents } from '../agent/contracts.js'
 import { AgentTodoState } from '../agent/state/todos.js'
 import type { McpConfigResolution } from '../config/mcp.js'
+import { parseModelRef } from '../providers/model-ref.js'
 import { createInferenceClient } from '../providers/router.js'
 import {
   InteractiveSessionRuntime,
@@ -776,6 +777,10 @@ export class CoralAcpController
         isCurrent: () => binding.runtime.acceptsEvent(handle),
         getTodos: () => handle.agent.getTodos(),
         getContextWindow: () => handle.agent.getFrozenPrefix().contextWindow,
+        getSessionCost: () =>
+          parseModelRef(handle.agent.getModel()).provider === 'ollama'
+            ? undefined
+            : handle.agent.getSessionCost?.(),
         getRuntimeMode: () => binding.runtimeMode,
         sessionToolGrants: binding.sessionToolGrants,
       },

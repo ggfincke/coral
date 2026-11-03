@@ -128,6 +128,7 @@ test('ToolRoundExecutor isolates prepared calls and rejects an undersized allowa
   })
 
   const mismatched = await executor.execute({
+    model: 'test-model',
     round,
     allowance: {
       minimumTokens: [0],
@@ -159,6 +160,7 @@ test('ToolRoundExecutor isolates prepared calls and rejects an undersized allowa
   const underfundedRound = executor.prepare(round.calls, catalog)
   const allowance = allowanceFor(underfundedRound, 0)
   const execution = await executor.execute({
+    model: 'test-model',
     round: underfundedRound,
     allowance: {
       minimumTokens: allowance.minimumTokens,
@@ -299,6 +301,7 @@ test('ToolRoundExecutor preserves catalog, batching, effects, and callback-failu
   const results: string[] = []
   let approvalPresentation: ToolCallPresentation | undefined
   const execution = await executor.execute({
+    model: 'test-model',
     round,
     allowance: allowanceFor(round),
     doomLoop: new DoomLoopDetector({ threshold: 2, window: 12 }),
@@ -421,6 +424,7 @@ test('ToolRoundExecutor stages every parallel mutation before result callbacks',
   const resultIds: number[] = []
 
   const execution = await executor.execute({
+    model: 'test-model',
     round,
     allowance: allowanceFor(round),
     doomLoop: new DoomLoopDetector({ threshold: 2, window: 12 }),
@@ -511,6 +515,7 @@ test('ToolRoundExecutor isolates validator failures and records a final-call abo
   const resultIds: number[] = []
 
   const execution = await executor.execute({
+    model: 'test-model',
     round,
     allowance: allowanceFor(round),
     doomLoop: new DoomLoopDetector(),
@@ -595,6 +600,7 @@ test('ToolRoundExecutor fills every model reply after approval abort', async () 
   const results: string[] = []
 
   const execution = await executor.execute({
+    model: 'test-model',
     round,
     allowance: allowanceFor(round),
     doomLoop: new DoomLoopDetector(),

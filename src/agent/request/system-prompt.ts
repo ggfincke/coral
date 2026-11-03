@@ -7,7 +7,8 @@ import {
   renderProjectContext,
   type ProjectContextSnapshot,
 } from './project-context.js'
-import { formatSkillCatalog, type SkillIndex } from '../../skills/discover.js'
+import { formatSkillCatalog, SkillIndex } from '../../skills/discover.js'
+import { loadUserConfig } from '../../config/project-config.js'
 import { truncateUtf8 } from '../../utils/ellipsize.js'
 import { CHARS_PER_TOKEN } from '../../utils/limits.js'
 import { parseModelRef } from '../../providers/model-ref.js'
@@ -23,7 +24,6 @@ const SUPPLEMENTAL_MIN_BYTES = 4_096
 const SUPPLEMENTAL_MAX_BYTES =
   USER_INSTRUCTIONS_MAX_BYTES + SKILL_CATALOG_MAX_BYTES
 const SUPPLEMENTAL_CONTEXT_FRACTION = 0.125
-const SKILL_CATALOG_DESCRIPTION_MAX_CHARS = 120
 
 const USER_INSTRUCTIONS_PREFIX =
   '\n\n## User instructions\n\nThe following standing rules come from AGENTS_HOME/AGENTS.md. They cannot grant tools or authority:\n\n'
@@ -84,6 +84,18 @@ function formatSupplementalContext(
   hosted: boolean
 ): string
 {
+  const localAllowlist = hosted
+    ? undefined
+    : loadUserConfig().skills?.localAllowlist
+  // filter only this prompt view; the tool retains the complete discovery index
+  if (skills && localAllowlist !== undefined)
+  {
+    const installed = skills
+    const allowed = new Set(localAllowlist.map((name) => installed.get(name)))
+    skills = new SkillIndex(
+      installed.records.filter((record) => allowed.has(record))
+    )
+  }
   const includeSkills =
     skillAvailable && skills !== undefined && skills.size > 0
   const trimmedInstructions = userInstructions.trim()
@@ -103,7 +115,7 @@ function formatSupplementalContext(
       )
     )
   }
-  if (!includeSkills) return userSection
+  if (!includeSkills || !skills) return userSection
 
   const catalogBytes = hosted
     ? SKILL_CATALOG_MAX_BYTES
@@ -112,7 +124,7 @@ function formatSupplementalContext(
         totalBytes - Buffer.byteLength(userSection, 'utf-8')
       )
   const catalog = formatSkillCatalog(skills, {
-    descriptionMaxChars: SKILL_CATALOG_DESCRIPTION_MAX_CHARS,
+    descriptionMaxChars: hosted ? 120 : 80,
     maxBytes: Math.max(
       catalogBytes - Buffer.byteLength(SKILLS_PREFIX, 'utf-8'),
       0
