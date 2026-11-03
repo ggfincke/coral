@@ -100,6 +100,24 @@ Hosted model tuning lives only in the user file, so a cloned repository cannot r
 
 Coral resends history on every turn, so `maxContextTokens` is effectively the per-turn cost ceiling. `--no-think` maps to effort `low` on Anthropic and `none` on OpenAI models that support it.
 
+Skills catalog preferences also live only in the user file:
+
+```json
+{
+  "skills": {
+    "localAllowlist": ["code-review", "simplification-review"]
+  }
+}
+```
+
+`skills.localAllowlist` is an optional string array of skill names to show in
+Ollama prompts, matched case-insensitively. An empty array hides the catalog;
+missing or malformed values allow all discovered names within the prompt budget.
+Unknown names are ignored. Hosted catalogs remain unchanged. This preference
+does not restrict the `skill` tool, skill listings, or slash commands, and is
+ignored in project config. Catalog descriptions are capped at 80 characters for
+Ollama and 120 for hosted models. See [Skills](skills.md).
+
 ---
 
 ## Project `<workspace>/.coral.json`
