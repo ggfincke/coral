@@ -35,6 +35,7 @@ export interface TokenUsage
   contextTokens: number
   // prompt tokens a hosted API served from its prompt cache
   cachedPromptTokens?: number
+  cacheWriteTokens?: number
   totalCachedPromptTokens: number
   // current-turn durations when the server reports them
   promptEvalDurationNs?: number
