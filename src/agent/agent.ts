@@ -110,6 +110,8 @@ import {
 } from './loop/tool-round.js'
 import { McpToolScope } from './mcp-scope.js'
 import { resolveVerifyConfig } from '../config/verify.js'
+import { resolveToolsConfig, type ToolsConfig } from '../config/tools.js'
+import { parseModelRef } from '../providers/model-ref.js'
 import {
   appendAttachmentContext,
   attachmentReportFromMaterialization,
@@ -239,7 +241,8 @@ export class Agent
   private permissions: ToolPermissions
   private thinkMode: boolean | 'low' | 'medium' | 'high'
   // keep the instance toolset and Ollama schema separate for restricted subagents
-  private baseTools: readonly Tool[]
+  private readonly baseTools: readonly Tool[]
+  private readonly toolsConfig: ToolsConfig
   // derive lookup, schemas, names, and token cost from one immutable profile
   private toolCatalog!: ToolCatalog
   private maxIterations?: number
@@ -309,9 +312,11 @@ export class Agent
     this.skills = options.skills ?? EMPTY_SKILL_INDEX
     this.userInstructions = options.userInstructions ?? ''
     this.projectContext = options.projectContext ?? true
+    this.toolsConfig = resolveToolsConfig(this.cwd)
     // bind skill to this Agent's index; with nothing installed it is omitted
     // rather than advertised as a tool that can only fail
     this.baseTools = (options.tools ?? allTools)
+      .filter((tool) => !this.toolsConfig.disabled.includes(tool.name))
       .filter((tool) => tool.name !== 'skill' || this.skills.size > 0)
       .map((tool) =>
         tool.name === 'skill' ? createSkillTool(this.skills) : tool
@@ -339,7 +344,8 @@ export class Agent
       mode: options.mcpMode ?? 'off',
       config: options.mcpConfig,
       permissions: this.permissions,
-      baseTools: this.baseTools,
+      // reserve original trusted names even when the active profile omits them
+      baseTools: options.tools ?? allTools,
       managerFactory: options.mcpManagerFactory,
       lifecycleSignal: this.lifecycleAbort.signal,
     })
@@ -688,13 +694,19 @@ export class Agent
     this.lifecycleAbort.signal.throwIfAborted()
 
     // stage fallible derivations before the synchronous model commit
-    const systemContent = this.buildSystemContent(nextModel)
+    const catalog = this.createToolCatalog([], nextModel)
+    const systemContent = this.buildSystemContent(
+      nextModel,
+      this.projectContextBudget(this.contextWindowSize),
+      catalog
+    )
     const previousModel = this.model
     this.foldCurrentReliability(previousModel)
     this.reliabilityStats = makeReliabilityStats()
 
     // reset context state because a different model uses a cold runner
     this.model = nextModel
+    this.toolCatalog = catalog
     this.contextWindowSize = 0
     this.numCtx = 0
     this.hostedOutputTokens = undefined
@@ -964,10 +976,17 @@ export class Agent
     }
   }
 
-  private createToolCatalog(dynamicTools: readonly Tool[] = []): ToolCatalog
+  private createToolCatalog(
+    dynamicTools: readonly Tool[] = [],
+    model = this.model
+  ): ToolCatalog
   {
+    const local = parseModelRef(model).provider === 'ollama'
     return new ToolCatalog({
-      trustedTools: this.baseTools,
+      // retain the source tools so a provider switch can restore task
+      trustedTools: this.baseTools.filter(
+        (tool) => tool.name !== 'task' || !local || this.toolsConfig.localTask
+      ),
       dynamicTools,
     })
   }

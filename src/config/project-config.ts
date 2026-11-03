@@ -9,6 +9,7 @@ import { readJsonObjectFile } from '../utils/json.js'
 interface SharedCoralConfig
 {
   permissions?: unknown
+  tools?: unknown
 }
 
 export interface UserCoralConfig extends SharedCoralConfig
@@ -60,6 +61,7 @@ export function loadUserConfig(): UserCoralConfig
   const config = loadCoralConfigFile(join(homedir(), '.coral.json'))
   const result: UserCoralConfig = {}
   if (config.permissions !== undefined) result.permissions = config.permissions
+  if (config.tools !== undefined) result.tools = config.tools
   if (config.mcp !== undefined) result.mcp = config.mcp
   if (config.providers !== undefined) result.providers = config.providers
   return result
@@ -71,6 +73,7 @@ export function loadProjectConfig(cwd: string): ProjectCoralConfig
   const config = loadCoralConfigFile(resolve(cwd, '.coral.json'))
   const result: ProjectCoralConfig = {}
   if (config.permissions !== undefined) result.permissions = config.permissions
+  if (config.tools !== undefined) result.tools = config.tools
   if (config.retrieval !== undefined) result.retrieval = config.retrieval
   if (config.context !== undefined) result.context = config.context
   if (config.verify !== undefined) result.verify = config.verify
