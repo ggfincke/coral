@@ -1326,7 +1326,7 @@ test(
 )
 
 test(
-  'Agent rebuilds volatile git context for each model request',
+  'Agent reuses the turn-start git snapshot for each model request',
   { skip: !HAS_GIT },
   async () =>
   {
@@ -1373,7 +1373,12 @@ test(
       message.content.startsWith(GIT_CONTEXT_HEADING)
     )
     assert.ok(secondContext)
-    assert.match(secondContext.content, /external\.txt/)
+    assert.deepEqual(
+      secondContext,
+      requests[0]!.find((message) =>
+        message.content.startsWith(GIT_CONTEXT_HEADING)
+      )
+    )
   }
 )
 
