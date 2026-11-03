@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Local model controls:** configure the prompt cap with
+  `context.maxPromptTokens` or `CORAL_MAX_PROMPT_TOKENS`, disable built-in
+  tools with `tools.disabled`, and opt into local subagents with
+  `tools.localTask`. User-only `skills.localAllowlist` filters the local
+  prompt catalog without restricting skill loading.
+- **ACP usage:** hosted sessions report known cumulative estimated USD cost,
+  and prompt responses include available cache-read and cache-write tokens.
+
 - **Hosted models:** pick `anthropic/<id>` (Anthropic Messages API) or
   `openai/<id>` (OpenAI Responses API) with `-m`, the picker, or `/model` to
   spend subscription API credits from Coral. Keys come from
@@ -25,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompts add an "Always allow this session" option kept in memory only.
 
 ### Changed
+
+- **Local tool rounds:** gather the labeled automatic Git snapshot once per
+  turn, type the todo item schema, reserve todos for four or more steps with
+  milestone updates, and disable thinking for local compaction summaries.
+  Local tool results cap at about 10,000 tokens, skill descriptions at 80
+  characters, and `task` defaults off. Hosted defaults remain unchanged.
+- **Repository instructions:** a compact `.coral.md` supplies routine commands
+  and conventions, with `AGENTS.md` available for architecture on demand.
 
 - **Leaner system prompt:** the prompt no longer repeats the tool catalog that
   every provider already receives as native tool schemas, and drops rules that
