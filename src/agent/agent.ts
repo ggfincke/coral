@@ -1425,6 +1425,9 @@ export class Agent
         onResult: events.onCompaction,
       }
 
+      const turnGitContext = await this.turnContext.gatherGit(signal)
+      signal.throwIfAborted()
+
       let iterations = 0
       let stallNudges = 0
       let reprompts = 0
@@ -1458,7 +1461,7 @@ export class Agent
 
         try
         {
-          let gitContext = await this.turnContext.gatherGit(signal)
+          let gitContext = turnGitContext
           let fileChanges = await this.turnContext.gatherFileChanges(signal)
           signal.throwIfAborted()
           const activeMessage = this.state.getMessage(runAnchor)

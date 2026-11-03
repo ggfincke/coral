@@ -233,7 +233,7 @@ export async function buildGitContextMessage(
   const lines = [
     GIT_CONTEXT_HEADING,
     '',
-    'Snapshot is current at request time; call git tools before staging, committing, switching branches, or pushing.',
+    'Automatic Coral repository snapshot taken at turn start, not a user message; call git tools before staging, committing, switching branches, or pushing.',
     '',
     `- root: ${root}`,
     `- cwd: ${cwdFromRoot}`,
