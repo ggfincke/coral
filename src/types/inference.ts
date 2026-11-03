@@ -129,6 +129,8 @@ export interface ChatResponse
   eval_duration?: number
   // hosted prompt tokens served from the provider's prompt cache
   cached_prompt_count?: number
+  // hosted prompt tokens written to the provider's prompt cache
+  cache_write_count?: number
   // replayed thinking blocks the provider dropped as no longer valid
   dropped_thinking_count?: number
 }

@@ -1694,6 +1694,7 @@ export class Agent
                 totalCompletionTokens: this.totalCompletionTokens,
                 contextTokens: requestBudget.promptTokens,
                 cachedPromptTokens,
+                cacheWriteTokens: chunk.cache_write_count,
                 totalCachedPromptTokens: this.totalCachedPromptTokens,
                 promptEvalDurationNs,
                 evalDurationNs,

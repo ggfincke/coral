@@ -352,6 +352,7 @@ export function finalChunkFrom(
     prompt_eval_count: usage.input_tokens + cacheRead + cacheWrite,
     eval_count: usage.output_tokens,
     cached_prompt_count: cacheRead,
+    cache_write_count: usage.cache_creation_input_tokens ?? undefined,
     dropped_thinking_count: dropped,
   }
 }
