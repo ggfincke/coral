@@ -4,6 +4,7 @@
 import type { ToolPermissions } from '../../config/permissions.js'
 import { getToolPolicy } from '../../config/permissions.js'
 import type { CodeIntelService } from '../../lsp/contracts.js'
+import { parseModelRef } from '../../providers/model-ref.js'
 import type { ToolCatalog } from '../../tools/catalog.js'
 import { requiresWorkspacePathApproval } from '../../tools/path-policy.js'
 import type { SubagentRunner } from '../../tools/subagent.js'
@@ -21,6 +22,7 @@ import {
 } from '../../utils/ellipsize.js'
 import { toError, toErrorMessage } from '../../utils/errors.js'
 import {
+  MAX_LOCAL_TOOL_OUTPUT_CHARS,
   MAX_TOOL_OUTPUT_CHARS,
   REJECTION_REASON_MAX_CHARS,
   estimateUtf8Tokens,
@@ -119,6 +121,7 @@ interface ToolInvocation
 
 interface MutableToolResultRoundBudget
 {
+  maxOutputChars: number
   minimumTokens: readonly number[]
   nextResult: number
   remainingCalls: number
@@ -351,6 +354,7 @@ export class ToolRoundExecutor
   }
 
   async execute(input: {
+    model: string
     round: PreparedToolRound
     allowance: ToolResultRoundAllowance
     events: ToolRoundEvents
@@ -408,6 +412,10 @@ export class ToolRoundExecutor
       }
 
       const budget: MutableToolResultRoundBudget = {
+        maxOutputChars:
+          parseModelRef(input.model).provider === 'ollama'
+            ? MAX_LOCAL_TOOL_OUTPUT_CHARS
+            : MAX_TOOL_OUTPUT_CHARS,
         minimumTokens,
         nextResult: 0,
         remainingCalls: input.round.calls.length,
@@ -828,7 +836,7 @@ export class ToolRoundExecutor
       ` — narrow the scope (e.g. diff a specific path) to see the rest]` +
       `${redactionNote}\n\n`
     const maxRetainedChars = Math.max(
-      Math.min(rawContent.length - 1, MAX_TOOL_OUTPUT_CHARS - marker.length),
+      Math.min(rawContent.length - 1, budget.maxOutputChars - marker.length),
       0
     )
     const messageForRetainedChars = (retainedChars: number): OllamaMessage =>
@@ -850,7 +858,7 @@ export class ToolRoundExecutor
       role: 'tool',
       tool_name: toolName,
       content:
-        rawContent.length <= MAX_TOOL_OUTPUT_CHARS
+        rawContent.length <= budget.maxOutputChars
           ? rawContent
           : messageForRetainedChars(maxRetainedChars).content,
     }

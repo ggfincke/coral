@@ -1848,6 +1848,7 @@ export class Agent
         }
 
         const toolExecution = await this.toolRounds.execute({
+          model: this.model,
           round: preparedToolRound,
           allowance: toolResultAllowance,
           events,
