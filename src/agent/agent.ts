@@ -302,7 +302,10 @@ export class Agent
     this.baseUrl = baseUrl
     this.cwd = resolve(cwd ?? getCwd())
     this.maxPromptTokens = resolveContextConfig(this.cwd).maxPromptTokens
-    this.requestPlanner = new RequestPlanner(this.maxPromptTokens)
+    this.requestPlanner = new RequestPlanner(
+      this.maxPromptTokens,
+      options.think !== false
+    )
     const transport = options.inferenceClient ?? createInferenceClient(baseUrl)
     this.sessionCosts =
       transport instanceof SessionInferenceClient
@@ -376,7 +379,8 @@ export class Agent
         requestBudgetCapacity(
           options.numCtx,
           this.hostedOutputTokens,
-          this.maxPromptTokens
+          this.maxPromptTokens,
+          this.thinkMode !== false
         ).promptLimit
       )
     }
@@ -535,7 +539,8 @@ export class Agent
     const promptLimit = requestBudgetCapacity(
       this.contextWindowSize || MIN_NUM_CTX,
       this.hostedOutputTokens,
-      this.maxPromptTokens
+      this.maxPromptTokens,
+      this.thinkMode !== false
     ).promptLimit
     const totalToolBudget = Math.floor(promptLimit * 0.5)
     return Math.max(
@@ -960,7 +965,8 @@ export class Agent
       requestBudgetCapacity(
         contextWindow,
         this.hostedOutputTokens,
-        this.maxPromptTokens
+        this.maxPromptTokens,
+        this.thinkMode !== false
       ).promptLimit
     )
     this.replaceSystemPrompt(this.buildSystemContent(this.model))
@@ -1489,6 +1495,7 @@ export class Agent
 
         let fullContent = ''
         let fullThinking = ''
+        let doneReason: string | undefined
         let toolCalls: OllamaToolCall[] = []
         let providerState: ProviderState | undefined
         // retain the first doom-loop trip from this round
@@ -1685,6 +1692,7 @@ export class Agent
             // capture token usage and model time from the final chunk
             if (chunk.done)
             {
+              doneReason = chunk.done_reason
               const promptTokens = chunk.prompt_eval_count ?? 0
               const completionTokens = chunk.eval_count ?? 0
               const promptEvalDurationNs = chunk.prompt_eval_duration
@@ -1704,6 +1712,7 @@ export class Agent
                 this.totalEvalDurationNs += evalDurationNs
               }
               events.onUsage?.({
+                doneReason,
                 promptTokens,
                 completionTokens,
                 totalPromptTokens: this.totalPromptTokens,
@@ -1741,6 +1750,16 @@ export class Agent
         {
           this.recordPartialResponse(fullContent, fullThinking)
           return finish()
+        }
+
+        if (doneReason === 'length')
+        {
+          if (fullContent) this.recordPartialResponse(fullContent, fullThinking)
+          return fail(
+            new Error(
+              'Model response reached its output token limit and was truncated. No tools from this response were executed.'
+            )
+          )
         }
 
         // recover tool calls emitted as text content; hosted models call

@@ -120,6 +120,7 @@ export interface ChatResponse
 {
   message: OllamaMessage
   done: boolean
+  done_reason?: string
   // emitted independently of semantic response validation and token counters
   billingUsage?: BillingUsage
   billingRejected?: boolean

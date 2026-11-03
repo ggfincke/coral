@@ -63,7 +63,17 @@ function formatModelBlock(model: ModelReport): string
     `cleanliness ${pct(model.meanCleanliness)}  ` +
     `tok/s ${tps(model.meanTokensPerSecond)}`
 
-  const lines = model.results.map((t) => formatTaskLine(t, idWidth))
+  const lines = model.results.flatMap((task) => [
+    formatTaskLine(task, idWidth),
+    ...task.runs.flatMap((run, rep) =>
+      run.rounds.map((sample) =>
+      {
+        const duration = (ns: number | null) =>
+          ns === null ? 'unavailable' : `${(ns / 1e6).toFixed(1)}ms`
+        return `    rep ${rep + 1} round ${sample.round}: prompt ${sample.promptTokens}, decode ${sample.completionTokens}, context ~${sample.contextTokens}, prompt time ${duration(sample.promptEvalDurationNs)}, decode time ${duration(sample.evalDurationNs)}, reason ${sample.doneReason ?? 'unavailable'}`
+      })
+    ),
+  ])
 
   return [summary, ...lines].join('\n')
 }

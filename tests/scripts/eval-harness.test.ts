@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
+import { formatReport, reportToJson } from './eval/report.js'
 import { treeContains, treeFreeOf } from './eval/grade.js'
 import { aggregateModel, aggregateTask, runRep } from './eval/harness.js'
 import { taskById } from './eval/tasks.js'
@@ -37,6 +38,7 @@ function outcome(overrides: Partial<RunOutcome> = {}): RunOutcome
     aborted: false,
     errored: false,
     passed: true,
+    rounds: [],
     detail: '',
     ...overrides,
   }
@@ -69,6 +71,7 @@ function taskResult(
     detail: '',
     ...overrides,
     metrics,
+    runs: [],
   }
 }
 
@@ -353,5 +356,85 @@ describe('aggregateModel', () =>
     assert.equal(empty.passRate, 0)
     assert.equal(empty.meanCleanliness, 0)
     assert.equal(empty.meanTokensPerSecond, 0)
+  })
+})
+
+describe('per-round diagnostics', () =>
+{
+  it('retains every usage callback by task and rep in JSON and text reports', async () =>
+  {
+    const task: EvalTask = {
+      id: 'rounds',
+      description: 'round capture',
+      prompt: 'inspect',
+      async setup()
+      {},
+      async grade()
+      {
+        return { passed: true, detail: 'ok' }
+      },
+    }
+    const run = await runRep(
+      'fake-model',
+      task,
+      {},
+      {
+        createAgent: () => ({
+          async run(_prompt, events)
+          {
+            events.onUsage?.({
+              promptTokens: 100,
+              completionTokens: 20,
+              contextTokens: 110,
+              totalPromptTokens: 100,
+              totalCompletionTokens: 20,
+              totalCachedPromptTokens: 0,
+              totalPromptEvalDurationNs: 1000,
+              totalEvalDurationNs: 2000,
+              promptEvalDurationNs: 1000,
+              evalDurationNs: 2000,
+              doneReason: 'stop',
+            })
+            events.onUsage?.({
+              promptTokens: 150,
+              completionTokens: 30,
+              contextTokens: 170,
+              totalPromptTokens: 250,
+              totalCompletionTokens: 50,
+              totalCachedPromptTokens: 0,
+              totalPromptEvalDurationNs: 1000,
+              totalEvalDurationNs: 2000,
+            })
+            return { status: 'completed' }
+          },
+          getMessages: () => [],
+          getReliabilityStats: () => makeReliabilityStats(),
+          async dispose()
+          {},
+        }),
+      }
+    )
+    assert.equal(run.promptTokens, 250)
+    assert.equal(run.rounds.length, 2)
+    assert.deepEqual(
+      run.rounds.map((round) => round.promptTokens),
+      [100, 150]
+    )
+    assert.equal(run.rounds[1]!.promptEvalDurationNs, null)
+    assert.equal(run.rounds[1]!.doneReason, null)
+    const report = {
+      models: [
+        aggregateModel('fake-model', [aggregateTask('rounds', [run, run])]),
+      ],
+      host: 'fake',
+      reps: 2,
+    }
+    const json = JSON.parse(reportToJson(report))
+    assert.deepEqual(json.models[0].results[0].runs[1].rounds, run.rounds)
+    const text = formatReport(report)
+    assert.match(text, /rep 1 round 1: prompt 100/)
+    assert.match(text, /rep 2 round 2: prompt 150/)
+    assert.match(text, /prompt time unavailable/)
+    assert.match(text, /reason unavailable/)
   })
 })

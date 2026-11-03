@@ -169,3 +169,97 @@ test('restricted toolsets cannot reach tools outside their subset', async () =>
 
   assert.match(seenResults[0]!, /Unknown tool: todo_write/)
 })
+
+test('output cutoffs fail without repairing, executing tools, or retrying', async (t) =>
+{
+  for (const [label, content, nativeCall, thinking] of [
+    ['empty', '', false, ''],
+    ['thinking only', '', false, 'unfinished reasoning'],
+    ['partial text', 'Partial answer', false, 'unfinished reasoning'],
+    [
+      'text tool call',
+      '{"name":"read_file","arguments":{"path":"package.json"}}',
+      false,
+      '',
+    ],
+    ['native tool call', 'Partial answer', true, 'unfinished reasoning'],
+  ] as const)
+  {
+    await t.test(label, async () =>
+    {
+      const { agent, streams } = await makeAgent([
+        [
+          {
+            message: {
+              role: 'assistant',
+              content,
+              thinking,
+              tool_calls: nativeCall
+                ? [
+                    {
+                      function: {
+                        name: 'read_file',
+                        arguments: { path: 'package.json' },
+                      },
+                    },
+                  ]
+                : undefined,
+            },
+            done: true,
+            done_reason: 'length',
+          },
+        ],
+      ])
+      const calls: string[] = []
+      let error: Error | undefined
+      let done = false
+      let reason: string | undefined
+      try
+      {
+        const outcome = await agent.run(
+          'inspect',
+          makeAgentEvents({
+            onToolCall: (name) =>
+            {
+              calls.push(name)
+            },
+            onError: (value) =>
+            {
+              error = value
+            },
+            onDone: () =>
+            {
+              done = true
+            },
+            onUsage: (usage) =>
+            {
+              reason = usage.doneReason
+            },
+          })
+        )
+        assert.equal(outcome.status, 'failed')
+        assert.match(error!.message, /output token limit/)
+        assert.equal(reason, 'length')
+        assert.equal(done, false)
+        assert.equal(streams(), 1)
+        assert.deepEqual(calls, [])
+        assert.equal(agent.getReliabilityStats().stallNudges, 0)
+        assert.equal(agent.getReliabilityStats().repairedToolCalls, 0)
+        assert.equal(agent.getReliabilityStats().reprompts, 0)
+        const replies = agent
+          .getMessages()
+          .filter((message) => message.role === 'assistant')
+        assert.equal(replies.length, content ? 1 : 0)
+        if (content)
+        {
+          assert.equal(replies[0]!.content, content)
+          assert.equal(replies[0]!.tool_calls, undefined)
+        }
+      }
+      finally
+      {
+        await agent.dispose()
+      }
+    })
+  }
+})

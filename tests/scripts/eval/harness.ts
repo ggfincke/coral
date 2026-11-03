@@ -27,6 +27,7 @@ import type {
   ModelReport,
   RunMetrics,
   RunOutcome,
+  RoundSample,
   TaskResult,
 } from './types.js'
 
@@ -110,6 +111,7 @@ export async function runRep(
   let toolCallsExecuted = 0
   let toolErrors = 0
   let lastUsage: TokenUsage | undefined
+  const rounds: RoundSample[] = []
   let aborted = false
   let iterationLimited = false
   let doomLooped = false
@@ -164,6 +166,15 @@ export async function runRep(
       onUsage: (usage) =>
       {
         lastUsage = usage
+        rounds.push({
+          round: rounds.length + 1,
+          promptTokens: usage.promptTokens,
+          completionTokens: usage.completionTokens,
+          contextTokens: usage.contextTokens,
+          promptEvalDurationNs: usage.promptEvalDurationNs ?? null,
+          evalDurationNs: usage.evalDurationNs ?? null,
+          doneReason: usage.doneReason ?? null,
+        })
       },
       onCompactionStart: () =>
       {},
@@ -251,7 +262,7 @@ export async function runRep(
       errored,
     }
 
-    return { ...metrics, passed, detail }
+    return { ...metrics, rounds, passed, detail }
   }
   catch (err)
   {
@@ -268,6 +279,7 @@ export async function runRep(
       aborted,
       errored: true,
       passed: false,
+      rounds,
       detail: `run setup failed: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
@@ -346,7 +358,7 @@ export function aggregateTask(taskId: string, runs: RunOutcome[]): TaskResult
     errored: runs.some((r) => r.errored),
   }
 
-  return { taskId, reps, passes, passed, detail, metrics }
+  return { taskId, reps, passes, passed, detail, metrics, runs }
 }
 
 // aggregate per-task results into one model report

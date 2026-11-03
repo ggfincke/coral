@@ -62,6 +62,8 @@ prompt, then grades the result deterministically:
 Per-task metrics are the mean across reps; model headline rates are the mean
 across tasks.
 
+Reports also retain per-round usage samples under each task's `runs`, in repetition order. Text output prints each rep and round with prompt/decode counts, estimated context occupancy, model durations, and the completion reason. Missing durations and reasons are `null` in JSON and `unavailable` in text. These are diagnostic signals, not direct measurements of cache hits.
+
 ## Usage
 
 Requires a running Ollama with each model already pulled.

@@ -838,3 +838,70 @@ test('subagentTools exposes only subagent-safe tools', () =>
   assert.equal(searchCodeTool.subagentSafe, true)
   assert.equal(searchCodeTool.parallelSafe, undefined)
 })
+
+test('read_file pages cover the original contents and preserve full-file observation', async () =>
+{
+  const dir = await tempDir('coral-read-pages-')
+  const content = 'first\r\n\r\nthird\nfourth\nlast'
+  await writeFile(join(dir, 'pages.txt'), content)
+  const observed: string[] = []
+  const context = {
+    cwd: dir,
+    observeFile: (_path: string, value: string) =>
+    {
+      observed.push(value)
+    },
+  }
+  assert.equal(
+    (await readTool.execute({ path: 'pages.txt' }, context)).output,
+    content
+  )
+  const pages = []
+  for (const offset of [1, 3, 5])
+  {
+    const page = await readTool.execute(
+      { path: 'pages.txt', offset, limit: 2 },
+      context
+    )
+    assert.equal(page.error, undefined)
+    assert.match(page.output, new RegExp(`^Lines ${offset}-`))
+    pages.push(page.output.slice(page.output.indexOf('\n') + 1))
+    if (offset < 5)
+      assert.match(page.output, new RegExp(`Next offset: ${offset + 2}`))
+  }
+  assert.equal(pages.join(''), content)
+  assert.equal(
+    observed.every((value) => value === content),
+    true
+  )
+  assert.match(
+    (await readTool.execute({ path: 'pages.txt', offset: 3 }, context)).output,
+    /^Lines 3-5 of 5\.\nthird/
+  )
+  assert.match(
+    (await readTool.execute({ path: 'pages.txt', limit: 1 }, context)).output,
+    /^Lines 1-1 of 5\. Next offset: 2\./
+  )
+  assert.match(
+    (await readTool.execute({ path: 'pages.txt', offset: 6 }, context)).output,
+    /^Empty page/
+  )
+  for (const value of [0, -1, 1.5, '2', null])
+  {
+    assert.match(
+      (await readTool.execute({ path: 'pages.txt', offset: value }, context))
+        .error!,
+      /positive integer/
+    )
+    assert.match(
+      (await readTool.execute({ path: 'pages.txt', limit: value }, context))
+        .error!,
+      /positive integer/
+    )
+  }
+  await writeFile(join(dir, 'empty.txt'), '')
+  assert.match(
+    (await readTool.execute({ path: 'empty.txt', offset: 1 }, context)).output,
+    /total lines: 0/
+  )
+})

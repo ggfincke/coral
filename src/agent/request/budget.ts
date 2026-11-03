@@ -107,7 +107,8 @@ function normalizedWindow(contextWindow: number): number
 export function requestBudgetCapacity(
   contextWindow: number,
   hostedOutputTokens?: number,
-  maxPromptTokens = MAX_REQUEST_PROMPT_TOKENS
+  maxPromptTokens = MAX_REQUEST_PROMPT_TOKENS,
+  thinking = true
 ): RequestBudgetCapacity
 {
   const window = normalizedWindow(contextWindow)
@@ -130,11 +131,14 @@ export function requestBudgetCapacity(
     }
   }
 
+  const fractionalReserve = Math.floor(window * RESPONSE_RESERVE_FRACTION)
   const responseReserve = Math.max(
     1,
     Math.min(
       MAX_RESPONSE_RESERVE_TOKENS,
-      Math.floor(window * RESPONSE_RESERVE_FRACTION)
+      thinking && window >= 16_384
+        ? Math.max(4_096, fractionalReserve)
+        : fractionalReserve
     )
   )
   const localPromptCap =
@@ -147,7 +151,7 @@ export function requestBudgetCapacity(
   )
   const summaryResponseReserve = Math.min(
     MAX_SUMMARY_RESPONSE_RESERVE_TOKENS,
-    responseReserve
+    Math.max(1, fractionalReserve)
   )
   const summaryPromptLimit = Math.max(
     0,
@@ -168,13 +172,15 @@ export function createRequestBudgetBreakdown(
   contextWindow: number,
   input: Partial<RequestBudgetCategories>,
   hostedOutputTokens?: number,
-  maxPromptTokens?: number
+  maxPromptTokens?: number,
+  thinking = true
 ): RequestBudgetBreakdown
 {
   const capacity = requestBudgetCapacity(
     contextWindow,
     hostedOutputTokens,
-    maxPromptTokens
+    maxPromptTokens,
+    thinking
   )
   const categories = {} as RequestBudgetCategories
 

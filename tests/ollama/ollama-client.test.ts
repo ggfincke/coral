@@ -64,7 +64,7 @@ test('chatStream requires valid completion records and preserves stream diagnost
       await withFetch(
         async () =>
           new Response(
-            `${JSON.stringify(partial)}\n{"done":true,"eval_count":3}`
+            `${JSON.stringify(partial)}\n{"done":true,"done_reason":"length","eval_count":3}`
           ),
         async () =>
         {
@@ -81,6 +81,7 @@ test('chatStream requires valid completion records and preserves stream diagnost
             {
               message: { role: 'assistant', content: '' },
               done: true,
+              done_reason: 'length',
               eval_count: 3,
             },
           ])
