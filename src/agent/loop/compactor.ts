@@ -37,6 +37,7 @@ export interface CompactionRuntime
   numCtx?: number
   // hosted output cap; undefined keeps the local request profile
   hostedOutputTokens?: number
+  maxPromptTokens?: number
   toolDefinitionTokens: number
 }
 
@@ -323,7 +324,8 @@ export class CompactionCoordinator
     const fullPrompt = buildCompactionPrompt(cleaned)
     const capacity = requestBudgetCapacity(
       runtime.contextWindow,
-      runtime.hostedOutputTokens
+      runtime.hostedOutputTokens,
+      runtime.maxPromptTokens
     )
     const systemMessage: ModelRequestMessage = {
       role: 'system',

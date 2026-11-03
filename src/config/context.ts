@@ -34,6 +34,8 @@ export interface ContextConfig
 {
   // explicit ceiling from the environment or .coral.json
   maxNumCtx?: number
+  // local prompt ceiling, independent of the pinned context window
+  maxPromptTokens?: number
 }
 
 export interface ContextWindowResolverDependencies
@@ -65,20 +67,29 @@ function envNumCtx(): number | undefined
   return Number.isFinite(env) && env > 0 ? env : undefined
 }
 
-// resolve the explicit context ceiling, with the environment taking precedence
+// resolve independent context and local prompt ceilings, preferring the environment
 export function resolveContextConfig(cwd: string): ContextConfig
 {
-  const env = envNumCtx()
-  if (env !== undefined) return { maxNumCtx: env }
-
   const raw = loadProjectConfig(cwd).context
-  const configured = isPlainObject(raw) ? raw.maxNumCtx : undefined
-  if (typeof configured === 'number' && configured > 0)
+  const config: ContextConfig = {}
+  for (const key of ['maxNumCtx', 'maxPromptTokens'] as const)
   {
-    return { maxNumCtx: Math.floor(configured) }
+    const env =
+      key === 'maxNumCtx'
+        ? envNumCtx()
+        : Number.parseInt(process.env.CORAL_MAX_PROMPT_TOKENS ?? '', 10)
+    const configured = isPlainObject(raw) ? raw[key] : undefined
+    const value =
+      typeof env === 'number' && Number.isFinite(env) && env > 0
+        ? env
+        : configured
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 1)
+    {
+      config[key] = Math.floor(value)
+    }
   }
 
-  return {}
+  return config
 }
 
 // estimate full-attention KV-cache bytes per token, or return undefined when

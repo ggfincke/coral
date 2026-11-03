@@ -164,6 +164,9 @@ export class RequestPlanner
   // hosted output cap from model metadata; undefined keeps the local profile
   private hostedOutputTokens?: number
 
+  constructor(private readonly maxPromptTokens?: number)
+  {}
+
   setHostedOutputTokens(tokens: number | undefined): void
   {
     this.hostedOutputTokens = tokens
@@ -173,7 +176,8 @@ export class RequestPlanner
   {
     const capacity = requestBudgetCapacity(
       input.contextWindow,
-      this.hostedOutputTokens
+      this.hostedOutputTokens,
+      this.maxPromptTokens
     )
     const baseContent = input.systemContentAt(0)
     const baseMessage: ModelRequestMessage = {
@@ -193,7 +197,8 @@ export class RequestPlanner
     const baseBudget = createRequestBudgetBreakdown(
       input.contextWindow,
       fixedCategories,
-      this.hostedOutputTokens
+      this.hostedOutputTokens,
+      this.maxPromptTokens
     )
     if (!baseBudget.fits)
     {
@@ -272,7 +277,8 @@ export class RequestPlanner
       estimateRequestFramingTokens(2)
     const capacity = requestBudgetCapacity(
       input.contextWindow,
-      this.hostedOutputTokens
+      this.hostedOutputTokens,
+      this.maxPromptTokens
     )
     return (
       attachmentAllowanceForFixedCost(capacity.promptLimit, fixedPromptTokens) *
@@ -500,7 +506,8 @@ export class RequestPlanner
     const baseMessages = this.toolResultMessages(input, systemContent, false)
     const capacity = requestBudgetCapacity(
       input.contextWindow,
-      this.hostedOutputTokens
+      this.hostedOutputTokens,
+      this.maxPromptTokens
     )
     const basePromptTokens =
       estimateModelRequestMessagesTokens(baseMessages) +
@@ -596,7 +603,8 @@ export class RequestPlanner
         fileChanges: fileChangeTokens,
         framing: estimateRequestFramingTokens(input.messages.length),
       },
-      this.hostedOutputTokens
+      this.hostedOutputTokens,
+      this.maxPromptTokens
     )
   }
 
@@ -621,7 +629,8 @@ export class RequestPlanner
           content,
         }),
       },
-      this.hostedOutputTokens
+      this.hostedOutputTokens,
+      this.maxPromptTokens
     )
   }
 

@@ -45,7 +45,11 @@ import {
   DEFAULT_MAX_HISTORY,
   type ConversationMessageAnchor,
 } from './state/conversation.js'
-import { MIN_NUM_CTX, resolvePinnedContextWindow } from '../config/context.js'
+import {
+  MIN_NUM_CTX,
+  resolveContextConfig,
+  resolvePinnedContextWindow,
+} from '../config/context.js'
 import { resolveMemoryBudget } from '../config/memory-budget.js'
 
 export type { CompactionResult } from './state/compaction.js'
@@ -267,7 +271,8 @@ export class Agent
   private readonly turnContext: TurnContextAssembler
   private readonly replay: ReplayCoordinator
   private readonly compactor: CompactionCoordinator
-  private readonly requestPlanner = new RequestPlanner()
+  private readonly maxPromptTokens?: number
+  private readonly requestPlanner: RequestPlanner
   private readonly toolRounds: ToolRoundExecutor
   private acceptedTurn?: ActiveAcceptedTurn
   // self-check edits after a clean completion (warn-only); off by default
@@ -293,6 +298,8 @@ export class Agent
     this.model = model
     this.baseUrl = baseUrl
     this.cwd = resolve(cwd ?? getCwd())
+    this.maxPromptTokens = resolveContextConfig(this.cwd).maxPromptTokens
+    this.requestPlanner = new RequestPlanner(this.maxPromptTokens)
     const transport = options.inferenceClient ?? createInferenceClient(baseUrl)
     this.sessionCosts =
       transport instanceof SessionInferenceClient
@@ -360,8 +367,11 @@ export class Agent
     if (options.numCtx && options.numCtx > 0)
     {
       this.compactor.setPromptLimit(
-        requestBudgetCapacity(options.numCtx, this.hostedOutputTokens)
-          .promptLimit
+        requestBudgetCapacity(
+          options.numCtx,
+          this.hostedOutputTokens,
+          this.maxPromptTokens
+        ).promptLimit
       )
     }
 
@@ -518,7 +528,8 @@ export class Agent
   {
     const promptLimit = requestBudgetCapacity(
       this.contextWindowSize || MIN_NUM_CTX,
-      this.hostedOutputTokens
+      this.hostedOutputTokens,
+      this.maxPromptTokens
     ).promptLimit
     const totalToolBudget = Math.floor(promptLimit * 0.5)
     return Math.max(
@@ -934,7 +945,11 @@ export class Agent
         : undefined
     this.requestPlanner.setHostedOutputTokens(this.hostedOutputTokens)
     this.compactor.setPromptLimit(
-      requestBudgetCapacity(contextWindow, this.hostedOutputTokens).promptLimit
+      requestBudgetCapacity(
+        contextWindow,
+        this.hostedOutputTokens,
+        this.maxPromptTokens
+      ).promptLimit
     )
     this.replaceSystemPrompt(this.buildSystemContent(this.model))
 
@@ -960,6 +975,7 @@ export class Agent
       contextWindow: this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
       numCtx: this.numCtx || undefined,
       hostedOutputTokens: this.hostedOutputTokens,
+      maxPromptTokens: this.maxPromptTokens,
       toolDefinitionTokens: this.toolCatalog.definitionTokens,
     }
   }

@@ -106,7 +106,8 @@ function normalizedWindow(contextWindow: number): number
 // prompt is bounded by the pinned window alone and output by the model cap
 export function requestBudgetCapacity(
   contextWindow: number,
-  hostedOutputTokens?: number
+  hostedOutputTokens?: number,
+  maxPromptTokens = MAX_REQUEST_PROMPT_TOKENS
 ): RequestBudgetCapacity
 {
   const window = normalizedWindow(contextWindow)
@@ -136,9 +137,13 @@ export function requestBudgetCapacity(
       Math.floor(window * RESPONSE_RESERVE_FRACTION)
     )
   )
+  const localPromptCap =
+    Number.isFinite(maxPromptTokens) && maxPromptTokens >= 1
+      ? Math.floor(maxPromptTokens)
+      : MAX_REQUEST_PROMPT_TOKENS
   const promptLimit = Math.max(
     0,
-    Math.min(MAX_REQUEST_PROMPT_TOKENS, window - responseReserve)
+    Math.min(localPromptCap, window - responseReserve)
   )
   const summaryResponseReserve = Math.min(
     MAX_SUMMARY_RESPONSE_RESERVE_TOKENS,
@@ -146,7 +151,7 @@ export function requestBudgetCapacity(
   )
   const summaryPromptLimit = Math.max(
     0,
-    Math.min(MAX_REQUEST_PROMPT_TOKENS, window - summaryResponseReserve)
+    Math.min(localPromptCap, window - summaryResponseReserve)
   )
 
   return {
@@ -162,10 +167,15 @@ export function requestBudgetCapacity(
 export function createRequestBudgetBreakdown(
   contextWindow: number,
   input: Partial<RequestBudgetCategories>,
-  hostedOutputTokens?: number
+  hostedOutputTokens?: number,
+  maxPromptTokens?: number
 ): RequestBudgetBreakdown
 {
-  const capacity = requestBudgetCapacity(contextWindow, hostedOutputTokens)
+  const capacity = requestBudgetCapacity(
+    contextWindow,
+    hostedOutputTokens,
+    maxPromptTokens
+  )
   const categories = {} as RequestBudgetCategories
 
   for (const category of REQUEST_BUDGET_CATEGORIES)
