@@ -32,6 +32,9 @@ export function estimateModelRequestValue(value: unknown): Utf8TokenEstimate
 // would otherwise overflow the window or stall prefill
 export const MAX_TOOL_OUTPUT_CHARS = 25_000 * CHARS_PER_TOKEN
 
+// keep local prefill bounded even when the request has room for more output
+export const MAX_LOCAL_TOOL_OUTPUT_CHARS = 10_000 * CHARS_PER_TOKEN
+
 // keep errors short because multi-KB stacks drown the signal and can stall
 // prefill, especially on smaller models
 export const MAX_ERROR_MESSAGE_CHARS = 2_000 * CHARS_PER_TOKEN
