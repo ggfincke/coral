@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Premature local completion:** retry thinking-only responses within the
+  existing stall limit and nudge once when a response ends with a concrete
+  promised action followed by a colon, without a tool call.
+
 - **Ollama prompt cache:** the per-round Git context snapshot no longer rewrites
   the leading system message, so an edit no longer forces Ollama to re-prefill
   the whole conversation on the next round. Later system text now stays in

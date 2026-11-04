@@ -74,6 +74,8 @@ import {
   looksLikeAttemptedToolCall,
   REPROMPT_MESSAGE,
   MAX_REPROMPTS,
+  looksLikeUnfinishedAction,
+  ACTION_NUDGE_MESSAGE,
 } from './loop/response-repair.js'
 import {
   DoomLoopDetector,
@@ -1499,6 +1501,7 @@ export class Agent
       let iterations = 0
       let stallNudges = 0
       let reprompts = 0
+      let actionNudged = false
       let verifyReprompts = 0
       const doomLoop = new DoomLoopDetector()
       let attachmentsCommitted = false
@@ -1866,16 +1869,28 @@ export class Agent
         if (toolCalls.length === 0)
         {
           this.pushMessage(assistantMessage)
-          // nudge a fully empty turn because it is a dead end, not an answer
+          // local thinking without visible content is also a stalled response
           if (
             !fullContent.trim() &&
-            !fullThinking.trim() &&
+            (!fullThinking.trim() || this.hostedOutputTokens === undefined) &&
             stallNudges < MAX_STALL_NUDGES
           )
           {
             stallNudges++
             this.reliabilityStats.stallNudges++
             this.pushMessage({ role: 'user', content: STALL_NUDGE_MESSAGE })
+            continue
+          }
+
+          if (
+            !actionNudged &&
+            this.hostedOutputTokens === undefined &&
+            looksLikeUnfinishedAction(fullContent)
+          )
+          {
+            actionNudged = true
+            this.reliabilityStats.stallNudges++
+            this.pushMessage({ role: 'user', content: ACTION_NUDGE_MESSAGE })
             continue
           }
 
