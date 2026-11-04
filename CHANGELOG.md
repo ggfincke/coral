@@ -56,6 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ACP command display:** expose shell commands directly in tool-call and
+  approval inputs so 456code shows the actual command instead of "Ran command".
+
 - **Ollama prompt cache:** the per-round Git context snapshot no longer rewrites
   the leading system message, so an edit no longer forces Ollama to re-prefill
   the whole conversation on the next round. Later system text now stays in

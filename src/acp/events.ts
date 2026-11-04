@@ -119,6 +119,18 @@ function boundedToolOutput(output: string): string
   return `${truncated.head}\n\n[${truncated.omitted} characters omitted]`
 }
 
+function toolInput(call: ActiveToolCall): Record<string, unknown>
+{
+  return {
+    toolName: call.name,
+    arguments: call.args,
+    // ACP clients read shell commands directly from rawInput.command
+    ...(call.name === 'bash' && typeof call.args.command === 'string'
+      ? { command: call.args.command }
+      : {}),
+  }
+}
+
 function permissionToolCall(call: ActiveToolCall): ToolCallUpdate
 {
   return {
@@ -126,10 +138,7 @@ function permissionToolCall(call: ActiveToolCall): ToolCallUpdate
     kind: toolKind(call.name),
     status: 'pending',
     title: toolTitle(call.name, call.presentation),
-    rawInput: {
-      toolName: call.name,
-      arguments: call.args,
-    },
+    rawInput: toolInput(call),
   }
 }
 
@@ -301,10 +310,7 @@ export class AcpEventProjection
           kind: toolKind(name),
           status: 'pending',
           locations: toolLocation(this.options.cwd, args),
-          rawInput: {
-            toolName: name,
-            arguments: args,
-          },
+          rawInput: toolInput(call),
         })
       },
       onToolResult: (name, result, error, callId, diff) =>
