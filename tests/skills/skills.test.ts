@@ -272,10 +272,10 @@ test('standing instructions and the skill catalog keep separate prompt budgets',
   const longWithoutSkills = prompt(longInstructions, false)
   const longWithSkills = prompt(longInstructions, true)
   assert.equal(userSection(longWithSkills), userSection(longWithoutSkills))
-  assert.equal(
-    Buffer.byteLength(userSection(longWithSkills), 'utf-8'),
-    USER_INSTRUCTIONS_MAX_BYTES
-  )
+  // the cut lands on the last line break inside the budget, not the exact byte
+  const userBytes = Buffer.byteLength(userSection(longWithSkills), 'utf-8')
+  assert.ok(userBytes <= USER_INSTRUCTIONS_MAX_BYTES)
+  assert.ok(userBytes > USER_INSTRUCTIONS_MAX_BYTES / 2)
   assert.match(longWithSkills, /## Skills/)
   assert.ok(
     Buffer.byteLength(skillsSection(longWithSkills), 'utf-8') <=

@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Local prompt budget:** pin the local context window no larger than the
+  prompt cap can fill, cut an over-budget AGENTS_HOME section at a paragraph
+  boundary, and offer `code_intel` only inside TypeScript/JavaScript
+  projects. The eval report shows per-round prefill share and flags rounds
+  that missed the prefix cache; a `long-context-fix` task seeds a ~35 file
+  project with a cross-module bug, and `eval compare <before> <after>` diffs
+  two saved `--json` reports per task. Eval runs pin local sampling
+  (`temperature: 0`, `seed: <rep>`) unless `--sampling model` is passed,
+  aggregate wall time and token totals by median, and show per-task wall
+  seconds, prefill share, and first-round prompt tokens.
 - **Local tool rounds:** gather the labeled automatic Git snapshot once per
   turn, type the todo item schema, reserve todos for four or more steps with
   milestone updates, and disable thinking for local compaction summaries.
@@ -58,6 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **ACP command display:** expose shell commands directly in tool-call and
   approval inputs so 456code shows the actual command instead of "Ran command".
+- **Premature local completion:** retry thinking-only responses within the
+  existing stall limit and nudge once when a response ends with a concrete
+  promised action followed by a colon, without a tool call.
 
 - **Ollama prompt cache:** the per-round Git context snapshot no longer rewrites
   the leading system message, so an edit no longer forces Ollama to re-prefill

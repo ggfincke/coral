@@ -98,12 +98,19 @@ export async function runRep(
   model: string,
   task: EvalTask,
   opts: EvalOptions,
-  dependencies: RunRepDependencies = {}
+  dependencies: RunRepDependencies = {},
+  rep = 0
 ): Promise<RunOutcome>
 {
   const host = opts.host ?? DEFAULT_OLLAMA_HOST
   const maxIterations = opts.maxIterations ?? DEFAULT_MAX_ITERATIONS
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  // pin sampling by default so reps differ only by what changed under test;
+  // seed = rep keeps reps distinct from each other but identical across runs
+  const sampling =
+    (opts.sampling ?? 'pinned') === 'pinned'
+      ? { seed: rep, temperature: 0 }
+      : undefined
 
   const dir = await mkdtemp(join(tmpdir(), 'coral-eval-'))
 
@@ -128,6 +135,7 @@ export async function runRep(
       new Agent(model, host, dir, {
         maxIterations,
         think: opts.think,
+        sampling,
         permissions: defaultToolPermissions(),
       })
 
@@ -258,6 +266,7 @@ export async function runRep(
       completionTokens: lastUsage?.totalCompletionTokens ?? 0,
       tokensPerSecond: computeTokensPerSecond(lastUsage),
       wallMs,
+      firstRoundPromptTokens: rounds[0]?.promptTokens ?? 0,
       aborted,
       errored,
     }
@@ -276,6 +285,7 @@ export async function runRep(
       completionTokens: 0,
       tokensPerSecond: 0,
       wallMs: 0,
+      firstRoundPromptTokens: rounds[0]?.promptTokens ?? 0,
       aborted,
       errored: true,
       passed: false,
@@ -333,7 +343,20 @@ function meanReliability(runs: RunOutcome[]): ReliabilityStats
   return mean
 }
 
-// aggregate a task's reps using a strict majority & mean metrics
+// return the median, or zero for an empty set; even counts average the middle pair
+function median(values: number[]): number
+{
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 1
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+// aggregate a task's reps using a strict majority; counters and rates use the
+// mean, while time and token totals use the median so one cold or stalled rep
+// cannot swing the task
 export function aggregateTask(taskId: string, runs: RunOutcome[]): TaskResult
 {
   const reps = runs.length
@@ -349,10 +372,11 @@ export function aggregateTask(taskId: string, runs: RunOutcome[]): TaskResult
     toolErrors: mean(runs.map((r) => r.toolErrors)),
     reliability: meanReliability(runs),
     cleanlinessRate: mean(runs.map((r) => r.cleanlinessRate)),
-    promptTokens: mean(runs.map((r) => r.promptTokens)),
-    completionTokens: mean(runs.map((r) => r.completionTokens)),
+    promptTokens: median(runs.map((r) => r.promptTokens)),
+    completionTokens: median(runs.map((r) => r.completionTokens)),
     tokensPerSecond: mean(runs.map((r) => r.tokensPerSecond)),
-    wallMs: mean(runs.map((r) => r.wallMs)),
+    wallMs: median(runs.map((r) => r.wallMs)),
+    firstRoundPromptTokens: median(runs.map((r) => r.firstRoundPromptTokens)),
     // preserve any abort or error across the task's reps
     aborted: runs.some((r) => r.aborted),
     errored: runs.some((r) => r.errored),
@@ -378,6 +402,9 @@ export function aggregateModel(
     passRate,
     meanCleanliness: mean(results.map((r) => r.metrics.cleanlinessRate)),
     meanTokensPerSecond: mean(results.map((r) => r.metrics.tokensPerSecond)),
+    firstRoundPromptTokens: median(
+      results.map((r) => r.metrics.firstRoundPromptTokens)
+    ),
   }
 }
 
@@ -409,7 +436,7 @@ export async function runEval(
       const runs: RunOutcome[] = []
       for (let rep = 0; rep < reps; rep++)
       {
-        runs.push(await runRep(model, task, { ...opts, host, reps }))
+        runs.push(await runRep(model, task, { ...opts, host, reps }, {}, rep))
       }
       modelRuns.push(...runs)
       taskResults.push(aggregateTask(task.id, runs))

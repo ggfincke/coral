@@ -10,6 +10,27 @@ import { normalizeToolName } from '../../utils/tool-name.js'
 export const STALL_NUDGE_MESSAGE =
   'Your last turn was empty. Call a tool to make progress, or give your final answer as plain text.'
 
+export const ACTION_NUDGE_MESSAGE =
+  'Your last response ended by announcing an action without calling a tool. ' +
+  'Carry out that action with a tool now, or give your final answer if the task is complete. ' +
+  'If you need user input or permission, explain what is missing instead.'
+
+// a trailing colon after a concrete first-person action is a handoff, not a result
+export function looksLikeUnfinishedAction(content: string): boolean
+{
+  const lastParagraph =
+    content
+      .trim()
+      .split(/\n\s*\n/)
+      .at(-1) ?? ''
+  return (
+    lastParagraph.endsWith(':') &&
+    /\bI(?:['’]ll| will)\s+(?:(?:now|also|independently|first|next)\s+)*(?:read|check|verify|run|execute|search|inspect|review|write|edit|fix|test|enumerate)\b/i.test(
+      lastParagraph
+    )
+  )
+}
+
 // cap nudges before accepting an empty turn as final
 export const MAX_STALL_NUDGES = 2
 

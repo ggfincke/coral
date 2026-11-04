@@ -114,6 +114,9 @@ export interface ChatRequest
   num_ctx?: number
   // cap generated tokens, including thinking, through options.num_predict
   num_predict?: number
+  // pin sampling for repeatable runs; local-only, hosted transports ignore both
+  seed?: number
+  temperature?: number
 }
 
 export interface ChatResponse
