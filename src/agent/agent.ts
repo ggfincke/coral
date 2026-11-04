@@ -145,6 +145,7 @@ import type {
   AgentEvents,
   AgentOptions,
   AgentRunOutcome,
+  SamplingOverrides,
 } from './contracts.js'
 
 // cap tool-call rounds for research subagents
@@ -259,6 +260,8 @@ export class Agent
   private numCtx = 0
   // hosted output cap from model metadata; undefined means a local model
   private hostedOutputTokens?: number
+  // pinned seed/temperature for repeatable local runs; hosted transports ignore it
+  private sampling?: SamplingOverrides
   // set when a hosted window is narrower than the model allows
   private contextCap?: { native: number; byEnv: boolean }
   // share one in-flight context-window resolution and clear it after settlement
@@ -324,6 +327,7 @@ export class Agent
         ? transport
         : new SessionInferenceClient(transport, this.sessionCosts)
     this.thinkMode = options.think ?? true
+    this.sampling = options.sampling
     this.skills = options.skills ?? EMPTY_SKILL_INDEX
     this.userInstructions = options.userInstructions ?? ''
     this.projectContext = options.projectContext ?? true
@@ -1688,6 +1692,8 @@ export class Agent
               think: this.thinkMode,
               num_ctx: this.numCtx || undefined,
               num_predict: requestBudget.responseReserve,
+              seed: this.sampling?.seed,
+              temperature: this.sampling?.temperature,
             },
             signal
           ))

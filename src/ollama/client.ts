@@ -315,6 +315,14 @@ export class OllamaClient
     {
       options.num_predict = request.num_predict
     }
+    if (typeof request.seed === 'number' && Number.isInteger(request.seed))
+    {
+      options.seed = request.seed
+    }
+    if (typeof request.temperature === 'number' && request.temperature >= 0)
+    {
+      options.temperature = request.temperature
+    }
     if (Object.keys(options).length > 0) body.options = options
 
     return body
