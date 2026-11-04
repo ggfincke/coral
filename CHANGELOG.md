@@ -66,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ACP command display:** expose shell commands directly in tool-call and
+  approval inputs so 456code shows the actual command instead of "Ran command".
 - **Premature local completion:** retry thinking-only responses within the
   existing stall limit and nudge once when a response ends with a concrete
   promised action followed by a colon, without a tool call.
