@@ -5,6 +5,10 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { EvalTask } from './types.js'
 import {
+  LONG_CONTEXT_TEST_FILES,
+  seedLongContextProject,
+} from './long-context-fixture.js'
+import {
   answerContains,
   readFileSafe,
   readJson,
@@ -296,6 +300,42 @@ const bugFixVerify: EvalTask = {
   },
 }
 
+// define a multi-file fix where the bug spans two modules the prompt never
+// names; passing requires reading across the tree and keeping the tests locked
+const longContextFix: EvalTask = {
+  id: 'long-context-fix',
+  description: 'find & fix a cross-module pricing bug in a ~35 file project',
+  prompt:
+    'npm test fails in this project: gold customers are being charged wrong. Find the cause, fix it in the source (not the tests), and run the tests to confirm.',
+  async setup(dir)
+  {
+    await seedLongContextProject(dir)
+  },
+  async grade(ctx)
+  {
+    // reject any edit to the locked tests
+    for (const [rel, expected] of Object.entries(LONG_CONTEXT_TEST_FILES))
+    {
+      const actual = await readFileSafe(ctx.dir, rel)
+      if (actual !== expected)
+      {
+        return { passed: false, detail: `${rel} was modified` }
+      }
+    }
+    // the whole suite must pass, not just the gold case
+    const { code } = await runNode(
+      ctx.dir,
+      ['--test', 'test/'],
+      GRADE_TIMEOUT_MS
+    )
+    const passed = code === 0
+    return {
+      passed,
+      detail: passed ? 'node --test passed' : `node --test exited ${code}`,
+    }
+  },
+}
+
 export const TASKS: EvalTask[] = [
   readReport,
   singleEdit,
@@ -303,6 +343,7 @@ export const TASKS: EvalTask[] = [
   searchMultiEdit,
   buildRun,
   bugFixVerify,
+  longContextFix,
 ]
 
 export function taskById(id: string): EvalTask | undefined
