@@ -33,6 +33,11 @@ prompt, then grades the result deterministically:
 6. **bug-fix-verify** — fix the subtract-instead-of-add bug in `sum.mjs` so
    `sum.test.mjs` passes; graded by re-running `node --test` (exit 0 only on a
    real fix).
+7. **long-context-fix** — find and fix a percent-vs-fraction bug that spans
+   `discount-rate.mjs` and `apply-discount.mjs` inside a ~35 file project the
+   prompt never names (`long-context-fixture.ts`); graded by re-running the
+   locked `node --test test/` suite. This is the task that grows the context
+   enough to exercise prompt caps, prefix-cache misses, and compaction.
 
 ## Metric definitions
 
@@ -59,10 +64,20 @@ prompt, then grades the result deterministically:
 - **passRate (per model)** — total passing reps over total reps, so a 3-rep task
   weighs more than a 1-rep task.
 
-Per-task metrics are the mean across reps; model headline rates are the mean
-across tasks.
+Per-task counters and rates are the mean across reps; wall time and token
+totals (including `firstRoundPromptTokens`, the system prompt plus task prompt
+cost) are the median so one cold or stalled rep cannot swing the task. Model
+headline rates are the mean across tasks; the model `first-round` figure is the
+median across tasks. Each task line also shows median wall seconds and the
+mean prefill share across every round of every rep.
 
-Reports also retain per-round usage samples under each task's `runs`, in repetition order. Text output prints each rep and round with prompt/decode counts, estimated context occupancy, model durations, and the completion reason. Missing durations and reasons are `null` in JSON and `unavailable` in text. These are diagnostic signals, not direct measurements of cache hits.
+Sampling is pinned by default: every request sends `temperature: 0` and
+`seed: <rep index>`, so reps differ from each other but a rerun reproduces the
+same reps and before/after reports differ only by what changed. Pass
+`--sampling model` to leave Ollama's own sampling in place. Hosted providers
+ignore both.
+
+Reports also retain per-round usage samples under each task's `runs`, in repetition order. Text output prints each rep and round with prompt/decode counts, estimated context occupancy, the prefill share (prompt tokens Ollama actually evaluated over the estimated context), model durations, and the completion reason, then a `cold rounds` line listing rounds after the first whose prefill share reached 90%. Missing durations and reasons are `null` in JSON and `unavailable` in text. These are diagnostic signals, not direct measurements of cache hits: a prefix-cache hit only re-reads the new tail, so a later round that re-prefills nearly everything most likely missed.
 
 ## Usage
 
@@ -87,7 +102,25 @@ npm run eval -- mistral qwen3-coder --reps 3 --save-telemetry
 
 Flags: `--reps <n>`, `--json`, `--task <id>` (repeatable; unknown ids fail
 loudly), `--host <url>`, plus `--max-iterations <n>`, `--timeout <ms>`,
-`--think <low|medium|high|on|off>`, and `--save-telemetry`.
+`--think <low|medium|high|on|off>`, `--sampling <pinned|model>`, and
+`--save-telemetry`.
+
+## Comparing runs
+
+Save two `--json` reports, then diff them per model and per task:
+
+```bash
+npm run --silent eval -- qwen3.8:27b --reps 3 --json > before.json
+# change something
+npm run --silent eval -- qwen3.8:27b --reps 3 --json > after.json
+npm run eval -- compare before.json after.json
+```
+
+Deltas are after minus before. Rates print in percentage points; wall time,
+total prompt tokens, and first-round prompt tokens (the system prompt cost)
+print as absolute and relative change. First-round prints `n/a` when either
+report predates that field. Only models and tasks present in both reports are
+diffed; tasks on one side are listed, not dropped.
 
 ## Longitudinal telemetry (`--save-telemetry`)
 

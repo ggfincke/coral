@@ -1,7 +1,16 @@
 // tests/scripts/eval/report.ts
 // renders an EvalReport as plain aligned text or pretty JSON
 
-import type { EvalReport, ModelReport, TaskResult } from './types.js'
+import type {
+  EvalReport,
+  ModelReport,
+  RoundSample,
+  TaskResult,
+} from './types.js'
+
+// a later round that prefilled at least this share of its context missed the
+// prefix cache (cache hits only re-read the new tail)
+const COLD_PREFILL_FRACTION = 0.9
 
 // format a 0..1 rate as a right-padded percent string
 function pct(rate: number): string
@@ -13,6 +22,26 @@ function pct(rate: number): string
 function tps(value: number): string
 {
   return value.toFixed(1)
+}
+
+// share of the planned context that ollama actually prefilled this round;
+// near 100% means the prefix cache missed and the whole prompt was re-read
+function prefillFraction(sample: RoundSample): number
+{
+  if (sample.contextTokens <= 0) return 0
+  return Math.min(1, sample.promptTokens / sample.contextTokens)
+}
+
+// list the rounds after the first that re-prefilled most of the prompt
+function formatColdRounds(rounds: RoundSample[]): string
+{
+  const cold = rounds
+    .filter(
+      (sample) =>
+        sample.round > 1 && prefillFraction(sample) >= COLD_PREFILL_FRACTION
+    )
+    .map((sample) => sample.round)
+  return cold.length === 0 ? 'none' : cold.join(', ')
 }
 
 // pad a string to width on the right (left-align)
@@ -27,7 +56,26 @@ function padLeft(s: string, width: number): string
   return s.length >= width ? s : ' '.repeat(width - s.length) + s
 }
 
-// one line per task: id, passes/reps, cleanliness, tok/s, status, detail
+// format milliseconds as whole seconds
+function secs(ms: number): string
+{
+  return `${(ms / 1000).toFixed(0)}s`
+}
+
+// mean prefill share across every round of every rep; high means the prefix
+// cache is missing and each round re-reads the whole prompt
+function taskPrefill(task: TaskResult): number
+{
+  const samples = task.runs.flatMap((run) => run.rounds)
+  if (samples.length === 0) return 0
+  return (
+    samples.reduce((sum, sample) => sum + prefillFraction(sample), 0) /
+    samples.length
+  )
+}
+
+// one line per task: id, passes/reps, cleanliness, tok/s, wall, prefill,
+// status, detail
 function formatTaskLine(task: TaskResult, idWidth: number): string
 {
   const status = task.metrics.aborted
@@ -43,6 +91,8 @@ function formatTaskLine(task: TaskResult, idWidth: number): string
     padLeft(`${task.passes}/${task.reps}`, 7),
     padLeft(pct(task.metrics.cleanlinessRate), 6),
     padLeft(tps(task.metrics.tokensPerSecond), 8),
+    padLeft(secs(task.metrics.wallMs), 6),
+    padLeft(pct(taskPrefill(task)), 6),
     padRight(status, 7),
   ]
 
@@ -61,18 +111,20 @@ function formatModelBlock(model: ModelReport): string
     `${model.model}  ` +
     `passRate ${pct(model.passRate)}  ` +
     `cleanliness ${pct(model.meanCleanliness)}  ` +
-    `tok/s ${tps(model.meanTokensPerSecond)}`
+    `tok/s ${tps(model.meanTokensPerSecond)}  ` +
+    `first-round ${model.firstRoundPromptTokens.toFixed(0)} tok`
 
   const lines = model.results.flatMap((task) => [
     formatTaskLine(task, idWidth),
-    ...task.runs.flatMap((run, rep) =>
-      run.rounds.map((sample) =>
+    ...task.runs.flatMap((run, rep) => [
+      ...run.rounds.map((sample) =>
       {
         const duration = (ns: number | null) =>
           ns === null ? 'unavailable' : `${(ns / 1e6).toFixed(1)}ms`
-        return `    rep ${rep + 1} round ${sample.round}: prompt ${sample.promptTokens}, decode ${sample.completionTokens}, context ~${sample.contextTokens}, prompt time ${duration(sample.promptEvalDurationNs)}, decode time ${duration(sample.evalDurationNs)}, reason ${sample.doneReason ?? 'unavailable'}`
-      })
-    ),
+        return `    rep ${rep + 1} round ${sample.round}: prompt ${sample.promptTokens}, decode ${sample.completionTokens}, context ~${sample.contextTokens}, prefill ${pct(prefillFraction(sample))}, prompt time ${duration(sample.promptEvalDurationNs)}, decode time ${duration(sample.evalDurationNs)}, reason ${sample.doneReason ?? 'unavailable'}`
+      }),
+      `    rep ${rep + 1} cold rounds: ${formatColdRounds(run.rounds)}`,
+    ]),
   ])
 
   return [summary, ...lines].join('\n')

@@ -115,6 +115,12 @@ export type AgentMcpManagerFactory = (
   mode: ActiveMcpMode
 ) => Promise<AgentMcpManager>
 
+export interface SamplingOverrides
+{
+  seed?: number
+  temperature?: number
+}
+
 export interface AgentOptions
 {
   think?: boolean | 'low' | 'medium' | 'high'
@@ -126,6 +132,8 @@ export interface AgentOptions
   numCtx?: number
   // inherit the parent's hosted output cap alongside its pinned window
   hostedOutputTokens?: number
+  // pin local sampling for repeatable runs (evals); hosted transports ignore it
+  sampling?: SamplingOverrides
   // run a read-only self-check after edit-producing turns
   verifyEdits?: boolean
   // override local and user tool policy for deterministic callers

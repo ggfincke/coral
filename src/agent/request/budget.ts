@@ -168,6 +168,22 @@ export function requestBudgetCapacity(
   }
 }
 
+// smallest local window whose prompt limit still reaches the prompt cap; any
+// larger pinned num_ctx only allocates KV cache the planner never fills
+export function usefulLocalContextWindow(
+  maxPromptTokens = MAX_REQUEST_PROMPT_TOKENS
+): number
+{
+  const cap =
+    Number.isFinite(maxPromptTokens) && maxPromptTokens >= 1
+      ? Math.floor(maxPromptTokens)
+      : MAX_REQUEST_PROMPT_TOKENS
+  const fractional = Math.ceil(cap / (1 - RESPONSE_RESERVE_FRACTION))
+  return fractional * RESPONSE_RESERVE_FRACTION <= MAX_RESPONSE_RESERVE_TOKENS
+    ? fractional
+    : cap + MAX_RESPONSE_RESERVE_TOKENS
+}
+
 export function createRequestBudgetBreakdown(
   contextWindow: number,
   input: Partial<RequestBudgetCategories>,

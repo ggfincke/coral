@@ -1,15 +1,18 @@
 // tests/scripts/eval/run.ts
 // drive live Ollama model evals through the CLI
 
+import { readFile } from 'node:fs/promises'
 import { runEval } from './harness.js'
 import { TASKS, taskById } from './tasks.js'
 import { formatReport, reportToJson } from './report.js'
+import { formatComparison } from './compare.js'
 import {
   evalTelemetryPath,
   formatTelemetry,
   loadTelemetry,
 } from '../../../src/telemetry/store.js'
-import type { EvalOptions, EvalTask } from './types.js'
+import { isPlainObject } from '../../../src/utils/guards.js'
+import type { EvalOptions, EvalReport, EvalTask } from './types.js'
 
 function fail(message: string): never
 {
@@ -50,6 +53,17 @@ function requirePositiveInteger(value: number, flag: string): number
 }
 
 // coerce a --think flag value to the EvalOptions think type
+// only two sampling modes exist; anything else is a typo worth failing on
+function parseSampling(value: string): EvalOptions['sampling']
+{
+  const normalized = value.toLowerCase()
+  if (normalized === 'pinned' || normalized === 'model')
+  {
+    return normalized
+  }
+  fail(`--sampling must be pinned or model, got ${value}`)
+}
+
 function parseThink(value: string): EvalOptions['think']
 {
   const normalized = value.toLowerCase()
@@ -102,7 +116,8 @@ function printUsageAndExit(): never
     'usage: tsx tests/scripts/eval/run.ts <model...> ' +
       '[--host <url>] [--reps <n>] [--task <id>]... ' +
       '[--max-iterations <n>] [--timeout <ms>] [--think <mode>] ' +
-      '[--json] [--save-telemetry]'
+      '[--sampling <pinned|model>] [--json] [--save-telemetry]\n' +
+      '       tsx tests/scripts/eval/run.ts compare <before.json> <after.json>'
   )
 }
 
@@ -122,9 +137,57 @@ function resolveTasks(taskFilter: string[]): EvalTask[]
   })
 }
 
+// parse a saved --json report; fail loudly on a missing or malformed file
+async function loadReport(path: string): Promise<EvalReport>
+{
+  let parsed: unknown
+  try
+  {
+    parsed = JSON.parse(await readFile(path, 'utf-8'))
+  }
+  catch (err)
+  {
+    fail(
+      `cannot read eval report ${path}: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+  if (
+    !isPlainObject(parsed) ||
+    !Array.isArray(parsed.models) ||
+    typeof parsed.host !== 'string' ||
+    typeof parsed.reps !== 'number'
+  )
+  {
+    fail(`${path} is not a Coral eval --json report`)
+  }
+  return parsed as unknown as EvalReport
+}
+
+// `compare <before.json> <after.json>` prints deltas instead of running models
+async function compareMain(argv: string[]): Promise<void>
+{
+  const [beforePath, afterPath, ...rest] = argv
+  if (beforePath === undefined || afterPath === undefined || rest.length > 0)
+  {
+    fail(
+      'usage: tsx tests/scripts/eval/run.ts compare <before.json> <after.json>'
+    )
+  }
+  const [before, after] = await Promise.all([
+    loadReport(beforePath),
+    loadReport(afterPath),
+  ])
+  console.log(formatComparison(before, after))
+}
+
 async function main(): Promise<void>
 {
   const argv = process.argv.slice(2)
+  if (argv[0] === 'compare')
+  {
+    await compareMain(argv.slice(1))
+    return
+  }
   const models: string[] = []
   const taskFilter: string[] = []
   const opts: EvalOptions = {}
@@ -157,6 +220,10 @@ async function main(): Promise<void>
         break
       case '--think':
         opts.think = parseThink(requireFlagValue(argv, i, arg))
+        i++
+        break
+      case '--sampling':
+        opts.sampling = parseSampling(requireFlagValue(argv, i, arg))
         i++
         break
       case '--json':

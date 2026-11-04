@@ -30,6 +30,7 @@ import {
   type ProjectContextSnapshot,
 } from './request/project-context.js'
 import { setCwd, getCwd } from '../cwd.js'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   resolvePermissions,
@@ -132,6 +133,7 @@ import type { McpMode, McpStatus } from '../mcp/types.js'
 import {
   assertRequestBudget,
   requestBudgetCapacity,
+  usefulLocalContextWindow,
   type RequestBudgetBreakdown,
 } from './request/budget.js'
 import {
@@ -143,10 +145,14 @@ import type {
   AgentEvents,
   AgentOptions,
   AgentRunOutcome,
+  SamplingOverrides,
 } from './contracts.js'
 
 // cap tool-call rounds for research subagents
 const SUBAGENT_MAX_ITERATIONS = 24
+
+// any of these at the cwd root marks a project the TypeScript server can serve
+const TS_PROJECT_MARKERS = ['tsconfig.json', 'jsconfig.json', 'package.json']
 
 function mergeReliabilityStats(
   base: ReliabilityStats | undefined,
@@ -254,6 +260,8 @@ export class Agent
   private numCtx = 0
   // hosted output cap from model metadata; undefined means a local model
   private hostedOutputTokens?: number
+  // pinned seed/temperature for repeatable local runs; hosted transports ignore it
+  private sampling?: SamplingOverrides
   // set when a hosted window is narrower than the model allows
   private contextCap?: { native: number; byEnv: boolean }
   // share one in-flight context-window resolution and clear it after settlement
@@ -319,15 +327,22 @@ export class Agent
         ? transport
         : new SessionInferenceClient(transport, this.sessionCosts)
     this.thinkMode = options.think ?? true
+    this.sampling = options.sampling
     this.skills = options.skills ?? EMPTY_SKILL_INDEX
     this.userInstructions = options.userInstructions ?? ''
     this.projectContext = options.projectContext ?? true
     this.toolsConfig = resolveToolsConfig(this.cwd)
     // bind skill to this Agent's index; with nothing installed it is omitted
     // rather than advertised as a tool that can only fail
+    // code_intel only works against a TypeScript/JavaScript project, so its
+    // schema and prompt rule are dead weight anywhere else
+    const typeScriptProject = TS_PROJECT_MARKERS.some((marker) =>
+      existsSync(resolve(this.cwd, marker))
+    )
     this.baseTools = (options.tools ?? allTools)
       .filter((tool) => !this.toolsConfig.disabled.includes(tool.name))
       .filter((tool) => tool.name !== 'skill' || this.skills.size > 0)
+      .filter((tool) => tool.name !== 'code_intel' || typeScriptProject)
       .map((tool) =>
         tool.name === 'skill' ? createSkillTool(this.skills) : tool
       )
@@ -948,8 +963,20 @@ export class Agent
 
     if (this.model !== requestedModel) return this.contextWindowSize
 
-    // use the request-budget fallback when model metadata is unavailable
-    const contextWindow = resolved?.contextWindow ?? MIN_NUM_CTX
+    // use the request-budget fallback when model metadata is unavailable;
+    // a local pin above what the prompt cap can fill only wastes KV memory
+    const contextWindow =
+      resolved === undefined
+        ? MIN_NUM_CTX
+        : resolved.hostedOutputTokens !== undefined
+          ? resolved.contextWindow
+          : Math.max(
+              MIN_NUM_CTX,
+              Math.min(
+                resolved.contextWindow,
+                usefulLocalContextWindow(this.maxPromptTokens)
+              )
+            )
     this.contextWindowSize = contextWindow
     this.numCtx = contextWindow
     this.hostedOutputTokens = resolved?.hostedOutputTokens
@@ -1665,6 +1692,8 @@ export class Agent
               think: this.thinkMode,
               num_ctx: this.numCtx || undefined,
               num_predict: requestBudget.responseReserve,
+              seed: this.sampling?.seed,
+              temperature: this.sampling?.temperature,
             },
             signal
           ))
