@@ -58,7 +58,21 @@ function boundedSection(
     budget - Buffer.byteLength(boundedMarker, 'utf-8'),
     0
   )
-  return `${prefix}${truncateUtf8(body, contentBudget).trimEnd()}${boundedMarker}`
+  return `${prefix}${truncateAtLineBreak(body, contentBudget)}${boundedMarker}`
+}
+
+// cut at the last paragraph or line break so a bullet never ends mid-word;
+// keep the raw byte cut when no break lands in the back half of the budget
+function truncateAtLineBreak(body: string, maxBytes: number): string
+{
+  const raw = truncateUtf8(body, maxBytes)
+  const floor = Math.floor(raw.length / 2)
+  for (const separator of ['\n\n', '\n'])
+  {
+    const index = raw.lastIndexOf(separator)
+    if (index >= floor) return raw.slice(0, index).trimEnd()
+  }
+  return raw.trimEnd()
 }
 
 export function supplementalBudgetForWindow(contextWindow: number): number
