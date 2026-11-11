@@ -10,6 +10,7 @@ import {
   estimateKvBytesPerToken,
   computeMemoryCappedContext,
   resolveContextConfig,
+  resolveKvElementBytes,
   resolvePinnedContextWindow,
 } from '../../src/config/context.js'
 import type { Model, ModelInfo } from '../../src/types/inference.js'
@@ -85,6 +86,62 @@ test('estimateKvBytesPerToken matches the verified full-attention figure', () =>
 {
   // 88 layers * 8 kv heads * (128 + 128) dims * 2 bytes (f16)
   assert.equal(estimateKvBytesPerToken(MISTRAL), 360_448)
+})
+
+// run fn w/ a fresh home whose ~/.coral.json declares the given ollama section
+async function withUserOllamaConfig<T>(
+  ollama: unknown,
+  fn: () => T | Promise<T>
+): Promise<T>
+{
+  const home = await tempDir('coral-kv-home-')
+  await writeFile(join(home, '.coral.json'), JSON.stringify({ ollama }))
+  const original = process.env.HOME
+  process.env.HOME = home
+  try
+  {
+    return await fn()
+  }
+  finally
+  {
+    if (original === undefined) delete process.env.HOME
+    else process.env.HOME = original
+  }
+}
+
+test('ollama.kvCacheType scales the KV estimate and ignores unknown values', async () =>
+{
+  const elementBytes = (kvCacheType: unknown) =>
+    withUserOllamaConfig({ kvCacheType }, resolveKvElementBytes)
+  assert.equal(await elementBytes('f16'), 2)
+  assert.equal(await elementBytes(' Q8_0 '), 34 / 32)
+  assert.equal(await elementBytes('q4_0'), 18 / 32)
+  for (const unknown of ['q16', 'constructor', 8, undefined])
+  {
+    assert.equal(await elementBytes(unknown), 2)
+  }
+  assert.equal(estimateKvBytesPerToken(MISTRAL, 34 / 32), 191_488)
+
+  // a 24 GiB discrete GPU w/ 17.7 GB of weights, as on a single-3090 host
+  const pinned = (kvCacheType: string) =>
+    withUserOllamaConfig({ kvCacheType }, async () =>
+    {
+      const resolved = await resolvePinnedContextWindow({
+        model: 'full-attention',
+        cwd: await tempProject(),
+        memory: { kind: 'discrete', totalBytes: 24 * GiB },
+        showModel: async () => MISTRAL,
+        listModels: async (): Promise<Model[]> => [
+          { name: 'full-attention', size: 17.7 * 1e9, modified_at: '' },
+        ],
+      })
+      return resolved?.contextWindow
+    })
+  await withNumCtx(undefined, async () =>
+  {
+    assert.equal(await pinned('f16'), 16_384)
+    assert.equal(await pinned('q8_0'), 30_720)
+  })
 })
 
 test('estimateKvBytesPerToken treats sliding-window archs as KV-light', () =>

@@ -16,7 +16,7 @@ Constants in `src/config/context.ts`:
 - Unified memory: **75%** of RAM, minus a **6 GiB** reserve and model weight bytes (from `/api/tags` `size`; missing → 0)
 - Discrete GPU: all of VRAM, minus a **2 GiB** reserve and model weight bytes. Weights larger than VRAM fall to the minimum window
 - Minimum window: **8,192** tokens
-- Full-attention KV estimate: f16 (2 bytes/element) × layers × KV heads × (key + value length)
+- Full-attention KV estimate: f16 (2 bytes/element) × layers × KV heads × (key + value length). User `~/.coral.json` `ollama.kvCacheType` of `q8_0` or `q4_0` shrinks the element to 34/32 or 18/32 of a byte when the Ollama server runs a quantized K/V cache; see [Configuration](configuration.md#user-coraljson)
 - Sliding-window architectures **`gemma` / `gemma2` / `gemma3` / `gemma4`**: treated as KV-light → pin **native** context after the weight check (no 1024 rounding from KV math)
 - Full-attention: `floor(remainingBytes / kvBytesPerToken)`, clamp to native and minimum, round down to **1024**
 - User ceiling: `CORAL_NUM_CTX` if it parses as an integer `> 0`, else project `context.maxNumCtx` (JSON **number** only)

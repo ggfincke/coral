@@ -20,6 +20,9 @@ export interface UserCoralConfig extends SharedCoralConfig
   providers?: unknown
   // catalog preferences stay user-only; installed skills remain loadable
   skills?: { localAllowlist?: string[] }
+  // facts about this machine's Ollama server stay user-only so a cloned repo
+  // cannot oversize the pinned window
+  ollama?: unknown
 }
 
 export interface ProjectCoralConfig extends SharedCoralConfig
@@ -67,6 +70,7 @@ export function loadUserConfig(): UserCoralConfig
   if (config.tools !== undefined) result.tools = config.tools
   if (config.mcp !== undefined) result.mcp = config.mcp
   if (config.providers !== undefined) result.providers = config.providers
+  if (config.ollama !== undefined) result.ollama = config.ollama
   if (
     isPlainObject(config.skills) &&
     Array.isArray(config.skills.localAllowlist) &&

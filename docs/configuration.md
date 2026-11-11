@@ -121,6 +121,26 @@ does not restrict the `skill` tool, skill listings, or slash commands, and is
 ignored in project config. Catalog descriptions are capped at 80 characters for
 Ollama and 120 for hosted models. See [Skills](skills.md).
 
+`ollama.kvCacheType` tells Coral which K/V cache type your Ollama server uses:
+`"f16"` (the default), `"q8_0"`, or `"q4_0"`. Coral cannot read the server's
+environment, so it sizes the pinned window for f16 unless you say otherwise.
+
+```json
+{
+  "ollama": { "kvCacheType": "q8_0" }
+}
+```
+
+Set it only after the server itself runs with the matching
+`OLLAMA_KV_CACHE_TYPE` (Ollama needs flash attention on for a quantized cache)
+and `ollama ps` still shows the model at `100% GPU`. If the server is on f16
+while Coral assumes a smaller cache, the pinned window can outgrow memory and
+the model spills off the GPU. The setting is user-only and ignored in project
+config. It changes nothing for the Gemma family, which pins its native window,
+or for hosted models, and the pin is still capped by the local prompt limit
+(about 37,450 tokens at the default `context.maxPromptTokens`). Unknown values
+mean f16.
+
 ---
 
 ## Project `<workspace>/.coral.json`

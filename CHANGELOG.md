@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`temperature: 0`, `seed: <rep>`) unless `--sampling model` is passed,
   aggregate wall time and token totals by median, and show per-task wall
   seconds, prefill share, and first-round prompt tokens.
+- **Quantized K/V cache sizing:** user `~/.coral.json` `ollama.kvCacheType`
+  (`f16`, `q8_0`, or `q4_0`) tells Coral which K/V cache type the Ollama
+  server runs, so a full-attention model on a small GPU can pin a larger
+  window when the server uses `OLLAMA_KV_CACHE_TYPE`. The default stays f16.
 - **Eval cache signal:** eval tasks can carry follow-up turns, and a
   `long-context-followup` task runs two short turns after the long-context
   fix. Reports and `eval compare` now show prompt-eval time per task and the
