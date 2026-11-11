@@ -10,6 +10,7 @@ import {
   MAX_COMPACT_FAILURES,
   MAX_FROZEN_SUMMARIES,
   pruneToolResults as buildPrunedMessages,
+  pruneToolResultsToTarget as buildPrunedMessagesToTarget,
   splitForCompaction,
   type CompactionConfig,
 } from './compaction.js'
@@ -671,6 +672,38 @@ export class ConversationState
     protectCount?: number
   ): ConversationTransition | null
   {
+    return this.commitPrune(compactedAt, (activeIndex) =>
+      buildPrunedMessages(
+        this.messages,
+        protectCount,
+        this.frozenPrefixLength,
+        activeIndex
+      )
+    )
+  }
+
+  // prune one batch down to a stored-token target so the next prune waits for
+  // real growth instead of rewriting mid-history every round
+  pruneToolResultsToTarget(
+    compactedAt: string,
+    targetStoredTokens: number
+  ): ConversationTransition | null
+  {
+    return this.commitPrune(compactedAt, (activeIndex) =>
+      buildPrunedMessagesToTarget(
+        this.messages,
+        targetStoredTokens,
+        this.frozenPrefixLength,
+        activeIndex
+      )
+    )
+  }
+
+  private commitPrune(
+    compactedAt: string,
+    build: (activeIndex: number) => ReturnType<typeof buildPrunedMessages>
+  ): ConversationTransition | null
+  {
     const beforeStoredTokens = this.estimatedTokenCount
     const beforeMessages = this.messages.length
     const activeMessage = this.activeAnchor
@@ -679,12 +712,7 @@ export class ConversationState
     const activeIndex = activeMessage
       ? this.messages.indexOf(activeMessage)
       : this.messages.length
-    const { prunedMessages, prunedCount, prunedThinking } = buildPrunedMessages(
-      this.messages,
-      protectCount,
-      this.frozenPrefixLength,
-      activeIndex
-    )
+    const { prunedMessages, prunedCount, prunedThinking } = build(activeIndex)
     if (prunedCount === 0 && prunedThinking === 0) return null
 
     this.messages = prunedMessages
