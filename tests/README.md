@@ -54,8 +54,13 @@ npm run typecheck:scripts
 npm run test:watch
 
 # run a specific test file
-node --import tsx --test tests/agent/agent.test.ts
+node --import tsx --import ./tests/helpers/isolate-home.ts --test tests/agent/agent.test.ts
 ```
+
+`npm test` preloads `tests/helpers/isolate-home.ts`, which gives every test
+process an empty temporary home and a fixed Git identity. Your own
+`~/.coral.json`, `~/.agents`, and global Git config or hooks never reach a
+test. Keep the preload when running a single file.
 
 ## Adding Tests
 
