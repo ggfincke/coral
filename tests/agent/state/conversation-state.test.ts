@@ -11,6 +11,7 @@ import {
   FROZEN_SUMMARY_MARKER,
   MAX_FROZEN_SUMMARIES,
   pruneToolResults,
+  pruneToolResultsToTarget,
   splitForCompaction,
   stripThinkingForCompaction,
   type CompactionConfig,
@@ -1142,6 +1143,52 @@ describe('compaction helpers', () =>
     assert.equal(prunedCount, 1)
     assert.match(prunedMessages[1]!.content, /tool result pruned/)
     assert.equal(prunedMessages[3]!.content, 'recent output')
+  })
+
+  test('pruneToolResultsToTarget lowers protection only as far as the target needs and never prunes the unseen tool round', () =>
+  {
+    const result = (label: string): OllamaMessage => ({
+      role: 'tool',
+      tool_name: 'read_file',
+      content: `${label} `.repeat(80),
+    })
+    const call: OllamaMessage = { role: 'assistant', content: '' }
+    const messages: OllamaMessage[] = [
+      { role: 'system', content: 'System.' },
+      { role: 'user', content: 'Read everything.' },
+    ]
+    for (let round = 0; round < 8; round++)
+    {
+      messages.push(call, result(`seen ${round}`))
+    }
+    // one parallel round the model has not read yet
+    messages.push(
+      call,
+      result('unseen a'),
+      result('unseen b'),
+      result('unseen c')
+    )
+    const intact = (pruned: OllamaMessage[]): number =>
+      pruned.filter(
+        (message) =>
+          message.role === 'tool' && !/tool result pruned/.test(message.content)
+      ).length
+
+    const sixKept = estimateTotalTokens(
+      pruneToolResults(messages, 6).prunedMessages
+    )
+    assert.equal(
+      intact(pruneToolResultsToTarget(messages, sixKept).prunedMessages),
+      6
+    )
+    assert.equal(
+      intact(pruneToolResultsToTarget(messages, sixKept - 1).prunedMessages),
+      5
+    )
+
+    const floored = pruneToolResultsToTarget(messages, 0).prunedMessages
+    assert.equal(intact(floored), 3)
+    assert.deepEqual(floored.slice(-3), messages.slice(-3))
   })
 
   test('stripThinkingForCompaction removes reasoning while preserving answers', () =>

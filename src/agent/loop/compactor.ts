@@ -9,6 +9,7 @@ import type {
 import {
   buildCompactionPrompt,
   DEFAULT_COMPACTION_CONFIG,
+  pruneTargetTokens,
   shouldCompactByTotal,
   shouldPrune,
   stripThinkingForCompaction,
@@ -140,7 +141,13 @@ export class CompactionCoordinator
     // prune old tool results before spending one model request on a summary
     if (shouldPrune(this.state.getMessageCount(), totalTokens, this.config))
     {
-      const transition = this.state.pruneToolResults(new Date().toISOString())
+      // tools, framing & volatile context are not prunable, so the stored
+      // history carries the whole reduction
+      const overheadTokens = totalTokens - this.state.getEstimatedTokens()
+      const transition = this.state.pruneToolResultsToTarget(
+        new Date().toISOString(),
+        pruneTargetTokens(this.config) - overheadTokens
+      )
       if (transition)
       {
         if (signal?.aborted) return false

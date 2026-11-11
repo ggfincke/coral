@@ -314,6 +314,8 @@ export async function requestSessionTitle(
         ],
         // a title is a few words; bound decode regardless of model verbosity
         num_predict: 32,
+        // local thinking would spend that whole budget before any visible title
+        think: false,
         // reuse the session pin so this request does not reload the runner
         num_ctx: numCtx,
       },

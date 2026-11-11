@@ -17,6 +17,13 @@ const SUMMARIZE_THRESHOLD = 0.9
 // keep this many recent tool results during pruning
 const PRUNE_PROTECT_COUNT = 6
 
+// prune down to this fraction so the next prune waits for real growth; one
+// result per round rewrites mid-history & forfeits the prefix cache every time
+const PRUNE_TARGET = 0.5
+
+// a batch prune never gives up the newest results below this count
+const PRUNE_MIN_PROTECT_COUNT = 2
+
 // recognize only the complete bounded marker shape we generate
 const PRUNE_MARKER_PREFIX = '[tool result pruned — '
 const PRUNE_MARKER_SUFFIX = /, ~\d+ tokens\]$/
@@ -243,6 +250,66 @@ export function pruneToolResults(
   }
 
   return { prunedMessages, prunedCount, prunedThinking }
+}
+
+// estimated context a batch prune aims to get back under
+export function pruneTargetTokens(
+  config: CompactionConfig = DEFAULT_COMPACTION_CONFIG
+): number
+{
+  return Math.floor(config.contextWindow * PRUNE_TARGET)
+}
+
+// count the results of the round that just ran; the model has not read them
+function countUnseenToolResults(
+  messages: OllamaMessage[],
+  startIndex: number
+): number
+{
+  let unseen = 0
+  for (
+    let i = messages.length - 1;
+    i >= startIndex && messages[i]!.role === 'tool';
+    i--
+  )
+  {
+    unseen++
+  }
+  return unseen
+}
+
+// prune once to a stored-token target, giving up protected results oldest
+// first only as far as the target needs
+export function pruneToolResultsToTarget(
+  messages: OllamaMessage[],
+  targetTokens: number,
+  startIndex = 0,
+  protectActiveSkillResultsFrom = messages.length
+): ReturnType<typeof pruneToolResults>
+{
+  const unseen = countUnseenToolResults(messages, startIndex)
+  const minProtectCount = Math.max(PRUNE_MIN_PROTECT_COUNT, unseen)
+  let protectCount = Math.max(PRUNE_PROTECT_COUNT, unseen)
+  let result = pruneToolResults(
+    messages,
+    protectCount,
+    startIndex,
+    protectActiveSkillResultsFrom
+  )
+  while (
+    protectCount > minProtectCount &&
+    estimateTotalTokens(result.prunedMessages) > targetTokens
+  )
+  {
+    protectCount--
+    result = pruneToolResults(
+      messages,
+      protectCount,
+      startIndex,
+      protectActiveSkillResultsFrom
+    )
+  }
+  return result
 }
 
 // remove thinking blocks before sending messages to the summarizer

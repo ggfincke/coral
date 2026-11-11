@@ -72,6 +72,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing stall limit and nudge once when a response ends with a concrete
   promised action followed by a colon, without a tool call.
 
+- **Local pruning:** automatic pruning now clears a batch of old tool results
+  down to about half the prompt limit instead of one result per round. On a
+  small window every round used to rewrite mid-history, so Ollama re-prefilled
+  most of the conversation each time. Results from the round that just ran are
+  never pruned.
+- **Local session titles:** the background title request turns thinking off, so
+  thinking models no longer spend the whole 32-token budget on reasoning and
+  return no title.
+
 - **Ollama prompt cache:** the per-round Git context snapshot no longer rewrites
   the leading system message, so an edit no longer forces Ollama to re-prefill
   the whole conversation on the next round. Later system text now stays in
