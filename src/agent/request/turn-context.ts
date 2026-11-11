@@ -1,5 +1,5 @@
 // src/agent/request/turn-context.ts
-// durable turn capture and volatile context boundary
+// durable turn capture and per-turn repository context
 
 import type { OllamaMessage } from '../../types/inference.js'
 import type { AttachmentReader } from './attachments.js'
@@ -34,7 +34,7 @@ export interface TurnContextDependencies
   ) => Promise<OllamaMessage | null>
 }
 
-// capture durable inputs separately from request-only repository state
+// capture durable inputs separately from per-turn repository state
 export class TurnContextAssembler
 {
   private readonly cwd: string

@@ -710,6 +710,49 @@ describe('ConversationState', () =>
     assert.equal(state.getEstimatedTokens(), estimateTotalTokens(snapshot))
   })
 
+  test('batch prune clears stale git snapshots but keeps the newest', () =>
+  {
+    const state = new ConversationState('System.')
+    const result = (label: string): OllamaMessage => ({
+      role: 'tool',
+      tool_name: 'read_file',
+      content: `${label} `.repeat(200),
+    })
+    const first = state.acceptUserMessage('first')
+    state.setActiveGitContext(first, 'snapshot one')
+    state.appendMessages([{ role: 'assistant', content: '' }, result('a')])
+    state.finalizeActiveTurn(first)
+    const second = state.acceptUserMessage('second')
+    state.setActiveGitContext(second, 'snapshot two')
+    state.appendMessages([{ role: 'assistant', content: '' }, result('b')])
+    state.finalizeActiveTurn(second)
+    // a deduped turn carries no snapshot of its own
+    const third = state.acceptUserMessage('third')
+    state.appendMessages([{ role: 'assistant', content: '' }, result('c')])
+    const before = state.getEstimatedTokens()
+
+    assert.equal(state.newestGitContext(), 'snapshot two')
+    const transition = state.pruneToolResultsToTarget(
+      '2026-11-11T00:00:00.000Z',
+      0
+    )
+
+    assert.ok(transition)
+    const users = state.getMessages().filter((m) => m.role === 'user')
+    assert.deepEqual(
+      users.map((message) => message.gitContext),
+      [undefined, 'snapshot two', undefined]
+    )
+    assert.equal(state.newestGitContext(), 'snapshot two')
+    assert.equal(
+      state.getEstimatedTokens(),
+      estimateTotalTokens(state.getMessages())
+    )
+    assert.ok(state.getEstimatedTokens() < before)
+    // the active turn keeps its anchor through the rewrite
+    assert.equal(state.getMessage(third)?.content, 'third')
+  })
+
   test('ConversationState replay plans reject drift, clear misalignment, & never leak mutable state', () =>
   {
     const state = new ConversationState('system')

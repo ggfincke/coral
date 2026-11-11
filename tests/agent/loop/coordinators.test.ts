@@ -153,7 +153,7 @@ describe('RequestPlanner', () =>
   function plan(
     input: {
       systemContent?: string
-      gitContext?: OllamaMessage | null
+      gitContext?: string
       attachmentCapture?: AttachmentCapture
       historyCompactionAvailable?: boolean
     } = {}
@@ -164,13 +164,16 @@ describe('RequestPlanner', () =>
       contextWindow: CONTEXT_WINDOW,
       storedMessages: [
         { role: 'system', content: input.systemContent ?? BASE_SYSTEM },
-        { role: 'user', content: CLEAN_TURN },
+        {
+          role: 'user',
+          content: CLEAN_TURN,
+          ...(input.gitContext ? { gitContext: input.gitContext } : {}),
+        },
       ],
       activeIndex: 1,
       cleanActiveContent: CLEAN_TURN,
       baseSystemContent: BASE_SYSTEM,
       tools: TOOLS,
-      gitContext: input.gitContext ?? null,
       ...(input.attachmentCapture
         ? {
             pendingAttachments: {
@@ -185,44 +188,39 @@ describe('RequestPlanner', () =>
 
   test('RequestPlanner preserves fallback priority and exact allowance math', () =>
   {
-    const smallGit: OllamaMessage = {
-      role: 'system',
-      content: '## Git Context\n- branch: main\n- status: clean',
-    }
+    const smallGit = '## Git Context\n- branch: main\n- status: clean'
     const retained = prepared(plan({ gitContext: smallGit }))
-    assert.equal(
-      retained.messages[1]!.content,
-      `${CLEAN_TURN}\n\n${smallGit.content}`
-    )
+    assert.equal(retained.messages[1]!.content, `${CLEAN_TURN}\n\n${smallGit}`)
+    assert.equal(retained.gitContext, smallGit)
 
-    const fullGit: OllamaMessage = {
-      role: 'system',
-      content: [
-        '## Git Context',
-        '- root: /repo',
-        '- cwd: /repo',
-        '- branch: main',
-        '- status: modified',
-        `- detail: ${'d'.repeat(40_000)}`,
-      ].join('\n'),
-    }
+    const fullGit = [
+      '## Git Context',
+      '- root: /repo',
+      '- cwd: /repo',
+      '- branch: main',
+      '- status: modified',
+      `- detail: ${'d'.repeat(40_000)}`,
+    ].join('\n')
     const compacted = prepared(plan({ gitContext: fullGit }))
     assert.match(compacted.messages.at(-1)!.content, /detail: omitted/)
-    assert.notEqual(compacted.messages.at(-1)!.content, fullGit.content)
+    assert.match(compacted.gitContext ?? '', /detail: omitted/)
+    assert.equal(
+      compacted.messages[1]!.content,
+      `${CLEAN_TURN}\n\n${compacted.gitContext}`
+    )
 
-    const oversizedCompactGit: OllamaMessage = {
-      role: 'system',
-      content: [
-        '## Git Context',
-        '- root: /repo',
-        '- cwd: /repo',
-        '- branch: main',
-        `- status: ${'s'.repeat(40_000)}`,
-        '- detail: changed files',
-      ].join('\n'),
-    }
+    const oversizedCompactGit = [
+      '## Git Context',
+      '- root: /repo',
+      '- cwd: /repo',
+      '- branch: main',
+      `- status: ${'s'.repeat(40_000)}`,
+      '- detail: changed files',
+    ].join('\n')
     const omitted = prepared(plan({ gitContext: oversizedCompactGit }))
     assert.equal(omitted.messages.length, 2)
+    assert.equal(omitted.gitContext, null)
+    assert.equal(omitted.messages[1]!.content, CLEAN_TURN)
 
     const reducedSystem = prepared(
       plan({ systemContent: `${BASE_SYSTEM}\n${'p'.repeat(40_000)}` })
@@ -314,14 +312,11 @@ describe('RequestPlanner', () =>
 test('git context remains in the active user prefix across tool rounds with exact accounting', () =>
 {
   const planner = new RequestPlanner()
-  const gitContext: OllamaMessage = {
-    role: 'system',
-    content:
-      '## Git Context\nAutomatic Coral repository snapshot taken at turn start, not a user message;\n- branch: main',
-  }
+  const gitContext =
+    '## Git Context\nAutomatic Coral repository snapshot taken at turn start, not a user message;\n- branch: main'
   const storedMessages: OllamaMessage[] = [
     { role: 'system', content: 'system' },
-    { role: 'user', content: 'inspect' },
+    { role: 'user', content: 'inspect', gitContext },
   ]
   const input = {
     contextWindow: 8192,
@@ -330,7 +325,6 @@ test('git context remains in the active user prefix across tool rounds with exac
     cleanActiveContent: 'inspect',
     baseSystemContent: 'system',
     tools: [],
-    gitContext,
     historyCompactionAvailable: false,
     pendingAttachments: {
       capture: {
@@ -351,9 +345,11 @@ test('git context remains in the active user prefix across tool rounds with exac
   if (first.kind !== 'prepared') throw new Error('request not prepared')
   assert.equal(storedMessages[1]!.content, 'inspect')
   assert.doesNotMatch(first.request.attachmentCommit!.content, /Git Context/)
+  assert.equal(first.request.gitContext, gitContext)
   storedMessages[1] = {
     role: 'user',
     content: first.request.attachmentCommit!.content,
+    gitContext,
   }
   storedMessages.push(
     {

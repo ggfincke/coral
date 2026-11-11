@@ -36,14 +36,16 @@ Hosted models (`anthropic/<id>`, `openai/<id>`) skip the memory math. Their wind
 
 ## What competes for the window
 
-Each model request is budgeted (`src/agent/request/budget.ts`): a response reserve (about 1/8 of the window, cap 16,384), then system prompt, tool schemas, history, volatile Git context, and `@` attachments, with the prompt itself capped at 32,768 tokens.
+Each model request is budgeted (`src/agent/request/budget.ts`): a response reserve (about 1/8 of the window, cap 16,384), then system prompt, tool schemas, history, the turn's Git snapshot, and `@` attachments, with the prompt itself capped at 32,768 tokens.
 
 If it does not fit, `RequestPlanner` degrades in order: compact Git → drop Git → strip project files from the system prompt → compact history if allowed (hard-fit summarize between system and the active turn) → fit attachments. If protected history or fixed cost still overflow, `RequestBudgetError` (`onError`) distinguishes:
 
 - `fixed_cost_overflow` — shorten the turn, disable optional MCP tools, or raise the context limit
 - `history_overflow` — start a new session, compact earlier, or raise the context limit
 
-Git context is a **request-only** extra system payload (`## Git Context`): branch, status lists (max 12 each), `--stat`, last 5 oneline commits, truncated at 6,000 characters. Not stored in history. Absent if cwd is not a git work tree.
+Git context is a turn-start snapshot (`## Git Context`) appended to your message: branch, status lists (max 12 each), `--stat`, last 5 oneline commits, truncated at 6,000 characters. Absent if cwd is not a git work tree.
+
+Coral stores the snapshot with its turn (session field `gitContext`, never shown in the transcript) and resends it unchanged on every later request, so earlier turns stay byte-identical and a prompt cache can reuse them. A new turn gets a snapshot only when it differs from the newest one still in history, so no snapshot on a turn means nothing changed. Older snapshots are cleared when old tool results are pruned. If a request is over budget, the active turn's snapshot shrinks to its header lines or is dropped, and stays that way for the rest of the turn.
 
 `@` attachments: up to 64 files, 1 MiB text each, mention order, **4 MiB** aggregate capture, skip reasons `not found` | `too large` | `binary` | `unreadable` | `outside workspace` | `over budget`. The committed user message can include a `Referenced files (from @-mentions):` block; `displayContent` keeps your typed text for the UI.
 
@@ -53,7 +55,7 @@ Git context is a **request-only** extra system payload (`## Git Context`): branc
 
 During `runInternal`, before a request:
 
-1. **Prune** old tool results if there are at least **10** messages and estimated tokens exceed **75%** of the window. One prune works down toward **50%** so the next one waits for real growth instead of rewriting history every round: the newest **6** tool results are kept when that is enough, otherwise older ones go first, never fewer than the newest **2** and never a result from the round that just ran. Every `skill` result loaded in the active turn is also kept; after finalization, the newest completed skill result remains protected. Others become markers like `[tool result pruned — toolName: preview, ~N tokens]`. Prune does **not** clear undo. TUI: `Auto-pruned N old tool results (~… tokens freed)`.
+1. **Prune** old tool results if there are at least **10** messages and estimated tokens exceed **75%** of the window. One prune works down toward **50%** so the next one waits for real growth instead of rewriting history every round: the newest **6** tool results are kept when that is enough, otherwise older ones go first, never fewer than the newest **2** and never a result from the round that just ran. Every `skill` result loaded in the active turn is also kept; after finalization, the newest completed skill result remains protected. Others become markers like `[tool result pruned — toolName: preview, ~N tokens]`. The same pass clears every stored Git snapshot except the newest. Prune does **not** clear undo. TUI: `Auto-pruned N old tool results (~… tokens freed)`.
 2. **Summarize** if at least **20** messages and tokens exceed **90%**. Newest **10** messages stay verbatim. The summarizer is a tool-free Ollama call with a structured handoff prompt (Goal, Decisions, Work completed, Work remaining, Relevant files). Thinking is replaced with `[reasoning was used]`. TUI first line: `Context auto-compacted`, then `Undo history cleared`.
 3. If summarization fails **2** times, Coral **trims** to the most recent **100** messages (`DEFAULT_MAX_HISTORY`). TUI: `Context trimmed to recent history (summarization unavailable)` plus `Undo history cleared`.
 4. **Every** request iteration, if stored messages exceed 100, Coral also trims to 100 (preserving the active turn). That guard is independent of whether prune/summarize ran.

@@ -135,6 +135,10 @@ function isOllamaMessage(value: unknown): value is OllamaMessage
   {
     return false
   }
+  if (value.gitContext !== undefined && typeof value.gitContext !== 'string')
+  {
+    return false
+  }
   if (value.tool_name !== undefined && typeof value.tool_name !== 'string')
   {
     return false

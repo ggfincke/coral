@@ -78,6 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existing stall limit and nudge once when a response ends with a concrete
   promised action followed by a colon, without a tool call.
 
+- **Prompt cache across turns:** the Git snapshot is now stored with its turn
+  and resent unchanged, so a new user turn no longer makes Ollama re-read the
+  whole previous turn. A turn gets a snapshot only when the repository changed
+  since the last one, and stale snapshots are cleared when old tool results
+  are pruned. Sessions save it as an optional `gitContext` message field.
 - **Local pruning:** automatic pruning now clears a batch of old tool results
   down to about half the prompt limit instead of one result per round. On a
   small window every round used to rewrite mid-history, so Ollama re-prefilled

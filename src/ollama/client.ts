@@ -83,8 +83,8 @@ function wireMessage(message: ChatMessage): ModelRequestMessage
 }
 
 // merge the leading system run to satisfy Ollama's leading-message contract;
-// later system text (per-round git context, undo warnings) stays in place as
-// user text so a volatile snapshot never rewrites the cached prompt prefix
+// later system text (undo warnings) stays in place as user text so it never
+// rewrites the cached prompt prefix
 function wireMessages(messages: ChatMessage[]): ModelRequestMessage[]
 {
   const wired = messages.map(wireMessage)

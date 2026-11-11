@@ -26,6 +26,7 @@ import {
   estimateModelRequestMessagesTokens,
   estimateModelRequestToolTokens,
   estimateRequestFramingTokens,
+  GIT_CONTEXT_SEPARATOR,
   toModelRequestMessage,
 } from '../request/projection.js'
 
@@ -47,7 +48,6 @@ export interface PendingAttachmentPlan
 
 export interface ModelRequestPlanInput extends RequestPlanningSnapshot
 {
-  gitContext: OllamaMessage | null
   fileChanges?: OllamaMessage | null
   pendingAttachments?: PendingAttachmentPlan
   historyCompactionAvailable: boolean
@@ -64,6 +64,9 @@ export interface PreparedModelRequest
   messages: ModelRequestMessage[]
   budget: RequestBudgetBreakdown
   systemContent: string
+  // snapshot text this request carries on the active turn; the caller stores
+  // it so later requests project the same bytes
+  gitContext: string | null
   attachmentCommit?: AttachmentCommit
 }
 
@@ -76,7 +79,6 @@ export type ModelRequestPlan =
       kind: 'needs_history_compaction'
       budget: RequestBudgetBreakdown
       systemContent: string
-      gitContext: OllamaMessage | null
       fileChanges?: OllamaMessage | null
     }
 
@@ -88,7 +90,8 @@ export interface RequestMeasurementInput
   cleanActiveContent: string
   baseSystemContent: string
   tools: readonly OllamaTool[]
-  gitContext: OllamaMessage | null
+  // snapshot suffix on the active message; earlier turns count as history
+  gitContext: string | null
   fileChanges?: OllamaMessage | null
 }
 
@@ -299,7 +302,7 @@ export class RequestPlanner
     {
       throw new Error('Request planning requires a system message')
     }
-    this.activeMessage(input)
+    const storedActive = this.activeMessage(input)
 
     const fullMaterialization = input.pendingAttachments
       ? materializeAttachments(
@@ -308,7 +311,8 @@ export class RequestPlanner
         )
       : undefined
     let systemContent = currentSystem.content
-    let gitContext = input.gitContext
+    // start from the stored snapshot so a degrade stays in place for the turn
+    let gitContext = storedActive.gitContext ?? null
     let fileChanges = input.fileChanges ?? null
     let candidate = this.requestCandidate(
       input,
@@ -378,7 +382,6 @@ export class RequestPlanner
         kind: 'needs_history_compaction',
         budget: candidate.budget,
         systemContent,
-        gitContext,
         fileChanges,
       }
     }
@@ -451,6 +454,7 @@ export class RequestPlanner
         messages: candidate.messages,
         budget: candidate.budget,
         systemContent,
+        gitContext,
         ...(attachmentCommit ? { attachmentCommit } : {}),
       },
     }
@@ -465,7 +469,7 @@ export class RequestPlanner
     {
       throw new Error('Tool-result reservation requires a system message')
     }
-    this.activeMessage(input)
+    const gitContext = this.activeMessage(input).gitContext ?? null
 
     let systemContent = currentSystem.content
     let projectedMessages = this.toolResultMessages(input, systemContent, true)
@@ -476,7 +480,7 @@ export class RequestPlanner
       cleanActiveContent: input.cleanActiveContent,
       baseSystemContent: input.baseSystemContent,
       tools: input.tools,
-      gitContext: null,
+      gitContext,
     })
 
     if (!budget.fits && systemContent !== input.baseSystemContent)
@@ -490,7 +494,7 @@ export class RequestPlanner
         cleanActiveContent: input.cleanActiveContent,
         baseSystemContent: input.baseSystemContent,
         tools: input.tools,
-        gitContext: null,
+        gitContext,
       })
     }
 
@@ -576,7 +580,7 @@ export class RequestPlanner
           ...active,
           content: active.content.slice(
             0,
-            -`\n\n${input.gitContext.content}`.length
+            -`${GIT_CONTEXT_SEPARATOR}${input.gitContext}`.length
           ),
         }
       : active
@@ -662,31 +666,27 @@ export class RequestPlanner
   private requestCandidate(
     input: RequestPlanningSnapshot,
     systemContent: string,
-    gitContext: OllamaMessage | null,
+    gitContext: string | null,
     fileChanges: OllamaMessage | null,
     attachmentContext?: string | null
   ): RequestCandidate
   {
     const messages = input.storedMessages.map(toModelRequestMessage)
     messages[0] = { role: 'system', content: systemContent }
-    if (attachmentContext !== undefined)
-    {
-      messages[input.activeIndex] = {
-        ...messages[input.activeIndex]!,
-        content: appendAttachmentContext(
-          input.cleanActiveContent,
-          attachmentContext
-        ),
-      }
-    }
-    if (gitContext)
-    {
-      const active = messages[input.activeIndex]!
-      messages[input.activeIndex] = {
-        ...active,
-        content: `${active.content}\n\n${gitContext.content}`,
-      }
-    }
+    // rebuild the active turn so this candidate's attachments & snapshot
+    // replace the stored ones; earlier turns project exactly as stored
+    const storedActive = input.storedMessages[input.activeIndex]!
+    messages[input.activeIndex] = toModelRequestMessage({
+      ...storedActive,
+      content:
+        attachmentContext === undefined
+          ? storedActive.content
+          : appendAttachmentContext(
+              input.cleanActiveContent,
+              attachmentContext
+            ),
+      gitContext: gitContext ?? undefined,
+    })
     if (fileChanges) messages.push(toModelRequestMessage(fileChanges))
 
     return {
@@ -720,17 +720,12 @@ export class RequestPlanner
     return messages
   }
 
-  private compactGitContext(gitContext: OllamaMessage): OllamaMessage | null
+  private compactGitContext(gitContext: string): string | null
   {
     const keep =
       /^(## Git Context|Automatic Coral repository snapshot taken at turn start, not a user message;|- (root|cwd|branch|operation|status):)/
-    const lines = gitContext.content
-      .split('\n')
-      .filter((line) => keep.test(line))
+    const lines = gitContext.split('\n').filter((line) => keep.test(line))
     if (lines.length <= 1) return null
-    return {
-      role: 'system',
-      content: `${lines.join('\n')}\n- detail: omitted to fit request budget`,
-    }
+    return `${lines.join('\n')}\n- detail: omitted to fit request budget`
   }
 }

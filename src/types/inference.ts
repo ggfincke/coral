@@ -78,6 +78,9 @@ export interface OllamaMessage extends ModelRequestMessage
 {
   displayContent?: string
   attachmentReport?: AttachmentReport
+  // exact Git snapshot sent w/ this user turn; projection re-appends it on
+  // every later request so earlier turns stay byte-identical for prefix caches
+  gitContext?: string
 }
 
 export interface OllamaToolCall

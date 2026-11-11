@@ -1253,7 +1253,7 @@ test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o evic
 })
 
 test(
-  'Agent sends volatile git context without persisting it',
+  'Agent attaches a new git snapshot only when it changed and keeps earlier turns byte-identical',
   { skip: !HAS_GIT },
   async () =>
   {
@@ -1276,27 +1276,19 @@ test(
         done: true,
       }
     })
+    const events = makeAgentEvents({
+      onUsage(usage)
+      {
+        contextTokens.push(usage.contextTokens)
+      },
+    })
 
-    await agent.run(
-      'first',
-      makeAgentEvents({
-        onUsage(usage)
-        {
-          contextTokens.push(usage.contextTokens)
-        },
-      })
-    )
-    await agent.run(
-      'second',
-      makeAgentEvents({
-        onUsage(usage)
-        {
-          contextTokens.push(usage.contextTokens)
-        },
-      })
-    )
+    await agent.run('first', events)
+    await agent.run('second', events)
+    await writeFile(join(dir, 'note.txt'), 'changed\n', 'utf-8')
+    await agent.run('third', events)
 
-    assert.equal(requests.length, 2)
+    assert.equal(requests.length, 3)
     assert.deepEqual(
       contextTokens,
       requests.map(
@@ -1306,22 +1298,29 @@ test(
           estimateRequestFramingTokens(request.messages.length)
       )
     )
-    for (const request of requests)
+    // every later request starts with the previous request's exact messages
+    for (const [index, request] of requests.entries())
     {
-      const messages = request.messages
-      assert.equal(
-        messages.filter((message) =>
-          message.content.includes(GIT_CONTEXT_HEADING)
-        ).length,
-        1
-      )
+      if (index === 0) continue
+      const previous = requests[index - 1]!.messages
+      assert.deepEqual(request.messages.slice(0, previous.length), previous)
     }
-    assert.equal(
-      agent
-        .getMessages()
-        .some((message) => message.content.includes(GIT_CONTEXT_HEADING)),
-      false
+    const snapshotCount = (request: ChatRequest): number =>
+      request.messages.filter((message) =>
+        message.content.includes(GIT_CONTEXT_HEADING)
+      ).length
+    assert.deepEqual(requests.map(snapshotCount), [1, 1, 2])
+
+    const users = agent
+      .getMessages()
+      .filter((message) => message.role === 'user')
+    assert.deepEqual(
+      users.map((message) => message.content),
+      ['first', 'second', 'third']
     )
+    assert.match(users[0]!.gitContext ?? '', /status: clean/)
+    assert.equal(users[1]!.gitContext, undefined)
+    assert.match(users[2]!.gitContext ?? '', /status: dirty/)
   }
 )
 

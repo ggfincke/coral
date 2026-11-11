@@ -19,7 +19,7 @@ Facts that follow from that:
 - **Inference is Ollama by default.** Bare model names go to the host you configure (`http://localhost:11434` by default). The only hosted options are `anthropic/<id>` (Anthropic Messages API) and `openai/<id>` (OpenAI Responses API), used only when you pick such a model and export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`. Embeddings stay on Ollama.
 - **No remote telemetry.** Reliability counters stay in files under `CORAL_HOME` (default `~/.coral`). Coral does not upload them.
 - **MCP is an extra data boundary you opt into.** Local stdio subprocesses you define in `~/.coral.json` may reach files, the host, or remote APIs according to _their_ behavior. Coral does not sandbox them.
-- **Coding agent, not chatbot wrapper.** The model sees a structured tool catalog, a system prompt that scopes the model to those tools, Git snapshots at request time, optional `@` file attachments, and conversation history that Coral compact/prune/trims when the window fills.
+- **Coding agent, not chatbot wrapper.** The model sees a structured tool catalog, a system prompt that scopes the model to those tools, a Git snapshot per turn when the repository changed, optional `@` file attachments, and conversation history that Coral compact/prune/trims when the window fills.
 
 Coral currently targets **large local models** (the startup picker prefers `gemma4:31b-mlx` when that tag is installed). Small models can run; prompts and tools are not dumbed down for them.
 
@@ -115,7 +115,7 @@ Every non-cancelled chat stream must end with a valid `done: true` record. The c
 
 `startKeepAlive(model)` only remembers `lastModel`. It does **not** send a keep-alive request. `evictModel` POSTs `keep_alive: 0`; Agent `dispose()` never calls it, so a loaded model stays on the Ollama host after Coral exits.
 
-The client concatenates consecutive leading `system` messages into one wire system message (prompt + optional Git context). Frozen compaction handoffs are **user** messages, so they are not coalesced. Coral never adds Ollama's `format` field on tool-bearing requests because that drops `tool_calls`.
+The client concatenates consecutive leading `system` messages into one wire system message. Frozen compaction handoffs are **user** messages, so they are not coalesced. Coral never adds Ollama's `format` field on tool-bearing requests because that drops `tool_calls`.
 
 This layer exists so HTTP, NDJSON, and Ollama quirks do not leak into conversation state.
 
@@ -272,7 +272,7 @@ In order:
 
 ### 4. Each iteration
 
-- Rebuild **Git context** (request-only; not stored in history). If the cwd is not a git work tree, it is omitted.
+- The **Git context** was gathered once before the first iteration and stored with the user message when it differs from the newest stored snapshot; every iteration resends it unchanged. If the cwd is not a git work tree, it is omitted.
 - **Compact if needed** (prune old tool results, then summarize; fail-twice trim; plus a 100-message guard). See [Context](context.md).
 - `RequestPlanner.planModelRequest` builds the exact messages/tools payload. If it does not fit: compact git → drop git → strip project context → hard-fit history compaction → fit attachments. Overflow of protected history or fixed cost becomes a `RequestBudgetError` (`fixed_cost_overflow` or `history_overflow`) surfaced as `onError`.
 - `chatStream` to Ollama. `thinking` chunks → `onThinking`. `content` → `onToken`. `tool_calls` are merged by function index.

@@ -27,14 +27,22 @@ function nonNegativeInteger(value: number, label: string): number
   return value
 }
 
-// project only request fields so UI and persistence fields stay out of accounting
+// separates a user turn from the Git snapshot stored w/ it
+export const GIT_CONTEXT_SEPARATOR = '\n\n'
+
+// project only request fields so UI and persistence fields stay out of
+// accounting; a stored Git snapshot becomes part of the turn's content
 export function toModelRequestMessage(
   message: OllamaMessage | ModelRequestMessage
 ): ModelRequestMessage
 {
+  const gitContext = 'gitContext' in message ? message.gitContext : undefined
   const projected: ModelRequestMessage = {
     role: message.role,
-    content: message.content,
+    content:
+      gitContext === undefined
+        ? message.content
+        : `${message.content}${GIT_CONTEXT_SEPARATOR}${gitContext}`,
   }
 
   if (message.thinking !== undefined) projected.thinking = message.thinking
