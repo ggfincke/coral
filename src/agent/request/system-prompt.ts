@@ -282,7 +282,8 @@ export function buildSystemPrompt(ctx: {
   const hasGitPush = ctx.catalog.has('git_push')
   const hasGitTool = ctx.catalog.names.some((name) => name.startsWith('git_'))
 
-  if (hasGitCommit || hasGitPush)
+  // bash can still commit & push when the dedicated tools are not offered
+  if (hasGitCommit || hasGitPush || ctx.catalog.has('bash'))
   {
     gitRules.push('- Only commit when asked; only push when asked')
   }

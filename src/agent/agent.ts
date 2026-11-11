@@ -7,6 +7,7 @@ import type { SessionCostSnapshot } from '../types/session-cost.js'
 import type { AgentInferenceClient } from './inference-client.js'
 import {
   makeReliabilityStats,
+  type Model,
   type ModelRequestMessage,
   type OllamaMessage,
   type OllamaToolCall,
@@ -20,6 +21,8 @@ import type { Tool } from '../tools/tool.js'
 import { EMPTY_SKILL_INDEX, type SkillIndex } from '../skills/types.js'
 import { type SubagentResult, type SubagentRunner } from '../tools/subagent.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
+import { modelLookupKey } from '../ollama/model-name.js'
+import { resolveRetrievalConfig } from '../retrieval/config.js'
 import {
   buildSystemPrompt,
   supplementalBudgetForWindow,
@@ -153,6 +156,15 @@ import type {
 // cap tool-call rounds for research subagents
 const SUBAGENT_MAX_ITERATIONS = 24
 
+// git tools that change the repository; local models reach them through bash
+// unless tools.localGitWrite opts back in
+const LOCAL_GIT_WRITE_TOOLS: ReadonlySet<string> = new Set([
+  'git_add',
+  'git_commit',
+  'git_switch',
+  'git_push',
+])
+
 // any of these at the cwd root marks a project the TypeScript server can serve
 const TS_PROJECT_MARKERS = ['tsconfig.json', 'jsconfig.json', 'package.json']
 
@@ -255,6 +267,8 @@ export class Agent
   // keep the instance toolset and Ollama schema separate for restricted subagents
   private readonly baseTools: readonly Tool[]
   private readonly toolsConfig: ToolsConfig
+  // set once /api/tags is known to lack the embedding model search_code needs
+  private embeddingModelMissing = false
   // derive lookup, schemas, names, and token cost from one immutable profile
   private toolCatalog!: ToolCatalog
   private maxIterations?: number
@@ -428,7 +442,10 @@ export class Agent
     return new Agent(this.model, this.baseUrl, this.cwd, {
       inferenceClient: this.client,
       think: this.thinkMode,
-      tools: subagentTools,
+      // the child inherits the pinned window, so it never probes for itself
+      tools: this.embeddingModelMissing
+        ? subagentTools.filter((tool) => tool.name !== 'search_code')
+        : subagentTools,
       maxIterations: SUBAGENT_MAX_ITERATIONS,
       numCtx: this.numCtx,
       hostedOutputTokens: this.hostedOutputTokens,
@@ -951,6 +968,9 @@ export class Agent
   private async resolveContextWindow(signal?: AbortSignal): Promise<number>
   {
     const requestedModel = this.model
+    // keep the listing local sizing already fetches so search_code can be
+    // gated on it w/o a second /api/tags request
+    let listedModels: Model[] | undefined
     const resolved = await resolvePinnedContextWindow(
       {
         model: requestedModel,
@@ -958,12 +978,26 @@ export class Agent
         memory: resolveMemoryBudget(),
         showModel: (model, requestSignal) =>
           this.client.showModel(model, requestSignal),
-        listModels: (requestSignal) => this.client.listModels(requestSignal),
+        listModels: async (requestSignal) =>
+        {
+          listedModels = await this.client.listModels(requestSignal)
+          return listedModels
+        },
       },
       signal
     )
 
     if (this.model !== requestedModel) return this.contextWindowSize
+
+    // a listing that never arrived keeps the tool. this runs before the first
+    // request & before MCP tools are admitted, so the catalog is rebuilt bare
+    const embeddingModelMissing =
+      listedModels !== undefined && !this.embeddingModelListed(listedModels)
+    if (embeddingModelMissing !== this.embeddingModelMissing)
+    {
+      this.embeddingModelMissing = embeddingModelMissing
+      this.toolCatalog = this.createToolCatalog()
+    }
 
     // use the request-budget fallback when model metadata is unavailable;
     // a local pin above what the prompt cap can fill only wastes KV memory
@@ -1034,12 +1068,32 @@ export class Agent
   {
     const local = parseModelRef(model).provider === 'ollama'
     return new ToolCatalog({
-      // retain the source tools so a provider switch can restore task
+      // retain the source tools so a provider switch can restore them
       trustedTools: this.baseTools.filter(
-        (tool) => tool.name !== 'task' || !local || this.toolsConfig.localTask
+        (tool) => !local || this.offeredLocally(tool.name)
       ),
       dynamicTools,
     })
+  }
+
+  // local models get a leaner tool set to keep the fixed prompt small; each
+  // cut has its own opt-in or a concrete reason the tool cannot work
+  private offeredLocally(name: string): boolean
+  {
+    if (name === 'task') return this.toolsConfig.localTask
+    if (LOCAL_GIT_WRITE_TOOLS.has(name)) return this.toolsConfig.localGitWrite
+    if (name === 'search_code') return !this.embeddingModelMissing
+    return true
+  }
+
+  private embeddingModelListed(models: readonly Model[]): boolean
+  {
+    const key = modelLookupKey(resolveRetrievalConfig(this.cwd).embeddingModel)
+    return models.some((candidate) =>
+      [candidate.name, candidate.model].some(
+        (name) => typeof name === 'string' && modelLookupKey(name) === key
+      )
+    )
   }
 
   // rebuild the immutable tool snapshot after dynamic changes

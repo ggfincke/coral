@@ -73,6 +73,8 @@ Timeout 15s, 5 MiB buffer, 200 grep hits / 100 glob files.
 
 `search_code failed while using embedding model {name}: …` and, if the model is missing, a hint to `ollama pull {name}`.
 
+With an Ollama chat model, `search_code` is not offered at all while the embedding model is missing from `ollama list` at session start. After `ollama pull {name}`, start a new session or switch models to make it available.
+
 `/index` uses a different string: `Index build failed (embedding model {name}): …` plus the same pull hint when the model is missing. Already in progress: `Index build already in progress`. Usage: `/index` or `/index rebuild` (`force` is the same as `rebuild`).
 
 Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete. Digest errors (missing/ambiguous/invalid from `/api/tags`) fail closed so Coral will not reuse vectors under a mutable tag. Current index files: `CORAL_HOME/retrieval/v2/spaces/*.chunks-v2.sqlite`. The new chunk layout triggers a fresh build on first use; older space caches and legacy `retrieval/index.sqlite` remain unused and preserved.

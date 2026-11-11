@@ -76,8 +76,10 @@ export function makeFakeAgent(
     },
     async listModels()
     {
+      // list the default embedding model so search_code stays offered
       return [
         { name: 'fake-model', model: 'fake-model', size: 0, modified_at: '' },
+        { name: 'nomic-embed-text:latest', size: 0, modified_at: '' },
       ]
     },
     chatStream,

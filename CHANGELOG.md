@@ -70,6 +70,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Standing instructions:** `AGENTS_HOME/AGENTS.md` is read up to 32 KiB, and
   hosted models now receive it in full. Ollama models keep the 4 KiB share.
 
+- **Local tool set:** Ollama models no longer get `git_add`, `git_commit`,
+  `git_switch`, or `git_push` by default, which removes their schemas and most
+  of the commit rules from the fixed prompt (about 700 tokens). Set
+  `tools.localGitWrite` to `true` to restore them; Git through `bash` still
+  works and still asks for approval. `search_code` is also left out for Ollama
+  models when its embedding model is not pulled, instead of being offered and
+  failing on every call. Hosted models are unchanged.
+
 ### Fixed
 
 - **ACP command display:** expose shell commands directly in tool-call and

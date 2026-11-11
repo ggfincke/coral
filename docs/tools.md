@@ -32,6 +32,8 @@ TUI labels (Read, Write, Shell, …) are display only.
 | `task`        | always_allow     | no                   | no       | no       | Spawns read-only child              |
 | `todo_write`  | always_allow     | no                   | no       | no       | Primary session only                |
 
+Ollama models do not get `task`, `git_add`, `git_commit`, `git_switch`, or `git_push` by default; see [Tool profiles](configuration.md#tool-profiles) for `tools.localTask` and `tools.localGitWrite`. They also do not get `search_code` while its embedding model is not pulled.
+
 Subagent set: the ten `yes` rows under Subagent. `coral exec --permission-profile read-only` uses that same set. `workspace-write` adds `write_file`, `edit_file`, `bash` only.
 
 Ripgrep timeout 15s, buffer 5 MiB. Git default timeout 10s except `git_push` (60s). Tool results fed to the model are capped at about 100,000 characters.

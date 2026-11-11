@@ -34,6 +34,7 @@ import { HAS_GIT, initTestRepo } from '../helpers/git.js'
 import {
   makeFakeAgent,
   makeAgentEvents,
+  type FakeAgentOptions,
   type FakeChunk,
 } from '../helpers/agent-harness.js'
 
@@ -2372,7 +2373,7 @@ test('Agent.run leaves history untouched when automatic compaction is aborted', 
   agent.restoreMessages(
     Array.from({ length: 120 }, (_unused, index) => ({
       role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
-      content: `msg ${index + 1} ${'x'.repeat(100)}`,
+      content: `msg ${index + 1} ${'x'.repeat(130)}`,
     }))
   )
 
@@ -2470,7 +2471,7 @@ test('Agent reuses ordinary file observations and refreshes after awaited summar
             (_unused, index) => ({
               role:
                 index % 2 === 0 ? ('user' as const) : ('assistant' as const),
-              content: `msg ${index + 1} ${'x'.repeat(outcome === 'hard-fit' ? 4_000 : 100)}`,
+              content: `msg ${index + 1} ${'x'.repeat(outcome === 'hard-fit' ? 4_000 : 130)}`,
             })
           )
         )
@@ -3087,4 +3088,73 @@ test('Agent restores durable compaction metadata only while idle', async () =>
   {
     await agent.dispose()
   }
+})
+
+// run one turn and return the tool names & system prompt the model was sent
+async function firstRequestTools(
+  dir: string,
+  inferenceClient: FakeAgentOptions['inferenceClient'] = {}
+): Promise<{ names: string[]; system: string }>
+{
+  const requests: ChatRequest[] = []
+  const { agent } = makeFakeAgent(
+    dir,
+    async function* (request)
+    {
+      assert.ok(request)
+      requests.push(request)
+      yield { message: { role: 'assistant', content: 'ok' }, done: true }
+    },
+    { inferenceClient }
+  )
+  await agent.run('hello', makeAgentEvents())
+  await agent.dispose()
+  return {
+    names: (requests[0]!.tools ?? []).map((tool) => tool.function.name),
+    system: requests[0]!.messages[0]!.content,
+  }
+}
+
+test('local sessions omit git write tools unless tools.localGitWrite is true', async () =>
+{
+  const writeTools = ['git_add', 'git_commit', 'git_switch', 'git_push']
+  const lean = await firstRequestTools(await tempDir('coral-lean-tools-'))
+  for (const name of writeTools) assert.equal(lean.names.includes(name), false)
+  assert.ok(lean.names.includes('git_status'))
+  assert.ok(lean.names.includes('git_diff'))
+  assert.doesNotMatch(lean.system, /git_commit|git_add|git_switch|git_push/)
+  // bash can still commit, so the ask-first rule stays
+  assert.match(lean.system, /Only commit when asked/)
+
+  const optedIn = await tempDir('coral-git-write-tools-')
+  await writeFile(
+    join(optedIn, '.coral.json'),
+    JSON.stringify({ tools: { localGitWrite: true } })
+  )
+  const full = await firstRequestTools(optedIn)
+  for (const name of writeTools) assert.ok(full.names.includes(name))
+})
+
+test('search_code is hidden locally when the embedding model is missing and kept when listing fails', async () =>
+{
+  const dir = await tempDir('coral-search-code-gate-')
+  const listed = await firstRequestTools(dir)
+  assert.ok(listed.names.includes('search_code'))
+
+  const missing = await firstRequestTools(dir, {
+    async listModels()
+    {
+      return [{ name: 'fake-model', size: 0, modified_at: '' }]
+    },
+  })
+  assert.equal(missing.names.includes('search_code'), false)
+  assert.doesNotMatch(missing.system, /search_code/)
+
+  const unknown = await firstRequestTools(dir, {
+    async listModels()
+    {
+      throw new Error('tags unavailable')
+    },
+  })
+  assert.ok(unknown.names.includes('search_code'))
 })
