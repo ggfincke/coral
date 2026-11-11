@@ -1208,12 +1208,12 @@ export class Agent
   // categorize one allowlisted request without double-counting sources
   private buildRequestBudget(
     messages: readonly ModelRequestMessage[],
-    gitContext: OllamaMessage | null,
     anchor: ConversationMessageAnchor,
     cleanContent: string
   ): RequestBudgetBreakdown
   {
     const activeIndex = this.state.indexOf(anchor)
+    const gitContext = this.state.getMessage(anchor)?.gitContext ?? null
     if (activeIndex < 0)
     {
       throw new Error('Accepted turn is no longer present in Agent history')
@@ -1497,6 +1497,15 @@ export class Agent
 
       const turnGitContext = await this.turnContext.gatherGit(signal)
       signal.throwIfAborted()
+      // store the snapshot w/ its turn so later turns replay the same bytes;
+      // an unchanged one is skipped because the newest stored copy still holds
+      if (
+        turnGitContext &&
+        turnGitContext.content !== this.state.newestGitContext()
+      )
+      {
+        this.state.setActiveGitContext(runAnchor, turnGitContext.content)
+      }
 
       let iterations = 0
       let stallNudges = 0
@@ -1533,7 +1542,6 @@ export class Agent
 
         try
         {
-          let gitContext = turnGitContext
           let fileChanges = await this.turnContext.gatherFileChanges(signal)
           signal.throwIfAborted()
           const activeMessage = this.state.getMessage(runAnchor)
@@ -1560,8 +1568,8 @@ export class Agent
                 ...activeMessage,
                 content: pendingContent,
               })
+          // the Git snapshot is stored w/ the turn, so only these stay volatile
           const volatileTokens =
-            (gitContext ? estimateMessageTokens(gitContext) : 0) +
             (fileChanges ? estimateMessageTokens(fileChanges) : 0) +
             pendingAttachmentTokens
 
@@ -1606,7 +1614,6 @@ export class Agent
               cleanActiveContent: userMessage,
               baseSystemContent: this.buildSystemContent(this.model, 0),
               tools: this.toolCatalog.ollamaTools,
-              gitContext,
               fileChanges,
               ...(attachmentsCommitted
                 ? {}
@@ -1629,7 +1636,6 @@ export class Agent
             {
               this.replaceSystemPrompt(plan.systemContent)
             }
-            gitContext = plan.gitContext
             await this.compactor.compactHistoryForHardFit({
               runtime: this.compactionRuntime(),
               anchor: runAnchor,
@@ -1651,6 +1657,20 @@ export class Agent
           this.lastRequestBudget = requestBudget
           assertRequestBudget(requestBudget)
           signal.throwIfAborted()
+
+          // keep the stored snapshot equal to what this request sends, so a
+          // budget degrade does not make later requests diverge from it
+          if (
+            !this.state.setActiveGitContext(
+              runAnchor,
+              preparedRequest.gitContext
+            )
+          )
+          {
+            throw new Error(
+              'Accepted turn is no longer present in Agent history'
+            )
+          }
 
           if (!attachmentsCommitted)
           {
@@ -1991,7 +2011,6 @@ export class Agent
           [...this.state.getMessages(), assistantMessage, ...toolResults].map(
             toModelRequestMessage
           ),
-          null,
           runAnchor,
           userMessage
         )

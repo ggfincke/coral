@@ -4,6 +4,7 @@
 import {
   alignToolRoundStart,
   buildCompactedMessages,
+  clearStaleGitContexts,
   countFrozenPrefix,
   estimateMessageTokens,
   estimateTotalTokens,
@@ -464,6 +465,35 @@ export class ConversationState
     return true
   }
 
+  // newest Git snapshot still stored, so a turn can skip an unchanged one
+  newestGitContext(): string | undefined
+  {
+    for (let i = this.messages.length - 1; i >= 0; i--)
+    {
+      const gitContext = this.messages[i]!.gitContext
+      if (gitContext !== undefined) return gitContext
+    }
+    return undefined
+  }
+
+  // store the exact snapshot text the active turn sends; null removes it
+  setActiveGitContext(
+    anchor: ConversationMessageAnchor,
+    gitContext: string | null
+  ): boolean
+  {
+    const message = this.resolveActiveAnchor(anchor)
+    if (!message) return false
+    if ((message.gitContext ?? null) === gitContext) return true
+
+    const before = estimateMessageTokens(message)
+    if (gitContext === null) delete message.gitContext
+    else message.gitContext = gitContext
+    this.estimatedTokenCount += estimateMessageTokens(message) - before
+    this.touch()
+    return true
+  }
+
   finalizeActiveTurn(
     anchor: ConversationMessageAnchor,
     changes: readonly UndoFileChange[] = [],
@@ -672,9 +702,9 @@ export class ConversationState
     protectCount?: number
   ): ConversationTransition | null
   {
-    return this.commitPrune(compactedAt, (activeIndex) =>
+    return this.commitPrune(compactedAt, (messages, activeIndex) =>
       buildPrunedMessages(
-        this.messages,
+        messages,
         protectCount,
         this.frozenPrefixLength,
         activeIndex
@@ -689,9 +719,9 @@ export class ConversationState
     targetStoredTokens: number
   ): ConversationTransition | null
   {
-    return this.commitPrune(compactedAt, (activeIndex) =>
+    return this.commitPrune(compactedAt, (messages, activeIndex) =>
       buildPrunedMessagesToTarget(
-        this.messages,
+        messages,
         targetStoredTokens,
         this.frozenPrefixLength,
         activeIndex
@@ -701,7 +731,10 @@ export class ConversationState
 
   private commitPrune(
     compactedAt: string,
-    build: (activeIndex: number) => ReturnType<typeof buildPrunedMessages>
+    build: (
+      messages: OllamaMessage[],
+      activeIndex: number
+    ) => ReturnType<typeof buildPrunedMessages>
   ): ConversationTransition | null
   {
     const beforeStoredTokens = this.estimatedTokenCount
@@ -712,7 +745,11 @@ export class ConversationState
     const activeIndex = activeMessage
       ? this.messages.indexOf(activeMessage)
       : this.messages.length
-    const { prunedMessages, prunedCount, prunedThinking } = build(activeIndex)
+    // stale snapshots go in the same rewrite so the target sees their savings
+    const { prunedMessages, prunedCount, prunedThinking } = build(
+      clearStaleGitContexts(this.messages, this.frozenPrefixLength),
+      activeIndex
+    )
     if (prunedCount === 0 && prunedThinking === 0) return null
 
     this.messages = prunedMessages

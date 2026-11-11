@@ -260,6 +260,32 @@ export function pruneTargetTokens(
   return Math.floor(config.contextWindow * PRUNE_TARGET)
 }
 
+// drop every stored Git snapshot except the newest outside the frozen prefix;
+// a prune already rewrites mid-history, so stale ones cost nothing extra to clear
+export function clearStaleGitContexts(
+  messages: OllamaMessage[],
+  startIndex = 0
+): OllamaMessage[]
+{
+  let newest = -1
+  for (let i = messages.length - 1; i >= startIndex; i--)
+  {
+    if (messages[i]!.gitContext !== undefined)
+    {
+      newest = i
+      break
+    }
+  }
+  return messages.map((message, index) =>
+  {
+    if (index < startIndex || index >= newest) return message
+    if (message.gitContext === undefined) return message
+    const cleared = { ...message }
+    delete cleared.gitContext
+    return cleared
+  })
+}
+
 // count the results of the round that just ran; the model has not read them
 function countUnseenToolResults(
   messages: OllamaMessage[],

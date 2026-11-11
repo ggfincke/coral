@@ -1,5 +1,5 @@
 // src/agent/request/git-context.ts
-// volatile git context for model turns
+// turn-start git snapshot for model turns
 
 import { existsSync } from 'node:fs'
 import { basename, isAbsolute, relative, resolve } from 'node:path'
@@ -233,7 +233,7 @@ export async function buildGitContextMessage(
   const lines = [
     GIT_CONTEXT_HEADING,
     '',
-    'Automatic Coral repository snapshot taken at turn start, not a user message; call git tools before staging, committing, switching branches, or pushing.',
+    'Automatic Coral repository snapshot taken at turn start, not a user message; call git tools before staging, committing, switching branches, or pushing. Later turns repeat it only when it changes.',
     '',
     `- root: ${root}`,
     `- cwd: ${cwdFromRoot}`,

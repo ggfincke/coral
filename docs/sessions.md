@@ -19,7 +19,7 @@ Title is derived from the first user message (ellipsized to 80 characters), or `
 `SessionData`:
 
 - **meta:** `id`, `model`, `cwd`, `createdAt`, `updatedAt`, `title`, `messageCount` (non-system messages), optional `compactionCount`, `lastCompactedAt`
-- **messages:** `system` \| `user` \| `assistant` \| `tool` with `content`; optional `displayContent`, `thinking`, `tool_name`, `tool_calls`, `attachmentReport`
+- **messages:** `system` \| `user` \| `assistant` \| `tool` with `content`; optional `displayContent`, `thinking`, `tool_name`, `tool_calls`, `attachmentReport`, `gitContext` (the Git snapshot sent with that user turn)
 - **todos:** `{ content, status }` with `pending` \| `in_progress` \| `completed`
 - **undo / redo:** up to **10** live-tail turns; persisted JSON byte cap **8 MiB**. File `before`/`after` snapshots can duplicate secrets. Aligned undo may omit redundant `messages` and rehydrate from history; redo always stores messages
 
