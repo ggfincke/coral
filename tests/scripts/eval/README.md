@@ -15,7 +15,7 @@ loaded Ollama model through a fixed set of coding tasks and measures, per model:
 It also reports throughput (prompt/completion tokens, tokens/sec) and per-rep
 reliability counters.
 
-## The 6 tasks
+## The tasks
 
 The suite (`tasks.ts`) seeds a throwaway scratch dir, runs the agent against a
 prompt, then grades the result deterministically:
@@ -38,6 +38,11 @@ prompt, then grades the result deterministically:
    prompt never names (`long-context-fixture.ts`); graded by re-running the
    locked `node --test test/` suite. This is the task that grows the context
    enough to exercise prompt caps, prefix-cache misses, and compaction.
+8. **long-context-followup** — the same fix inside a committed Git repo,
+   followed by two short follow-up turns on the same agent. A tool-free question
+   and a rerun of the tests add little new text, so a slow first round in turn
+   2 or 3 means the earlier turns were re-read instead of served from the
+   prefix cache.
 
 ## Metric definitions
 
@@ -69,7 +74,9 @@ totals (including `firstRoundPromptTokens`, the system prompt plus task prompt
 cost) are the median so one cold or stalled rep cannot swing the task. Model
 headline rates are the mean across tasks; the model `first-round` figure is the
 median across tasks. Each task line also shows median wall seconds and the
-mean prefill share across every round of every rep.
+median total prompt-eval time across reps; multi-turn tasks add `follow-up
+prefill`, the median prompt-eval time spent on the first round of each later
+turn.
 
 Sampling is pinned by default: every request sends `temperature: 0` and
 `seed: <rep index>`, so reps differ from each other but a rerun reproduces the
@@ -77,7 +84,7 @@ same reps and before/after reports differ only by what changed. Pass
 `--sampling model` to leave Ollama's own sampling in place. Hosted providers
 ignore both.
 
-Reports also retain per-round usage samples under each task's `runs`, in repetition order. Text output prints each rep and round with prompt/decode counts, estimated context occupancy, the prefill share (prompt tokens Ollama actually evaluated over the estimated context), model durations, and the completion reason, then a `cold rounds` line listing rounds after the first whose prefill share reached 90%. Missing durations and reasons are `null` in JSON and `unavailable` in text. These are diagnostic signals, not direct measurements of cache hits: a prefix-cache hit only re-reads the new tail, so a later round that re-prefills nearly everything most likely missed.
+Reports also retain per-round usage samples under each task's `runs`, in repetition order. Text output prints each rep and round (with its turn for multi-turn tasks) with prompt/decode counts, estimated context occupancy, model durations, and the completion reason. Missing durations and reasons are `null` in JSON and `unavailable` in text. Prompt-eval time is the cache signal: Ollama reports the full prompt in `prompt_eval_count` even when the prefix cache hits, so token counts cannot show a miss, while a round that re-reads earlier history takes visibly longer than one that only reads the new tail.
 
 ## Usage
 
@@ -117,9 +124,10 @@ npm run eval -- compare before.json after.json
 ```
 
 Deltas are after minus before. Rates print in percentage points; wall time,
-total prompt tokens, and first-round prompt tokens (the system prompt cost)
-print as absolute and relative change. First-round prints `n/a` when either
-report predates that field. Only models and tasks present in both reports are
+total prompt tokens, first-round prompt tokens (the system prompt cost),
+prompt-eval time, and follow-up prefill time print as absolute and relative
+change. A figure prints `n/a` when either report lacks it, as single-turn
+tasks do for follow-up prefill. Only models and tasks present in both reports are
 diffed; tasks on one side are listed, not dropped.
 
 ## Longitudinal telemetry (`--save-telemetry`)
@@ -147,8 +155,8 @@ printed below the per-run report (suppressed under `--json`).
 - Each rep executes in a fresh **throwaway temp dir** under the OS temp root
   (`coral-eval-*`, removed after the rep). It is not a sandbox — the agent can
   still run `bash`/`node` on the host, so only point it at models you trust.
-- Each run is bounded by a **`maxIterations` cap** (default 15) and a per-rep
-  timeout (default 120s); a hit cap, doom-loop stop, or timeout yields a failed/aborted outcome
+- Each run is bounded by a **`maxIterations` cap** (default 15 per turn) and a
+  per-rep timeout (default 120s, shared by every turn of the rep); a hit cap, doom-loop stop, or timeout yields a failed/aborted outcome
   even when the task grader accepts the partial result. Runtime errors also
   override a successful grade, while the grader's diagnostics remain available.
 - Tasks run **sequentially**, not in parallel: a single local Ollama runner serves

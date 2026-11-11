@@ -119,6 +119,7 @@ export async function runRep(
   let toolErrors = 0
   let lastUsage: TokenUsage | undefined
   const rounds: RoundSample[] = []
+  let turn = 1
   let aborted = false
   let iterationLimited = false
   let doomLooped = false
@@ -176,6 +177,7 @@ export async function runRep(
         lastUsage = usage
         rounds.push({
           round: rounds.length + 1,
+          turn,
           promptTokens: usage.promptTokens,
           completionTokens: usage.completionTokens,
           contextTokens: usage.contextTokens,
@@ -203,10 +205,16 @@ export async function runRep(
 
     const startMs = Date.now()
 
-    // contain a failed task as a failed RunOutcome
+    // contain a failed task as a failed RunOutcome; follow-ups reuse the
+    // agent so a cross-turn prefix break shows up in the later turns' rounds
     try
     {
-      await agent.run(task.prompt, events, controller.signal)
+      for (const prompt of [task.prompt, ...(task.followUps ?? [])])
+      {
+        if (aborted || errored) break
+        await agent.run(prompt, events, controller.signal)
+        turn++
+      }
     }
     catch
     {
@@ -344,7 +352,7 @@ function meanReliability(runs: RunOutcome[]): ReliabilityStats
 }
 
 // return the median, or zero for an empty set; even counts average the middle pair
-function median(values: number[]): number
+export function median(values: number[]): number
 {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)

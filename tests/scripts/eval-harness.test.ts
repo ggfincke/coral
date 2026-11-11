@@ -7,7 +7,12 @@ import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { formatReport, reportToJson } from './eval/report.js'
+import {
+  formatReport,
+  reportToJson,
+  taskFollowUpPrefillMs,
+  taskPromptEvalMs,
+} from './eval/report.js'
 import { treeContains, treeFreeOf } from './eval/grade.js'
 import { aggregateModel, aggregateTask, runRep } from './eval/harness.js'
 import { taskById } from './eval/tasks.js'
@@ -171,6 +176,84 @@ describe('runRep lifecycle', () =>
     assert.equal(result.errored, true)
     assert.equal(disposed, true)
     assert.equal(existsSync(scratchDir), false)
+  })
+})
+
+describe('runRep follow-up turns', () =>
+{
+  it('runRep runs follow-up prompts on one agent and reports later-turn prefill time', async () =>
+  {
+    // prompt-eval ms per round, grouped by the turn that produced them
+    const roundsByTurn = [[1000, 200], [500], [300, 100]]
+    const prompts: string[] = []
+    let agents = 0
+    const task: EvalTask = {
+      id: 'followups',
+      description: 'multi-turn',
+      prompt: 'first',
+      followUps: ['second', 'third'],
+      async setup()
+      {},
+      async grade()
+      {
+        return { passed: true, detail: 'ok' }
+      },
+    }
+
+    const run = await runRep(
+      'fake-model',
+      task,
+      {},
+      {
+        createAgent()
+        {
+          agents++
+          return {
+            async run(prompt, events)
+            {
+              for (const ms of roundsByTurn[prompts.length]!)
+              {
+                events.onUsage?.({
+                  promptTokens: 100,
+                  completionTokens: 10,
+                  contextTokens: 100,
+                  totalPromptTokens: 100,
+                  totalCompletionTokens: 10,
+                  totalCachedPromptTokens: 0,
+                  totalPromptEvalDurationNs: 0,
+                  totalEvalDurationNs: 0,
+                  promptEvalDurationNs: ms * 1e6,
+                })
+              }
+              prompts.push(String(prompt))
+              return { status: 'completed' }
+            },
+            getMessages: () => [],
+            getReliabilityStats: () => makeReliabilityStats(),
+            async dispose()
+            {},
+          }
+        },
+      }
+    )
+
+    assert.equal(agents, 1)
+    assert.deepEqual(prompts, ['first', 'second', 'third'])
+    assert.deepEqual(
+      run.rounds.map((round) => round.turn),
+      [1, 1, 2, 3, 3]
+    )
+    const result = aggregateTask('followups', [run])
+    assert.equal(taskPromptEvalMs(result), 2100)
+    // only the first round of turns 2 and 3 counts
+    assert.equal(taskFollowUpPrefillMs(result), 800)
+    const text = formatReport({
+      models: [aggregateModel('fake-model', [result])],
+      host: 'fake',
+      reps: 1,
+    })
+    assert.match(text, /follow-up prefill 0\.8s/)
+    assert.match(text, /rep 1 round 3, turn 2: prompt 100/)
   })
 })
 

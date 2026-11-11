@@ -1,6 +1,7 @@
 // tests/scripts/eval/compare.ts
 // diff two saved --json eval reports per model and per task
 
+import { taskFollowUpPrefillMs, taskPromptEvalMs } from './report.js'
 import type { EvalReport, ModelReport, TaskResult } from './types.js'
 
 // the task-level numbers worth tracking between runs; wall and prompt tokens
@@ -14,6 +15,10 @@ interface TaskFigures
   // null when the report predates the field, so the delta prints n/a
   // instead of a fake regression against zero
   firstRoundPromptTokens: number | null
+  // prompt-eval time is the cache signal; null when rounds carry no durations
+  promptEvalMs: number | null
+  // null for single-turn tasks and reports that predate turn tracking
+  followUpPrefillMs: number | null
 }
 
 function taskFigures(task: TaskResult): TaskFigures
@@ -24,7 +29,21 @@ function taskFigures(task: TaskResult): TaskFigures
     wallMs: task.metrics.wallMs,
     promptTokens: task.metrics.promptTokens,
     firstRoundPromptTokens: task.metrics.firstRoundPromptTokens ?? null,
+    promptEvalMs: taskPromptEvalMs(task),
+    followUpPrefillMs: taskFollowUpPrefillMs(task),
   }
+}
+
+// delta for a figure either report may lack
+function deltaOptional(
+  before: number | null,
+  after: number | null,
+  unit: string
+): string
+{
+  return before === null || after === null
+    ? 'n/a'
+    : deltaNum(before, after, unit)
 }
 
 // signed delta w/ a unit; rates print as percentage points
@@ -78,15 +97,9 @@ function formatModelComparison(
         `clean ${deltaPct(a.cleanliness, b.cleanliness)}  ` +
         `wall ${deltaNum(a.wallMs, b.wallMs, 'ms')}  ` +
         `prompt ${deltaNum(a.promptTokens, b.promptTokens, ' tok')}  ` +
-        `first-round ${
-          a.firstRoundPromptTokens === null || b.firstRoundPromptTokens === null
-            ? 'n/a'
-            : deltaNum(
-                a.firstRoundPromptTokens,
-                b.firstRoundPromptTokens,
-                ' tok'
-              )
-        }`
+        `first-round ${deltaOptional(a.firstRoundPromptTokens, b.firstRoundPromptTokens, ' tok')}  ` +
+        `prompt-time ${deltaOptional(a.promptEvalMs, b.promptEvalMs, 'ms')}  ` +
+        `follow-up prefill ${deltaOptional(a.followUpPrefillMs, b.followUpPrefillMs, 'ms')}`
     )
   }
 
