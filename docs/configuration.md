@@ -22,20 +22,20 @@ Numeric `context.maxNumCtx` is still clamped to supported token bounds later. St
 
 ## Precedence
 
-| Concern          | Winner                                                                                                     |
-| ---------------- | ---------------------------------------------------------------------------------------------------------- |
-| Tool policy      | Built-in defaults ← user `permissions` (may loosen defaults) ← project `permissions` (**tighten only**)    |
-| Local prompt cap | `CORAL_MAX_PROMPT_TOKENS` (integer `> 0`) **replaces** project `context.maxPromptTokens`; default `32768`  |
-| Context ceiling  | `CORAL_NUM_CTX` (integer `> 0`) **replaces** project `context.maxNumCtx`                                   |
-| Embedding model  | `CORAL_EMBEDDING_MODEL` (nonempty trimmed) else project `retrieval.embeddingModel` else `nomic-embed-text` |
-| Tool profile     | User + project `tools.disabled` union; project `tools.localTask` overrides user; default `false`           |
-| Verify           | Project `verify.enabled` boolean; otherwise `false`                                                        |
-| MCP servers      | User `mcp` only                                                                                            |
-| Theme            | `--theme` > `prefs.json` > `coral-reef`                                                                    |
-| Ollama host      | `--host` else `http://localhost:11434` (not `OLLAMA_HOST`)                                                 |
-| Model            | `--model` else picker / resume session model                                                               |
-| Think requests   | `--no-think` else on                                                                                       |
-| Permission mode  | `--yolo` else ask                                                                                          |
+| Concern          | Winner                                                                                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Tool policy      | Built-in defaults ← user `permissions` (may loosen defaults) ← project `permissions` (**tighten only**)                   |
+| Local prompt cap | `CORAL_MAX_PROMPT_TOKENS` (integer `> 0`) **replaces** project `context.maxPromptTokens`; default `32768`                 |
+| Context ceiling  | `CORAL_NUM_CTX` (integer `> 0`) **replaces** project `context.maxNumCtx`                                                  |
+| Embedding model  | `CORAL_EMBEDDING_MODEL` (nonempty trimmed) else project `retrieval.embeddingModel` else `nomic-embed-text`                |
+| Tool profile     | User + project `tools.disabled` union; project `tools.localTask` and `tools.localGitWrite` override user; default `false` |
+| Verify           | Project `verify.enabled` boolean; otherwise `false`                                                                       |
+| MCP servers      | User `mcp` only                                                                                                           |
+| Theme            | `--theme` > `prefs.json` > `coral-reef`                                                                                   |
+| Ollama host      | `--host` else `http://localhost:11434` (not `OLLAMA_HOST`)                                                                |
+| Model            | `--model` else picker / resume session model                                                                              |
+| Think requests   | `--no-think` else on                                                                                                      |
+| Permission mode  | `--yolo` else ask                                                                                                         |
 
 Project policy rank: `always_allow` < `require_approval` < `always_deny`. A clone can deny `bash`; it cannot silently make a user-gated tool `always_allow`. Unknown tool names (including `mcp__…` you have not set) default to `require_approval`.
 
@@ -169,7 +169,8 @@ Both user and project files accept:
 {
   "tools": {
     "disabled": ["search_code"],
-    "localTask": false
+    "localTask": false,
+    "localGitWrite": false
   }
 }
 ```
@@ -177,6 +178,10 @@ Both user and project files accept:
 `tools.disabled` removes built-in tools from the Agent's active catalog, schemas, and prompt guidance. User and project lists are combined, so a project cannot re-enable a tool disabled by the user. Entries must be exact built-in tool names; unknown names, non-string entries, and malformed fields are silently ignored. MCP tools remain controlled by the user MCP configuration and permissions. Disabled built-in names remain reserved and cannot be claimed by MCP tools.
 
 `task` is omitted for Ollama models unless `tools.localTask` is `true`. A valid project boolean overrides the user boolean; the default is `false`. An explicit `"task"` in either disabled list always wins. Switching models rebuilds the catalog for the selected provider and retires the previous model's MCP tools. Switching to a hosted provider restores `task` only if it was included in the Agent's original tool set and was not explicitly disabled. Tool profile config is read at Agent construction and is not reloaded on model switches.
+
+`git_add`, `git_commit`, `git_switch`, and `git_push` are omitted for Ollama models unless `tools.localGitWrite` is `true`, with the same precedence as `localTask`. Local models keep `git_status`, `git_diff`, and `git_log` and can still run Git through `bash`, which asks for approval. Leaving the four write tools out removes their schemas and most of the "Committing changes" prompt rules, about 700 tokens of fixed prompt. Hosted models always get them unless they are disabled.
+
+`search_code` is also omitted for Ollama models when the configured embedding model is not in the Ollama model list at session start. Pull the model and start a new session (or switch models) to get it back. If the model list cannot be read, the tool stays.
 
 ---
 
