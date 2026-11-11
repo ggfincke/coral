@@ -3,7 +3,8 @@
 
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import type { EvalTask } from './types.js'
+import { initTestRepo } from '../../helpers/git.js'
+import type { EvalTask, GradeContext, GradeResult } from './types.js'
 import {
   LONG_CONTEXT_TEST_FILES,
   seedLongContextProject,
@@ -302,38 +303,62 @@ const bugFixVerify: EvalTask = {
 
 // define a multi-file fix where the bug spans two modules the prompt never
 // names; passing requires reading across the tree and keeping the tests locked
+const LONG_CONTEXT_PROMPT =
+  'npm test fails in this project: gold customers are being charged wrong. Find the cause, fix it in the source (not the tests), and run the tests to confirm.'
+
+// pass only when the locked tests are untouched and the whole suite is green
+async function gradeLongContext(ctx: GradeContext): Promise<GradeResult>
+{
+  // reject any edit to the locked tests
+  for (const [rel, expected] of Object.entries(LONG_CONTEXT_TEST_FILES))
+  {
+    const actual = await readFileSafe(ctx.dir, rel)
+    if (actual !== expected)
+    {
+      return { passed: false, detail: `${rel} was modified` }
+    }
+  }
+  // the whole suite must pass, not just the gold case
+  const { code } = await runNode(ctx.dir, ['--test', 'test/'], GRADE_TIMEOUT_MS)
+  const passed = code === 0
+  return {
+    passed,
+    detail: passed ? 'node --test passed' : `node --test exited ${code}`,
+  }
+}
+
 const longContextFix: EvalTask = {
   id: 'long-context-fix',
   description: 'find & fix a cross-module pricing bug in a ~35 file project',
-  prompt:
-    'npm test fails in this project: gold customers are being charged wrong. Find the cause, fix it in the source (not the tests), and run the tests to confirm.',
+  prompt: LONG_CONTEXT_PROMPT,
   async setup(dir)
   {
     await seedLongContextProject(dir)
   },
-  async grade(ctx)
+  grade: gradeLongContext,
+}
+
+const longContextFollowup: EvalTask = {
+  id: 'long-context-followup',
+  description: 'the long-context fix, then two short follow-up turns',
+  prompt: LONG_CONTEXT_PROMPT,
+  followUps: [
+    'Which file did you change and what was the bug? Answer in one sentence without using tools.',
+    'Run the tests once more and tell me how many pass.',
+  ],
+  async setup(dir)
   {
-    // reject any edit to the locked tests
-    for (const [rel, expected] of Object.entries(LONG_CONTEXT_TEST_FILES))
+    await seedLongContextProject(dir)
+    // a committed repo gives every turn a Git snapshot, as real sessions have
+    const git = initTestRepo(dir)
+    git('add', '-A')
+    const commit = git('-c', 'commit.gpgsign=false', 'commit', '-m', 'seed')
+    if (commit.status !== 0)
     {
-      const actual = await readFileSafe(ctx.dir, rel)
-      if (actual !== expected)
-      {
-        return { passed: false, detail: `${rel} was modified` }
-      }
-    }
-    // the whole suite must pass, not just the gold case
-    const { code } = await runNode(
-      ctx.dir,
-      ['--test', 'test/'],
-      GRADE_TIMEOUT_MS
-    )
-    const passed = code === 0
-    return {
-      passed,
-      detail: passed ? 'node --test passed' : `node --test exited ${code}`,
+      throw new Error(`seed commit failed: ${commit.stderr.trim()}`)
     }
   },
+  grade: gradeLongContext,
 }
 
 export const TASKS: EvalTask[] = [
@@ -344,6 +369,7 @@ export const TASKS: EvalTask[] = [
   buildRun,
   bugFixVerify,
   longContextFix,
+  longContextFollowup,
 ]
 
 export function taskById(id: string): EvalTask | undefined

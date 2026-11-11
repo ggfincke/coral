@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`temperature: 0`, `seed: <rep>`) unless `--sampling model` is passed,
   aggregate wall time and token totals by median, and show per-task wall
   seconds, prefill share, and first-round prompt tokens.
+- **Eval cache signal:** eval tasks can carry follow-up turns, and a
+  `long-context-followup` task runs two short turns after the long-context
+  fix. Reports and `eval compare` now show prompt-eval time per task and the
+  time spent opening each later turn, replacing the prefill share and
+  `cold rounds` line. Ollama reports the full prompt in `prompt_eval_count`
+  even on a cache hit, so only time shows a re-read.
 - **Local tool rounds:** gather the labeled automatic Git snapshot once per
   turn, type the todo item schema, reserve todos for four or more steps with
   milestone updates, and disable thinking for local compaction summaries.

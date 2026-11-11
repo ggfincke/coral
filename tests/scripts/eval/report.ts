@@ -1,16 +1,14 @@
 // tests/scripts/eval/report.ts
 // renders an EvalReport as plain aligned text or pretty JSON
 
+import { median } from './harness.js'
 import type {
   EvalReport,
   ModelReport,
   RoundSample,
+  RunOutcome,
   TaskResult,
 } from './types.js'
-
-// a later round that prefilled at least this share of its context missed the
-// prefix cache (cache hits only re-read the new tail)
-const COLD_PREFILL_FRACTION = 0.9
 
 // format a 0..1 rate as a right-padded percent string
 function pct(rate: number): string
@@ -24,24 +22,53 @@ function tps(value: number): string
   return value.toFixed(1)
 }
 
-// share of the planned context that ollama actually prefilled this round;
-// near 100% means the prefix cache missed and the whole prompt was re-read
-function prefillFraction(sample: RoundSample): number
+// sum the prompt-eval time of the chosen rounds; null when none reported one
+function promptEvalMs(samples: RoundSample[]): number | null
 {
-  if (sample.contextTokens <= 0) return 0
-  return Math.min(1, sample.promptTokens / sample.contextTokens)
+  const durations = samples.flatMap((sample) =>
+    sample.promptEvalDurationNs === null ? [] : [sample.promptEvalDurationNs]
+  )
+  if (durations.length === 0) return null
+  return durations.reduce((sum, ns) => sum + ns, 0) / 1e6
 }
 
-// list the rounds after the first that re-prefilled most of the prompt
-function formatColdRounds(rounds: RoundSample[]): string
+// the first round of each turn after the first; a cross-turn prefix break
+// makes these re-read the earlier turns
+function followUpFirstRounds(run: RunOutcome): RoundSample[]
 {
-  const cold = rounds
-    .filter(
-      (sample) =>
-        sample.round > 1 && prefillFraction(sample) >= COLD_PREFILL_FRACTION
-    )
-    .map((sample) => sample.round)
-  return cold.length === 0 ? 'none' : cold.join(', ')
+  const rounds = run.rounds ?? []
+  return rounds.filter(
+    (sample, index) =>
+      (sample.turn ?? 1) > 1 && rounds[index - 1]?.turn !== sample.turn
+  )
+}
+
+// median of one per-rep figure, skipping reps that could not report it
+function medianAcrossReps(
+  task: TaskResult,
+  figure: (run: RunOutcome) => number | null
+): number | null
+{
+  const values = task.runs.flatMap((run) =>
+  {
+    const value = figure(run)
+    return value === null ? [] : [value]
+  })
+  return values.length === 0 ? null : median(values)
+}
+
+// median across reps of total prompt-eval time. prompt_eval_count is the full
+// prompt even on a cache hit, so time is the only signal that tracks misses
+export function taskPromptEvalMs(task: TaskResult): number | null
+{
+  return medianAcrossReps(task, (run) => promptEvalMs(run.rounds ?? []))
+}
+
+// median across reps of the prompt-eval time spent opening each later turn;
+// null for single-turn tasks and reports that predate turn tracking
+export function taskFollowUpPrefillMs(task: TaskResult): number | null
+{
+  return medianAcrossReps(task, (run) => promptEvalMs(followUpFirstRounds(run)))
 }
 
 // pad a string to width on the right (left-align)
@@ -62,20 +89,14 @@ function secs(ms: number): string
   return `${(ms / 1000).toFixed(0)}s`
 }
 
-// mean prefill share across every round of every rep; high means the prefix
-// cache is missing and each round re-reads the whole prompt
-function taskPrefill(task: TaskResult): number
+// format an optional millisecond figure as seconds w/ one decimal
+function prefillSecs(ms: number | null): string
 {
-  const samples = task.runs.flatMap((run) => run.rounds)
-  if (samples.length === 0) return 0
-  return (
-    samples.reduce((sum, sample) => sum + prefillFraction(sample), 0) /
-    samples.length
-  )
+  return ms === null ? 'n/a' : `${(ms / 1000).toFixed(1)}s`
 }
 
-// one line per task: id, passes/reps, cleanliness, tok/s, wall, prefill,
-// status, detail
+// one line per task: id, passes/reps, cleanliness, tok/s, wall, prompt-eval
+// time, status, detail
 function formatTaskLine(task: TaskResult, idWidth: number): string
 {
   const status = task.metrics.aborted
@@ -92,11 +113,14 @@ function formatTaskLine(task: TaskResult, idWidth: number): string
     padLeft(pct(task.metrics.cleanlinessRate), 6),
     padLeft(tps(task.metrics.tokensPerSecond), 8),
     padLeft(secs(task.metrics.wallMs), 6),
-    padLeft(pct(taskPrefill(task)), 6),
+    padLeft(prefillSecs(taskPromptEvalMs(task)), 7),
     padRight(status, 7),
   ]
+  const followUp = taskFollowUpPrefillMs(task)
+  const followUpNote =
+    followUp === null ? '' : `  follow-up prefill ${prefillSecs(followUp)}`
 
-  return `${cols.join('  ')}  ${task.detail}`
+  return `${cols.join('  ')}  ${task.detail}${followUpNote}`
 }
 
 // per-model block: summary line then one line per task
@@ -116,15 +140,17 @@ function formatModelBlock(model: ModelReport): string
 
   const lines = model.results.flatMap((task) => [
     formatTaskLine(task, idWidth),
-    ...task.runs.flatMap((run, rep) => [
-      ...run.rounds.map((sample) =>
+    ...task.runs.flatMap((run, rep) =>
+    {
+      const multiTurn = run.rounds.some((sample) => (sample.turn ?? 1) > 1)
+      return run.rounds.map((sample) =>
       {
         const duration = (ns: number | null) =>
           ns === null ? 'unavailable' : `${(ns / 1e6).toFixed(1)}ms`
-        return `    rep ${rep + 1} round ${sample.round}: prompt ${sample.promptTokens}, decode ${sample.completionTokens}, context ~${sample.contextTokens}, prefill ${pct(prefillFraction(sample))}, prompt time ${duration(sample.promptEvalDurationNs)}, decode time ${duration(sample.evalDurationNs)}, reason ${sample.doneReason ?? 'unavailable'}`
-      }),
-      `    rep ${rep + 1} cold rounds: ${formatColdRounds(run.rounds)}`,
-    ]),
+        const turn = multiTurn ? `, turn ${sample.turn ?? 1}` : ''
+        return `    rep ${rep + 1} round ${sample.round}${turn}: prompt ${sample.promptTokens}, decode ${sample.completionTokens}, context ~${sample.contextTokens}, prompt time ${duration(sample.promptEvalDurationNs)}, decode time ${duration(sample.evalDurationNs)}, reason ${sample.doneReason ?? 'unavailable'}`
+      })
+    }),
   ])
 
   return [summary, ...lines].join('\n')

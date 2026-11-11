@@ -12,6 +12,8 @@ export interface EvalTask
   id: string
   description: string
   prompt: string
+  // later user turns sent to the same agent once the previous turn settles
+  followUps?: string[]
   // seed the scratch dir before the agent runs
   setup(dir: string): Promise<void>
   grade(ctx: GradeContext): Promise<GradeResult>
@@ -66,7 +68,10 @@ export interface RunOutcome extends RunMetrics
 
 export interface RoundSample
 {
+  // counts across every turn of the rep
   round: number
+  // 1-based user turn this round served; absent in reports that predate it
+  turn?: number
   promptTokens: number
   completionTokens: number
   contextTokens: number
