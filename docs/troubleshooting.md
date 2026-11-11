@@ -29,7 +29,7 @@ Streamed reasoning missing without an error: `/api/chat` 400/404/422 whose body 
 
 **Do:** `/compact`, `/new`, fewer MCP `enabledTools`, smaller `@` attachments, or raise the ceiling (`CORAL_NUM_CTX` or `context.maxNumCtx`). Remember the **8192** floor, the **32,768** prompt-budget cap, and memory/native caps — [Context](context.md).
 
-Pinned window unexpectedly small: full-attention models are KV-capped (`0.75 × RAM − weights − 6 GiB`). Gemma-family sliding-window models pin native after the weight check. Missing weight metadata is treated as 0 (more optimistic).
+Pinned window unexpectedly small: full-attention models are KV-capped (`0.75 × RAM − weights − 6 GiB`). Gemma-family sliding-window models pin native after the weight check. Missing weight metadata is treated as 0 (more optimistic). On a small GPU, running Ollama with a quantized K/V cache and declaring it in `~/.coral.json` `ollama.kvCacheType` roughly doubles the window that fits.
 
 `/compact` says `Conversation too short to compact` or `Compaction skipped — not enough context to summarize`. Auto-compact notices: prune (`Auto-pruned …`, undo kept), summarize (`Context auto-compacted` + `Undo history cleared`), or trim (`Context trimmed to recent history (summarization unavailable)` + `Undo history cleared`).
 

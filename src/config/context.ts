@@ -1,7 +1,7 @@
 // src/config/context.ts
 // memory-aware context-window sizing
 
-import { loadProjectConfig } from './project-config.js'
+import { loadProjectConfig, loadUserConfig } from './project-config.js'
 import { modelLookupKey } from '../ollama/model-name.js'
 import type { Model, ModelInfo } from '../types/inference.js'
 import { isPlainObject } from '../utils/guards.js'
@@ -17,8 +17,17 @@ const MEMORY_RESERVE_BYTES = 6 * 1024 ** 3
 // display server sharing the GPU
 const DISCRETE_RESERVE_BYTES = 2 * 1024 ** 3
 
-// estimate KV elements at f16 width so the memory bound stays conservative
-const KV_ELEMENT_BYTES = 2
+// estimate KV elements at f16 width unless the user says the server runs a
+// quantized cache, so the memory bound stays conservative by default
+const F16_KV_ELEMENT_BYTES = 2
+
+// bytes per KV element for each OLLAMA_KV_CACHE_TYPE value; the quantized
+// types store 32 values per block plus a 2-byte scale
+const KV_ELEMENT_BYTES: ReadonlyMap<string, number> = new Map([
+  ['f16', F16_KV_ELEMENT_BYTES],
+  ['q8_0', 34 / 32],
+  ['q4_0', 18 / 32],
+])
 
 // keep a tight memory budget from producing an unusable context window
 export const MIN_NUM_CTX = 8_192
@@ -92,9 +101,25 @@ export function resolveContextConfig(cwd: string): ContextConfig
   return config
 }
 
+// read the KV cache type the user declares for their Ollama server in
+// ~/.coral.json ollama.kvCacheType; Coral cannot see the server's own
+// environment, and anything unrecognized falls back to f16
+export function resolveKvElementBytes(): number
+{
+  const raw = loadUserConfig().ollama
+  const type =
+    isPlainObject(raw) && typeof raw.kvCacheType === 'string'
+      ? raw.kvCacheType.trim().toLowerCase()
+      : ''
+  return KV_ELEMENT_BYTES.get(type) ?? F16_KV_ELEMENT_BYTES
+}
+
 // estimate full-attention KV-cache bytes per token, or return undefined when
 // the model metadata cannot describe a meaningful KV bound
-export function estimateKvBytesPerToken(info: ModelInfo): number | undefined
+export function estimateKvBytesPerToken(
+  info: ModelInfo,
+  elementBytes = F16_KV_ELEMENT_BYTES
+): number | undefined
 {
   // treat sliding-window families as KV-light so callers pin their native window
   if (info.architecture && SLIDING_WINDOW_ARCHS.has(info.architecture))
@@ -108,7 +133,7 @@ export function estimateKvBytesPerToken(info: ModelInfo): number | undefined
     return undefined
   }
 
-  const perLayer = kvHeadCount * (keyLength + valueLength) * KV_ELEMENT_BYTES
+  const perLayer = kvHeadCount * (keyLength + valueLength) * elementBytes
   return blockCount * perLayer
 }
 
@@ -200,7 +225,7 @@ export async function resolvePinnedContextWindow(
     memoryKind: memory.kind,
     weightBytes,
     nativeContext,
-    kvBytesPerToken: estimateKvBytesPerToken(info),
+    kvBytesPerToken: estimateKvBytesPerToken(info, resolveKvElementBytes()),
   })
 
   // enforce the minimum and native bounds after applying the user ceiling
