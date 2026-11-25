@@ -4,6 +4,7 @@
 import { existsSync, rmSync } from 'node:fs'
 import { lstat, readFile, readlink, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { READ_ONLY_GIT_CONFIG } from '../utils/git.js'
 import { execFileCommand, formatProcessError } from '../utils/process.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 import { assertJobsPlatform } from './process.js'
@@ -12,12 +13,8 @@ import type { JobRecord, JobRepository } from './types.js'
 
 const MAX_GIT_BYTES = 4 * 1024 * 1024
 const MAX_DIFF_BYTES = 1024 * 1024
-const GIT_OPTIONS = [
-  '-c',
-  'core.hooksPath=/dev/null',
-  '-c',
-  'core.fsmonitor=false',
-]
+// task git runs no fsmonitor & no hooks for index, checkout, or ref events
+const GIT_OPTIONS = READ_ONLY_GIT_CONFIG
 
 async function git(
   cwd: string,
