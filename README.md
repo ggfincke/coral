@@ -600,8 +600,8 @@ By default Coral stores:
 | `~/.coral/sessions/*.json`                        | Authoritative saved conversations, todos, and bounded undo/redo        |
 | `~/.coral/history.jsonl`                          | Append-only prompt history; navigation loads the newest 500 valid rows |
 | `~/.coral/prefs.json`                             | Mutable UI preferences such as the selected theme                      |
-| `~/.coral/telemetry.json` + `telemetry.d`         | Legacy baseline plus immutable per-Agent-lifetime counter deltas       |
-| `~/.coral/eval-telemetry.json` + `.d`             | Legacy eval baseline plus optional immutable eval counter deltas       |
+| `~/.coral/telemetry.d/`                           | Immutable per-Agent-lifetime counter deltas                            |
+| `~/.coral/eval-telemetry.d/`                      | Optional immutable eval counter deltas                                 |
 | `~/.coral/retrieval/v2/spaces/*.chunks-v2.sqlite` | Semantic indexes isolated by embedding space and chunker version       |
 | `~/.coral/retrieval/index.sqlite`                 | Preserved legacy retrieval cache; current Coral does not open it       |
 | `~/.coral/mcp-trust.json` + `.d`                  | Legacy trust baseline plus atomic per-alias approval records           |

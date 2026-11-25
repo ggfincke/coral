@@ -1,6 +1,8 @@
 // src/agent/loop/edit-verification.ts
 // build the post-edit verification prompt and parse its verdict
 
+import { CHARS_PER_TOKEN } from '../../utils/limits.js'
+
 export interface VerificationResult
 {
   status: 'pass' | 'fail' | 'unknown'
@@ -14,12 +16,40 @@ export interface VerificationResult
 // cap failed-verification fix attempts before a warn-only finish
 export const MAX_VERIFY_REPROMPTS = 1
 
-// the verdict line the self-check subagent must end with
-const VERDICT_PATTERN = /VERDICT:\s*(PASS|FAIL)\b[ \t]*[-—:]?[ \t]*(.*)/i
+// the verdict line the self-check subagent must end with; local models often
+// bold it or inflect the keyword, so emphasis and a trailing ED are tolerated
+const VERDICT_PATTERN = /VERDICT[*_]*[ \t]*:[*_ \t]*(PASS|FAIL)(?:ED)?\b(.*)/i
 
-// prompt a read-only subagent to review edits against the original request
-export function buildVerifyPrompt(request: string, diffs: string[]): string
+// emphasis and separators around the reason, never part of it
+const REASON_LEAD_PATTERN = /^[\s*_]*[-:\u2014]?[\s*]*/
+const REASON_TAIL_PATTERN = /[\s*]+$/
+
+// share of the subagent's prompt limit the joined diffs may fill, leaving the
+// rest for its system prompt, tool schemas, and file re-reads
+const VERIFY_DIFF_PROMPT_SHARE = 0.5
+
+// cut the joined diffs at a line boundary once they pass the review budget
+function boundDiffs(diffs: string[], maxChars: number): string
 {
+  const joined = diffs.join('\n\n')
+  if (joined.length <= maxChars) return joined
+
+  const lineEnd = joined.lastIndexOf('\n', maxChars)
+  const kept = joined.slice(0, lineEnd > 0 ? lineEnd : Math.max(maxChars, 0))
+  return `${kept}\n[diffs truncated to fit the review; re-read the changed files for the rest]`
+}
+
+// prompt a read-only subagent to review edits against the original request,
+// keeping the diffs within a share of the subagent's prompt token limit
+export function buildVerifyPrompt(
+  request: string,
+  diffs: string[],
+  promptLimit: number
+): string
+{
+  const maxDiffChars = Math.floor(
+    promptLimit * VERIFY_DIFF_PROMPT_SHARE * CHARS_PER_TOKEN
+  )
   return [
     'You are reviewing code changes another agent just made, checking whether',
     'they correctly & completely satisfy the original request.',
@@ -28,7 +58,7 @@ export function buildVerifyPrompt(request: string, diffs: string[]): string
     request,
     '',
     'CHANGES MADE (unified diffs):',
-    diffs.join('\n\n'),
+    boundDiffs(diffs, maxDiffChars),
     '',
     'Re-read the changed files if you need surrounding context. Look for logic',
     'errors, missed requirements, broken syntax, & edits that contradict the',
@@ -66,7 +96,9 @@ export function parseVerifyVerdict(
     if (!match) continue
 
     const status = match[1]!.toUpperCase() === 'PASS' ? 'pass' : 'fail'
-    const reason = match[2]!.trim()
+    const reason = match[2]!
+      .replace(REASON_LEAD_PATTERN, '')
+      .replace(REASON_TAIL_PATTERN, '')
     return {
       status,
       reason: reason.length > 0 ? reason : undefined,
