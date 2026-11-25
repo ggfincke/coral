@@ -32,8 +32,8 @@ const plugins = {
 }
 
 export default defineConfig([
-  // exclude build output & reference projects
-  globalIgnores(['dist', 'reference']),
+  // exclude build output, reference projects & git-excluded local notes
+  globalIgnores(['dist', 'reference', 'dev-docs']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
