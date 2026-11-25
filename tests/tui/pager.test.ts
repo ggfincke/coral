@@ -158,6 +158,21 @@ test('pager search accepts multi-character input, deletes graphemes, and cycles 
   )
 })
 
+test('N searches backward from a stale selection or the viewport top', () =>
+{
+  const corpus = rows(60).map((row, i) =>
+    i === 2 || i === 40 ? `${row} hit` : row
+  )
+  const v = view(corpus.length, 5, corpus)
+  const back = (state: PagerState) =>
+    reducePagerInput(state, 'N', noKey, v).state.current
+  const base: PagerState = { top: 0, query: 'hit', draft: null, current: null }
+
+  assert.equal(back({ ...base, current: 45 }), 40)
+  assert.equal(back({ ...base, top: 50 }), 40)
+  assert.equal(back({ ...base, top: 10 }), 2)
+})
+
 test('findMatchRows ignores case and styling and highlightRow keeps the row width', () =>
 {
   const styled = `\u001b[31mHello\u001b[39m World, hello again`
@@ -249,7 +264,7 @@ test('the pager frame shows a footer, finds matches, holds its top while rows ap
     )
     await flush()
     assert.equal(frames.at(-1)!.split('\n')[1], topRow)
-    assert.match(frames.at(-1)!, /↓ \d+ new/)
+    assert.match(frames.at(-1)!, /↓ \d+ more/)
 
     stdin.write('q')
     await flush()
