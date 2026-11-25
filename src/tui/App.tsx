@@ -2130,8 +2130,7 @@ export default function App({
       setPaletteOpen(false)
       if (entry.command)
       {
-        // the palette never held the composer text, so the draft stays put;
-        // /clear, /new, and /resume still reset it through the session
+        // the palette never held the composer text, so the draft stays put
         void handleSubmit(entry.command, true)
         return
       }
