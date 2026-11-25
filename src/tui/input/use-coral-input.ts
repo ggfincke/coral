@@ -2,7 +2,7 @@
 // connect normalized terminal input to Ink's shared event stream
 
 import type { EventEmitter } from 'node:events'
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useStdin } from 'ink'
 import { terminalControlEvents } from './control-tap.js'
 import {
@@ -34,7 +34,9 @@ export function useCoralInput(
   const pendingRef = useRef('')
   const handlerRef = useRef(handler)
 
-  useEffect(() =>
+  // refresh during commit: a passive effect runs a stdin read later, so the
+  // next key would still reach the previous render's handler
+  useLayoutEffect(() =>
   {
     handlerRef.current = handler
   }, [handler])

@@ -23,8 +23,12 @@ export function tapTerminalControls(
     const chunk: unknown = stdin.read(size)
     if (chunk !== null)
     {
-      const parsed = tokenizeTerminalChunk(String(chunk), pending)
+      const text = String(chunk)
+      const parsed = tokenizeTerminalChunk(text, pending)
       pending = parsed.pending
+      // a burst can end on the ESC that opens the next packet; a lone ESC
+      // read is the Escape key and is never held
+      if (!pending && text.length > 1 && text.endsWith('\x1b')) pending = '\x1b'
       for (const token of parsed.tokens)
       {
         if (isMouseOrFocusPacket(token))

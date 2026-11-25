@@ -2,6 +2,7 @@
 // shared grapheme boundaries for prompt editing
 
 import { clamp } from '../../utils/clamp.js'
+import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 
 const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, {
   granularity: 'grapheme',
@@ -100,4 +101,17 @@ export function clampGraphemeOffset(
   return direction === 'forward'
     ? nextGraphemeOffset(value, clamped)
     : previousGraphemeOffset(value, clamped)
+}
+
+// single-line drafts (filters, searches, reasons): fast typing and IME commits
+// arrive as one multi-character token, so the whole sanitized run is appended
+export function appendDraftInput(draft: string, input: string): string
+{
+  return draft + sanitizeUntrustedText(input).replace(/\s+/g, ' ')
+}
+
+// backspace in a single-line draft removes one whole grapheme
+export function deleteDraftGrapheme(draft: string): string
+{
+  return draft.slice(0, previousGraphemeOffset(draft, draft.length))
 }
