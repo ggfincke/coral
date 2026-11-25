@@ -15,12 +15,15 @@ export interface CoralAcpCliOptions
 
 interface CoralAcpCliDependencies
 {
-  serve?: (options: CoralAcpCliOptions) => Promise<void>
+  // onStarted marks the point after which a failure is not a startup failure
+  serve?: (options: CoralAcpCliOptions, onStarted: () => void) => Promise<void>
   writeStderr?: (text: string) => void
 }
 
 export async function serveAcpStdio(
-  options: CoralAcpCliOptions
+  options: CoralAcpCliOptions,
+  onStarted: () => void = () =>
+  {}
 ): Promise<void>
 {
   const { CoralAcpController } = await import('../acp/controller.js')
@@ -35,6 +38,7 @@ export async function serveAcpStdio(
   ) as unknown as ReadableStream<Uint8Array>
   const stream = acp.ndJsonStream(output, input)
   const connection = app.connect(stream)
+  onStarted()
   const abortForSignal = (): void => connection.close()
   process.once('SIGINT', abortForSignal)
   process.once('SIGTERM', abortForSignal)
@@ -58,6 +62,7 @@ export async function runAcpCli(
 {
   const writeStderr =
     dependencies.writeStderr ?? ((text: string) => process.stderr.write(text))
+  let started = false
   try
   {
     const result = Array.isArray(input)
@@ -70,15 +75,26 @@ export async function runAcpCli(
     {
       throw new Error('model must be nonempty')
     }
-    await (dependencies.serve ?? serveAcpStdio)({
-      host: normalizeOllamaHost(parsed.host),
-      ...(model ? { model } : {}),
-    })
+    await (dependencies.serve ?? serveAcpStdio)(
+      {
+        host: normalizeOllamaHost(parsed.host),
+        ...(model ? { model } : {}),
+      },
+      () =>
+      {
+        started = true
+      }
+    )
     return 0
   }
   catch (error)
   {
-    writeStderr(`Cannot start Coral ACP: ${boundedDiagnostic(error)}\n`)
+    // a shutdown save failure after serving is not a startup failure
+    writeStderr(
+      started
+        ? `Coral ACP failed at exit: ${boundedDiagnostic(error)}\n`
+        : `Cannot start Coral ACP: ${boundedDiagnostic(error)}\n`
+    )
     return 1
   }
 }

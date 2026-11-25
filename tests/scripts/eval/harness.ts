@@ -104,10 +104,7 @@ interface RunStop
 
 // map a settled turn's status to the stop it causes; null only for completed.
 // a status added later fails typecheck here & fails the rep at runtime
-function stopForOutcome(
-  outcome: AgentRunOutcome,
-  doomLooped: boolean
-): RunStop | null
+function stopForOutcome(outcome: AgentRunOutcome): RunStop | null
 {
   switch (outcome.status)
   {
@@ -119,12 +116,10 @@ function stopForOutcome(
         errored: false,
         reason: 'iteration limit reached',
       }
+    case 'doom_loop_stopped':
+      return { aborted: true, errored: false, reason: 'doom loop stopped' }
     case 'stopped':
-      return {
-        aborted: true,
-        errored: false,
-        reason: doomLooped ? 'doom loop stopped' : 'aborted',
-      }
+      return { aborted: true, errored: false, reason: 'aborted' }
     case 'cancelled':
       return { aborted: true, errored: false, reason: 'aborted' }
     case 'failed':
@@ -171,8 +166,6 @@ export async function runRep(
   let turn = 1
   // the first turn that did not complete; it fails the rep
   let stop: RunStop | null = null
-  // the doom-loop callback only names the reason for a stopped status
-  let doomLooped = false
   let agent: EvalAgent | undefined
 
   try
@@ -209,11 +202,7 @@ export async function runRep(
       // keep eval runs headless by approving gated tools
       onToolApproval: async () => true,
       // stop a run when the agent reports a doom loop; the stop fails the rep
-      onDoomLoop: async () =>
-      {
-        doomLooped = true
-        return false
-      },
+      onDoomLoop: async () => false,
       onVerification: () =>
       {},
       onUsage: (usage) =>
@@ -249,7 +238,7 @@ export async function runRep(
       for (const prompt of [task.prompt, ...(task.followUps ?? [])])
       {
         const outcome = await agent.run(prompt, events, controller.signal)
-        stop = stopForOutcome(outcome, doomLooped)
+        stop = stopForOutcome(outcome)
         if (stop) break
         turn++
       }
