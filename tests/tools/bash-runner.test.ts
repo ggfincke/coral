@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { runJobCommand } from '../../src/jobs/process.js'
 import { bashTool } from '../../src/tools/bash.js'
+import { capErrorMessage } from '../../src/tools/tool-output.js'
 import { runGitCommand } from '../../src/utils/git.js'
 import { HAS_GIT, initTestRepo } from '../helpers/git.js'
 import { makeTempDirPool } from '../helpers/temp.js'
@@ -93,21 +94,44 @@ test('bash gives children no stdin', async () =>
   assert.equal(result.output, '')
 })
 
-test('bash keeps running past the output cap & keeps the tail', async () =>
+test('bash keeps running past the output cap & keeps head & tail', async () =>
 {
   const dir = await tempDir('coral-bash-overflow-')
   const result = await bashTool.execute(
     {
       command:
-        'head -c 2097152 /dev/zero | tr "\\0" x; echo; echo LAST-LINE; touch marker',
+        'echo FIRST-LINE; head -c 2097152 /dev/zero | tr "\\0" x; echo; echo LAST-LINE; touch marker',
     },
     toolContext(dir)
   )
 
   assert.equal(result.error, undefined)
   assert.ok(existsSync(join(dir, 'marker')))
-  assert.match(result.output, /^\[Earlier command output truncated\]\n/)
+  assert.match(result.output, /^FIRST-LINE\n/)
+  assert.match(result.output, /\n\[\d+ chars of output omitted\]\n/)
   assert.match(result.output, /LAST-LINE\n$/)
+})
+
+test('bash failure cause survives the model-facing error cap', async () =>
+{
+  const dir = await tempDir('coral-bash-long-stderr-')
+  // ~10 KB of stderr, past the loop's 8,000-char error cap
+  const noise = 'for i in $(seq 1 400); do echo "FAIL test $i" >&2; done'
+  const cases = [
+    { command: `${noise}; sleep 5`, timeout: 1000, cause: /timed out/ },
+    { command: `${noise}; exit 2`, timeout: 5000, cause: /exit code 2/ },
+  ]
+  for (const { command, timeout, cause } of cases)
+  {
+    const result = await bashTool.execute(
+      { command, timeout },
+      toolContext(dir)
+    )
+    const seen = capErrorMessage(result.error ?? '')
+    assert.match(seen, cause)
+    assert.match(seen, /FAIL test 1\n/)
+    assert.match(seen, /FAIL test 400$/)
+  }
 })
 
 test('bash & task commands do not inherit hosted API keys', async () =>

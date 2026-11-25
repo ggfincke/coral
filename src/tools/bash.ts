@@ -9,7 +9,9 @@ import {
   runProcessGroup,
   type ProcessGroupResult,
 } from '../utils/process.js'
+import { MAX_ERROR_MESSAGE_CHARS } from '../utils/limits.js'
 import { isUnsafeTerminalControl } from '../utils/untrusted-text.js'
+import { capToolOutput } from './tool-output.js'
 
 export const BASH_DEFAULT_TIMEOUT_MS = 30_000
 
@@ -30,19 +32,22 @@ function controlByteError(command: string): string | undefined
     if (isUnsafeTerminalControl(code))
     {
       const hex = code.toString(16).toUpperCase().padStart(4, '0')
-      return (
+      const prefix =
         `bash refuses commands containing raw control characters ` +
-        `(U+${hex} at character ${index}); write it as an escape such as ` +
-        `$'\\x1b' or printf '\\033' instead`
-      )
+        `(U+${hex} at character ${index})`
+      if (code === 0x0d)
+      {
+        return `${prefix}; CR and CRLF line endings are not allowed, send the command with LF-only (\\n) line endings`
+      }
+      return `${prefix}; write it as an escape such as $'\\x1b' or printf '\\033' instead`
     }
     index++
   }
   return undefined
 }
 
-// why the command failed, as a trailer line the model can act on
-function failureTrailer(result: ProcessGroupResult, timeout: number): string
+// why the command failed, as one line the model can act on
+function failureCause(result: ProcessGroupResult, timeout: number): string
 {
   if (result.launchError) return `[could not start: ${result.launchError}]`
   if (result.stopped === 'timeout')
@@ -55,6 +60,17 @@ function failureTrailer(result: ProcessGroupResult, timeout: number): string
   }
   if (result.signal) return `[killed by ${result.signal}]`
   return `[exit code ${String(result.exitCode)}]`
+}
+
+// the cause leads & stderr keeps its head & tail within the loop's error
+// cap, so the model sees why it failed however much stderr there was
+function failureError(result: ProcessGroupResult, timeout: number): string
+{
+  const cause = failureCause(result, timeout)
+  const stderr = result.stderr.trim()
+  if (!stderr) return cause
+  const budget = MAX_ERROR_MESSAGE_CHARS - cause.length - 1
+  return `${cause}\n${capToolOutput(stderr, budget, { preserveTail: true })}`
 }
 
 export const bashTool: Tool = {
@@ -104,12 +120,7 @@ export const bashTool: Tool = {
     })
     if (result.exitCode !== 0 || result.stopped || result.launchError)
     {
-      return {
-        output: result.stdout,
-        error: [result.stderr.trim(), failureTrailer(result, timeout)]
-          .filter(Boolean)
-          .join('\n'),
-      }
+      return { output: result.stdout, error: failureError(result, timeout) }
     }
 
     return {

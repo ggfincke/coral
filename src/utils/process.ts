@@ -24,6 +24,9 @@ const STOP_GRACE_MS = 1000
 // still holds the pipes keeps running, & its later output is discarded
 const OUTPUT_DRAIN_MS = 200
 
+// most chars of a stream's head kept once output passes its cap
+const OUTPUT_HEAD_CHARS = 64 * 1024
+
 export interface ChildProcessOptions
 {
   cwd?: string
@@ -67,7 +70,7 @@ export interface ProcessGroupOptions
   timeout?: number
   // abort stops the whole group
   signal?: AbortSignal
-  // chars of each stream's tail kept in memory
+  // chars of each stream kept in memory, split between head & tail
   maxOutput?: number
   // defaults to childProcessEnv()
   env?: NodeJS.ProcessEnv
@@ -97,29 +100,52 @@ export function childProcessEnv(
 }
 
 /**
- * Keeps the last `limit` characters of process output, so a long run keeps
- * going and its end survives. Text before the kept tail is replaced by a
- * marker line.
+ * Keeps the first and last characters of process output within `limit`, so a
+ * long run keeps going and both its opening lines and its end survive. Text
+ * between them is replaced by a marker line naming how much was dropped.
  */
-export class OutputTail
+export class BoundedOutput
 {
-  private value = ''
-  private truncated = false
+  private head = ''
+  private tail = ''
+  private headOpen = true
+  private omitted = 0
+  private readonly headLimit: number
+  private readonly tailLimit: number
 
-  constructor(private readonly limit = DEFAULT_CHILD_PROCESS_MAX_BUFFER)
-  {}
+  constructor(limit = DEFAULT_CHILD_PROCESS_MAX_BUFFER)
+  {
+    this.headLimit = Math.min(OUTPUT_HEAD_CHARS, Math.floor(limit / 4))
+    this.tailLimit = limit - this.headLimit
+  }
 
   append(text: string): void
   {
-    this.value += text
-    if (this.value.length > this.limit)
+    if (this.headOpen)
     {
-      this.value = this.value.slice(-this.limit)
-      this.truncated = true
+      let room = this.headLimit - this.head.length
+      if (text.length <= room)
+      {
+        this.head += text
+        return
+      }
+      // keep a surrogate pair together on the tail side of the cut
+      if (room > 0 && /[\uD800-\uDBFF]/.test(text[room - 1]!)) room--
+      this.head += text.slice(0, room)
+      text = text.slice(room)
+      this.headOpen = false
+    }
+    this.tail += text
+    if (this.tail.length > this.tailLimit)
+    {
+      let drop = this.tail.length - this.tailLimit
+      if (/[\uDC00-\uDFFF]/.test(this.tail[drop]!)) drop++
+      this.omitted += drop
+      this.tail = this.tail.slice(drop)
     }
   }
 
-  // decode a byte stream into this tail; the returned flush appends a
+  // decode a byte stream into this buffer; the returned flush appends a
   // multibyte character split across the final read
   capture(stream: Readable): () => void
   {
@@ -130,8 +156,9 @@ export class OutputTail
 
   toString(): string
   {
-    const marker = this.truncated ? '[Earlier command output truncated]\n' : ''
-    return `${marker}${this.value}`
+    if (!this.omitted) return this.head + this.tail
+    const head = this.head.endsWith('\n') ? this.head : `${this.head}\n`
+    return `${head}[${this.omitted} chars of output omitted]\n${this.tail}`
   }
 }
 
@@ -212,15 +239,15 @@ async function stopGroup(pgid: number): Promise<void>
 
 // run a model-directed command in its own session & process group w/ no
 // stdin & no terminal; a timeout or abort stops the whole group, & output
-// past maxOutput keeps its tail instead of killing the run
+// past maxOutput keeps its head & tail instead of killing the run
 export async function runProcessGroup(
   file: string,
   args: string[],
   options: ProcessGroupOptions = {}
 ): Promise<ProcessGroupResult>
 {
-  const stdout = new OutputTail(options.maxOutput)
-  const stderr = new OutputTail(options.maxOutput)
+  const stdout = new BoundedOutput(options.maxOutput)
+  const stderr = new BoundedOutput(options.maxOutput)
   const result = (
     fields: Omit<ProcessGroupResult, 'stdout' | 'stderr'>
   ): ProcessGroupResult => ({

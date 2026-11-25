@@ -164,14 +164,15 @@ async function execMutatingGit(
 
 // execFile throws at spawn (E2BIG, a NUL byte in an arg) instead of calling
 // back, so turn that into an ordinary failure the caller can report. git
-// never prompts on the terminal, whatever path runs it
+// never prompts on the terminal, whatever path runs it; an empty GPG_TTY
+// keeps a signing gpg from pointing pinentry at the user's terminal
 async function execGit(
   args: string[],
   options: ChildProcessOptions,
   mutating = false
 ): Promise<ChildProcessResult>
 {
-  const env = childProcessEnv({ GIT_TERMINAL_PROMPT: '0' })
+  const env = childProcessEnv({ GIT_TERMINAL_PROMPT: '0', GPG_TTY: '' })
   if (mutating) return execMutatingGit(args, { ...options, env })
   try
   {

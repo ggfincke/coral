@@ -9,9 +9,9 @@ import { ensurePrivateDir } from '../utils/fs.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { writeJsonFile } from '../utils/json.js'
 import {
+  BoundedOutput,
   childProcessEnv,
   drainChildOutput,
-  OutputTail,
 } from '../utils/process.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 import { jobDirectory } from './store.js'
@@ -437,7 +437,7 @@ export async function runJobCommand(
     }
   )
   // stdout & stderr interleave in arrival order, each w/ its own decoder
-  const output = new OutputTail(OUTPUT_LIMIT)
+  const output = new BoundedOutput(OUTPUT_LIMIT)
   const flushes = [child.stdout, child.stderr].map((stream) =>
     output.capture(stream)
   )
