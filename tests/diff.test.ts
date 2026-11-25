@@ -300,6 +300,41 @@ test('fuzzy edits refuse to re-indent across tab & space units', () =>
   )
 })
 
+// alignment spaces on one line (col-0 JSDoc, C comment, make continuation)
+// must not read as the file's unit for tab-indented lines elsewhere
+test('fuzzy edits keep same-unit tab edits next to space-aligned lines', () =>
+{
+  const cases = [
+    {
+      before: '/**\n * doc\n */\nexport function f() {\n\ta()\n}\n',
+      old: '/**\n * doc \n */\nexport function f() {\n\ta()',
+      neu: '/**\n * doc\n */\nexport function f() {\n\ta()\n\tb()',
+      after: '/**\n * doc\n */\nexport function f() {\n\ta()\n\tb()\n}\n',
+    },
+    {
+      before: '/*\n * init\n */\nint f(void)\n{\n\treturn 0;\n}\n',
+      old: '/*\n * init \n */\nint f(void)\n{\n\treturn 0;',
+      neu: '/*\n * init\n */\nint f(void)\n{\n\tinit();\n\treturn 0;',
+      after: '/*\n * init\n */\nint f(void)\n{\n\tinit();\n\treturn 0;\n}\n',
+    },
+    {
+      before: 'SRCS = a.c \\\n       b.c\nall:\n\t$(CC) $(SRCS)\n',
+      old: 'SRCS = a.c \\\n       b.c \nall:\n\t$(CC) $(SRCS)',
+      neu: 'SRCS = a.c \\\n       b.c\nall:\n\t$(CC) $(SRCS)\n\t$(LD) a.o',
+      after: 'SRCS = a.c \\\n       b.c\nall:\n\t$(CC) $(SRCS)\n\t$(LD) a.o\n',
+    },
+  ]
+  for (const { before, old, neu, after } of cases)
+  {
+    assert.deepEqual(applyEdit(before, old, neu, false), {
+      ok: true,
+      after,
+      count: 1,
+      matchType: 'fuzzy',
+    })
+  }
+})
+
 test('fuzzy refusals report why the normalized match was not applied', () =>
 {
   assert.deepEqual(

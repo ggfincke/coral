@@ -106,41 +106,46 @@ function contentLines(text: string): string[]
   return lines
 }
 
-// pick the indent character of a block's first indented line, if any
-function blockIndentUnit(lines: string[]): string | undefined
+// report whether old_string & the matched file lines indent a corresponding line
+// w/ different units; compare line by line so alignment spaces on one line (a
+// column-0 JSDoc ` * `, a Makefile continuation) don't stand in for the file's unit
+function indentUnitsDiffer(oldLines: string[], fileLines: string[]): boolean
 {
-  for (const line of lines)
+  for (let i = 0; i < oldLines.length; i++)
   {
-    const indent = leadingWhitespace(line)
-    if (indent && line.trim() !== '') return indent[0]
+    if (oldLines[i].trim() === '') continue
+    const oldUnit = leadingWhitespace(oldLines[i])[0]
+    const fileUnit = leadingWhitespace(fileLines[i])[0]
+    if (oldUnit && fileUnit && oldUnit !== fileUnit) return true
   }
-  return undefined
+  return false
 }
 
 // re-base a changed replacement line onto the file's indentation while preserving
 // its relative indentation; unchanged lines reuse the file verbatim. returns null
-// when indents start w/ different units, since adding their counts would mix them
+// when indents use different units, since adding their counts would mix them
 function reindentNewLine(
   line: string,
   oldIndent: string,
   fileIndent: string,
-  fileUnit: string | undefined
+  unitsDiffer: boolean
 ): string | null
 {
   const lineIndent = leadingWhitespace(line)
   const body = line.slice(lineIndent.length)
   if (lineIndent === oldIndent) return fileIndent + body
-  // compare leading units only so alignment spaces after a tab (a JSDoc ` * `
-  // line) don't read as a mismatch
+  if (unitsDiffer) return null
+  // compare leading units only; alignment spaces after a tab are not refused but
+  // still re-base as tabs (pre-existing, same as main)
   const units = new Set(
-    [oldIndent[0], lineIndent[0], fileIndent[0], fileUnit].filter(Boolean)
+    [oldIndent[0], lineIndent[0], fileIndent[0]].filter(Boolean)
   )
   if (units.size > 1) return null
   const cols = Math.max(
     0,
     fileIndent.length + lineIndent.length - oldIndent.length
   )
-  const unit = fileIndent[0] ?? fileUnit ?? lineIndent[0] ?? ' '
+  const unit = fileIndent[0] ?? lineIndent[0] ?? ' '
   return unit.repeat(cols) + body
 }
 
@@ -190,7 +195,7 @@ function applyFuzzyEdit(
   {
     const fileLines = beforeLines.slice(start, start + oldLines.length)
     const fileIndent = leadingWhitespace(fileLines[baseLine])
-    const fileUnit = blockIndentUnit(fileLines)
+    const unitsDiffer = indentUnitsDiffer(oldLines, fileLines)
     const useCrlf = fileLines.some((line) => line.endsWith('\r'))
     // count source-text changes per key so an interval check never rescans a run
     const changes = new Array<number>(oldLines.length)
@@ -224,7 +229,7 @@ function applyFuzzyEdit(
         result.push(useCrlf ? '\r' : '')
         continue
       }
-      const rebased = reindentNewLine(line, oldIndent, fileIndent, fileUnit)
+      const rebased = reindentNewLine(line, oldIndent, fileIndent, unitsDiffer)
       if (rebased === null) return refuse('indent_mismatch')
       result.push(useCrlf ? `${rebased}\r` : rebased)
     }
@@ -239,8 +244,8 @@ function applyFuzzyEdit(
 }
 
 // give a multi-line replacement the file's CRLF endings when every file line
-// break is CRLF; mixed-ending files & matches that split a CRLF pair keep
-// new_string as sent
+// break is CRLF & no lone CR exists; mixed-ending files & matches that split a
+// CRLF pair keep new_string as sent
 function matchLineEndings(
   before: string,
   oldString: string,
@@ -249,7 +254,7 @@ function matchLineEndings(
 {
   if (!newString.includes('\n') || !before.includes('\r\n')) return newString
   if (oldString.startsWith('\n') || oldString.endsWith('\r')) return newString
-  if (/(?<!\r)\n/.test(before)) return newString
+  if (/(?<!\r)\n|\r(?!\n)/.test(before)) return newString
   return newString.replace(/(?<!\r)\n/g, '\r\n')
 }
 
