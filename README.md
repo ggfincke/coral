@@ -616,7 +616,7 @@ configuration remains `~/.coral.json`.
 
 Durable tasks also keep a private control directory at
 `/tmp/coral-jobs-<uid>-<hash>/`, a locked worktree for each task in the source
-repository's worktree list, and a `codex/job-<id>` branch. Coral retains all of
+repository's worktree list, and a `coral/job-<id>` branch. Coral retains all of
 these after a task settles. See [Durable coding tasks](docs/jobs.md).
 
 Semantic indexing keeps fitting TS/JS declarations and class members together.

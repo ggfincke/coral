@@ -20,6 +20,7 @@ import { writeJsonFile } from '../utils/json.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
   appendJobEvent,
+  isValidJobRecord,
   jobSpecDigest,
   listJobs,
   parseJobSpec,
@@ -30,6 +31,7 @@ import {
   assertJobsPlatform,
   captureOwnedProcess,
   cleanupJobProcesses,
+  decodeOwner,
   processIdentity,
   terminateOwnedGroup,
   type OwnedJobProcess,
@@ -40,7 +42,12 @@ import {
   jobRuntimePaths,
 } from './runtime.js'
 import { assertJobWorktree } from './git.js'
-import type { JobRecord, JobRequest, JobResponse } from './types.js'
+import {
+  SETTLED_JOB_STATUSES,
+  type JobRecord,
+  type JobRequest,
+  type JobResponse,
+} from './types.js'
 
 export interface SupervisorOwner
 {
@@ -69,8 +76,9 @@ export function readSupervisorOwner(): SupervisorOwner | undefined
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
     throw error
   }
-  const owner = JSON.parse(serialized) as SupervisorOwner
+  const owner = JSON.parse(serialized) as SupervisorOwner | null
   if (
+    !owner ||
     owner.version !== 1 ||
     !Number.isSafeInteger(owner.pid) ||
     owner.pid <= 1 ||
@@ -143,23 +151,15 @@ async function recoverPreviousWorker(): Promise<void>
   {
     const active = JSON.parse(
       readFileSync(paths.active, 'utf8')
-    ) as ActiveWorker
-    if (
-      !active ||
-      typeof active.jobId !== 'string' ||
-      !active.owner ||
-      !Number.isSafeInteger(active.owner.pid) ||
-      active.owner.pid <= 1 ||
-      typeof active.owner.identity !== 'string' ||
-      !/^[0-9a-f-]{36}$/.test(active.owner.token)
-    )
+    ) as ActiveWorker | null
+    if (!active || typeof active.jobId !== 'string')
     {
       throw new Error(
         'Invalid active-worker identity; task execution is blocked.'
       )
     }
     // stop the old worker before inspecting command journals it could still update
-    await terminateOwnedGroup(active.owner)
+    await terminateOwnedGroup(decodeOwner(active.owner))
     await cleanupJobProcesses(active.jobId)
     accountInterrupted(
       readJob(active.jobId),
@@ -308,6 +308,7 @@ function validateRequest(value: unknown): JobRequest
     request.action === 'resume' &&
     (typeof request.instructions !== 'string' ||
       request.instructions.length > 100_000 ||
+      request.instructions.includes('\0') ||
       (request.shellResolution !== undefined &&
         !['continue', 'retry'].includes(request.shellResolution)) ||
       (request.setupResolution !== undefined &&
@@ -562,8 +563,10 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
 
   const kick = () =>
   {
+    // a blocked supervisor keeps its pending fail-closed shutdown
+    if (blocked) return
     if (idle) clearTimeout(idle)
-    if (queueRun || stopping || blocked) return
+    if (queueRun || stopping) return
     queueRun = drain()
       .catch(failClosed)
       .finally(() =>
@@ -588,6 +591,16 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
           idle = setTimeout(shutdown, 60_000)
         }
       })
+  }
+
+  // a request the record cannot hold is the client's error; failing it here,
+  // before any event or environment changes, keeps the queue running
+  const assertStorable = (job: JobRecord) =>
+  {
+    if (!isValidJobRecord(job))
+      throw new Error(
+        'This request would make the task record invalid; nothing was changed.'
+      )
   }
 
   const handle = async (request: JobRequest): Promise<JobResponse> =>
@@ -641,6 +654,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
       job.queuedAt = new Date().toISOString()
       job.queueOrder =
         Math.max(0, ...listJobs().map((entry) => entry.queueOrder ?? 0)) + 1
+      assertStorable(job)
       environments.set(job.id, request.environment!)
       persistControl(() =>
       {
@@ -673,15 +687,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
     }
     else
     {
-      if (
-        ![
-          'interrupted',
-          'cancelled',
-          'needs_input',
-          'failed',
-          'ready_for_review',
-        ].includes(job.status)
-      )
+      if (!(SETTLED_JOB_STATUSES as readonly string[]).includes(job.status))
       {
         throw new Error('Only a settled or interrupted task can be continued.')
       }
@@ -703,12 +709,13 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
         'Inspect current files and continue the approved task from observed state.'
       job.resumeSetup = request.setupResolution
       job.resumeShell = request.shellResolution
-      environments.set(job.id, request.environment!)
       job.status = 'queued'
       job.queuedAt = new Date().toISOString()
       job.queueOrder =
         Math.max(0, ...listJobs().map((entry) => entry.queueOrder ?? 0)) + 1
       delete job.error
+      assertStorable(job)
+      environments.set(job.id, request.environment!)
       persistControl(() =>
       {
         appendJobEvent(

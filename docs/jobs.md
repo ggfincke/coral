@@ -62,7 +62,7 @@ after 60 seconds with an empty queue.
 A worker:
 
 1. creates the task worktree under `CORAL_HOME/jobs/<id>/worktree` on branch
-   `codex/job-<id>`, at the approved commit;
+   `coral/job-<id>`, at the approved commit;
 2. runs setup commands once;
 3. runs an Agent turn to implement the objective;
 4. runs the full check suite, then gives the Agent up to `--max-repairs` repair
@@ -160,7 +160,7 @@ See [Troubleshooting](troubleshooting.md#durable-tasks) for specific messages.
 | `CORAL_HOME/jobs/<id>/worktree/`            | The task worktree, locked in the source repository                  |
 | `/tmp/coral-jobs-<uid>-<hash>/`             | Supervisor lock, control socket, active-worker journal, launch logs |
 
-Task directories are private (`0o700`). Worktrees, `codex/job-<id>` branches,
+Task directories are private (`0o700`). Worktrees, `coral/job-<id>` branches,
 checkpoints, and logs are kept after a task settles; Coral does not delete them.
 To remove a finished task's worktree, run `git worktree remove --force --force`
 on it from the source repository, then delete the branch if you no longer need

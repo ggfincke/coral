@@ -2,7 +2,7 @@
 // dispatch durable coding task commands and private process entrypoints
 
 import { readFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   Command,
@@ -17,12 +17,13 @@ import { createJobPlan } from '../jobs/plan.js'
 import { assertJobsPlatform } from '../jobs/process.js'
 import {
   jobCommandOutputPath,
-  jobDirectory,
+  jobRecordPath,
   jobSpecDigest,
   listJobRecords,
   readJob,
   readJobEvents,
   readJobSnapshot,
+  MAX_JOB_ACTIVE_MS,
 } from '../jobs/store.js'
 import type { JobRecord } from '../jobs/types.js'
 import { DEFAULT_OLLAMA_HOST } from '../ollama/host.js'
@@ -54,10 +55,10 @@ function minutes(value: string): number
     !Number.isFinite(parsed) ||
     parsed <= 0 ||
     !Number.isSafeInteger(parsed * 60_000) ||
-    parsed * 60_000 > 2_147_482_000
+    parsed * 60_000 > MAX_JOB_ACTIVE_MS
   )
     throw new InvalidArgumentError(
-      'Use positive minutes with millisecond precision, at most 2147482000 milliseconds total.'
+      `Use positive minutes with millisecond precision, at most ${MAX_JOB_ACTIVE_MS} milliseconds total.`
     )
   return parsed
 }
@@ -76,7 +77,7 @@ function describe(job: JobRecord, transcript = false): void
   output(`Specification digest: ${jobSpecDigest(job.spec)}`)
   if (job.status === 'draft')
   {
-    output(`Edit the spec in: ${join(jobDirectory(job.id), 'job.json')}`)
+    output(`Edit the spec in: ${jobRecordPath(job.id)}`)
     output(
       `After editing, run coral jobs show ${job.id} to review the updated specification and digest.`
     )
@@ -142,6 +143,9 @@ async function objectiveFromInput(
     value = contents.toString('utf8')
   }
   if (!value?.trim()) throw new Error('Provide a nonempty task objective.')
+  // a UTF-16 file decodes with NUL bytes, which a task record cannot store
+  if (value.includes('\0'))
+    throw new Error('Task text must be UTF-8 without NUL bytes.')
   return value.trim()
 }
 
@@ -280,7 +284,7 @@ export async function runJobsCli(args: string[]): Promise<number>
           json({
             job,
             digest: jobSpecDigest(job.spec),
-            draftPath: join(jobDirectory(job.id), 'job.json'),
+            draftPath: jobRecordPath(job.id),
           })
         else describe(job)
       }
@@ -367,7 +371,7 @@ export async function runJobsCli(args: string[]): Promise<number>
         json({
           job,
           digest: jobSpecDigest(job.spec),
-          draftPath: join(jobDirectory(id), 'job.json'),
+          draftPath: jobRecordPath(id),
           ...(options.transcript && job.snapshot
             ? { transcript: readJobSnapshot(id, job.snapshot) }
             : {}),

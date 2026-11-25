@@ -18,7 +18,14 @@ import { toErrorMessage } from '../utils/errors.js'
 import { isPlainObject } from '../utils/guards.js'
 import { writeJsonFile } from '../utils/json.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
-import type { JobEvent, JobRecord, JobSpec } from './types.js'
+import {
+  JOB_PHASES,
+  JOB_STATUSES,
+  SETTLED_JOB_STATUSES,
+  type JobEvent,
+  type JobRecord,
+  type JobSpec,
+} from './types.js'
 
 const JOB_ID = /^[0-9a-f]{8}$/
 const SNAPSHOT_NAME = /^snapshot-[0-9a-f-]{36}\.json$/
@@ -33,19 +40,17 @@ const MAX_OUTPUT_FILE_BYTES = 4 * 1024 * 1024
 export const JOB_OUTPUT_TAIL_CHARS = 8_192
 // the longest delay setTimeout honors, less the supervisor's settle margin
 export const MAX_JOB_ACTIVE_MS = 2_147_482_000
+// the longest shell command a record can hold as setup, check, or agent intent
+export const MAX_JOB_COMMAND_CHARS = 16_384
 const MAX_EVENTS_BYTES = 2 * 1024 * 1024
+const MAX_EVENTS = 2048
 const MAX_EVENT_TEXT = 16 * 1024
-const STATUSES = new Set([
-  'draft',
-  'queued',
-  'running',
-  'ready_for_review',
-  'needs_input',
-  'interrupted',
-  'cancelled',
-  'failed',
-])
-const PHASES = new Set(['setup', 'implement', 'checks', 'repair', 'reconcile'])
+// coalesced stream events reach disk at most once per heartbeat, so a busy
+// task rewrites its whole log at most once a second whatever its event rate
+const EVENT_FLUSH_MS = 1000
+const STATUSES = new Set<string>(JOB_STATUSES)
+const SETTLED_STATUSES = new Set<string>(SETTLED_JOB_STATUSES)
+const PHASES = new Set<string>(JOB_PHASES)
 
 function text(value: unknown, limit = 100_000): value is string
 {
@@ -69,49 +74,73 @@ function timestamp(value: unknown): value is string
   return text(value, 40) && Number.isFinite(Date.parse(value))
 }
 
-function commands(value: unknown): value is string[]
+// a command the record can persist: nonblank, bounded, and free of NUL bytes
+export function isJobCommand(value: unknown): boolean
+{
+  return nonempty(value, MAX_JOB_COMMAND_CHARS)
+}
+
+export function isJobCommandList(value: unknown): value is string[]
 {
   return (
     Array.isArray(value) &&
     value.length <= 100 &&
-    value.every((command) => nonempty(command, 16_384))
+    value.every((command) => isJobCommand(command))
   )
+}
+
+// names the first spec field the record would refuse, so callers can report it
+function specProblem(value: unknown): string | undefined
+{
+  if (!isPlainObject(value)) return 'specification'
+  const repository = value.repository
+  if (!isPlainObject(repository)) return 'repository'
+  const fields: [string, boolean][] = [
+    ['objective', nonempty(value.objective, 32_768)],
+    ['model', nonempty(value.model, 1024)],
+    ['host', nonempty(value.host, 4096)],
+    ['plan', nonempty(value.plan)],
+    [
+      'repository.source',
+      nonempty(repository.source, 4096) && isAbsolute(repository.source),
+    ],
+    [
+      'repository.commonDir',
+      nonempty(repository.commonDir, 4096) && isAbsolute(repository.commonDir),
+    ],
+    [
+      'repository.commit',
+      typeof repository.commit === 'string' && SHA.test(repository.commit),
+    ],
+    ['setup', isJobCommandList(value.setup)],
+    ['checks', isJobCommandList(value.checks)],
+    [
+      'activeTimeLimitMs',
+      integer(value.activeTimeLimitMs) &&
+        value.activeTimeLimitMs > 0 &&
+        value.activeTimeLimitMs <= MAX_JOB_ACTIVE_MS,
+    ],
+    ['maxRepairs', integer(value.maxRepairs)],
+  ]
+  return fields.find(([, valid]) => !valid)?.[0]
 }
 
 function validSpec(value: unknown): value is JobSpec
 {
-  if (!isPlainObject(value) || !isPlainObject(value.repository)) return false
-  const repository = value.repository
-  return (
-    nonempty(value.objective, 32_768) &&
-    nonempty(value.model, 1024) &&
-    nonempty(value.host, 4096) &&
-    nonempty(value.plan) &&
-    nonempty(repository.source, 4096) &&
-    isAbsolute(repository.source) &&
-    nonempty(repository.commonDir, 4096) &&
-    isAbsolute(repository.commonDir) &&
-    typeof repository.commit === 'string' &&
-    SHA.test(repository.commit) &&
-    commands(value.setup) &&
-    commands(value.checks) &&
-    integer(value.activeTimeLimitMs) &&
-    value.activeTimeLimitMs > 0 &&
-    value.activeTimeLimitMs <= MAX_JOB_ACTIVE_MS &&
-    integer(value.maxRepairs)
-  )
+  return specProblem(value) === undefined
 }
 
 export function parseJobSpec(value: unknown): JobSpec
 {
-  if (!validSpec(value))
+  const problem = specProblem(value)
+  if (problem !== undefined)
     throw new Error(
-      'Invalid task specification. Keep repository identity, objective, model, plan, command arrays, and positive execution limits intact.'
+      `Invalid task specification field ${problem}: it is missing, blank, too long, contains a NUL byte, or is out of range. Keep repository identity, objective, model, plan, command arrays, and positive execution limits intact.`
     )
-  return structuredClone(value)
+  return structuredClone(value as JobSpec)
 }
 
-function validRecord(value: unknown): value is JobRecord
+export function isValidJobRecord(value: unknown): value is JobRecord
 {
   if (
     !isPlainObject(value) ||
@@ -136,7 +165,7 @@ function validRecord(value: unknown): value is JobRecord
     if (
       !isPlainObject(result) ||
       !['setup', 'checks'].includes(String(result.phase)) ||
-      !nonempty(result.command, 16_384) ||
+      !isJobCommand(result.command) ||
       !integer(result.attempt) ||
       typeof result.ok !== 'boolean' ||
       !text(result.output, 1024 * 1024) ||
@@ -156,13 +185,7 @@ function validRecord(value: unknown): value is JobRecord
   if (
     value.settledStatus !== undefined &&
     (value.status !== 'running' ||
-      ![
-        'ready_for_review',
-        'needs_input',
-        'interrupted',
-        'cancelled',
-        'failed',
-      ].includes(String(value.settledStatus)))
+      !SETTLED_STATUSES.has(String(value.settledStatus)))
   )
     return false
   if (
@@ -181,7 +204,7 @@ function validRecord(value: unknown): value is JobRecord
     {
       if (
         !isPlainObject(shell) ||
-        !nonempty(shell.command, 16_384) ||
+        !isJobCommand(shell.command) ||
         !timestamp(shell.startedAt)
       )
         return false
@@ -222,7 +245,7 @@ function validRecord(value: unknown): value is JobRecord
     if (
       !isPlainObject(pending) ||
       !['setup', 'checks'].includes(String(pending.phase)) ||
-      !nonempty(pending.command, 16_384) ||
+      !isJobCommand(pending.command) ||
       !integer(pending.index) ||
       !integer(pending.attempt)
     )
@@ -235,7 +258,7 @@ function validRecord(value: unknown): value is JobRecord
       !isPlainObject(worktree) ||
       !nonempty(worktree.path, 4096) ||
       !isAbsolute(worktree.path) ||
-      worktree.branch !== `codex/job-${value.id}` ||
+      worktree.branch !== jobBranchName(value.id) ||
       (worktree.pending !== undefined && worktree.pending !== true)
     )
       return false
@@ -317,6 +340,17 @@ export function jobDirectory(id: string): string
   return join(jobsDirectory(), id)
 }
 
+export function jobRecordPath(id: string): string
+{
+  return join(jobDirectory(id), 'job.json')
+}
+
+// the branch each task worktree owns in the source repository
+export function jobBranchName(id: string): string
+{
+  return `coral/job-${id}`
+}
+
 // field order is explicit so draft JSON formatting never changes approval identity
 export function jobSpecDigest(spec: JobSpec): string
 {
@@ -344,10 +378,10 @@ export function jobSpecDigest(spec: JobSpec): string
 export function readJob(id: string): JobRecord
 {
   assertStateDirectories(id)
-  const path = join(jobDirectory(id), 'job.json')
+  const path = jobRecordPath(id)
   if (!existsSync(path)) throw new Error(`Task not found: ${id}`)
   const value = readValue(path, MAX_RECORD_BYTES)
-  if (!validRecord(value) || value.id !== id)
+  if (!isValidJobRecord(value) || value.id !== id)
   {
     throw new Error(
       `Invalid task record ${id}; preserve the file and correct the draft or restore its last valid record`
@@ -358,9 +392,10 @@ export function readJob(id: string): JobRecord
 
 export function writeJob(job: JobRecord): void
 {
-  if (!validRecord(job))
+  if (!isValidJobRecord(job))
     throw new Error('Refusing to persist an invalid task record')
-  const path = join(prepareDirectory(job.id), 'job.json')
+  prepareDirectory(job.id)
+  const path = jobRecordPath(job.id)
   if (existsSync(path))
   {
     const previous = readJob(job.id)
@@ -400,7 +435,7 @@ export function listJobRecords(): JobListing
     if (
       !entry.isDirectory() ||
       !JOB_ID.test(entry.name) ||
-      !existsSync(join(jobDirectory(entry.name), 'job.json'))
+      !existsSync(jobRecordPath(entry.name))
     )
       continue
     try
@@ -462,14 +497,74 @@ export function readJobEvents(id: string, after = 0): JobEvent[]
   return events
 }
 
-// one supervisor or its active worker owns writes; viewers only read whole files
-export function appendJobEvent(id: string, type: string, value: string): void
+// events this process appended but has not written yet; a flush re-reads the
+// file, so events another owner wrote meanwhile are kept
+interface PendingEvents
+{
+  events: Omit<JobEvent, 'sequence'>[]
+  timer?: ReturnType<typeof setTimeout>
+  // a failed timer flush surfaces on the next append or flush
+  error?: unknown
+}
+
+const pendingEvents = new Map<string, PendingEvents>()
+
+function eventSize(event: JobEvent): number
+{
+  // the element text inside JSON.stringify([event], null, 2), w/o "[\n" and "\n]"
+  return Buffer.byteLength(JSON.stringify([event], null, 2)) - 4
+}
+
+function takePendingEvents(id: string): PendingEvents | undefined
+{
+  const pending = pendingEvents.get(id)
+  if (!pending) return undefined
+  pendingEvents.delete(id)
+  if (pending.timer) clearTimeout(pending.timer)
+  if (pending.error !== undefined) throw pending.error
+  return pending
+}
+
+// one read and one whole-file write however many events are added; running
+// byte totals keep eviction from re-serializing the log per evicted event
+function writeEvents(id: string, added: Omit<JobEvent, 'sequence'>[]): void
+{
+  const events = readJobEvents(id).filter((event) => event.type !== 'truncated')
+  const sizes = events.map(eventSize)
+  let sizeTotal = sizes.reduce((total, size) => total + size, 0)
+  for (const entry of added)
+  {
+    const event = { sequence: (events.at(-1)?.sequence ?? 0) + 1, ...entry }
+    events.push(event)
+    sizes.push(eventSize(event))
+    sizeTotal += sizes.at(-1)!
+    // the file is "[\n", the elements joined by ",\n", then "\n]"
+    while (
+      events.length > 1 &&
+      (2 + sizeTotal + 2 * events.length > MAX_EVENTS_BYTES ||
+        events.length > MAX_EVENTS)
+    )
+    {
+      events.shift()
+      sizeTotal -= sizes.shift()!
+    }
+  }
+  writeJsonFile(join(prepareDirectory(id), 'events.json'), events)
+}
+
+// one supervisor or its active worker owns writes; viewers only read whole
+// files. coalesced appends wait up to EVENT_FLUSH_MS, and any plain append
+// writes them first, so phase and settlement events stay in order
+export function appendJobEvent(
+  id: string,
+  type: string,
+  value: string,
+  options: { coalesce?: boolean } = {}
+): void
 {
   if (!nonempty(type, 80)) throw new Error('Invalid task event type')
-  const events = readJobEvents(id).filter((event) => event.type !== 'truncated')
   const sanitized = sanitizeUntrustedText(value)
-  const event: JobEvent = {
-    sequence: (events.at(-1)?.sequence ?? 0) + 1,
+  const entry = {
     at: new Date().toISOString(),
     type,
     text:
@@ -477,17 +572,37 @@ export function appendJobEvent(id: string, type: string, value: string): void
         ? sanitized.slice(0, MAX_EVENT_TEXT - 20) + '\n[output truncated]'
         : sanitized,
   }
-  events.push(event)
-  let bytes = Buffer.byteLength(JSON.stringify(events, null, 2))
-  while (
-    events.length > 1 &&
-    (bytes > MAX_EVENTS_BYTES || events.length > 2048)
-  )
+  if (!options.coalesce)
   {
-    events.shift()
-    bytes = Buffer.byteLength(JSON.stringify(events, null, 2))
+    writeEvents(id, [...(takePendingEvents(id)?.events ?? []), entry])
+    return
   }
-  writeJsonFile(join(prepareDirectory(id), 'events.json'), events)
+  let pending = pendingEvents.get(id)
+  if (pending?.error !== undefined) takePendingEvents(id)
+  if (!pending)
+  {
+    pending = { events: [] }
+    pendingEvents.set(id, pending)
+  }
+  pending.events.push(entry)
+  pending.timer ??= setTimeout(() =>
+  {
+    try
+    {
+      flushJobEvents(id)
+    }
+    catch (error)
+    {
+      pendingEvents.set(id, { events: [], error })
+    }
+  }, EVENT_FLUSH_MS)
+}
+
+// write coalesced events now; the worker calls this before it exits
+export function flushJobEvents(id: string): void
+{
+  const pending = takePendingEvents(id)
+  if (pending?.events.length) writeEvents(id, pending.events)
 }
 
 export function writeJobSnapshot(id: string, session: SessionData): string

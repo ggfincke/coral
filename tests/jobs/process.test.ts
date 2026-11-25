@@ -2,8 +2,15 @@
 // join owned shell descendants on cancellation and deadlines before later work
 
 import assert from 'node:assert/strict'
+import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -299,3 +306,55 @@ test(
     }
   }
 )
+
+test(
+  'a stale process record whose pid now leads a foreign group is dropped without signaling it',
+  { timeout: 20_000 },
+  async () =>
+  {
+    const root = await pool.tempDir('coral-job-reused-pid-')
+    process.env.CORAL_HOME = join(root, 'home')
+    const id = randomBytes(4).toString('hex')
+    // stands in for an unrelated process that reused the recorded pid
+    const foreign = spawn('/bin/sleep', ['20'], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    try
+    {
+      await new Promise((resolve) => foreign.once('spawn', resolve))
+      const directory = join(jobDirectory(id), 'processes')
+      mkdirSync(directory, { recursive: true, mode: 0o700 })
+      const token = randomUUID()
+      const record = join(directory, `${token}.json`)
+      // the dead command's identity: same pid and group, an earlier start
+      writeFileSync(
+        record,
+        JSON.stringify({
+          pid: foreign.pid,
+          token,
+          identity: `Mon Nov 23 09:00:00 2026 ${foreign.pid}`,
+        })
+      )
+      await cleanupJobProcesses(id)
+      assert.equal(existsSync(record), false)
+      assert.ok(await processIdentity(foreign.pid!), 'foreign process survives')
+    }
+    finally
+    {
+      process.kill(-foreign.pid!, 'SIGKILL')
+    }
+  }
+)
+
+test('command output keeps a multibyte character split across two writes', async () =>
+{
+  const root = await pool.tempDir('coral-job-utf8-')
+  process.env.CORAL_HOME = join(root, 'home')
+  const result = await runJobCommand(
+    "printf '\\xf0\\x9f'; sleep 0.2; printf '\\x98\\x80\\n'",
+    { cwd: root, jobId: randomBytes(4).toString('hex') }
+  )
+  assert.equal(result.ok, true)
+  assert.equal(result.output, '\u{1F600}\n')
+})
