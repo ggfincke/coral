@@ -234,6 +234,34 @@ test('kills are multi-line aware & report their text', () =>
   )
 })
 
+test('home and end stay on the logical line; unbound chords type nothing', () =>
+{
+  const value = 'line one\nline two\nline three'
+  for (const key of [buildKey({ home: true }), buildKey({ ctrl: true })])
+  {
+    const input = key.ctrl ? 'a' : ''
+    assert.equal(
+      applyPromptEdit({ value, input, key, cursor: buildCursor(22) })
+        ?.cursorOffset,
+      18
+    )
+  }
+
+  for (const [input, key] of [
+    ['x', buildKey({ ctrl: true })],
+    ['n', buildKey({ ctrl: true })],
+    ['`', buildKey({ ctrl: true })],
+    ['\x1c', buildKey()],
+    ['x', buildKey({ meta: true })],
+  ] as const)
+  {
+    assert.equal(
+      applyPromptEdit({ value: 'draft', input, key, cursor: buildCursor(5) }),
+      null
+    )
+  }
+})
+
 test('insertTextAt splices text at an offset for yank', () =>
 {
   assert.deepEqual(insertTextAt('hello world', 5, ','), {

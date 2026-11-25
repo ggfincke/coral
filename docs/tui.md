@@ -119,7 +119,7 @@ Mouse wheel over the prompt scrolls the transcript by 3 lines.
 
 - `/` + a word completes built-ins and discovered skill winners (max 8 rows).
 - `@` completes project files from a session-owned catalog (text-like paths, up to 5,000 files, **max 8 rows**). Refresh happens when you type an `@` query.
-- Mentions: `@path` or `@"quoted path"` after start-of-line or whitespace.
+- Mentions: `@path` or `@"quoted path"` after start-of-line or whitespace. An unquoted mention drops trailing `.,;:!?` and an unmatched `)` or `]`, so `see @README.md.` attaches `README.md`; quote a name that really ends in one of those (completion does this for you).
 - On submit, mentioned files are attached in order, fitted to the request budget. Skip reasons: `not found`, `too large`, `binary`, `unreadable`, `outside workspace`, `over budget`. Caps include 64 files and a 1 MiB text read limit per file.
 
 Completion menu: Up/Down select; Tab/Enter accept; Esc dismisses the **menu** (does not abort a run).

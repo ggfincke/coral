@@ -155,6 +155,8 @@ interface LiveDraft
 type HeldKey = { input: string; key: CoralKey } | { paste: string }
 
 const EMPTY_HISTORY_ENTRIES: readonly HistoryEntry[] = []
+// eslint-disable-next-line no-control-regex
+const TYPED_CONTROL_RE = /[\x00-\x1f\x7f]/
 const INITIAL_RESET: PromptReset = { epoch: 0, kind: 'external' }
 
 export default function PromptInput({
@@ -316,8 +318,9 @@ export default function PromptInput({
   const hasExternalValue = value !== cursor.value
   useLayoutEffect(() =>
   {
-    if (hasExternalValue)
-      draftRef.current = { value, cursorOffset: value.length }
+    if (!hasExternalValue) return
+    draftRef.current = { value, cursorOffset: value.length }
+    lastYankRef.current = null
   }, [hasExternalValue, value])
   const resolvedCursor = useMemo(
     () => ({
@@ -416,6 +419,8 @@ export default function PromptInput({
     {
       const changed = nextValue !== draftRef.current.value
       draftRef.current = { value: nextValue, cursorOffset }
+      // yank-pop only follows a yank; yank callers set the span after this
+      lastYankRef.current = null
       setCursor({ value: nextValue, cursorOffset, cursorWidth })
       if (changed) onChange(nextValue)
       return changed
@@ -532,14 +537,13 @@ export default function PromptInput({
     }
   }, [applyDraft])
 
-  // classify an edit for undo coalescing: plain single-character typing runs
-  // collapse into one unit, everything else stands alone
+  // classify an edit for undo coalescing: plain typing runs collapse into one
+  // unit, whether keys arrive one per read or several in one token
   const editOpKind = useCallback((input: string, key: CoralKey): EditOpKind =>
   {
     const plain =
-      input.length === 1 &&
-      input >= ' ' &&
-      input !== '\x7f' &&
+      input.length > 0 &&
+      !TYPED_CONTROL_RE.test(input) &&
       !key.ctrl &&
       !key.meta &&
       !key.backspace &&
@@ -1003,6 +1007,20 @@ export default function PromptInput({
         (before.mode === 'normal' || (key.escape && !menuLive))
       )
       {
+        // NORMAL edits share the composer's undo history; the restored cursor
+        // is clamped back onto a character
+        const undoInNormal = () =>
+        {
+          undoEdit()
+          const restored = draftRef.current
+          syncVimDraft(engine, restored.value, restored.cursorOffset)
+          applyDraft(restored.value, vimView(engine).cursorOffset)
+        }
+        if (key.ctrl && input === '_')
+        {
+          undoInNormal()
+          return
+        }
         if (
           (key.ctrl || key.meta) &&
           !(key.ctrl && input === 'j') &&
@@ -1056,7 +1074,25 @@ export default function PromptInput({
           return
         }
 
-        applyDraft(next.value, Math.min(next.cursorOffset, next.value.length))
+        if (next.undoRequested)
+        {
+          undoInNormal()
+          return
+        }
+        commitEdit(
+          {
+            value: next.value,
+            cursorOffset: Math.min(next.cursorOffset, next.value.length),
+            cursorWidth: 0,
+          },
+          'other'
+        )
+        // a change that enters INSERT (`cw`, `o`) and the text typed after it
+        // undo as one step, so the typing run joins the change's snapshot
+        if (next.mode === 'insert' && next.value !== live.value)
+        {
+          memoryRef.current = { ...memoryRef.current, lastOpCharInsert: true }
+        }
         return
       }
 
