@@ -154,7 +154,7 @@ Refs/paths starting with `-` are rejected so git does not treat them as options.
 - **`git_switch`** — required `branch`; optional `create` (default false), `startPoint` (requires `create:true`). Create path runs `git check-ref-format --branch`.
 - **`git_push`** — `git push --porcelain`; optional `remote` (must be a configured remote), `branch` (requires `remote`; `HEAD` or a plain branch name, no `+`, `:`, `^`, `~`, or `@{`), `setUpstream` (requires both) → `-u`. Timeout 5 min.
 
-`/diff` in the TUI is a user command (`git diff HEAD` plus a list of untracked files), not this tool.
+`/diff` in the TUI is a user command (staged and unstaged changes plus a list of untracked files), not this tool.
 
 ---
 

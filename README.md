@@ -214,7 +214,7 @@ inspection; `logs --follow` can be interrupted without cancelling the task.
 worktree is not a sandbox. Workers are instructed to remain in their worktree
 and avoid Git mutations and background processes, but shell access is still
 host access. The task profile excludes MCP and nested workers. Container
-sandboxing, automatic integration, and Windows task execution are not included.
+sandboxing and automatic integration are not included.
 
 ## Interactive use
 
