@@ -81,9 +81,9 @@ test('animation hook respects reduced motion and compaction while cleaning up ti
     view = render(
       createElement(Harness, { stage: 'tool:read_file', observe }),
       {
-        stdout: stdout as NodeJS.WriteStream,
-        stderr: stdout as NodeJS.WriteStream,
-        stdin: stdin as NodeJS.ReadStream,
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: stdout as unknown as NodeJS.WriteStream,
+        stdin: stdin as unknown as NodeJS.ReadStream,
         debug: true,
         patchConsole: false,
         exitOnCtrlC: false,

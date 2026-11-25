@@ -406,7 +406,7 @@ test('rapid replacement joins disposal before folding telemetry exactly once', a
   second.reliability = 2
   third.reliability = 3
   await Promise.resolve()
-  assert.deepEqual(folded, [])
+  assert.equal(folded.length, 0)
 
   disposeA.resolve()
   disposeB.resolve()
@@ -1045,7 +1045,6 @@ test('fork saves the complete parent, preserves files, and binds future saves on
       return true
     },
   })
-  assert.equal(result.status, 'forked')
   if (result.status !== 'forked') assert.fail(result.message)
   runtime.finishCommand(command)
   childAgent.restoreMessages([
@@ -1053,7 +1052,8 @@ test('fork saves the complete parent, preserves files, and binds future saves on
     { role: 'user', content: 'child only' },
   ])
   const turn = runtime.beginOperation('turn')!
-  prompt = null
+  // widen past the null assignment; onPromptChange sets it during the request
+  prompt = null as ActivePrompt | null
   const childApproval = runtime.requestToolApproval(turn, {
     toolName: 'bash',
     args: {},

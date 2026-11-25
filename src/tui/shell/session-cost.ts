@@ -4,7 +4,7 @@
 import type { SessionCostSnapshot } from '../../types/session-cost.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 
-export function formatCostAmount(usd: number): string
+function formatCostAmount(usd: number): string
 {
   return usd > 0 && usd < 0.01 ? '<$0.01' : `~$${usd.toFixed(2)}`
 }

@@ -652,7 +652,7 @@ npm run typecheck -- --pretty false
 npm run format:check
 npm test
 npm run build
-npm run typecheck:scripts
+npm run typecheck:tests
 npm run check:dev-tools
 npm run check:architecture
 npm run check:changelog

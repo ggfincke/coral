@@ -1,23 +1,33 @@
 // src/tui/shell/notify.ts
 // pure escape-sequence builders for bell, desktop notifications, and focus-aware gating
 
+import { isUnsafeTerminalControl } from '../../utils/untrusted-text.js'
+
 const OSC_PAYLOAD_MAX = 200
 
-// strip ESC/BEL/other C0 controls and bidi overrides, collapse whitespace runs,
-// trim, then cap so OSC payloads stay single-line and injection-free
-const controlChar = (code: number): string => String.fromCharCode(code)
-const OSC_STRIP_PATTERN = new RegExp(
-  `[${controlChar(0)}-${controlChar(31)}${controlChar(127)}\u202a-\u202e]`,
-  'g'
-)
+// every terminal control (C0, DEL, C1) plus bidi embeddings, overrides, and
+// isolates is stripped so a payload can't end the sequence early or reorder it
+export function isOscStripped(code: number): boolean
+{
+  return (
+    code === 0x09 ||
+    code === 0x0a ||
+    isUnsafeTerminalControl(code) ||
+    (code >= 0x202a && code <= 0x202e) ||
+    (code >= 0x2066 && code <= 0x2069)
+  )
+}
 
+// strip, collapse whitespace runs, trim, then cap so OSC payloads stay
+// single-line and injection-free
 export function sanitizeOscPayload(text: string): string
 {
-  return text
-    .replace(OSC_STRIP_PATTERN, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, OSC_PAYLOAD_MAX)
+  let kept = ''
+  for (const char of text)
+  {
+    if (!isOscStripped(char.codePointAt(0)!)) kept += char
+  }
+  return kept.replace(/\s+/g, ' ').trim().slice(0, OSC_PAYLOAD_MAX)
 }
 
 // bare BEL byte -> audible/visual ping for terminals without OSC 9 support

@@ -92,7 +92,7 @@ test('SQLite ranks exact stable winners without hydrating losers or mixing reind
       'prepare',
       function (this: Database.Database, sql: string)
       {
-        const statement = prepare.call(this, sql)
+        const statement: Database.Statement<unknown[]> = prepare.call(this, sql)
         if (
           !statement.reader ||
           !statement.columns().some((column) => column.name === 'text')

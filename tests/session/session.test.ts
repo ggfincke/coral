@@ -644,14 +644,18 @@ test('session metadata and previews reuse validated revisions without hiding aut
   await writeFile(replacementPath, JSON.stringify(replacement))
   const statFile = fs.stat.bind(fs)
   let revisionChecks = 0
-  const replacingStat = t.mock.method(fs, 'stat', async (...args) =>
-  {
-    if (args[0] === path && ++revisionChecks === 2)
+  const replacingStat = t.mock.method(
+    fs,
+    'stat',
+    async (...args: Parameters<typeof fs.stat>) =>
     {
-      await fs.rename(replacementPath, path)
+      if (args[0] === path && ++revisionChecks === 2)
+      {
+        await fs.rename(replacementPath, path)
+      }
+      return statFile(...args)
     }
-    return statFile(...args)
-  })
+  )
   const raced = await loadSessionPreview(meta.id)
   assert.equal(raced.kind, 'loaded')
   if (raced.kind !== 'loaded') assert.fail('expected the completed snapshot')
@@ -680,12 +684,16 @@ test('session metadata and previews reuse validated revisions without hiding aut
   const open = fs.open.bind(fs)
   const controller = new AbortController()
   const aborted = new Error('stop listing')
-  const abortingOpen = t.mock.method(fs, 'open', async (...args) =>
-  {
-    const file = await open(...args)
-    controller.abort(aborted)
-    return file
-  })
+  const abortingOpen = t.mock.method(
+    fs,
+    'open',
+    async (...args: Parameters<typeof fs.open>) =>
+    {
+      const file = await open(...args)
+      controller.abort(aborted)
+      return file
+    }
+  )
   await assert.rejects(
     listSessions({ signal: controller.signal }),
     (error) => error === aborted
@@ -700,16 +708,20 @@ test('session metadata and previews reuse validated revisions without hiding aut
   // a completed scan for the previous home must not replace the new home's cache
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
-  const pausedOpen = t.mock.method(fs, 'open', async (...args) =>
-  {
-    const file = await open(...args)
-    if (args[0] === path)
+  const pausedOpen = t.mock.method(
+    fs,
+    'open',
+    async (...args: Parameters<typeof fs.open>) =>
     {
-      entered.resolve()
-      await release.promise
+      const file = await open(...args)
+      if (args[0] === path)
+      {
+        entered.resolve()
+        await release.promise
+      }
+      return file
     }
-    return file
-  })
+  )
   const oldListing = listSessions()
   await entered.promise
   try

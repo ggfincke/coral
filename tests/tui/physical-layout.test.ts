@@ -612,6 +612,7 @@ test('Enter sends an exactly typed slash command instead of re-accepting its own
     columns: 80,
     rows: 16,
     scrollOffset: 0,
+    tick: 0,
     acceptSubmissions: true,
   })
   try

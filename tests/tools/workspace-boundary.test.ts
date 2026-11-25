@@ -13,6 +13,7 @@ import { globTool } from '../../src/tools/glob.js'
 import { grepTool } from '../../src/tools/grep.js'
 import { listFilesTool } from '../../src/tools/list-files.js'
 import { readTool } from '../../src/tools/read.js'
+import type { ToolExecutionContext } from '../../src/tools/tool.js'
 import { writeTool } from '../../src/tools/write.js'
 import {
   overwriteRegularFile,
@@ -23,6 +24,11 @@ import { makeTempDirPool } from '../helpers/temp.js'
 const { tempDir } = makeTempDirPool()
 const hasRipgrep = spawnSync('rg', ['--version']).status === 0
 
+function toolContext(cwd: string): ToolExecutionContext
+{
+  return { cwd, ollamaHost: 'http://localhost:11434' }
+}
+
 test('write_file refuses dangling symlinks that would create files outside the workspace', async () =>
 {
   const cwd = await tempDir('coral-dangling-ws-')
@@ -32,7 +38,10 @@ test('write_file refuses dangling symlinks that would create files outside the w
 
   for (const path of ['notes.txt', 'gone/nested.txt'])
   {
-    const result = await writeTool.execute({ path, content: 'x' }, { cwd })
+    const result = await writeTool.execute(
+      { path, content: 'x' },
+      toolContext(cwd)
+    )
     assert.match(result.error ?? '', /symlink|outside workspace/)
     assert.equal(result.change, undefined)
   }
@@ -44,7 +53,7 @@ test('write_file refuses dangling symlinks that would create files outside the w
   await symlink(join(cwd, 'target.txt'), join(cwd, 'alias.txt'))
   const allowed = await writeTool.execute(
     { path: 'alias.txt', content: 'new\n' },
-    { cwd }
+    toolContext(cwd)
   )
   assert.equal(allowed.error, undefined)
   assert.equal(await readFile(join(cwd, 'target.txt'), 'utf-8'), 'new\n')
@@ -78,15 +87,21 @@ test('no-approval read tools never return content through escaping symlinks', as
   await symlink(join(outside, 'secret.txt'), join(cwd, 'leak.txt'))
 
   const results = [
-    await readTool.execute({ path: 'leak.txt' }, { cwd }),
-    await readTool.execute({ path: 'linkdir/secret.txt' }, { cwd }),
-    await listFilesTool.execute({ path: 'linkdir' }, { cwd }),
+    await readTool.execute({ path: 'leak.txt' }, toolContext(cwd)),
+    await readTool.execute({ path: 'linkdir/secret.txt' }, toolContext(cwd)),
+    await listFilesTool.execute({ path: 'linkdir' }, toolContext(cwd)),
   ]
   if (hasRipgrep)
   {
     results.push(
-      await grepTool.execute({ pattern: 'needle', path: 'linkdir' }, { cwd }),
-      await globTool.execute({ pattern: '*', path: 'linkdir' }, { cwd })
+      await grepTool.execute(
+        { pattern: 'needle', path: 'linkdir' },
+        toolContext(cwd)
+      ),
+      await globTool.execute(
+        { pattern: '*', path: 'linkdir' },
+        toolContext(cwd)
+      )
     )
   }
   for (const result of results)
@@ -97,7 +112,10 @@ test('no-approval read tools never return content through escaping symlinks', as
 
   if (hasRipgrep)
   {
-    const rootGrep = await grepTool.execute({ pattern: 'needle' }, { cwd })
+    const rootGrep = await grepTool.execute(
+      { pattern: 'needle' },
+      toolContext(cwd)
+    )
     assert.equal(rootGrep.output, 'No matches found.')
   }
 })
@@ -109,17 +127,17 @@ test('edit_file & write_file refuse non-UTF-8 files and leave their bytes intact
   const path = join(cwd, 'legacy.txt')
   await writeFile(path, original)
 
-  const read = await readTool.execute({ path: 'legacy.txt' }, { cwd })
+  const read = await readTool.execute({ path: 'legacy.txt' }, toolContext(cwd))
   assert.match(read.output, /not valid UTF-8/)
 
   const edit = await editTool.execute(
     { path: 'legacy.txt', old_string: 'b', new_string: 'c' },
-    { cwd }
+    toolContext(cwd)
   )
   assert.match(edit.error ?? '', /not valid UTF-8/)
   const write = await writeTool.execute(
     { path: 'legacy.txt', content: 'replaced\n' },
-    { cwd }
+    toolContext(cwd)
   )
   assert.match(write.error ?? '', /not valid UTF-8/)
   assert.deepEqual(await readFile(path), original)
@@ -130,7 +148,7 @@ test('edit_file & write_file refuse non-UTF-8 files and leave their bytes intact
   await writeFile(bomPath, bomOriginal)
   const bomEdit = await editTool.execute(
     { path: 'bom.txt', old_string: '1', new_string: '2' },
-    { cwd }
+    toolContext(cwd)
   )
   assert.equal(bomEdit.error, undefined)
   assert.deepEqual(await readFile(bomPath), Buffer.from('﻿key = 2\n', 'utf-8'))
@@ -146,7 +164,7 @@ test(
   {
     const cwd = await tempDir('coral-fifo-')
     assert.equal(spawnSync('mkfifo', [join(cwd, 'pipe')]).status, 0)
-    const result = await readTool.execute({ path: 'pipe' }, { cwd })
+    const result = await readTool.execute({ path: 'pipe' }, toolContext(cwd))
     assert.match(result.error ?? '', /not a regular file/)
   }
 )
@@ -156,7 +174,7 @@ test('paths starting with ~ are rejected instead of creating a literal ~ dir', a
   const cwd = await tempDir('coral-tilde-')
   const result = await writeTool.execute(
     { path: '~/coral-tilde.txt', content: 'x' },
-    { cwd }
+    toolContext(cwd)
   )
   assert.match(result.error ?? '', /~/)
   assert.equal(existsSync(join(cwd, '~')), false)

@@ -16,7 +16,7 @@
 - [ ] Security audit passes (`npm audit --audit-level=high`)
 - [ ] Formatting and linting pass (`npm run format:check`)
 - [ ] Typecheck passes (`npm run typecheck`)
-- [ ] Script typecheck passes (`npm run typecheck:scripts`)
+- [ ] Test typecheck passes (`npm run typecheck:tests`)
 - [ ] Unit tests pass (`npm test`)
 - [ ] Dev-tool checks pass (`npm run check:dev-tools`)
 - [ ] Architecture boundaries pass (`npm run check:architecture`)

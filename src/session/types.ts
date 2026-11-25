@@ -45,7 +45,12 @@ export interface SessionData
 
 // a raced snapshot remains displayable, but a null revision must not be cached
 export type SessionPreviewResult =
-  | { kind: 'loaded'; revision: string | null; messages: OllamaMessage[] }
+  | {
+      kind: 'loaded'
+      revision: string | null
+      messages: OllamaMessage[]
+      undo?: UndoTurn[]
+    }
   | { kind: 'unchanged'; revision: string }
   | { kind: 'missing' }
 

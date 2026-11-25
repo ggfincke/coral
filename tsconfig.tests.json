@@ -5,6 +5,6 @@
     "rootDir": ".",
     "sourceMap": false
   },
-  "include": ["tests/scripts/**/*.ts"],
+  "include": ["tests/**/*.ts"],
   "exclude": ["node_modules", "dist", "reference"]
 }

@@ -47,8 +47,8 @@ npm test
 # compile-check Python dev tools and run focused dev-tool checks
 npm run check:dev-tools
 
-# typecheck TypeScript eval and benchmark scripts
-npm run typecheck:scripts
+# typecheck every test file, including eval and benchmark scripts
+npm run typecheck:tests
 
 # run in watch mode
 npm run test:watch

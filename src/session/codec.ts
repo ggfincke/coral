@@ -362,6 +362,24 @@ export function decodeSessionPreview(
   return { meta: value.meta, messages: value.messages }
 }
 
+// picker previews also need undo intervals to hide internal corrective
+// prompts; uncloned message slices suffice because previews only read them
+export function decodeSessionPreviewWithUndo(
+  value: unknown
+): Pick<SessionData, 'meta' | 'messages' | 'undo'> | undefined
+{
+  if (!isSessionFileData(value)) return undefined
+  const messages = value.messages
+  return {
+    meta: value.meta,
+    messages,
+    undo: value.undo?.map((turn) => ({
+      ...turn,
+      messages: turn.messages ?? messages.slice(turn.startIndex, turn.endIndex),
+    })),
+  }
+}
+
 export function encodeSessionData(session: SessionData): object
 {
   const undoState = serializeUndoState(

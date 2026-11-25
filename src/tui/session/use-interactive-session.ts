@@ -92,9 +92,7 @@ export interface InteractiveSession
   sessionLabelId: string | null
   todos: TodoItem[]
   sessionCost: SessionCostSnapshot | null
-  listProjectFiles: (cwd: string) => Promise<string[]>
   refreshProjectFiles: (cwd: string) => Promise<string[]>
-  invalidateProjectFiles: (cwd?: string) => void
   activateModel: (
     model: string,
     restored: SessionData | null
@@ -120,7 +118,6 @@ export interface InteractiveSession
   acceptsEvent: (handle: OperationHandle<Agent>) => boolean
   acceptsCommandEvent: (handle: OperationHandle<Agent>) => boolean
   acceptsCommandTerminal: (handle: OperationHandle<Agent>) => boolean
-  isCurrentOperation: (handle: OperationHandle<Agent>) => boolean
   requestPrompt: (
     handle: OperationHandle<Agent>,
     prompt: PromptRequest
@@ -432,6 +429,23 @@ export function useInteractiveSession(
     [fetchContextWindow, persistCurrent, runtime, titleGenerator]
   )
 
+  // every primary Agent built after mount shares one host, think setting, MCP
+  // mode source, MCP config, and inference client
+  const buildAgent = useCallback(
+    (model: string, cwd: string | undefined, restored: SessionData | null) =>
+      buildPrimaryAgent({
+        model,
+        host: options.host,
+        cwd,
+        think: options.think,
+        mcpMode: activeMcpMode(yoloRef.current),
+        mcpConfig,
+        restored,
+        inferenceClient,
+      }),
+    [inferenceClient, mcpConfig, options.host, options.think]
+  )
+
   const activateModel = useCallback(
     (
       nextModel: string,
@@ -448,16 +462,7 @@ export function useInteractiveSession(
 
       const adopted = adoptAgent(
         () =>
-          buildPrimaryAgent({
-            model: nextModel,
-            host: options.host,
-            cwd: restored?.meta.cwd ?? options.cwd,
-            think: options.think,
-            mcpMode: activeMcpMode(yoloRef.current),
-            mcpConfig,
-            restored,
-            inferenceClient,
-          }),
+          buildAgent(nextModel, restored?.meta.cwd ?? options.cwd, restored),
         restored
       )
       return Promise.resolve(
@@ -466,16 +471,7 @@ export function useInteractiveSession(
           : { status: 'busy' }
       )
     },
-    [
-      adoptAgent,
-      inferenceClient,
-      mcpConfig,
-      options.host,
-      options.cwd,
-      options.think,
-      runtime,
-      switchModel,
-    ]
+    [adoptAgent, buildAgent, options.cwd, runtime, switchModel]
   )
 
   const renameCurrentSession = useCallback(
@@ -511,30 +507,13 @@ export function useInteractiveSession(
         saveParent: () => runtime.saveOperation(owner),
         adopt: (child) =>
           adoptAgent(
-            () =>
-              buildPrimaryAgent({
-                model: child.meta.model,
-                cwd: child.meta.cwd,
-                host: options.host,
-                think: options.think,
-                mcpMode: activeMcpMode(yoloRef.current),
-                mcpConfig,
-                inferenceClient,
-                restored: child,
-              }),
+            () => buildAgent(child.meta.model, child.meta.cwd, child),
             child,
             true,
             owner
           ),
       }),
-    [
-      adoptAgent,
-      inferenceClient,
-      mcpConfig,
-      options.host,
-      options.think,
-      runtime,
-    ]
+    [adoptAgent, buildAgent, runtime]
   )
 
   const clearCurrentSession = useCallback(() =>
@@ -567,30 +546,13 @@ export function useInteractiveSession(
         return false
 
       return adoptAgent(
-        () =>
-          buildPrimaryAgent({
-            model: target.meta.model,
-            host: options.host,
-            cwd: target.meta.cwd,
-            think: options.think,
-            mcpMode: activeMcpMode(yoloRef.current),
-            mcpConfig,
-            restored: target,
-            inferenceClient,
-          }),
+        () => buildAgent(target.meta.model, target.meta.cwd, target),
         target,
         true,
         owner
       )
     },
-    [
-      adoptAgent,
-      inferenceClient,
-      mcpConfig,
-      options.host,
-      options.think,
-      runtime,
-    ]
+    [adoptAgent, buildAgent, runtime]
   )
 
   const setPermissionMode = useCallback(
@@ -797,10 +759,6 @@ export function useInteractiveSession(
     (handle: OperationHandle<Agent>) => runtime.acceptsCommandTerminal(handle),
     [runtime]
   )
-  const isCurrentOperation = useCallback(
-    (handle: OperationHandle<Agent>) => runtime.isCurrentOperation(handle),
-    [runtime]
-  )
   const requestPrompt = useCallback(
     (handle: OperationHandle<Agent>, prompt: PromptRequest) =>
       runtime.requestPrompt(handle, prompt),
@@ -869,6 +827,10 @@ export function useInteractiveSession(
     [runtime]
   )
   const getSessionId = useCallback(() => runtime.getSessionId(), [runtime])
+  const getSessionTitle = useCallback(
+    () => runtime.getSessionMeta()?.title,
+    [runtime]
+  )
   const isYolo = useCallback(() => yoloRef.current, [])
   const isAcceptingTransitions = useCallback(
     () =>
@@ -877,16 +839,8 @@ export function useInteractiveSession(
       !runtime.hasActiveTransition(),
     [runtime]
   )
-  const listProjectFiles = useCallback(
-    (cwd: string) => projectFileCatalog.list(cwd),
-    [projectFileCatalog]
-  )
   const refreshProjectFiles = useCallback(
     (cwd: string) => projectFileCatalog.refresh(cwd),
-    [projectFileCatalog]
-  )
-  const invalidateProjectFiles = useCallback(
-    (cwd?: string) => projectFileCatalog.invalidate(cwd),
     [projectFileCatalog]
   )
 
@@ -900,9 +854,7 @@ export function useInteractiveSession(
     activePrompt,
     sessionLabelId: sessionMeta?.id ?? null,
     todos,
-    listProjectFiles,
     refreshProjectFiles,
-    invalidateProjectFiles,
     activateModel,
     switchModel,
     resumeSession,
@@ -916,7 +868,6 @@ export function useInteractiveSession(
     acceptsEvent,
     acceptsCommandEvent,
     acceptsCommandTerminal,
-    isCurrentOperation,
     requestPrompt,
     requestToolApproval,
     settlePrompt,
@@ -927,7 +878,7 @@ export function useInteractiveSession(
     abortActive,
     hasActiveOperation,
     getSessionId,
-    getSessionTitle: () => runtime.getSessionMeta()?.title,
+    getSessionTitle,
     isYolo,
     isAcceptingTransitions,
     shutdown,

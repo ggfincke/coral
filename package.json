@@ -28,7 +28,7 @@
     "build": "node node_modules/typescript-7/bin/tsc",
     "postbuild": "node -e \"require('node:fs').chmodSync('dist/cli/main.js',0o755)\"",
     "typecheck": "node node_modules/typescript-7/bin/tsc --noEmit",
-    "typecheck:scripts": "node node_modules/typescript-7/bin/tsc -p tsconfig.scripts.json",
+    "typecheck:tests": "node node_modules/typescript-7/bin/tsc -p tsconfig.tests.json",
     "dev": "tsx src/cli/main.tsx",
     "start": "node dist/cli/main.js",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",

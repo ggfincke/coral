@@ -663,7 +663,7 @@ export default function App({
     activity += ` · ${style('warning')('ctx low — /compact')}`
   }
   const hasExpandableOutput = !rawMode && output.some(isExpandableBlock)
-  const activityLines = buildActivityLines(activity, '', transcriptWidth)
+  const activityLines = buildActivityLines(activity, transcriptWidth)
   if (activityHint || hasExpandableOutput) activityLines.push('')
   const headerHeight = 2
   const statusHeight = activityLines.length + metricLines.length
@@ -1481,12 +1481,6 @@ export default function App({
         },
         async () =>
         {
-          if (
-            queueHistoryWarning(
-              value.trim().split(/\s+/)[0]!.slice(1).toLowerCase()
-            )
-          )
-            return { admitted: false, handled: true }
           if (!preserveInput) clearInput()
           setScrollOffset(0)
 
@@ -1558,22 +1552,33 @@ export default function App({
             },
           }
 
-          // bare /resume opens the picker inside the joined command lifetime
-          if (value.trim() === '/resume')
+          // bare overlay commands open inside the joined command lifetime;
+          // they fold case like the registry lookup
+          const bareCommand = value.trim().toLowerCase()
+          if (bareCommand === '/resume')
           {
             setSessionPickerOpen(true)
             return { admitted: true, handled: true }
           }
 
-          if (value.trim().toLowerCase() === '/jobs')
+          if (bareCommand === '/jobs')
           {
             setJobsOpen(true)
             return { admitted: true, handled: true }
           }
 
-          if (value.trim().toLowerCase() === '/transcript')
+          if (bareCommand === '/transcript')
           {
-            openTranscript()
+            if (rawMode)
+            {
+              setOutput((prev) => [
+                ...prev,
+                systemBlock(
+                  'The transcript pager is off in raw mode; /raw off returns to the styled view'
+                ),
+              ])
+            }
+            else openTranscript()
             return { admitted: true, handled: true }
           }
 
@@ -1600,6 +1605,7 @@ export default function App({
       renameCurrentSession,
       queueHistoryWarning,
       manageQueue,
+      rawMode,
       reopenModelPicker,
       resetTokenUsage,
       resumeSessionById,
@@ -1871,26 +1877,25 @@ export default function App({
 
   // terminal title mirrors activity state; written on stage changes only so
   // the braille frame stays static (animation would spam escape writes)
-  const promptActiveForTitle = Boolean(activePromptContent)
   useEffect(() =>
   {
-    const text = promptActiveForTitle
+    const text = promptActive
       ? formatBlockedTitle(currentCwd)
       : runStage === 'idle'
         ? formatIdleTitle(currentCwd)
         : formatRunningTitle(0, currentCwd)
     process.stdout.write(buildTerminalTitle(text))
-  }, [currentCwd, promptActiveForTitle, runStage])
+  }, [currentCwd, promptActive, runStage])
 
   // notify on completion or approval only while focus is absent or unknown
   const prevRunStageRef = useRef(runStage)
-  const prevPromptActiveRef = useRef(promptActiveForTitle)
+  const prevPromptActiveRef = useRef(promptActive)
   useEffect(() =>
   {
     if (loadPrefs().notifications === false)
     {
       prevRunStageRef.current = runStage
-      prevPromptActiveRef.current = promptActiveForTitle
+      prevPromptActiveRef.current = promptActive
       return
     }
 
@@ -1898,12 +1903,12 @@ export default function App({
     if (
       prevRunStageRef.current !== 'idle' &&
       runStage === 'idle' &&
-      !promptActiveForTitle
+      !promptActive
     )
     {
       message = 'turn complete'
     }
-    else if (!prevPromptActiveRef.current && promptActiveForTitle)
+    else if (!prevPromptActiveRef.current && promptActive)
     {
       message = 'action required'
     }
@@ -1915,8 +1920,8 @@ export default function App({
       )
     }
     prevRunStageRef.current = runStage
-    prevPromptActiveRef.current = promptActiveForTitle
-  }, [promptActiveForTitle, runStage, terminalFocused])
+    prevPromptActiveRef.current = promptActive
+  }, [promptActive, runStage, terminalFocused])
 
   // raw-mode payload: whole committed transcript as plain text
   const rawDump = useMemo(
@@ -2421,17 +2426,7 @@ export default function App({
               onHeightChange={setPromptHeight}
               value={input}
               reset={promptReset}
-              focus={
-                !pickerVisible &&
-                !paletteVisible &&
-                !backtrackOpen &&
-                !sessionPickerVisible &&
-                !jobsOpen &&
-                !pagerVisible &&
-                Boolean(agent) &&
-                !promptActive &&
-                !terminalTooSmall
-              }
+              focus={showComposer && !pagerVisible && !terminalTooSmall}
               filesCacheKey={currentCwd}
               completionCommands={completionCommands}
               refreshFiles={refreshFiles}

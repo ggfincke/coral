@@ -40,7 +40,10 @@ function sessionFor(
     activePrompt: null,
     acceptsEvent: (handle) => runtime.acceptsEvent(handle),
     beginOperation: (kind) => runtime.beginOperation(kind),
-    completeTurn: (handle) => runtime.completeTurn(handle),
+    completeTurn: (handle) => ({
+      ...runtime.completeTurn(handle),
+      saveRefused: false,
+    }),
     getSessionId: () => runtime.getSessionId(),
     isYolo: () => false,
     requestPrompt: (handle, prompt) => runtime.requestPrompt(handle, prompt),
