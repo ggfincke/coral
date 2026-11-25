@@ -288,6 +288,8 @@ async function main(): Promise<void>
   const requestSignal = (timeout: number): AbortSignal =>
     AbortSignal.any([overall, AbortSignal.timeout(timeout)])
   let loadedByBenchmark = false
+  // the benchmark's own error, rethrown after cleanup
+  let failure: { error: unknown } | undefined
   let digest: string | undefined
   const pairs: Pair[] = []
   try
@@ -427,15 +429,26 @@ async function main(): Promise<void>
       'prompt_eval_count is total prompt accounting, not uncached tokens; this verdict applies only to this model and fixture.'
     )
   }
-  finally
+  catch (error)
   {
-    process.off('SIGINT', interrupt)
-    process.off('SIGTERM', interrupt)
-    if (loadedByBenchmark)
+    failure = { error }
+  }
+  process.off('SIGINT', interrupt)
+  process.off('SIGTERM', interrupt)
+  if (loadedByBenchmark)
+  {
+    try
     {
       await unloadBenchmarkModel(client, model, host, digest!)
     }
+    catch (cleanupError)
+    {
+      // keep the benchmark's own failure as the one main() reports
+      if (!failure) throw cleanupError
+      console.error('model unload also failed:', cleanupError)
+    }
   }
+  if (failure) throw failure.error
 }
 
 void main().catch((error: unknown) =>
