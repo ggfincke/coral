@@ -4,10 +4,8 @@
 import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import { resolve } from 'node:path'
-import {
-  formatProjectPath,
-  isPathInsideProject,
-} from '../../shared/project-tree.js'
+import { formatProjectPath } from '../../shared/project-tree.js'
+import { isPathInsideProject } from '../../utils/path-containment.js'
 import type { OllamaMessage } from '../../types/inference.js'
 import {
   openRegularFile,

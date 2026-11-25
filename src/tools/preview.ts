@@ -64,7 +64,9 @@ export async function previewToolDiff(
         return { kind: 'message', message: `Preview skipped: ${allowed.error}` }
       }
 
-      const before = await readOptionalPreviousTextFile(allowed.path)
+      const before = await readOptionalPreviousTextFile(allowed.path, {
+        root: allowed.root,
+      })
       if (!before.ok)
       {
         return { kind: 'message', message: formatPreviewSkipMessage(before) }
@@ -85,7 +87,9 @@ export async function previewToolDiff(
         return { kind: 'message', message: `Preview skipped: ${allowed.error}` }
       }
 
-      const before = await readRequiredTextFile(allowed.path)
+      const before = await readRequiredTextFile(allowed.path, {
+        root: allowed.root,
+      })
       if (!before.ok)
       {
         return { kind: 'message', message: formatPreviewSkipMessage(before) }

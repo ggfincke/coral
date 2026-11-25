@@ -8,8 +8,8 @@ import { test } from 'node:test'
 import {
   formatProjectDirectoryPath,
   formatProjectPath,
-  isPathInsideProject,
 } from '../../src/shared/project-tree.js'
+import { isPathInsideProject } from '../../src/utils/path-containment.js'
 
 test('project paths are relative only when inside the cwd boundary', () =>
 {

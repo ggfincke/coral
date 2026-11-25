@@ -1,7 +1,6 @@
 // src/tools/write.ts
 // write content to a file, creating directories as needed
 
-import { constants } from 'node:fs'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
@@ -12,6 +11,8 @@ import { computeDiff } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { formatNotUtf8Refusal } from './file-utils.js'
 import {
+  EXCLUSIVE_CREATE_FLAGS,
+  overwriteRegularFile,
   readOptionalPreviousTextFile,
   TEXT_FILE_READ_LIMIT_BYTES,
 } from '../utils/file-read.js'
@@ -73,7 +74,9 @@ export const writeTool: Tool = {
         }
       }
 
-      const before = await readOptionalPreviousTextFile(path)
+      const before = await readOptionalPreviousTextFile(path, {
+        root: allowed.root,
+      })
       if (!before.ok)
       {
         return {
@@ -89,13 +92,18 @@ export const writeTool: Tool = {
         return { output: '', error: formatNotUtf8Refusal('write', path) }
       }
 
-      await mkdir(dirname(path), { recursive: true })
-      // create new files exclusively so a link or file planted after the
-      // workspace check fails the write instead of being followed
-      const flag = before.existed
-        ? 'w'
-        : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
-      await writeFile(path, content, { encoding: 'utf-8', flag })
+      if (before.existed)
+      {
+        await overwriteRegularFile(path, content, { root: allowed.root })
+      }
+      else
+      {
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(path, content, {
+          encoding: 'utf-8',
+          flag: EXCLUSIVE_CREATE_FLAGS,
+        })
+      }
       context?.observeFile?.(path, content)
       return {
         output: `Wrote ${formatBytes(contentBytes)} to ${path}`,

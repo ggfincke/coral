@@ -10,7 +10,10 @@ import {
   formatProjectTreeEntryName,
   shouldIncludeProjectTreeEntry,
 } from '../../shared/project-tree.js'
-import { readRegularFileSync } from '../../utils/file-read.js'
+import {
+  isOutsideRootError,
+  readRegularFileSync,
+} from '../../utils/file-read.js'
 import { CHARS_PER_TOKEN } from '../../utils/limits.js'
 
 // cap the bytes read from any single context file
@@ -65,6 +68,8 @@ export interface ProjectContextSnapshot
 {
   readonly rootSummary: string
   readonly files: readonly ContextFile[]
+  // user-facing lines about skipped instruction files; never sent to the model
+  readonly notices: readonly string[]
 }
 
 export interface ProjectContextOptions
@@ -85,9 +90,15 @@ export function projectContextBudgetForWindow(contextWindow: number): number
   return Math.min(Math.max(chars, MIN_TOTAL_CHARS), MAX_TOTAL_CHARS)
 }
 
+// a context file's body, or why it was not loaded
+type ContextFileRead =
+  | { status: 'loaded'; content: string }
+  | { status: 'absent' }
+  | { status: 'outside' }
+
 // read one context file within the byte limit; a link that resolves outside
-// the workspace is skipped like a missing file
-function readContextFile(cwd: string, name: string): string | null
+// the workspace is reported so the caller can skip it visibly
+function readContextFile(cwd: string, name: string): ContextFileRead
 {
   try
   {
@@ -96,17 +107,21 @@ function readContextFile(cwd: string, name: string): string | null
       MAX_CONTEXT_FILE_BYTES,
       cwd
     )
-    if (read.bytes.length === 0) return null
+    if (read.bytes.length === 0) return { status: 'absent' }
     if (read.truncated)
     {
       // leave a partial trailing UTF-8 code point out of the retained prefix
-      return new StringDecoder('utf8').write(read.bytes) + '\n… (truncated)'
+      const content =
+        new StringDecoder('utf8').write(read.bytes) + '\n… (truncated)'
+      return { status: 'loaded', content }
     }
-    return read.bytes.toString('utf8')
+    return { status: 'loaded', content: read.bytes.toString('utf8') }
   }
-  catch
+  catch (err)
   {
-    return null
+    return isOutsideRootError(err)
+      ? { status: 'outside' }
+      : { status: 'absent' }
   }
 }
 
@@ -166,19 +181,25 @@ export function captureProjectContext(
 {
   const root = readDirectory(cwd)
   const loaded: ContextFile[] = []
+  const notices: string[] = []
   if (Math.floor(options.maxTotalChars ?? DEFAULT_TOTAL_CHARS) > 0)
   {
     for (const { name, label } of INSTRUCTION_FILES)
     {
-      const content = readContextFile(cwd, name)
-      if (!content) continue
-      loaded.push(Object.freeze({ label, name, content }))
+      const read = readContextFile(cwd, name)
+      if (read.status === 'outside')
+      {
+        notices.push(`${name} links outside the workspace; not loaded`)
+      }
+      if (read.status !== 'loaded') continue
+      loaded.push(Object.freeze({ label, name, content: read.content }))
       break
     }
   }
   return Object.freeze({
     rootSummary: formatRootSummary(cwd, root),
     files: Object.freeze(loaded),
+    notices: Object.freeze(notices),
   })
 }
 

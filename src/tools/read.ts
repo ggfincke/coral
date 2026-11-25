@@ -5,6 +5,7 @@ import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { readFileGuarded } from './file-utils.js'
 import { getCwd } from '../cwd.js'
 import { checkWorkspacePath } from '../shared/workspace-path.js'
+import { formatNotUtf8Notice } from '../utils/file-read.js'
 
 export const readTool: Tool = {
   name: 'read_file',
@@ -51,13 +52,10 @@ export const readTool: Tool = {
     )
     if (!allowed.ok) return { output: '', error: allowed.error }
 
-    const result = await readFileGuarded(allowed.path)
+    const result = await readFileGuarded(allowed.path, { root: allowed.root })
     if (!result.ok) return result.result
     context?.observeFile?.(allowed.path, result.content)
-    const notice = result.lossy
-      ? `Note: ${allowed.path} is not valid UTF-8; invalid bytes are shown ` +
-        `as U+FFFD, and edit_file & write_file will refuse to change it.\n`
-      : ''
+    const notice = result.lossy ? formatNotUtf8Notice(allowed.path) : ''
     if (args.offset === undefined && args.limit === undefined)
     {
       return { output: notice + result.content }

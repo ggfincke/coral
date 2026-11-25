@@ -1,5 +1,5 @@
 // src/utils/file-read.ts
-// bounded regular-file reads and text-file helpers with explicit safety modes
+// bounded regular-file reads, checked overwrites, and text-file helpers
 
 import {
   closeSync,
@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { lstat, open, realpath, type FileHandle } from 'node:fs/promises'
 import { resolvePath } from '../cwd.js'
-import { isPathInsideProject } from '../shared/project-tree.js'
+import { isPathInsideProject } from './path-containment.js'
 import { formatBytes } from './bytes.js'
 import { toErrorMessage } from './errors.js'
 
@@ -24,6 +24,18 @@ export const TEXT_FILE_READ_LIMIT_BYTES = BYTES_PER_MB
 // O_NONBLOCK keeps a FIFO from hanging open(); O_NOFOLLOW pins the real path
 const REGULAR_FILE_OPEN_FLAGS =
   constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+
+// no O_TRUNC: nothing changes until the opened fd passes its checks
+const REGULAR_FILE_WRITE_FLAGS =
+  constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+
+// for new files: O_EXCL & O_NOFOLLOW fail on any entry planted at the final
+// component after the caller's checks; a swapped parent dir is not covered
+export const EXCLUSIVE_CREATE_FLAGS =
+  constants.O_WRONLY |
+  constants.O_CREAT |
+  constants.O_EXCL |
+  constants.O_NOFOLLOW
 
 export type TextFileReadFailureReason = 'missing' | 'oversized' | 'unreadable'
 
@@ -53,6 +65,8 @@ export type TextFileReadResult = TextFileReadSuccess | TextFileReadFailure
 export interface TextFileReadOptions
 {
   cwd?: string
+  // when set, the file's real path must stay inside this directory's real path
+  root?: string
   signal?: AbortSignal
 }
 
@@ -84,11 +98,20 @@ class RegularFileError extends Error
   readonly code = 'EREGULARFILE'
 }
 
+// the path's real target sits outside the caller's root
+class OutsideRootError extends RegularFileError
+{}
+
+export function isOutsideRootError(err: unknown): boolean
+{
+  return err instanceof OutsideRootError
+}
+
 function confinedTarget(target: string, realRoot: string | null): void
 {
   if (realRoot !== null && !isPathInsideProject(realRoot, target))
   {
-    throw new RegularFileError(`${target} resolves outside ${realRoot}`)
+    throw new OutsideRootError(`${target} resolves outside ${realRoot}`)
   }
 }
 
@@ -146,19 +169,18 @@ function resolvePathsSync(
   }
 }
 
-// open a regular file by its real path w/o blocking on FIFOs; realpath runs
-// before & after the no-follow open and the fd must match a fresh lstat.
-// throws on any failure
-export async function openRegularFile(
+// shared by the read & write opens below
+async function openCheckedFile(
   path: string,
-  options: RegularFileOpenOptions = {}
+  flags: number,
+  options: RegularFileOpenOptions
 ): Promise<OpenedRegularFile>
 {
   const { signal } = options
   const before = await resolvePaths(path, options.root)
   signal?.throwIfAborted()
   confinedTarget(before.target, before.root)
-  const handle = await open(before.target, REGULAR_FILE_OPEN_FLAGS)
+  const handle = await open(before.target, flags)
   try
   {
     signal?.throwIfAborted()
@@ -176,6 +198,27 @@ export async function openRegularFile(
     await handle.close().catch(() => undefined)
     throw err
   }
+}
+
+// open a regular file by its real path w/o blocking on FIFOs; realpath runs
+// before & after the no-follow open and the fd must match a fresh lstat.
+// throws on any failure
+export function openRegularFile(
+  path: string,
+  options: RegularFileOpenOptions = {}
+): Promise<OpenedRegularFile>
+{
+  return openCheckedFile(path, REGULAR_FILE_OPEN_FLAGS, options)
+}
+
+// openRegularFile for writing an existing file in place; the caller truncates
+// & writes through the handle only after these checks pass
+export function openRegularFileForWrite(
+  path: string,
+  options: RegularFileOpenOptions = {}
+): Promise<OpenedRegularFile>
+{
+  return openCheckedFile(path, REGULAR_FILE_WRITE_FLAGS, options)
 }
 
 // start from the fstat size so small files stay small, growing toward one
@@ -197,6 +240,36 @@ function boundedResult(
     bytes: buffer.subarray(0, Math.min(length, maxBytes)),
     truncated: length > maxBytes,
   }
+}
+
+// truncate & rewrite a file from openRegularFileForWrite, then close it
+export async function replaceOpenedFile(
+  file: OpenedRegularFile,
+  content: string,
+  signal?: AbortSignal
+): Promise<void>
+{
+  try
+  {
+    await file.handle.truncate(0)
+    await file.handle.writeFile(content, { encoding: 'utf-8', signal })
+  }
+  finally
+  {
+    await file.handle.close()
+  }
+}
+
+// replace an existing file in place through its re-checked real path, so a
+// link or dir swapped in after an earlier read fails instead of being followed
+export async function overwriteRegularFile(
+  path: string,
+  content: string,
+  options: RegularFileOpenOptions = {}
+): Promise<void>
+{
+  const file = await openRegularFileForWrite(path, options)
+  await replaceOpenedFile(file, content, options.signal)
 }
 
 // read at most maxBytes from an opened regular file, flagging overflow
@@ -345,7 +418,7 @@ async function readTextFile(
   let file: OpenedRegularFile | undefined
   try
   {
-    file = await openRegularFile(path, { signal })
+    file = await openRegularFile(path, { root: options.root, signal })
     if (file.stats.size > TEXT_FILE_READ_LIMIT_BYTES)
     {
       return oversizedFailure(path, file.stats.size)
@@ -370,6 +443,16 @@ async function readTextFile(
   {
     await file?.handle.close().catch(() => undefined)
   }
+}
+
+// one-line lead for lossy text shown to the model, so it knows the U+FFFD
+// marks are not in the file & the write tools will refuse it
+export function formatNotUtf8Notice(path: string): string
+{
+  return (
+    `Note: ${path} is not valid UTF-8; invalid bytes are shown as U+FFFD, ` +
+    `and edit_file & write_file will refuse to change it.\n`
+  )
 }
 
 export function formatRequiredTextFileError(

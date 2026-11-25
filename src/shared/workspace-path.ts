@@ -4,7 +4,7 @@
 import { lstat, realpath } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { resolvePath } from '../cwd.js'
-import { isPathInsideProject } from './project-tree.js'
+import { isPathInsideProject } from '../utils/path-containment.js'
 
 export interface ResolvedWorkspacePath
 {
@@ -17,6 +17,9 @@ export interface WorkspacePathCheck
   ok: boolean
   path: string
   error?: string
+  // set when the path was confined to the workspace; later opens pass it as
+  // their root so a link swapped in after this check fails closed
+  root?: string
 }
 
 // a leading ~ is never shell-expanded here, so it would name a literal dir
@@ -135,5 +138,5 @@ export async function checkWorkspacePath(
     }
   }
 
-  return { ok: true, path: resolved.path }
+  return { ok: true, path: resolved.path, root: cwd }
 }

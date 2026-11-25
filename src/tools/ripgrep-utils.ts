@@ -4,10 +4,8 @@
 import type { ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
 import { checkWorkspacePath } from '../shared/workspace-path.js'
-import {
-  formatProjectPath,
-  isPathInsideProject,
-} from '../shared/project-tree.js'
+import { formatProjectPath } from '../shared/project-tree.js'
+import { isPathInsideProject } from '../utils/path-containment.js'
 import { execFileCommand, formatProcessError } from '../utils/process.js'
 
 interface RgSearchTarget

@@ -14,6 +14,10 @@ import { grepTool } from '../../src/tools/grep.js'
 import { listFilesTool } from '../../src/tools/list-files.js'
 import { readTool } from '../../src/tools/read.js'
 import { writeTool } from '../../src/tools/write.js'
+import {
+  overwriteRegularFile,
+  readOptionalPreviousTextFile,
+} from '../../src/utils/file-read.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 
 const { tempDir } = makeTempDirPool()
@@ -44,6 +48,25 @@ test('write_file refuses dangling symlinks that would create files outside the w
   )
   assert.equal(allowed.error, undefined)
   assert.equal(await readFile(join(cwd, 'target.txt'), 'utf-8'), 'new\n')
+})
+
+// the state a racing process leaves after checkWorkspacePath passed: the
+// reads & writes that follow must still refuse to leave the root
+test('a link swapped in after the workspace check cannot redirect reads or writes', async () =>
+{
+  const cwd = await tempDir('coral-swap-ws-')
+  const outside = await tempDir('coral-swap-outside-')
+  const secret = join(outside, 'secret.txt')
+  await writeFile(secret, 'outside-secret\n')
+  await symlink(secret, join(cwd, 'new.txt'))
+
+  const read = await readOptionalPreviousTextFile('new.txt', { cwd, root: cwd })
+  assert.equal(read.ok, false)
+  await assert.rejects(
+    overwriteRegularFile(join(cwd, 'new.txt'), 'x', { root: cwd }),
+    /outside/
+  )
+  assert.equal(await readFile(secret, 'utf-8'), 'outside-secret\n')
 })
 
 test('no-approval read tools never return content through escaping symlinks', async () =>
