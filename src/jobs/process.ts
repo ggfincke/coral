@@ -255,7 +255,8 @@ export async function ownedGroupMembers(
   )
     return [...new Set([...members, ...proven])]
   // * a pgid in use is never reallocated, so a leader pid that started later
-  // was reused after the recorded group emptied; never signal its members
+  // was reused after the recorded group emptied; never signal its members. a
+  // leader still holding our token is ours despite a wall-clock step
   const recordedStart = identityStartMs(owner.identity)
   const liveStart =
     identity === undefined ? undefined : identityStartMs(identity)
@@ -263,6 +264,7 @@ export async function ownedGroupMembers(
     recordedStart !== undefined &&
     liveStart !== undefined &&
     liveStart > recordedStart &&
+    !proven.has(owner.pid) &&
     (!owner.uniqueId || native.get(owner.pid) !== owner.uniqueId)
   )
     return [...proven]
