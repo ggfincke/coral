@@ -3,6 +3,7 @@
 
 import chalk, { type ChalkInstance } from 'chalk'
 import { homedir } from 'node:os'
+import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
 import { lerpRgb, roleRgb, style, type RGB } from '../theme.js'
 import { center, visibleWidth } from '../wrap.js'
 
@@ -102,9 +103,9 @@ function infoText(
   maxWidth: number
 ): string
 {
-  let parts = [shortenCwd(cwd), model, '/help'].filter((part): part is string =>
-    Boolean(part)
-  )
+  let parts = [shortenCwd(cwd), model, '/help']
+    .filter((part): part is string => Boolean(part))
+    .map((part) => sanitizeUntrustedText(part).replace(/\s+/gu, ' '))
   while (parts.length > 1 && parts.join(' · ').length > maxWidth)
     parts = parts.slice(1)
   let text = parts.join(' · ')
