@@ -4,6 +4,7 @@
 import { strict as assert } from 'node:assert'
 import fs from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
+import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
@@ -302,17 +303,9 @@ test('LSP initialize disables automatic typings acquisition', () =>
 
 test('LSP start budget bounds consecutive failures, not restarts', async (t) =>
 {
-  const cwd = '/coral-in-memory-restarts'
-  const source = 'export const value = 1\n'
-  t.mock.method(fs, 'stat', (async () => ({
-    size: Buffer.byteLength(source),
-  })) as unknown as typeof fs.stat)
-  t.mock.method(
-    fs,
-    'readFile',
-    (async () => source) as unknown as typeof fs.readFile
-  )
-  syncBuiltinESMExports()
+  // a real file, since the bounded reader opens it w/ realpath & O_NOFOLLOW
+  const cwd = await fs.mkdtemp(join(tmpdir(), 'coral-lsp-restarts-'))
+  await fs.writeFile(join(cwd, 'value.ts'), 'export const value = 1\n')
 
   const client = new TypeScriptCodeIntel(cwd)
   const internal = client as unknown as {
@@ -341,7 +334,7 @@ test('LSP start budget bounds consecutive failures, not restarts', async (t) =>
   {
     await client.dispose()
     t.mock.restoreAll()
-    syncBuiltinESMExports()
+    await fs.rm(cwd, { recursive: true, force: true })
   })
   const hover = () =>
     client.query({
