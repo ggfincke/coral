@@ -1,7 +1,8 @@
 // src/shared/project-tree.ts
 // project tree filtering, sorting, and entry formatting
 
-import { isAbsolute, relative, sep } from 'node:path'
+import { relative, sep } from 'node:path'
+import { isPathInsideProject } from '../utils/path-containment.js'
 
 export interface ProjectTreeEntry
 {
@@ -51,20 +52,6 @@ export function formatProjectTreeEntryName(entry: ProjectTreeEntry): string
   if (entry.isDir) suffix += '/'
   if (entry.isSymlink) suffix += '@'
   return `${entry.name}${suffix}`
-}
-
-export function isPathInsideProject(
-  cwd: string,
-  absolutePath: string
-): boolean
-{
-  const projectPath = relative(cwd, absolutePath)
-  return (
-    projectPath === '' ||
-    (!isAbsolute(projectPath) &&
-      projectPath !== '..' &&
-      !projectPath.startsWith(`..${sep}`))
-  )
 }
 
 export function formatProjectPath(cwd: string, absolutePath: string): string

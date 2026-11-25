@@ -617,6 +617,15 @@ export class Agent
     return this.skills
   }
 
+  // instruction files skipped for linking outside the workspace, for the
+  // TUI & /status; the prompt never carries these
+  getProjectContextNotices(): readonly string[]
+  {
+    return captureProjectContext(this.cwd, {
+      maxTotalChars: this.projectContextBudget(this.contextWindowSize),
+    }).notices
+  }
+
   private dynamicToolTokenBudget(): number
   {
     const promptLimit = requestBudgetCapacity(

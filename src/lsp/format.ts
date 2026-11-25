@@ -3,10 +3,8 @@
 
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import {
-  formatProjectPath,
-  isPathInsideProject,
-} from '../shared/project-tree.js'
+import { formatProjectPath } from '../shared/project-tree.js'
+import { isPathInsideProject } from '../utils/path-containment.js'
 import { isPlainObject } from '../utils/guards.js'
 import { truncateToLineBoundary } from '../utils/truncate-output.js'
 

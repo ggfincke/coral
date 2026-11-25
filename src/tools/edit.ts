@@ -1,17 +1,19 @@
 // src/tools/edit.ts
 // surgical find/replace file edits
 
-import { writeFile } from 'node:fs/promises'
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { applyEdit, describeEditMiss } from './edit-operation.js'
-import { readFileGuarded } from './file-utils.js'
+import { formatNotUtf8Refusal, readFileGuarded } from './file-utils.js'
 import { checkWorkspacePath } from '../shared/workspace-path.js'
 import { getCwd } from '../cwd.js'
 import { formatBytes } from '../utils/bytes.js'
 import { computeDiff } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { pluralize } from '../utils/pluralize.js'
-import { TEXT_FILE_READ_LIMIT_BYTES } from '../utils/file-read.js'
+import {
+  overwriteRegularFile,
+  TEXT_FILE_READ_LIMIT_BYTES,
+} from '../utils/file-read.js'
 
 export const editTool: Tool = {
   name: 'edit_file',
@@ -63,8 +65,12 @@ export const editTool: Tool = {
     if (!allowed.ok) return { output: '', error: allowed.error }
 
     const path = allowed.path
-    const readResult = await readFileGuarded(path)
+    const readResult = await readFileGuarded(path, { root: allowed.root })
     if (!readResult.ok) return readResult.result
+    if (readResult.lossy)
+    {
+      return { output: '', error: formatNotUtf8Refusal('edit', path) }
+    }
     const content = readResult.content
 
     const result = applyEdit(content, oldString, newString, replaceAll)
@@ -98,7 +104,7 @@ export const editTool: Tool = {
 
     try
     {
-      await writeFile(path, updated, 'utf-8')
+      await overwriteRegularFile(path, updated, { root: allowed.root })
       context?.observeFile?.(path, updated)
     }
     catch (err)
