@@ -205,13 +205,10 @@ function countConversationMessages(messages: OllamaMessage[]): number
 }
 
 // replace one complete snapshot so concurrent saves keep whole-file semantics
-function writeSessionData(
-  session: SessionData,
-  lease?: SessionLeaseOwnership
-): void
+function writeSessionData(session: SessionData): void
 {
   withSessionWriteLock(
-    lease,
+    undefined,
     () => writeSessionDataUnlocked(session),
     session.meta.id
   )
