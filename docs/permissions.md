@@ -51,14 +51,14 @@ There is no TUI `off` permission mode. Turning MCP off for an interactive sessio
 
 ## Workspace path gate
 
-File/search/code-intel tools that declare a `path` argument still need a **separate** approval when that path is outside the workspace, even if their normal policy is `always_allow`. `write_file`, `edit_file`, `grep`, `glob`, and `list_files` default a missing path to `.`. `read_file` and `code_intel` require an explicit path.
+File/search/code-intel tools and `git_diff` / `git_log` / `git_add` that declare a `path` (or `paths`) argument still need a **separate** approval when that path is outside the workspace, even if their normal policy is `always_allow`. `write_file`, `edit_file`, `grep`, `glob`, and `list_files` default a missing path to `.`. `read_file` and `code_intel` require an explicit path.
 
 - Lexical `..` escape: `Access outside workspace requires approval: …`
 - Symlink escape: **fail closed** — `Access outside workspace through symlink is not allowed: …` (not an approval prompt)
 
 After you approve, that invocation may read/write the resolved path. Outside-workspace **writes/edits are not undoable**.
 
-**Not covered by path policy:** `bash`, all `git_*` tools (including `git_diff` / `git_log`, which take a `path` argument that is **not** workspace-gated), `search_code`, `skill`, `task`, `todo_write`, MCP tools. The `skill` tool can read only its discovered package's `SKILL.md` and `references/`; it cannot execute scripts. `bash` runs in the session cwd with no workspace fence; after you approve the command, the shell can touch anything the OS user can.
+**Not covered by path policy:** `bash`, the other `git_*` tools, `search_code`, `skill`, `task`, `todo_write`, MCP tools. The `skill` tool can read only its discovered package's `SKILL.md` and `references/`; it cannot execute scripts. `bash` runs in the session cwd with no workspace fence; after you approve the command, the shell can touch anything the OS user can.
 
 ---
 

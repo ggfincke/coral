@@ -18,9 +18,11 @@ import {
 export type DefaultToolPolicy =
   'always_allow' | 'require_approval' | 'always_deny'
 
+// names the argument holding a workspace path: a single 'path' string, or a
+// 'paths' array whose entries are each checked (git_add pathspecs)
 export interface WorkspacePathRule
 {
-  argument: 'path'
+  argument: 'path' | 'paths'
   defaultPath?: '.'
 }
 
@@ -87,9 +89,21 @@ const REGISTRATIONS: BuiltInToolRegistration[] = [
   },
   { name: 'bash', defaultPolicy: 'require_approval' },
   { name: 'git_status', defaultPolicy: 'always_allow' },
-  { name: 'git_diff', defaultPolicy: 'always_allow' },
-  { name: 'git_log', defaultPolicy: 'always_allow' },
-  { name: 'git_add', defaultPolicy: 'require_approval' },
+  {
+    name: 'git_diff',
+    defaultPolicy: 'always_allow',
+    workspacePath: { argument: 'path' },
+  },
+  {
+    name: 'git_log',
+    defaultPolicy: 'always_allow',
+    workspacePath: { argument: 'path' },
+  },
+  {
+    name: 'git_add',
+    defaultPolicy: 'require_approval',
+    workspacePath: { argument: 'paths' },
+  },
   { name: 'git_commit', defaultPolicy: 'require_approval' },
   { name: 'git_switch', defaultPolicy: 'require_approval' },
   { name: 'git_push', defaultPolicy: 'require_approval' },

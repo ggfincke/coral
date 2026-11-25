@@ -3,6 +3,7 @@
 
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
+import { checkWorkspacePath } from '../shared/workspace-path.js'
 import {
   runGitCommand,
   currentBranchLabel,
@@ -14,6 +15,59 @@ import {
 function isUnsafeRef(ref: string): boolean
 {
   return ref.startsWith('-')
+}
+
+// pathspecs stay inside the workspace unless the path was approved; magic such
+// as ':(top)' or ':/' would widen a pathspec past the launched directory
+async function checkPathspec(
+  path: string,
+  cwd: string,
+  context?: ToolExecutionContext
+): Promise<string | undefined>
+{
+  if (path.startsWith(':'))
+  {
+    return `Pathspec magic is not supported: ${path}`
+  }
+  const allowed = await checkWorkspacePath(
+    cwd,
+    path,
+    context?.allowOutsideWorkspace === true
+  )
+  return allowed.ok ? undefined : allowed.error
+}
+
+// refspec syntax that turns a branch push into a force (+), delete or rename
+// (:), or a revision expression (^, ~, @{)
+const UNSAFE_PUSH_BRANCH = /[+:^~]|@\{/
+
+// a push target is HEAD or a branch name git accepts unchanged, so shorthand
+// such as '@{-1}' that git expands is rejected
+async function isPlainBranchName(
+  branch: string,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<boolean>
+{
+  if (branch === 'HEAD') return true
+  const check = await runGitCommand(
+    ['check-ref-format', '--branch', branch],
+    cwd,
+    { signal }
+  )
+  return !check.error && check.output.trim() === branch
+}
+
+// a push remote must be one already configured, never a URL or local path
+async function isConfiguredRemote(
+  remote: string,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<boolean>
+{
+  const remotes = await runGitCommand(['remote'], cwd, { signal })
+  if (remotes.error) return false
+  return remotes.output.split('\n').some((name) => name.trim() === remote)
 }
 
 // run a git command, applying a display placeholder when output is empty
@@ -103,14 +157,20 @@ export const gitDiffTool: Tool = {
       return { output: '', error: `Invalid ref: ${ref}` }
     }
 
+    const cwd = context?.cwd ?? getCwd()
+    const pathError = path ? await checkPathspec(path, cwd, context) : undefined
+    if (pathError) return { output: '', error: pathError }
+
     const flags = ['diff']
     if (stat) flags.push('--stat')
     if (staged) flags.push('--staged')
+    // '--' after the ref keeps git from reading it as a pathspec instead
     if (ref) flags.push(ref)
-    if (path) flags.push('--', path)
+    flags.push('--')
+    if (path) flags.push(path)
 
     // git diff can exit 1 with valid output in some configs, so trust stdout
-    return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
+    return runGit(flags, cwd, '(no output)', {
       allowStdoutOnError: true,
       signal: context?.signal,
     })
@@ -160,6 +220,10 @@ export const gitLogTool: Tool = {
       return { output: '', error: `Invalid ref: ${ref}` }
     }
 
+    const cwd = context?.cwd ?? getCwd()
+    const pathError = path ? await checkPathspec(path, cwd, context) : undefined
+    if (pathError) return { output: '', error: pathError }
+
     const flags = ['log', `-n`, String(count)]
     if (oneline)
     {
@@ -170,10 +234,12 @@ export const gitLogTool: Tool = {
       flags.push('--pretty=format:%h %s (%an, %ar)')
     }
 
+    // '--' after the ref keeps git from reading it as a pathspec instead
     if (ref) flags.push(ref)
-    if (path) flags.push('--', path)
+    flags.push('--')
+    if (path) flags.push(path)
 
-    return runGit(flags, context?.cwd ?? getCwd(), '(no output)', {
+    return runGit(flags, cwd, '(no output)', {
       signal: context?.signal,
     })
   },
@@ -230,6 +296,11 @@ export const gitAddTool: Tool = {
     if (unsafe)
     {
       return { output: '', error: `Invalid path: ${unsafe}` }
+    }
+    for (const path of paths)
+    {
+      const pathError = await checkPathspec(path, cwd, context)
+      if (pathError) return { output: '', error: pathError }
     }
 
     const result = await runGitCommand(['add', '--', ...paths], cwd)
@@ -411,7 +482,7 @@ export const gitPushTool: Tool = {
     {
       return { output: '', error: `Invalid remote: ${remote}` }
     }
-    if (branch && isUnsafeRef(branch))
+    if (branch && (isUnsafeRef(branch) || UNSAFE_PUSH_BRANCH.test(branch)))
     {
       return { output: '', error: `Invalid branch: ${branch}` }
     }
@@ -427,6 +498,16 @@ export const gitPushTool: Tool = {
       }
     }
 
+    const cwd = context?.cwd ?? getCwd()
+    if (remote && !(await isConfiguredRemote(remote, cwd, context?.signal)))
+    {
+      return { output: '', error: `Unknown remote: ${remote}` }
+    }
+    if (branch && !(await isPlainBranchName(branch, cwd, context?.signal)))
+    {
+      return { output: '', error: `Invalid branch: ${branch}` }
+    }
+
     // --porcelain writes the push result to stdout; the human-readable summary
     // goes to stderr, which execFileSync drops on success
     const flags = ['push', '--porcelain']
@@ -435,7 +516,7 @@ export const gitPushTool: Tool = {
     if (branch) flags.push(branch)
 
     // pushes hit the network — allow more time than the default git timeout
-    return runGit(flags, context?.cwd ?? getCwd(), '(pushed)', {
+    return runGit(flags, cwd, '(pushed)', {
       timeout: 60_000,
     })
   },

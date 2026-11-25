@@ -4,6 +4,7 @@
 import { existsSync, rmSync } from 'node:fs'
 import { lstat, readFile, readlink, realpath } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
+import { READ_ONLY_GIT_CONFIG } from '../utils/git.js'
 import { execFileCommand, formatProcessError } from '../utils/process.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 import { jobDirectory, writeJob } from './store.js'
@@ -11,12 +12,8 @@ import type { JobRecord, JobRepository } from './types.js'
 
 const MAX_GIT_BYTES = 4 * 1024 * 1024
 const MAX_DIFF_BYTES = 1024 * 1024
-const GIT_OPTIONS = [
-  '-c',
-  'core.hooksPath=/dev/null',
-  '-c',
-  'core.fsmonitor=false',
-]
+// task git never runs hooks, on top of the shared read-only config
+const GIT_OPTIONS = ['-c', 'core.hooksPath=/dev/null', ...READ_ONLY_GIT_CONFIG]
 
 async function git(
   cwd: string,

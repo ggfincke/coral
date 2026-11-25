@@ -23,9 +23,9 @@ TUI labels (Read, Write, Shell, …) are display only.
 | `code_intel`  | always_allow     | `path`               | yes      | no       | TS/JS LSP                           |
 | `bash`        | require_approval | no                   | no       | no       | Not sandboxed                       |
 | `git_status`  | always_allow     | no                   | yes      | yes      |                                     |
-| `git_diff`    | always_allow     | no                   | yes      | yes      |                                     |
-| `git_log`     | always_allow     | no                   | yes      | yes      |                                     |
-| `git_add`     | require_approval | no                   | no       | no       |                                     |
+| `git_diff`    | always_allow     | `path`               | yes      | yes      |                                     |
+| `git_log`     | always_allow     | `path`               | yes      | yes      |                                     |
+| `git_add`     | require_approval | `paths`              | no       | no       |                                     |
 | `git_commit`  | require_approval | no                   | no       | no       | Staged only                         |
 | `git_switch`  | require_approval | no                   | no       | no       |                                     |
 | `git_push`    | require_approval | no                   | no       | no       | 60s timeout                         |
@@ -62,13 +62,13 @@ Fails if `old_string` is empty, equals `new_string`, is missing, or matches more
 
 ### `grep`
 
-Regex search via `rg -n -H --hidden --no-messages --regexp`. **Required:** `pattern`. Optional `path` (default cwd), `include` glob.
+Regex search via `rg -n -H --hidden --no-messages --regexp`, skipping `.git/`. **Required:** `pattern`. Optional `path` (default cwd), `include` glob.
 
 Max **200** hits. No matches: `No matches found.` Missing `rg`: install hint `https://github.com/BurntSushi/ripgrep#installation`.
 
 ### `glob`
 
-File names via `rg --files --hidden --sortr=modified --glob`. **Required:** `pattern`. Optional `path` (default cwd).
+File names via `rg --files --hidden --sortr=modified --glob`, skipping `.git/`. **Required:** `pattern`. Optional `path` (default cwd).
 
 Max **100** paths, newest first. No matches: `No matching files found.`
 
@@ -139,12 +139,12 @@ Runs in the session cwd. **Not sandboxed.** Network and paths outside the projec
 
 ## Git
 
-Refs/paths starting with `-` are rejected so git does not treat them as options.
+Refs/paths starting with `-` are rejected so git does not treat them as options. Pathspecs starting with `:` (pathspec magic) are rejected, and `path` / `paths` go through the workspace path gate. Every call disables `core.fsmonitor`; diffs add `--no-ext-diff --no-textconv --no-color` and logs `--no-color --no-show-signature`, so repo-local config cannot run commands or rewrite output. Hooks still run for the mutating tools.
 
 ### Read
 
 - **`git_status`** — optional `short` (default **true**) → `git status --short` vs `git status`.
-- **`git_diff`** — optional `staged`, `stat`, `ref`, `path`. Uses `--staged`, `--stat`, optional ref, `-- path`.
+- **`git_diff`** — optional `staged`, `stat`, `ref`, `path`. Uses `--staged`, `--stat`, optional ref, `-- path`. Output cut off by the buffer or a timeout is an error, not a partial diff.
 - **`git_log`** — optional `count` (default **10**, not clamped), `oneline` (default **true**), `ref`, `path`. Non-oneline pretty: `%h %s (%an, %ar)`.
 
 ### Mutation (always approval-gated by default)
@@ -152,7 +152,7 @@ Refs/paths starting with `-` are rejected so git does not treat them as options.
 - **`git_add`** — `all:true` → `git add -A`; else `git add -- …paths`. Requires `paths` or `all`.
 - **`git_commit`** — required nonempty `message` after trim (`git_commit requires a non-empty message`). Does **not** auto-stage. `git commit -m`.
 - **`git_switch`** — required `branch`; optional `create` (default false), `startPoint` (requires `create:true`). Create path runs `git check-ref-format --branch`.
-- **`git_push`** — `git push --porcelain`; optional `remote`, `branch` (requires `remote`), `setUpstream` (requires both) → `-u`. Timeout 60s.
+- **`git_push`** — `git push --porcelain`; optional `remote` (must be a configured remote), `branch` (requires `remote`; `HEAD` or a plain branch name, no `+`, `:`, `^`, `~`, or `@{`), `setUpstream` (requires both) → `-u`. Timeout 60s.
 
 `/diff` in the TUI is a user command (`git diff`), not this tool.
 
