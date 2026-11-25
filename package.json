@@ -1,6 +1,7 @@
 {
   "name": "coral",
   "version": "0.17.10",
+  "private": true,
   "description": "A local-first CLI/TUI coding agent for Ollama",
   "type": "module",
   "exports": {},

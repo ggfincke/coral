@@ -19,7 +19,8 @@ from coral_dev_tools.session_analysis import (
 def default_coral_home() -> Path:
     env_home = os.environ.get("CORAL_HOME")
     if env_home:
-        return Path(env_home).expanduser()
+        # relative values resolve under home, matching src/utils/coral-home.ts
+        return Path.home() / Path(env_home).expanduser()
     return Path.home() / ".coral"
 
 

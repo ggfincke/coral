@@ -153,8 +153,13 @@ def read_text(path: Path) -> str:
         return ""
 
 
-def command_candidates(path: Path, content: str) -> list[str]:
-    path_has_context = COMMAND_CONTEXT.search(str(path)) is not None
+# hints match the path inside the scanned tree, never the checkout's own parents
+def scan_path(root: Path, path: Path) -> str:
+    return path.relative_to(root).as_posix()
+
+
+def command_candidates(root: Path, path: Path, content: str) -> list[str]:
+    path_has_context = COMMAND_CONTEXT.search(scan_path(root, path)) is not None
     commands: list[str] = []
     for line in content.splitlines():
         stripped = line.strip()
@@ -197,7 +202,7 @@ def collect_hits(
     path: Path,
     content: str,
 ) -> tuple[FileHit | None, FileHit | None, FileHit | None]:
-    lower_path = str(path).lower()
+    lower_path = scan_path(root, path).lower()
 
     prompt_reasons: list[str] = []
     if PROMPT_HINT.search(lower_path):
@@ -249,7 +254,7 @@ def inventory_reference_tree(root: Path, *, top: int = 12) -> ReferenceInventory
         project_counts.update([project_name(root, path)])
         extension_counts.update([path.suffix.lower() or "(none)"])
         content = read_text(path)
-        slash_commands.update(command_candidates(path, content))
+        slash_commands.update(command_candidates(root, path, content))
         tool_names.update(tool_name_candidates(content))
 
         prompt_hit, tool_hit, permission_hit = collect_hits(root, path, content)

@@ -133,6 +133,30 @@ function checkRuntimeDrift()
   )
 }
 
+// the Python & ESLint comment checkers share one product-name allowlist
+function checkCommentCheckerDrift()
+{
+  const python = read('scripts/check-comment-style.py')
+  const eslint = read('eslint-rules/plain-comment-case.js')
+  const eslintMatch = requireMatch(
+    eslint,
+    /PROPER_NAMES = new Set\(\[([\s\S]*?)\]\)/,
+    'PROPER_NAMES in eslint-rules/plain-comment-case.js'
+  )
+  const pythonNames = extractPythonStringSet(python, 'PROPER_NAMES')
+  const eslintNameList = eslintMatch
+    ? [...eslintMatch[1].matchAll(/'([^']+)'/g)].map((item) => item[1]).sort()
+    : []
+  if (pythonNames.join('\n') !== eslintNameList.join('\n'))
+  {
+    errors.push(
+      'comment checker PROPER_NAMES drifted:\n' +
+        `  python=${pythonNames.join(', ')}\n` +
+        `  eslint=${eslintNameList.join(', ')}`
+    )
+  }
+}
+
 run('uv', [
   'run',
   'python',
@@ -144,6 +168,7 @@ run('uv', [
 ])
 run('uv', ['run', 'python', '-m', 'unittest', 'discover', 'tests/scripts'])
 checkRuntimeDrift()
+checkCommentCheckerDrift()
 
 if (errors.length > 0)
 {

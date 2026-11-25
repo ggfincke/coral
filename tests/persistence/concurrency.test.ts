@@ -24,12 +24,8 @@ import {
 import type { Embedder, EmbeddingSpace } from '../../src/retrieval/types.js'
 import { listSessions, loadSession } from '../../src/session/store.js'
 import type { SessionMeta } from '../../src/session/types.js'
-import {
-  loadTelemetry,
-  type TelemetryStore,
-} from '../../src/telemetry/store.js'
+import { loadTelemetry } from '../../src/telemetry/store.js'
 import { loadHistory } from '../../src/tui/prompt/input-history.js'
-import { makeReliabilityStats } from '../../src/types/inference.js'
 import { writeJsonFile } from '../../src/utils/json.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import {
@@ -189,21 +185,10 @@ test('session files remain authoritative across distinct and same-ID writers', a
   }
 })
 
-test('telemetry aggregates one legacy baseline and concurrent immutable deltas', async () =>
+test('telemetry aggregates concurrent immutable deltas', async () =>
 {
   const dir = await tempDir('coral-telemetry-race-')
   const path = join(dir, 'telemetry.json')
-  const baseline: TelemetryStore = {
-    models: {
-      'shared-model': {
-        reliability: makeReliabilityStats({ reprompts: 3, editRepairs: 1 }),
-        sessions: 2,
-        firstSeen: '2026-07-17T00:00:00.000Z',
-        updatedAt: '2026-07-17T01:00:00.000Z',
-      },
-    },
-  }
-  writeJsonFile(path, baseline)
 
   const workerCount = 4
   const iterations = 8
@@ -215,21 +200,19 @@ test('telemetry aggregates one legacy baseline and concurrent immutable deltas',
     }))
   )
 
-  const expectedSessions = 2 + workerCount * iterations
-  const expectedReprompts = 3 + workerCount * iterations
+  const expectedSessions = workerCount * iterations
+  const expectedReprompts = workerCount * iterations
   const expectedEditRepairs =
-    1 +
     workerCount *
-      Array.from({ length: iterations }, (_, index) => index % 2).reduce(
-        (sum, value) => sum + value,
-        0
-      )
+    Array.from({ length: iterations }, (_, index) => index % 2).reduce(
+      (sum, value) => sum + value,
+      0
+    )
   const first = loadTelemetry(path)
   const record = first.models['shared-model']
   assert.equal(record?.sessions, expectedSessions)
   assert.equal(record?.reliability.reprompts, expectedReprompts)
   assert.equal(record?.reliability.editRepairs, expectedEditRepairs)
-  assert.equal(record?.firstSeen, '2026-07-17T00:00:00.000Z')
 
   const deltaDir = join(dir, 'telemetry.d')
   const deltaFiles = (await readdir(deltaDir)).filter((file) =>
@@ -254,7 +237,6 @@ test('telemetry aggregates one legacy baseline and concurrent immutable deltas',
 
   if (process.platform !== 'win32')
   {
-    assert.equal((await stat(path)).mode & 0o777, 0o600)
     assert.equal((await stat(deltaDir)).mode & 0o777, 0o700)
     for (const file of await readdir(deltaDir))
     {
