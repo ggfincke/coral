@@ -13,8 +13,8 @@ TUI labels (Read, Write, Shell, …) are display only.
 | Name          | Default policy   | Path gate            | Subagent | Parallel | Approval notes                      |
 | ------------- | ---------------- | -------------------- | -------- | -------- | ----------------------------------- |
 | `read_file`   | always_allow     | `path`               | yes      | yes      | Outside workspace still prompts     |
-| `write_file`  | require_approval | `path` (default `.`) | no       | no       | Outside workspace: not undoable     |
-| `edit_file`   | require_approval | `path` (default `.`) | no       | no       | Exact match; optional `replace_all` |
+| `write_file`  | require_approval | `path`               | no       | no       | Outside workspace: not undoable     |
+| `edit_file`   | require_approval | `path`               | no       | no       | Exact match; optional `replace_all` |
 | `grep`        | always_allow     | `path` (default `.`) | yes      | yes      | Needs `rg`                          |
 | `glob`        | always_allow     | `path` (default `.`) | yes      | yes      | Needs `rg`                          |
 | `list_files`  | always_allow     | `path` (default `.`) | yes      | yes      | Tree, depth cap 5                   |
@@ -36,7 +36,7 @@ Ollama models do not get `task`, `git_add`, `git_commit`, `git_switch`, or `git_
 
 Subagent set: the ten `yes` rows under Subagent. `coral exec --permission-profile read-only` uses that same set. `workspace-write` adds `write_file`, `edit_file`, `bash` only.
 
-Ripgrep timeout 15s, buffer 5 MiB. Git default timeout 10s except `git_commit`, `git_switch`, and `git_push` (5 min, since they run hooks). Tool results fed to the model are capped at about 100,000 characters.
+Ripgrep timeout 15s. `grep` and `glob` read rg output as it streams and keep only the lines they show, at most 5 MiB of text; the rest is counted, so a large result returns the first hits and the real total. Git default timeout 10s except `git_commit`, `git_switch`, and `git_push` (5 min, since they run hooks). Tool results fed to the model are capped at about 100,000 characters.
 
 ---
 
@@ -44,21 +44,21 @@ Ripgrep timeout 15s, buffer 5 MiB. Git default timeout 10s except `git_commit`, 
 
 ### `read_file`
 
-Read a text file. **Required:** `path` (absolute or relative).
+Read a text file. **Required:** `path` (absolute or relative). Optional `offset` (first line, 1-based) and `limit` (line count) return one page with the total line count.
 
-Cap: 1,048,576 bytes. Oversized files tell the model to use `bash` with `head`/`tail`. Missing or unreadable paths error. Binary files are **not** detected — Coral reads UTF-8 and may return decoded garbage. Workspace check as above.
+Cap: 1,048,576 bytes. Oversized files tell the model to use `bash` with `head`/`tail`. Missing or unreadable paths error, and only regular files are read (a FIFO or device is refused instead of blocking). Binary files are **not** detected. Invalid UTF-8 is shown with U+FFFD in place of the bad bytes, after a note that `edit_file` and `write_file` will refuse to change that file. Workspace check as above.
 
 ### `write_file`
 
 Create/overwrite a file, creating parent directories. **Required:** `path`, `content`.
 
-In-workspace: refuses content over the 1 MiB undo-capture limit, and refuses if the previous file cannot be read for a snapshot; records a diff and undo snapshot. Outside workspace (after approval): writes, **not undoable**.
+In-workspace: refuses content over the 1 MiB undo-capture limit, and refuses if the previous file cannot be read for a snapshot; records a diff and undo snapshot. Outside workspace (after approval): writes, **not undoable**. Either way it refuses to overwrite an existing file that is not valid UTF-8 and tells the model to use `bash` for it.
 
 ### `edit_file`
 
 Surgical replace. **Required:** `path`, `old_string`, `new_string`. Optional `replace_all` (default false).
 
-Fails if `old_string` is empty, equals `new_string`, is missing, or matches more than once unless `replace_all`. Whitespace-tolerant fuzzy match may still apply and mark the call repaired (the model is told to copy exact text next time). Same undo size cap as write for in-workspace results.
+Fails if `old_string` is empty, equals `new_string`, is missing, or matches more than once unless `replace_all`. Whitespace-tolerant fuzzy match may still apply and mark the call repaired (the model is told to copy exact text next time). Same undo size cap as write for in-workspace results. Refuses a file that is not valid UTF-8.
 
 ### `grep`
 
@@ -154,7 +154,7 @@ Refs/paths starting with `-` are rejected so git does not treat them as options.
 - **`git_switch`** — required `branch`; optional `create` (default false), `startPoint` (requires `create:true`). Create path runs `git check-ref-format --branch`.
 - **`git_push`** — `git push --porcelain`; optional `remote` (must be a configured remote), `branch` (requires `remote`; `HEAD` or a plain branch name, no `+`, `:`, `^`, `~`, or `@{`), `setUpstream` (requires both) → `-u`. Timeout 5 min.
 
-`/diff` in the TUI is a user command (`git diff`), not this tool.
+`/diff` in the TUI is a user command (`git diff HEAD` plus a list of untracked files), not this tool.
 
 ---
 

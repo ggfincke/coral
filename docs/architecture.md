@@ -29,7 +29,7 @@ Package version at the time of this writing is `0.15.0`. Node.js `>=24` is requi
 
 ## What Coral is not
 
-- Not a multi-provider agent (OpenAI / Anthropic / …). The `AgentInferenceClient` seam is an Ollama-shaped test/runtime injection point. Production constructs `OllamaClient`.
+- Not a general multi-provider agent. Bare model names go to Ollama; `anthropic/<id>` and `openai/<id>` are the only other backends. The `AgentInferenceClient` seam is an Ollama-shaped test/runtime injection point. Production constructs a `RoutingInferenceClient` (`src/providers/router.ts`) over the Ollama client and the two hosted clients.
 - Not a remote-hosted service. Processes on your machine own the TUI, the Agent, tools, and local files. Durable tasks add a local background supervisor and worker process; nothing runs elsewhere.
 - Not a hostile-process sandbox. `bash` and MCP servers run as ordinary host processes. Headless permission profiles are **deterministic tool catalogs**, not isolation.
 - Not an IDE. TypeScript/JavaScript code intelligence is a bundled language-server tool (`code_intel`), not an editor.
@@ -318,7 +318,7 @@ This is the ownership rule that keeps compaction, undo, and MCP from racing.
 | **InteractiveSessionRuntime** | Which Agent is current, session binding, prompts, shutdown                                                                            | Message contents (reads Agent snapshots)                               |
 | **Session store**             | Files under `CORAL_HOME/sessions/`                                                                                                    | Live Agent memory except via load/restore                              |
 
-`ConversationState.touch()` bumps a revision on every mutation. Compaction and undo plans carry that revision; a stale plan returns `{ status: 'stale' }` and does not commit. Summarize, hard-fit, trim, `/compact`, and `/clear` **clear undo/redo**. Tool-result **prune** does not (it rewrites tool bodies in place and leaves stacks aligned). Undo refuses “after compaction or history changes” and “after concurrent history changes”.
+`ConversationState.touch()` bumps a revision on every mutation. Compaction and undo plans carry that revision; a stale plan returns `{ status: 'stale' }` and does not commit. Summarize, hard-fit, `/compact`, and `/clear` **clear undo/redo**. Tool-result **prune** does not (it rewrites tool bodies in place and leaves stacks aligned), and a trim keeps the records of surviving turns. Undo refuses “after compaction or history changes” and “after concurrent history changes”.
 
 ---
 
@@ -329,7 +329,7 @@ Extending Coral means extending this loop: more tools, better selection, richer 
 One round:
 
 1. Model streams text and/or `tool_calls`.
-2. Coral validates names and JSON arguments. Name repair is lowercase + strip separators, not fuzzy matching.
+2. Coral validates names and JSON arguments. Name repair is lowercase + strip separators, not fuzzy matching. A hosted call whose arguments are not a JSON object is answered with a per-call tool error and is never approved or run.
 3. Policy: `always_deny` → error to the model; `require_approval` → TUI prompt (or auto-true in yolo); `always_allow` → run, unless a workspace path escapes and is promoted, or a file write hits a protected path.
 4. Execute. Capture diffs for the TUI (not sent back to the model). Capture `change` / `todoChange` for undo.
 5. Bound the result (~100,000 characters) and, if needed, omit it to fit the next request.

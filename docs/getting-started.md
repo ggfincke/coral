@@ -4,6 +4,7 @@ Coral is a local-first coding agent in your terminal. It talks to **your** Ollam
 
 ## Requirements
 
+- macOS or Linux; Windows is not supported
 - **Node.js 24** or newer (`package.json` `engines.node` is `>=24`)
 - A running [Ollama](https://ollama.com/) server
 - At least one model already pulled into Ollama
