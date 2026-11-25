@@ -225,6 +225,26 @@ function minimumToolResultMessage(toolName: string): OllamaMessage
   })
 }
 
+// give each call a failed round never settled an interrupted result, so the
+// round whose completed calls changed files can still be committed
+function padInterruptedResults(
+  outcome: MutableToolRoundOutcome,
+  calls: readonly OllamaToolCall[]
+): void
+{
+  if (outcome.toolResults.length === 0) return
+  for (let index = outcome.toolResults.length; index < calls.length; index++)
+  {
+    outcome.toolResults.push(
+      Object.freeze({
+        role: 'tool',
+        tool_name: calls[index]!.function.name,
+        content: 'Error: Tool call interrupted',
+      })
+    )
+  }
+}
+
 function emptyOutcome(): MutableToolRoundOutcome
 {
   return {
@@ -446,6 +466,7 @@ export class ToolRoundExecutor
     }
     catch (error)
     {
+      padInterruptedResults(outcome, input.round.calls)
       return {
         status: 'failed',
         error: toError(error),
