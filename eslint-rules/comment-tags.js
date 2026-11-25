@@ -3,7 +3,8 @@
 
 import { getAllComments } from './ruleContext.js'
 
-const TODO_PREFIX = /^todo\b/i
+// an uppercase TODO word or a tag-shaped todo, so prose that starts "todo list" passes
+const TODO_PREFIX = /^(?:TODO\b|[Tt][Oo][Dd][Oo]\s*[(:])/
 const VALID_TODO = /^TODO(?:\([a-z0-9][a-z0-9._/-]*\):)?\s+\S/
 const LEGACY_TAG = /^(?:FOOTGUN|HACK|NOTE|WARN(?:ING)?|FIXME|XXX):\s*/i
 
