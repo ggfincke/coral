@@ -4,6 +4,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import {
+  isExpandableBlock,
   isNewestToolResultExpanded,
   resolveToolResultView,
   toggleNewestToolResult,
@@ -44,6 +45,22 @@ test('short results render untouched', () =>
   const view = resolveToolResultView(resultBlock('bash', 5))
   assert.equal(view.hiddenLines, 0)
   assert.equal(view.text.split('\n').length, 5)
+})
+
+test('expandability matches a full line split at the budget edges', () =>
+{
+  const content = (text: string): OutputBlock => ({
+    type: 'tool_result',
+    toolName: 'bash',
+    content: text,
+  })
+  assert.equal(isExpandableBlock(content('')), false)
+  assert.equal(isExpandableBlock(resultBlock('bash', 30)), false)
+  assert.equal(isExpandableBlock(resultBlock('bash', 31)), true)
+  assert.equal(isExpandableBlock(resultBlock('bash', 10_000)), true)
+  // a trailing newline adds an empty last line, same as split('\n')
+  assert.equal(isExpandableBlock(content(`${'x\n'.repeat(29)}x`)), false)
+  assert.equal(isExpandableBlock(content(`${'x\n'.repeat(30)}`)), true)
 })
 
 test('toggle flips only the newest tool result & reports its state', () =>

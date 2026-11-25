@@ -4,7 +4,7 @@
 import { diffWords } from 'diff'
 import chalk, { type ChalkInstance } from 'chalk'
 import { getTheme, style, type Role } from '../theme.js'
-import { padEnd, visibleWidth } from '../wrap.js'
+import { expandTabs, padEnd, visibleWidth } from '../wrap.js'
 import { sanitizeUntrustedText } from './sanitize.js'
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
@@ -116,8 +116,25 @@ interface PairGroup
 // header boundaries
 type Item = { type: 'literal'; raw: string } | { type: 'rows'; rows: DiffRow[] }
 
-// parse the unified text into literals and per-hunk content-row runs while
-// tracking old/new line numbers exactly like the single-pass renderer did
+// expand tabs in a content row's body; the sign column stays put so tab stops
+// line up with the code, not with the +/- prefix
+function expandBody(raw: string): string
+{
+  return raw.slice(0, 1) + expandTabs(raw.slice(1))
+}
+
+// classify a line inside a hunk by its first character; null = not a row
+function hunkRowKind(raw: string): RowKind | null
+{
+  if (raw.startsWith('+')) return 'add'
+  if (raw.startsWith('-')) return 'del'
+  if (raw.startsWith(' ') || raw === '') return 'ctx'
+  return null
+}
+
+// parse the unified text into literals and per-hunk content-row runs; each
+// hunk header's counts bound its rows, so `--`/`++` content stays a row and
+// anything outside a hunk (headers, untracked file bodies) stays a literal
 function parseItems(rawLines: string[]): Item[]
 {
   const items: Item[] = []
@@ -131,49 +148,41 @@ function parseItems(rawLines: string[]): Item[]
 
   let oldLine = 0
   let newLine = 0
+  let oldLeft = 0
+  let newLeft = 0
   for (const raw of rawLines)
   {
+    const kind = oldLeft > 0 || newLeft > 0 ? hunkRowKind(raw) : null
+    if (kind)
+    {
+      const text = expandBody(raw)
+      run ??= []
+      if (kind === 'add') run.push({ kind, text, newNum: newLine++ })
+      else if (kind === 'del') run.push({ kind, text, oldNum: oldLine++ })
+      else run.push({ kind, text, oldNum: oldLine++, newNum: newLine++ })
+      if (kind !== 'add') oldLeft = Math.max(oldLeft - 1, 0)
+      if (kind !== 'del') newLeft = Math.max(newLeft - 1, 0)
+      continue
+    }
+
+    // no-newline markers sit inside a hunk w/o consuming its counts; any
+    // other non-row line ends a hunk whose header overstated its size
+    if (!raw.startsWith('\\'))
+    {
+      oldLeft = 0
+      newLeft = 0
+    }
+
+    flush()
     const hunk = HUNK_HEADER.exec(raw)
     if (hunk)
     {
-      flush()
       oldLine = Number(hunk[1])
       newLine = Number(hunk[3])
-      items.push({ type: 'literal', raw })
-      continue
+      oldLeft = Number(hunk[2] ?? 1)
+      newLeft = Number(hunk[4] ?? 1)
     }
-
-    if (isFileHeader(raw))
-    {
-      flush()
-      items.push({ type: 'literal', raw })
-      continue
-    }
-
-    if (raw.startsWith('+'))
-    {
-      run ??= []
-      run.push({ kind: 'add', text: raw, newNum: newLine++ })
-      continue
-    }
-
-    if (raw.startsWith('-'))
-    {
-      run ??= []
-      run.push({ kind: 'del', text: raw, oldNum: oldLine++ })
-      continue
-    }
-
-    if (raw.startsWith(' ') || raw === '')
-    {
-      run ??= []
-      run.push({ kind: 'ctx', text: raw, oldNum: oldLine++, newNum: newLine++ })
-      continue
-    }
-
-    // preserve no-newline markers, truncation markers, and other meta lines
-    flush()
-    items.push({ type: 'literal', raw })
+    items.push({ type: 'literal', raw: hunk ? raw : expandTabs(raw) })
   }
   flush()
   return items

@@ -10,6 +10,31 @@ export function visibleWidth(text: string): number
   return stringWidth(text)
 }
 
+// replace plain-text tabs w/ spaces to the next tab stop; string-width counts a
+// tab as 0 columns while wrap-ansi expands it later, so renderers expand once up
+// front to keep every measure & the final wrap in agreement
+export function expandTabs(text: string, tabWidth = 4): string
+{
+  if (!text.includes('\t')) return text
+  return text
+    .split('\n')
+    .map((line) =>
+    {
+      // measure whole tab-free runs so multi-code-point graphemes count once
+      const [first = '', ...rest] = line.split('\t')
+      let out = first
+      let column = visibleWidth(first)
+      for (const part of rest)
+      {
+        const spaces = tabWidth - (column % tabWidth)
+        out += ' '.repeat(spaces) + part
+        column += spaces + visibleWidth(part)
+      }
+      return out
+    })
+    .join('\n')
+}
+
 // right-pad a possibly ANSI-styled string to a visible width
 export function padEnd(value: string, width: number): string
 {

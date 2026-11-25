@@ -518,3 +518,84 @@ test('McpToolScope retires managers when detach or disposal throws', async () =>
   await throwingScope.dispose()
   assert.equal(yoloDisposals, 1)
 })
+
+test('McpToolScope restarts bootstrap for a turn that joins an aborted one', async () =>
+{
+  let releaseInitialize: (tools: Tool[]) => void = () =>
+  {}
+  let releaseDispose = () =>
+  {}
+  let initializeStarted = () =>
+  {}
+  const started = new Promise<void>((resolve) =>
+  {
+    initializeStarted = resolve
+  })
+  const firstManager: AgentMcpManager = {
+    initialize()
+    {
+      initializeStarted()
+      return new Promise<Tool[]>((resolve) =>
+      {
+        releaseInitialize = resolve
+      })
+    },
+    getStatus: () => managerStatus('ready'),
+    dispose()
+    {
+      return new Promise<void>((resolve) =>
+      {
+        releaseDispose = resolve
+      })
+    },
+  }
+  const nextManager: AgentMcpManager = {
+    async initialize()
+    {
+      return [dynamicTool]
+    },
+    getStatus: () => managerStatus('ready'),
+    async dispose()
+    {},
+  }
+  let factoryCalls = 0
+  const scope = new McpToolScope({
+    mode: 'ask',
+    config: scopeConfig,
+    permissions: defaultToolPermissions(),
+    baseTools: [],
+    lifecycleSignal: new AbortController().signal,
+    managerFactory: async () =>
+      factoryCalls++ === 0 ? firstManager : nextManager,
+  })
+
+  const controller = new AbortController()
+  const first = scope.bootstrap(
+    admission(
+      () => assert.fail('aborted bootstrap admitted tools'),
+      controller.signal
+    )
+  )
+  await started
+  controller.abort()
+  releaseInitialize([dynamicTool])
+  // let the aborted bootstrap reach its pending dispose before the next turn joins
+  await new Promise((resolve) => setImmediate(resolve))
+
+  let admitted: readonly Tool[] | undefined
+  const second = scope.bootstrap(
+    admission((tools) =>
+    {
+      admitted = tools
+    })
+  )
+  releaseDispose()
+  await Promise.all([first, second])
+
+  assert.equal(factoryCalls, 2)
+  assert.deepEqual(
+    admitted?.map((tool) => tool.name),
+    [dynamicTool.name]
+  )
+  await scope.dispose()
+})

@@ -4,6 +4,7 @@
 import chalk from 'chalk'
 import type { TodoItem, TodoStatus } from '../../types/todo.js'
 import { ellipsize } from '../../utils/ellipsize.js'
+import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
 import { boxFrame } from '../run/status-line.js'
 import { padEnd } from '../wrap.js'
 
@@ -17,9 +18,12 @@ const TODO_MARK: Record<TodoStatus, string> = {
   completed: '●',
 }
 
+// task text comes from the model (or a session file): strip terminal
+// controls & collapse newlines so one todo stays one row
 export function todoRowText(todo: TodoItem): string
 {
-  return `${TODO_MARK[todo.status]} ${todo.content}`
+  const content = sanitizeUntrustedText(todo.content).replace(/\s+/gu, ' ')
+  return `${TODO_MARK[todo.status]} ${content}`
 }
 
 export function strikeIfDone(todo: TodoItem, text: string): string
