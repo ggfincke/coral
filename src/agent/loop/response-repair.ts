@@ -157,7 +157,16 @@ function normalizeCalls(
     return []
   }
 
-  const args = coerceArguments(shape.arguments ?? shape.parameters)
+  // a bare {"name"} object is an argument-free call; otherwise require an
+  // object arguments key so prose JSON is not mistaken for a call
+  const hasArgsKey = 'arguments' in shape || 'parameters' in shape
+  if (!hasArgsKey && Object.keys(shape).some((key) => key !== 'name'))
+  {
+    return []
+  }
+  const args = hasArgsKey
+    ? coerceArguments(shape.arguments ?? shape.parameters)
+    : {}
   if (args === null) return []
 
   return [{ type: 'function', function: { name, arguments: args } }]
