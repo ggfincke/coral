@@ -10,6 +10,7 @@ import type {
   ModelInfo,
 } from '../../types/inference.js'
 import type { HostedProviderSettings } from '../config.js'
+import { isBillingRejectedStatus } from '../hosted-wire.js'
 import { billingUsageFrom, finalChunkFrom, toAnthropicRequest } from './wire.js'
 
 // used only when the Models API omits a limit
@@ -17,11 +18,11 @@ const FALLBACK_INPUT_TOKENS = 200_000
 const FALLBACK_OUTPUT_TOKENS = 64_000
 
 // translate SDK failures into short actionable text without request bodies
-function describeError(err: unknown, model?: string): Error
+function describeError(err: unknown, keySource: string, model?: string): Error
 {
   if (err instanceof Anthropic.AuthenticationError)
   {
-    return new Error('Anthropic rejected ANTHROPIC_API_KEY (401)')
+    return new Error(`Anthropic rejected the API key from ${keySource} (401)`)
   }
   if (err instanceof Anthropic.PermissionDeniedError)
   {
@@ -114,7 +115,7 @@ export class AnthropicClient implements AgentInferenceClient
     catch (err)
     {
       if (signal?.aborted) throw err
-      throw describeError(err)
+      throw describeError(err, this.settings.apiKeySource)
     }
   }
 
@@ -171,10 +172,7 @@ export class AnthropicClient implements AgentInferenceClient
       settled = true
       if (
         err instanceof Anthropic.APIError &&
-        err.status !== undefined &&
-        err.status >= 400 &&
-        err.status < 500 &&
-        err.status !== 408
+        isBillingRejectedStatus(err.status)
       )
       {
         yield {
@@ -184,7 +182,7 @@ export class AnthropicClient implements AgentInferenceClient
         }
       }
       if (signal?.aborted) return
-      throw describeError(err, request.model)
+      throw describeError(err, this.settings.apiKeySource, request.model)
     }
     finally
     {

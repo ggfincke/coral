@@ -6,7 +6,9 @@ import type {
   OllamaMessage,
   OllamaTool,
   OllamaToolCall,
+  ProviderState,
 } from '../../types/inference.js'
+import { isPlainObject } from '../../utils/guards.js'
 import {
   CHARS_PER_TOKEN,
   estimateModelRequestValue,
@@ -89,15 +91,32 @@ function projectToolDefinition(tool: OllamaTool): OllamaTool
   }
 }
 
-// opaque replay data is signatures and ciphertext the provider does not bill
-// as prompt text, so it stays out of the estimate
+// signatures and ciphertext inside replay items are not billed as prompt text
+const OPAQUE_REPLAY_FIELDS = new Set(['signature', 'data', 'encrypted_content'])
+
+function estimateReplayTokens(state: ProviderState): number
+{
+  const visible = state.items.map((item) =>
+    isPlainObject(item)
+      ? Object.fromEntries(
+          Object.entries(item).filter(([key]) => !OPAQUE_REPLAY_FIELDS.has(key))
+        )
+      : item
+  )
+  return estimateModelRequestValue(visible).tokens
+}
+
+// replay items can stand in for the rebuilt turn and still carry tool inputs
+// that history stubbed out, so a message costs whichever form is larger
 export function estimateModelRequestMessageTokens(
   message: OllamaMessage | ModelRequestMessage
 ): number
 {
   const projected = toModelRequestMessage(message)
+  const state = projected.providerState
   delete projected.providerState
-  return estimateModelRequestValue(projected).tokens
+  const rebuilt = estimateModelRequestValue(projected).tokens
+  return state ? Math.max(rebuilt, estimateReplayTokens(state)) : rebuilt
 }
 
 export function estimateModelRequestMessagesTokens(

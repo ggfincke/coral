@@ -186,7 +186,10 @@ export function pruneToolResults(
   for (let i = startIndex; i < messages.length; i++)
   {
     const message = messages[i]!
-    if (message.role === 'assistant' && message.thinking)
+    if (
+      message.role === 'assistant' &&
+      (message.thinking || message.providerState)
+    )
     {
       thinkingIndices.push(i)
     }
@@ -226,7 +229,7 @@ export function pruneToolResults(
     {
       if (
         msg.role === 'assistant' &&
-        msg.thinking &&
+        (msg.thinking || msg.providerState) &&
         i >= startIndex &&
         !protectedThinking.has(i)
       )

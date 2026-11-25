@@ -1041,16 +1041,29 @@ export class Agent
     // keep the listing local sizing already fetches so search_code can be
     // gated on it w/o a second /api/tags request
     let listedModels: Model[] | undefined
+    let lookupError: unknown
     const resolved = await resolvePinnedContextWindow(
       {
         model: requestedModel,
         cwd: this.cwd,
         memory: resolveMemoryBudget(),
-        showModel: (model, requestSignal) =>
-          this.client.showModel(model, requestSignal),
+        showModel: async (model, requestSignal) =>
+        {
+          try
+          {
+            return await this.client.showModel(model, requestSignal)
+          }
+          catch (err)
+          {
+            lookupError = err
+            throw err
+          }
+        },
         listModels: async (requestSignal) =>
         {
-          listedModels = await this.client.listModels(requestSignal)
+          listedModels = await this.client.listModels(requestSignal, {
+            localOnly: true,
+          })
           return listedModels
         },
       },
@@ -1067,6 +1080,16 @@ export class Agent
     {
       this.embeddingModelMissing = embeddingModelMissing
       this.toolCatalog = this.createToolCatalog()
+    }
+
+    // a hosted ref whose limits could not be read stays unpinned and fails
+    // this turn, since the local fallback budget would cap its output; the
+    // next turn retries the lookup
+    if (resolved === undefined && this.isHostedModel())
+    {
+      throw lookupError instanceof Error
+        ? lookupError
+        : new Error(`Could not read the limits of ${requestedModel}`)
     }
 
     // use the request-budget fallback when model metadata is unavailable;
@@ -1105,6 +1128,13 @@ export class Agent
     this.replaceSystemPrompt(this.buildSystemContent(this.model))
 
     return this.contextWindowSize
+  }
+
+  // hosted behavior follows the model ref; hostedOutputTokens only sizes the
+  // budget and stays unset until the provider's limits are known
+  private isHostedModel(): boolean
+  {
+    return parseModelRef(this.model).provider !== 'ollama'
   }
 
   // append through the conversation invariant owner
@@ -1942,7 +1972,7 @@ export class Agent
         // tools natively, so JSON in their answers is never executed
         if (
           toolCalls.length === 0 &&
-          this.hostedOutputTokens === undefined &&
+          !this.isHostedModel() &&
           fullContent.trim()
         )
         {
@@ -2016,7 +2046,7 @@ export class Agent
           // local thinking without visible content is also a stalled response
           if (
             !fullContent.trim() &&
-            (!fullThinking.trim() || this.hostedOutputTokens === undefined) &&
+            (!fullThinking.trim() || !this.isHostedModel()) &&
             stallNudges < MAX_STALL_NUDGES
           )
           {
@@ -2028,7 +2058,7 @@ export class Agent
 
           if (
             !actionNudged &&
-            this.hostedOutputTokens === undefined &&
+            !this.isHostedModel() &&
             looksLikeUnfinishedAction(fullContent)
           )
           {
@@ -2041,7 +2071,7 @@ export class Agent
           // reprompt a botched call that repair could not recover
           if (
             reprompts < MAX_REPROMPTS &&
-            this.hostedOutputTokens === undefined &&
+            !this.isHostedModel() &&
             fullContent.trim() &&
             looksLikeAttemptedToolCall(fullContent, this.toolCatalog.names)
           )

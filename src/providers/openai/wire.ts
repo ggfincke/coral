@@ -20,15 +20,16 @@ import type {
 import type { HostedEffort } from '../config.js'
 import type { BillingUsage } from '../../types/session-cost.js'
 import { isPlainObject } from '../../utils/guards.js'
+import { tryParseJson } from '../../utils/json.js'
+import {
+  hostedOutputBudget,
+  INTERRUPTED_TOOL_RESULT,
+  malformedArgumentsError,
+  orphanToolResultText,
+  syntheticCallId,
+} from '../hosted-wire.js'
 
 export const OPENAI_PROVIDER = 'openai'
-
-const DEFAULT_MAX_OUTPUT_TOKENS = 16_000
-// reasoning tokens count against max_output_tokens, so tiny utility calls such
-// as session titles run at minimal effort with room left for the answer
-const SHORT_REQUEST_TOKENS = 1_024
-const MIN_MAX_OUTPUT_TOKENS = 2_048
-const INTERRUPTED_TOOL_RESULT = 'Error: Tool call interrupted'
 
 interface OpenAIModelLimits
 {
@@ -94,11 +95,6 @@ function effortFor(
   return configured
 }
 
-export function syntheticCallId(messageIndex: number, callIndex: number)
-{
-  return `coral_${messageIndex}_${callIndex}`
-}
-
 // replay encrypted reasoning only into the model that produced it
 function replayableReasoning(
   message: ModelRequestMessage,
@@ -161,7 +157,7 @@ export function toOpenAIInput(
       {
         input.push({
           role: 'user',
-          content: `Tool result (${message.tool_name ?? 'unknown'}):\n${output}`,
+          content: orphanToolResultText(message.tool_name, output),
         })
         return
       }
@@ -219,17 +215,13 @@ export function toOpenAIRequest(
 {
   const { instructions, input } = toOpenAIInput(request.messages, request.model)
   const tools = toOpenAITools(request.tools)
-  const requested =
-    request.num_predict && request.num_predict > 0
-      ? request.num_predict
-      : DEFAULT_MAX_OUTPUT_TOKENS
-  const shortRequest = requested < SHORT_REQUEST_TOKENS
+  const { maxOutputTokens, shortRequest } = hostedOutputBudget(request)
   return {
     model: request.model,
     ...(instructions ? { instructions } : {}),
     input,
     ...(tools.length > 0 ? { tools } : {}),
-    max_output_tokens: Math.max(requested, MIN_MAX_OUTPUT_TOKENS),
+    max_output_tokens: maxOutputTokens,
     reasoning: {
       effort: effortFor(request.think, effort, request.model, shortRequest),
       summary: 'auto',
@@ -240,37 +232,27 @@ export function toOpenAIRequest(
   }
 }
 
-function parseArguments(raw: string): Record<string, unknown>
-{
-  try
-  {
-    const value: unknown = JSON.parse(raw)
-    return value && typeof value === 'object' && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {}
-  }
-  catch
-  {
-    return {}
-  }
-}
-
+// a call still streaming when the response ended is never whole, so only
+// finished items become calls
 function toolCallsFrom(response: Response): OllamaToolCall[]
 {
   return response.output.flatMap((item) =>
-    item.type === 'function_call'
-      ? [
-          {
-            id: item.call_id,
-            type: 'function' as const,
-            function: {
-              name: item.name,
-              arguments: parseArguments(item.arguments),
-            },
-          },
-        ]
-      : []
-  )
+  {
+    if (item.type !== 'function_call') return []
+    if (item.status !== undefined && item.status !== 'completed') return []
+    const args = tryParseJson(item.arguments)
+    if (!isPlainObject(args))
+    {
+      throw malformedArgumentsError('OpenAI model', item.name)
+    }
+    return [
+      {
+        id: item.call_id,
+        type: 'function' as const,
+        function: { name: item.name, arguments: args },
+      },
+    ]
+  })
 }
 
 function refusalFrom(response: Response): string | undefined
@@ -332,6 +314,33 @@ export function billingUsageFrom(response: Response): BillingUsage | undefined
   }
 }
 
+// the stream resolves on any clean end, so every status other than completed
+// or an output-limit cut is a failed turn; returns true for that cut
+function checkTerminalStatus(response: Response): boolean
+{
+  if (response.status === 'completed') return false
+  if (response.status === 'failed')
+  {
+    const detail = response.error?.message
+    throw new Error(`OpenAI response failed${detail ? `: ${detail}` : ''}`)
+  }
+  if (response.status === 'incomplete')
+  {
+    const reason = response.incomplete_details?.reason
+    if (reason === 'max_output_tokens') return true
+    if (reason === 'content_filter')
+    {
+      throw new Error('OpenAI content filter stopped this response')
+    }
+    throw new Error(
+      `OpenAI response is incomplete (${reason ?? 'no reason given'})`
+    )
+  }
+  throw new Error(
+    `OpenAI response ended unfinished (${response.status ?? 'no status'})`
+  )
+}
+
 // translate a finished response into Coral's single terminal stream chunk
 export function finalChunkFrom(
   response: Response,
@@ -341,18 +350,9 @@ export function finalChunkFrom(
   const refusal = refusalFrom(response)
   if (refusal) throw new Error(`OpenAI model refused this request: ${refusal}`)
 
-  const toolCalls = toolCallsFrom(response)
-  if (
-    response.status === 'incomplete' &&
-    response.incomplete_details?.reason === 'max_output_tokens' &&
-    toolCalls.length > 0
-  )
-  {
-    throw new Error(
-      'OpenAI model hit the output token limit mid tool call; the call was not run'
-    )
-  }
-
+  // a token-limit cut reports `length` and carries no calls
+  const truncated = checkTerminalStatus(response)
+  const toolCalls = truncated ? [] : toolCallsFrom(response)
   const usage = response.usage
   const providerState = providerStateFrom(response, model)
   return {
@@ -363,8 +363,10 @@ export function finalChunkFrom(
       ...(providerState ? { providerState } : {}),
     },
     done: true,
+    ...(truncated ? { done_reason: 'length' } : {}),
     prompt_eval_count: usage?.input_tokens ?? 0,
     eval_count: usage?.output_tokens ?? 0,
     cached_prompt_count: usage?.input_tokens_details?.cached_tokens ?? 0,
+    cache_write_count: usage?.input_tokens_details?.cache_write_tokens,
   }
 }

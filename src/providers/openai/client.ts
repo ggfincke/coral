@@ -10,6 +10,7 @@ import type {
   ModelInfo,
 } from '../../types/inference.js'
 import type { HostedProviderSettings } from '../config.js'
+import { isBillingRejectedStatus } from '../hosted-wire.js'
 import {
   billingUsageFrom,
   finalChunkFrom,
@@ -20,11 +21,11 @@ import {
 } from './wire.js'
 
 // translate SDK failures into short actionable text without request bodies
-function describeError(err: unknown, model?: string): Error
+function describeError(err: unknown, keySource: string, model?: string): Error
 {
   if (err instanceof OpenAI.AuthenticationError)
   {
-    return new Error('OpenAI rejected OPENAI_API_KEY (401)')
+    return new Error(`OpenAI rejected the API key from ${keySource} (401)`)
   }
   if (err instanceof OpenAI.PermissionDeniedError)
   {
@@ -106,7 +107,7 @@ export class OpenAIClient implements AgentInferenceClient
     catch (err)
     {
       if (signal?.aborted) throw err
-      throw describeError(err)
+      throw describeError(err, this.settings.apiKeySource)
     }
   }
 
@@ -162,10 +163,7 @@ export class OpenAIClient implements AgentInferenceClient
       settled = true
       if (
         err instanceof OpenAI.APIError &&
-        err.status !== undefined &&
-        err.status >= 400 &&
-        err.status < 500 &&
-        err.status !== 408
+        isBillingRejectedStatus(err.status)
       )
       {
         yield {
@@ -175,7 +173,7 @@ export class OpenAIClient implements AgentInferenceClient
         }
       }
       if (signal?.aborted) return
-      throw describeError(err, request.model)
+      throw describeError(err, this.settings.apiKeySource, request.model)
     }
     finally
     {

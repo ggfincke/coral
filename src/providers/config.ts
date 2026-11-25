@@ -1,8 +1,9 @@
 // src/providers/config.ts
 // hosted provider credentials and user-only tuning
 
+import { MIN_NUM_CTX } from '../config/context.js'
 import { loadUserConfig } from '../config/project-config.js'
-import { isPlainObject } from '../utils/guards.js'
+import { isPlainObject, positiveInteger } from '../utils/guards.js'
 import { execFileCommand } from '../utils/process.js'
 import type { HostedProvider } from './model-ref.js'
 
@@ -11,6 +12,8 @@ export type HostedEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export interface HostedProviderSettings
 {
   apiKey: string
+  // where the key came from, named when the provider rejects it
+  apiKeySource: string
   effort: HostedEffort
   // window ceiling; resent history makes it the per-turn cost cap
   maxContextTokens: number
@@ -31,13 +34,20 @@ export function apiKeyEnvName(provider: HostedProvider): string
   return API_KEY_ENV[provider]
 }
 
+interface ResolvedApiKey
+{
+  key: string
+  source: string
+}
+
 // environment keys take precedence; linux desktop keys use the user's keyring
 async function resolveApiKey(
   provider: HostedProvider
-): Promise<string | undefined>
+): Promise<ResolvedApiKey | undefined>
 {
-  const envKey = process.env[API_KEY_ENV[provider]]?.trim()
-  if (envKey) return envKey
+  const envName = API_KEY_ENV[provider]
+  const envKey = process.env[envName]?.trim()
+  if (envKey) return { key: envKey, source: envName }
   if (process.platform !== 'linux') return undefined
 
   const result = await execFileCommand(
@@ -45,14 +55,17 @@ async function resolveApiKey(
     ['lookup', 'application', 'coral', 'provider', provider],
     { timeout: 2_000, maxBuffer: 16_384 }
   )
-  return result.ok ? result.stdout.trim() || undefined : undefined
+  const key = result.ok ? result.stdout.trim() : ''
+  return key
+    ? { key, source: `the keyring (application coral, provider ${provider})` }
+    : undefined
 }
 
 export async function hasHostedCredentials(
   provider: HostedProvider
 ): Promise<boolean>
 {
-  return Boolean(await resolveApiKey(provider))
+  return (await resolveApiKey(provider)) !== undefined
 }
 
 // read ~/.coral.json providers.<name>; malformed fields fall back to defaults
@@ -60,8 +73,8 @@ export async function resolveHostedSettings(
   provider: HostedProvider
 ): Promise<HostedProviderSettings>
 {
-  const apiKey = await resolveApiKey(provider)
-  if (!apiKey)
+  const credential = await resolveApiKey(provider)
+  if (!credential)
   {
     throw new Error(
       `${API_KEY_ENV[provider]} is not set and no keyring credential was found for ${provider}/ models`
@@ -75,12 +88,17 @@ export async function resolveHostedSettings(
     typeof section.effort === 'string' && EFFORTS.has(section.effort)
       ? (section.effort as HostedEffort)
       : DEFAULT_HOSTED_EFFORT
-  const maxContextTokens =
-    typeof section.maxContextTokens === 'number' &&
-    Number.isFinite(section.maxContextTokens) &&
-    section.maxContextTokens > 0
-      ? Math.floor(section.maxContextTokens)
-      : DEFAULT_HOSTED_MAX_CONTEXT_TOKENS
+  // a ceiling below the minimum window would leave too little room to work
+  const maxContextTokens = Math.max(
+    MIN_NUM_CTX,
+    positiveInteger(section.maxContextTokens) ??
+      DEFAULT_HOSTED_MAX_CONTEXT_TOKENS
+  )
 
-  return { apiKey, effort, maxContextTokens }
+  return {
+    apiKey: credential.key,
+    apiKeySource: credential.source,
+    effort,
+    maxContextTokens,
+  }
 }

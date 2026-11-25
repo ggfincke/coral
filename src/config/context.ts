@@ -4,7 +4,7 @@
 import { loadProjectConfig, loadUserConfig } from './project-config.js'
 import { modelLookupKey } from '../ollama/model-name.js'
 import type { Model, ModelInfo } from '../types/inference.js'
-import { isPlainObject } from '../utils/guards.js'
+import { isPlainObject, positiveInteger } from '../utils/guards.js'
 import type { MemoryBudget, MemoryKind } from './memory-budget.js'
 
 // reserve a fixed fraction of unified memory for the GPU on Apple Silicon
@@ -70,34 +70,28 @@ export interface ResolvedContextWindow
   hostedNativeContext?: number
 }
 
+function envInteger(name: string): number | undefined
+{
+  return positiveInteger(Number.parseInt(process.env[name] ?? '', 10))
+}
+
 function envNumCtx(): number | undefined
 {
-  const env = Number.parseInt(process.env.CORAL_NUM_CTX ?? '', 10)
-  return Number.isFinite(env) && env > 0 ? env : undefined
+  return envInteger('CORAL_NUM_CTX')
 }
 
 // resolve independent context and local prompt ceilings, preferring the environment
 export function resolveContextConfig(cwd: string): ContextConfig
 {
   const raw = loadProjectConfig(cwd).context
+  const section = isPlainObject(raw) ? raw : {}
   const config: ContextConfig = {}
-  for (const key of ['maxNumCtx', 'maxPromptTokens'] as const)
-  {
-    const env =
-      key === 'maxNumCtx'
-        ? envNumCtx()
-        : Number.parseInt(process.env.CORAL_MAX_PROMPT_TOKENS ?? '', 10)
-    const configured = isPlainObject(raw) ? raw[key] : undefined
-    const value =
-      typeof env === 'number' && Number.isFinite(env) && env > 0
-        ? env
-        : configured
-    if (typeof value === 'number' && Number.isFinite(value) && value >= 1)
-    {
-      config[key] = Math.floor(value)
-    }
-  }
-
+  const maxNumCtx = envNumCtx() ?? positiveInteger(section.maxNumCtx)
+  if (maxNumCtx !== undefined) config.maxNumCtx = maxNumCtx
+  const maxPromptTokens =
+    envInteger('CORAL_MAX_PROMPT_TOKENS') ??
+    positiveInteger(section.maxPromptTokens)
+  if (maxPromptTokens !== undefined) config.maxPromptTokens = maxPromptTokens
   return config
 }
 

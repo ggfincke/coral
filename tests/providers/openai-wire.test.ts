@@ -88,7 +88,7 @@ test('the terminal chunk keeps call ids, cached usage, and reasoning state', () 
     ],
     usage: {
       input_tokens: 12_000,
-      input_tokens_details: { cached_tokens: 11_000 },
+      input_tokens_details: { cached_tokens: 11_000, cache_write_tokens: 500 },
       output_tokens: 300,
     },
   } as unknown as Response
@@ -98,6 +98,8 @@ test('the terminal chunk keeps call ids, cached usage, and reasoning state', () 
   assert.equal(chunk.done, true)
   assert.equal(chunk.prompt_eval_count, 12_000)
   assert.equal(chunk.cached_prompt_count, 11_000)
+  assert.equal(chunk.cache_write_count, 500)
+  assert.equal(chunk.done_reason, undefined)
   assert.deepEqual(chunk.message.tool_calls, [
     {
       id: 'call_next',
@@ -110,4 +112,82 @@ test('the terminal chunk keeps call ids, cached usage, and reasoning state', () 
     model: MODEL,
     items: [reasoningItem],
   })
+})
+
+const partialCall = {
+  type: 'function_call',
+  call_id: 'call_1',
+  name: 'git_push',
+  arguments: '{"remote":"ori',
+  status: 'in_progress',
+}
+
+function endedResponse(fields: Record<string, unknown>): Response
+{
+  return {
+    status: 'completed',
+    error: null,
+    incomplete_details: null,
+    output: [],
+    usage: undefined,
+    ...fields,
+  } as unknown as Response
+}
+
+test('failed, unfinished, and filtered responses fail instead of finishing', () =>
+{
+  for (const [fields, pattern] of [
+    [
+      {
+        status: 'failed',
+        error: { code: 'server_error', message: 'The server had an error' },
+        output: [partialCall],
+      },
+      /failed: The server had an error/,
+    ],
+    [{ status: 'in_progress', output: [partialCall] }, /in_progress/],
+    [
+      {
+        status: 'incomplete',
+        incomplete_details: { reason: 'content_filter' },
+      },
+      /content filter/,
+    ],
+  ] as const)
+  {
+    assert.throws(() => finalChunkFrom(endedResponse(fields), MODEL), pattern)
+  }
+})
+
+test('an output-limit cut reports length and drops the unfinished call', () =>
+{
+  const chunk = finalChunkFrom(
+    endedResponse({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: [partialCall],
+    }),
+    MODEL
+  )
+  assert.equal(chunk.done_reason, 'length')
+  assert.equal(chunk.message.tool_calls, undefined)
+})
+
+test('a completed call with malformed arguments never runs', () =>
+{
+  const response = endedResponse({
+    output: [
+      {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'list_files',
+        arguments: '{"path":',
+        status: 'completed',
+      },
+    ],
+  })
+  assert.throws(
+    () => finalChunkFrom(response, MODEL),
+    /malformed arguments for list_files/
+  )
 })

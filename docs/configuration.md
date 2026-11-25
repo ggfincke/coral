@@ -96,10 +96,10 @@ Hosted model tuning lives only in the user file, so a cloned repository cannot r
 }
 ```
 
-| Key                                 | Type                                                    | Default if missing/malformed |
-| ----------------------------------- | ------------------------------------------------------- | ---------------------------- |
-| `providers.<name>.effort`           | `low` \| `medium` \| `high` \| `xhigh` \| `max`         | `high`                       |
-| `providers.<name>.maxContextTokens` | number `> 0` (floored), capped by the model's own limit | `200000`                     |
+| Key                                 | Type                                                                               | Default if missing/malformed |
+| ----------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------- |
+| `providers.<name>.effort`           | `low` \| `medium` \| `high` \| `xhigh` \| `max`                                    | `high`                       |
+| `providers.<name>.maxContextTokens` | number `>= 1` (floored, raised to at least 8,192), capped by the model's own limit | `200000`                     |
 
 Coral resends history on every turn, so `maxContextTokens` is effectively the per-turn cost ceiling. `--no-think` maps to effort `low` on Anthropic and `none` on OpenAI models that support it.
 
