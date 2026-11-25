@@ -40,6 +40,8 @@ import {
   formatRunningTitle,
 } from './shell/title.js'
 import { useCoralInput } from './input/use-coral-input.js'
+import { buildKey } from './input/terminal-input.js'
+import { useLiveState } from './input/use-live-state.js'
 import { useTerminalModes } from './input/use-terminal-modes.js'
 
 // queued-message rows shown above the composer before an overflow summary
@@ -233,7 +235,7 @@ export default function App({
   // body scroll position inside the active approval/confirm prompt
   const [lockedPromptId, setLockedPromptId] = useState<number | null>(null)
   // rejection reason being typed for one tool prompt; keyed so it self-resets
-  const [rejectReason, setRejectReason] = useState<{
+  const [rejectReason, rejectReasonRef, setRejectReason] = useLiveState<{
     promptId: number
     draft: string
   } | null>(null)
@@ -1099,7 +1101,14 @@ export default function App({
         }
       }
 
-      if (activePrompt && reasonDraft !== null)
+      // an earlier key of this stdin read may have edited the reason
+      const liveReason = rejectReasonRef.current
+      const liveReasonDraft =
+        activePrompt?.kind === 'tool' &&
+        liveReason?.promptId === activePrompt.id
+          ? liveReason.draft
+          : null
+      if (activePrompt && liveReasonDraft !== null)
       {
         // modifier chords keep their meaning; everything else edits the reason
         if (key.ctrl || key.meta)
@@ -1109,14 +1118,14 @@ export default function App({
           else if (chord === 'locked') setLockedPromptId(activePrompt.id)
           return
         }
-        const step = reduceRejectReasonKey(reasonDraft, ch, key)
+        const step = reduceRejectReasonKey(liveReasonDraft, ch, key)
         if (step.kind === 'edit')
         {
           setRejectReason({ promptId: activePrompt.id, draft: step.draft })
         }
         else if (step.kind === 'submit')
         {
-          const reason = reasonDraft.trim()
+          const reason = liveReasonDraft.trim()
           settlePrompt(
             activePrompt.id,
             reason ? { approved: false, reason } : false
@@ -1216,6 +1225,19 @@ export default function App({
     },
     {
       isActive: terminalTooSmall || pickerVisible || Boolean(activePrompt),
+      // a paste only types into a rejection reason; approval choices drop it
+      onPaste: (text) =>
+      {
+        const liveReason = rejectReasonRef.current
+        if (
+          activePrompt?.kind !== 'tool' ||
+          liveReason?.promptId !== activePrompt.id
+        )
+          return
+        const step = reduceRejectReasonKey(liveReason.draft, text, buildKey())
+        if (step.kind === 'edit')
+          setRejectReason({ promptId: activePrompt.id, draft: step.draft })
+      },
     }
   )
 

@@ -11,6 +11,7 @@ import {
   filterPaletteEntries,
   reducePaletteInput,
 } from '../../src/tui/palette/palette.js'
+import { reduceSessionPickerInput } from '../../src/tui/sessions/picker.js'
 import type { CommandInfo } from '../../src/tui/commands/contracts.js'
 import type { KeybindingSummary } from '../../src/tui/input/keybindings.js'
 
@@ -82,6 +83,21 @@ describe('command palette', () =>
       ),
       { handled: true, state: { query: 'jk', selectedIndex: 1 } }
     )
+  })
+
+  test('palette and session filters take whole tokens and delete graphemes', () =>
+  {
+    for (const reduce of [reducePaletteInput, reduceSessionPickerInput])
+    {
+      const start = { query: '', selectedIndex: 0 }
+      assert.equal(reduce(start, 'abc', {}, 4).state.query, 'abc')
+      assert.equal(reduce(start, '🔥', {}, 4).state.query, '🔥')
+      assert.equal(
+        reduce({ query: 'a🔥', selectedIndex: 0 }, '', { backspace: true }, 4)
+          .state.query,
+        'a'
+      )
+    }
   })
 
   test('buildPaletteLines keeps the selected entry visible in short viewports', () =>

@@ -23,9 +23,11 @@ export function useTerminalModes({
   const { suspendTerminal: suspendInk } = useApp()
   // ink 8 types stdout as a bare WritableStream; render() still uses process.stdout
   const stdout = useStdout().stdout as typeof process.stdout
-  const { internal_eventEmitter } = useStdin() as unknown as {
-    internal_eventEmitter: EventEmitter
-  }
+  const { internal_eventEmitter, setBracketedPasteMode } =
+    useStdin() as unknown as {
+      internal_eventEmitter: EventEmitter
+      setBracketedPasteMode: (isEnabled: boolean) => void
+    }
   const [focused, setFocused] = useState<boolean | null>(null)
   const mountedRef = useRef(false)
   const suspendedRef = useRef(false)
@@ -63,6 +65,20 @@ export function useTerminalModes({
     },
     [suspendInk, writeModes]
   )
+
+  // * bracketed paste & one paste listener live as long as the App, so Ink never
+  // replays a paste as keys to an overlay or approval prompt
+  useEffect(() =>
+  {
+    const dropPaste = () => undefined
+    setBracketedPasteMode(true)
+    internal_eventEmitter.on('paste', dropPaste)
+    return () =>
+    {
+      internal_eventEmitter.removeListener('paste', dropPaste)
+      setBracketedPasteMode(false)
+    }
+  }, [internal_eventEmitter, setBracketedPasteMode])
 
   useEffect(() =>
   {

@@ -1,7 +1,7 @@
 // src/tui/palette/command-palette.tsx
 // interactive command palette for slash commands and keybindings
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
   buildPaletteLines,
   filterPaletteEntries,
@@ -9,6 +9,8 @@ import {
   type PaletteEntry,
 } from './palette.js'
 import { useCoralInput } from '../input/use-coral-input.js'
+import { useLiveState } from '../input/use-live-state.js'
+import { appendDraftInput } from '../prompt/grapheme.js'
 import type { CoralKey } from '../input/terminal-input.js'
 import { LineList } from '../components/line-list.js'
 
@@ -36,8 +38,11 @@ export default function CommandPalette({
   onClose,
 }: CommandPaletteProps)
 {
-  const [query, setQuery] = useState('')
-  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [filter, filterRef, setFilter] = useLiveState({
+    query: '',
+    selectedIndex: 0,
+  })
+  const { query, selectedIndex } = filter
   const matches = useMemo(
     () => filterPaletteEntries(entries, query),
     [entries, query]
@@ -67,9 +72,17 @@ export default function CommandPalette({
         onClose()
         return
       }
+      // keys earlier in the same stdin read may have changed the filter
+      const live = filterRef.current
+      const liveMatches =
+        live === filter ? matches : filterPaletteEntries(entries, live.query)
+      const liveIndex = Math.min(
+        live.selectedIndex,
+        Math.max(liveMatches.length - 1, 0)
+      )
       if (key.return)
       {
-        const selected = matches[safeIndex]
+        const selected = liveMatches[liveIndex]
         if (selected?.command || selected?.action)
         {
           onSelect(selected)
@@ -78,18 +91,21 @@ export default function CommandPalette({
       }
 
       const next = reducePaletteInput(
-        { query, selectedIndex: safeIndex },
+        { query: live.query, selectedIndex: liveIndex },
         input,
         key,
-        matches.length
+        liveMatches.length
       )
-      if (next.handled)
-      {
-        setQuery(next.state.query)
-        setSelectedIndex(next.state.selectedIndex)
-      }
+      if (next.handled) setFilter(next.state)
     },
-    { isActive: active }
+    {
+      isActive: active,
+      onPaste: (text) =>
+        setFilter((live) => ({
+          query: appendDraftInput(live.query, text),
+          selectedIndex: 0,
+        })),
+    }
   )
 
   return <LineList lines={lines} />

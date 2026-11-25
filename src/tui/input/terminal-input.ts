@@ -86,29 +86,6 @@ export function buildKey(overrides: Partial<CoralKey> = {}): CoralKey
   }
 }
 
-// post-tokenization checks — operate on input strings where ESC may be stripped
-const PARSED_MOUSE_RE = new RegExp(`^(?:${ESC})?\\[<\\d+;\\d+;\\d+[Mm]$`)
-const PARSED_MOUSE_FRAGMENT_RE = new RegExp(`^(?:${ESC})?\\[<[0-9;]*$`)
-const PARSED_PASTE_RE = new RegExp(`^(?:${ESC})?\\[(?:200|201)~$`)
-const PARSED_FOCUS_RE = new RegExp(`^(?:${ESC})?\\[[IO]$`)
-
-export function isParsedControlSequence(input: string): boolean
-{
-  return (
-    PARSED_MOUSE_RE.test(input) ||
-    PARSED_MOUSE_FRAGMENT_RE.test(input) ||
-    PARSED_PASTE_RE.test(input) ||
-    PARSED_FOCUS_RE.test(input)
-  )
-}
-
-// a partial/incomplete SGR-mouse sequence — callers test this before
-// isParsedControlSequence (which subsumes this regex) to buffer vs discard
-export function isParsedControlFragment(input: string): boolean
-{
-  return PARSED_MOUSE_FRAGMENT_RE.test(input)
-}
-
 function parseMouseWheelPacket(input: string): 'up' | 'down' | 'other' | null
 {
   const match = input.match(SGR_MOUSE_PACKET_RE)
@@ -147,6 +124,34 @@ function findNextControlIndex(input: string): number
   )
 
   return indexes.length > 0 ? Math.min(...indexes) : -1
+}
+
+// C0 controls & DEL except ESC: Enter, Tab, and ctrl keys typed in a burst
+function isControlByte(code: number): boolean
+{
+  return (code < 0x20 && code !== 0x1b) || code === 0x7f
+}
+
+// Ink splits only backspace & ctrl+c out of a text run, so `fix it\r` would be
+// one event; give each control byte its own token. an ESC-led run is one
+// escape sequence from Ink's parser and stays whole
+function pushTextRun(tokens: string[], run: string): void
+{
+  if (run.startsWith(ESC))
+  {
+    tokens.push(run)
+    return
+  }
+
+  let start = 0
+  for (let index = 0; index < run.length; index++)
+  {
+    if (!isControlByte(run.charCodeAt(index))) continue
+    if (index > start) tokens.push(run.slice(start, index))
+    tokens.push(run[index]!)
+    start = index + 1
+  }
+  if (start < run.length) tokens.push(run.slice(start))
 }
 
 export function tokenizeTerminalChunk(
@@ -191,13 +196,21 @@ export function tokenizeTerminalChunk(
     const nextControlIndex = findNextControlIndex(remaining)
     if (nextControlIndex === -1)
     {
-      tokens.push(remaining)
+      // a read can end inside the next packet; hold that tail for the next read
+      const tailStart = remaining.lastIndexOf(ESC)
+      const tail = tailStart > 0 ? remaining.slice(tailStart) : ''
+      if (tail && isControlFragment(tail))
+      {
+        pushTextRun(tokens, remaining.slice(0, tailStart))
+        return { tokens, pending: tail }
+      }
+      pushTextRun(tokens, remaining)
       return { tokens, pending: '' }
     }
 
     if (nextControlIndex > 0)
     {
-      tokens.push(remaining.slice(0, nextControlIndex))
+      pushTextRun(tokens, remaining.slice(0, nextControlIndex))
       remaining = remaining.slice(nextControlIndex)
       continue
     }
@@ -264,6 +277,12 @@ export function toInputEvent(packet: string): ParsedInputEvent | null
     input = ''
   }
 
+  // an escape sequence that names no key (F13+, unmapped CSI) is not text; a
+  // meta chord is ESC plus one character
+  if (input.startsWith(ESC) && !keypress.name && [...input].length > 2)
+  {
+    input = ''
+  }
   if (input.startsWith('\u001B'))
   {
     input = input.slice(1)

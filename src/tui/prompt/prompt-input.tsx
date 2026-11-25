@@ -12,12 +12,8 @@ import {
 import { Box, Text, usePaste } from 'ink'
 import { style } from '../theme.js'
 import { useCoralInput } from '../input/use-coral-input.js'
-import {
-  buildKey,
-  isParsedControlSequence,
-  isParsedControlFragment,
-  type CoralKey,
-} from '../input/terminal-input.js'
+import { useLiveState } from '../input/use-live-state.js'
+import { buildKey, type CoralKey } from '../input/terminal-input.js'
 import {
   matchPromptKeybinding,
   resolveOverrideAction,
@@ -44,6 +40,11 @@ import {
   updateHistorySearchQuery,
   type HistorySearchState,
 } from './history-search.js'
+import {
+  appendDraftInput,
+  deleteDraftGrapheme,
+  graphemeOffsets,
+} from './grapheme.js'
 import type { HistoryEntry } from './input-history.js'
 import {
   applyVimInput,
@@ -142,6 +143,17 @@ interface CursorState
   cursorWidth: number
 }
 
+// the draft & cursor as of the last handled key, ahead of the render
+interface LiveDraft
+{
+  value: string
+  cursorOffset: number
+}
+
+// a key or paste that arrived after a submit, waiting for the parent's
+// answer to render
+type HeldKey = { input: string; key: CoralKey } | { paste: string }
+
 const EMPTY_HISTORY_ENTRIES: readonly HistoryEntry[] = []
 const INITIAL_RESET: PromptReset = { epoch: 0, kind: 'external' }
 
@@ -190,18 +202,21 @@ export default function PromptInput({
     cursorOffset: value.length,
     cursorWidth: 0,
   })
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  const [dismissed, setDismissed] = useState(false)
+  // * key handlers edit draftRef, never the render closure: Ink delivers every
+  // key of one stdin read before React renders, so `value` can be stale
+  const draftRef = useRef<LiveDraft>({ value, cursorOffset: value.length })
+  const [selectedIndex, selectedIndexRef, setSelectedIndex] = useLiveState(0)
+  const [dismissed, dismissedRef, setDismissed] = useLiveState(false)
   const [files, setFiles] = useState<string[]>([])
   const filesCacheKeyRef = useRef(filesCacheKey)
   const fileRequestIdRef = useRef(0)
   const mountedRef = useRef(true)
-  const pendingTerminalSequenceRef = useRef('')
   // paste tokens map to their stored full text for send-time expansion; ids
   // stay monotonic so a hand-typed lookalike can never resolve to a token
   const pasteRegistryRef = useRef(new Map<number, string>())
   const nextPasteIdRef = useRef(1)
-  const [pendingPasteConfirm, setPendingPasteConfirm] = useState(false)
+  const [pendingPasteConfirm, pasteConfirmRef, setPendingPasteConfirm] =
+    useLiveState(false)
   const [droppedChars, setDroppedChars] = useState(0)
   const [pasteRejected, setPasteRejected] = useState(false)
   const resetEpochRef = useRef(reset.epoch)
@@ -216,7 +231,8 @@ export default function PromptInput({
     preferredColRef.current = null
   }, [width, value])
   // ctrl+r reverse search: state here, pre-search composer snapshot in a ref
-  const [search, setSearch] = useState<HistorySearchState>(IDLE_HISTORY_SEARCH)
+  const [search, searchRef, setSearch] =
+    useLiveState<HistorySearchState>(IDLE_HISTORY_SEARCH)
   const searchSavedRef = useRef<{ value: string; cursorOffset: number }>({
     value: '',
     cursorOffset: 0,
@@ -263,7 +279,6 @@ export default function PromptInput({
       {
         vimEngineRef.current = createVimEngine(value)
         // retire imperative editor state before another input frame arrives
-        // eslint-disable-next-line react-hooks/set-state-in-effect
         setVimMode('normal')
       }
       else
@@ -280,16 +295,30 @@ export default function PromptInput({
     preferredColRef.current = null
     searchSavedRef.current = { value: '', cursorOffset: 0 }
     setSearch(IDLE_HISTORY_SEARCH)
+    draftRef.current = { value, cursorOffset: value.length }
     setCursor({ value, cursorOffset: value.length, cursorWidth: 0 })
     setPendingPasteConfirm(false)
     setDroppedChars(0)
     setPasteRejected(false)
     setDismissed(false)
     setSelectedIndex(0)
-  }, [reset.epoch, reset.kind, value])
+  }, [
+    reset.epoch,
+    reset.kind,
+    value,
+    setDismissed,
+    setPendingPasteConfirm,
+    setSearch,
+    setSelectedIndex,
+  ])
   // move the cursor to the end when external value changes invalidate its
-  // controlled position
+  // controlled position; own edits always set value & cursor together
   const hasExternalValue = value !== cursor.value
+  useLayoutEffect(() =>
+  {
+    if (hasExternalValue)
+      draftRef.current = { value, cursorOffset: value.length }
+  }, [hasExternalValue, value])
   const resolvedCursor = useMemo(
     () => ({
       value,
@@ -338,7 +367,7 @@ export default function PromptInput({
     setFiles(reset.files)
     setSelectedIndex(reset.selectedIndex)
     setDismissed(reset.dismissed)
-  }, [filesCacheKey])
+  }, [filesCacheKey, setDismissed, setSelectedIndex])
 
   useEffect(() =>
   {
@@ -380,20 +409,44 @@ export default function PromptInput({
     }
   }, [filesCacheKey, needFiles, refreshFiles])
 
-  // splice the highlighted suggestion into the prompt and close the menu
+  // every draft or cursor change lands here first, so the next key of the same
+  // stdin read sees it; returns whether the text changed
+  const applyDraft = useCallback(
+    (nextValue: string, cursorOffset: number, cursorWidth = 0): boolean =>
+    {
+      const changed = nextValue !== draftRef.current.value
+      draftRef.current = { value: nextValue, cursorOffset }
+      setCursor({ value: nextValue, cursorOffset, cursorWidth })
+      if (changed) onChange(nextValue)
+      return changed
+    },
+    [onChange]
+  )
+
+  // keys after a submit in the same stdin read wait for the commit that
+  // carries the parent's answer (clear, queue, or keep), then replay
+  const heldKeysRef = useRef<HeldKey[] | null>(null)
+  const [submitCount, setSubmitCount] = useState(0)
+  const submitDraft = useCallback(
+    (text: string, kind: PromptSubmitKind) =>
+    {
+      heldKeysRef.current = []
+      setSubmitCount((count) => count + 1)
+      onSubmit(text, kind)
+    },
+    [onSubmit]
+  )
+
+  // splice the highlighted suggestion into the prompt and close the menu; the
+  // caller checked that the rendered menu still matches the live draft
   const acceptCompletion = useCallback(() =>
   {
     if (!query || items.length === 0) return
-    const item = items[Math.min(selectedIndex, items.length - 1)]!
-    const next = applyCompletion(value, query, item)
-    setCursor({
-      value: next.value,
-      cursorOffset: next.cursorOffset,
-      cursorWidth: 0,
-    })
+    const item = items[Math.min(selectedIndexRef.current, items.length - 1)]!
+    const next = applyCompletion(draftRef.current.value, query, item)
     setSelectedIndex(0)
-    if (next.value !== value) onChange(next.value)
-  }, [items, onChange, query, selectedIndex, value])
+    applyDraft(next.value, next.cursorOffset)
+  }, [applyDraft, items, query, selectedIndexRef, setSelectedIndex])
 
   // every mutation funnels through here so undo capture, menu state, & the
   // vertical column intent stay consistent
@@ -409,14 +462,11 @@ export default function PromptInput({
     ) =>
     {
       // cursor-only moves end a typing run but never cost an undo press
+      const before = draftRef.current
       memoryRef.current =
-        next.value === value
+        next.value === before.value
           ? { ...memoryRef.current, lastOpCharInsert: false }
-          : pushUndo(
-              memoryRef.current,
-              { value, cursorOffset: resolvedCursor.cursorOffset },
-              op
-            )
+          : pushUndo(memoryRef.current, before, op)
       if (next.killed)
       {
         killRingRef.current = pushKill(killRingRef.current, next.killed)
@@ -425,14 +475,8 @@ export default function PromptInput({
       lastYankRef.current = null
       preferredColRef.current = null
 
-      setCursor({
-        value: next.value,
-        cursorOffset: next.cursorOffset,
-        cursorWidth: next.cursorWidth,
-      })
-      if (next.value !== value)
+      if (applyDraft(next.value, next.cursorOffset, next.cursorWidth))
       {
-        onChange(next.value)
         if (!next.value)
         {
           setPendingPasteConfirm(false)
@@ -442,42 +486,32 @@ export default function PromptInput({
         setSelectedIndex(0)
       }
     },
-    [onChange, resolvedCursor.cursorOffset, value]
+    [applyDraft, setDismissed, setPendingPasteConfirm, setSelectedIndex]
   )
 
   const undoEdit = useCallback(() =>
   {
-    const popped = popUndo(memoryRef.current, {
-      value,
-      cursorOffset: resolvedCursor.cursorOffset,
-    })
+    const live = draftRef.current
+    const popped = popUndo(memoryRef.current, live)
     memoryRef.current = popped.memory
     const restore = popped.restore
-    if (!restore || restore.value === value) return
+    if (!restore || restore.value === live.value) return
 
-    setCursor({
-      value: restore.value,
-      cursorOffset: restore.cursorOffset,
-      cursorWidth: 0,
-    })
-    onChange(restore.value)
+    applyDraft(restore.value, restore.cursorOffset)
     setDismissed(false)
     setSelectedIndex(0)
-  }, [onChange, resolvedCursor.cursorOffset, value])
+  }, [applyDraft, setDismissed, setSelectedIndex])
 
   const yankText = useCallback(
     (text: string) =>
     {
       if (!text) return
-      commitEdit(
-        insertTextAt(value, resolvedCursor.cursorOffset, text),
-        'other'
-      )
-      const start = resolvedCursor.cursorOffset
+      const start = draftRef.current.cursorOffset
+      commitEdit(insertTextAt(draftRef.current.value, start, text), 'other')
       lastYankRef.current = { start, end: start + text.length }
       killIndexRef.current = 0
     },
-    [commitEdit, resolvedCursor.cursorOffset, value]
+    [commitEdit]
   )
 
   const yankPopCycle = useCallback(() =>
@@ -488,19 +522,15 @@ export default function PromptInput({
 
     killIndexRef.current = nextKillIndex(ring.length, killIndexRef.current)
     const replacement = ring[killIndexRef.current] ?? ''
+    const live = draftRef.current.value
     const nextValue =
-      value.slice(0, span.start) + replacement + value.slice(span.end)
-    setCursor({
-      value: nextValue,
-      cursorOffset: span.start + replacement.length,
-      cursorWidth: 0,
-    })
-    onChange(nextValue)
+      live.slice(0, span.start) + replacement + live.slice(span.end)
+    applyDraft(nextValue, span.start + replacement.length)
     lastYankRef.current = {
       start: span.start,
       end: span.start + replacement.length,
     }
-  }, [onChange, value])
+  }, [applyDraft])
 
   // classify an edit for undo coalescing: plain single-character typing runs
   // collapse into one unit, everything else stands alone
@@ -521,18 +551,17 @@ export default function PromptInput({
   }, [])
 
   // leave search mode; restore=true puts the pre-search draft back untouched
-  const finishSearch = useCallback((restore: boolean) =>
-  {
-    const saved = searchSavedRef.current
-    setSearch(IDLE_HISTORY_SEARCH)
-    if (!restore) return
+  const finishSearch = useCallback(
+    (restore: boolean) =>
+    {
+      const saved = searchSavedRef.current
+      setSearch(IDLE_HISTORY_SEARCH)
+      if (!restore) return
 
-    setCursor({
-      value: saved.value,
-      cursorOffset: saved.cursorOffset,
-      cursorWidth: 0,
-    })
-  }, [])
+      applyDraft(saved.value, saved.cursorOffset)
+    },
+    [applyDraft, setSearch]
+  )
 
   const handleSearchInput = useCallback(
     (input: string, key: CoralKey) =>
@@ -552,19 +581,8 @@ export default function PromptInput({
       }
       if (key.return)
       {
-        const preview = historySearchPreview(
-          getHistoryEntries?.() ?? [],
-          search
-        )
-        if (preview !== null)
-        {
-          onChange(preview)
-          setCursor({
-            value: preview,
-            cursorOffset: preview.length,
-            cursorWidth: 0,
-          })
-        }
+        const preview = historySearchPreview(entries, searchRef.current)
+        if (preview !== null) applyDraft(preview, preview.length)
         setSearch(IDLE_HISTORY_SEARCH)
         return
       }
@@ -574,7 +592,7 @@ export default function PromptInput({
           updateHistorySearchQuery(
             entries,
             prev,
-            [...prev.query].slice(0, -1).join('')
+            deleteDraftGrapheme(prev.query)
           )
         )
         return
@@ -587,10 +605,14 @@ export default function PromptInput({
       }
 
       setSearch((prev) =>
-        updateHistorySearchQuery(entries, prev, prev.query + input)
+        updateHistorySearchQuery(
+          entries,
+          prev,
+          appendDraftInput(prev.query, input)
+        )
       )
     },
-    [finishSearch, getHistoryEntries, onChange, search]
+    [applyDraft, finishSearch, getHistoryEntries, searchRef, setSearch]
   )
 
   // splice pasted text at the cursor through the same edit path as typing so
@@ -598,19 +620,17 @@ export default function PromptInput({
   const insertPastedText = useCallback(
     (text: string) =>
     {
+      const live = draftRef.current
       const nextState = applyPromptEdit({
-        value,
+        value: live.value,
         input: text,
         key: buildKey(),
-        cursor: {
-          cursorOffset: resolvedCursor.cursorOffset,
-          cursorWidth: 0,
-        },
+        cursor: { cursorOffset: live.cursorOffset, cursorWidth: 0 },
       })
-      if (!nextState || nextState.value === value) return
+      if (!nextState || nextState.value === live.value) return
       commitEdit(nextState, 'other')
     },
-    [commitEdit, resolvedCursor.cursorOffset, value]
+    [commitEdit]
   )
 
   // bracketed pastes arrive on a channel useInput never sees; DECSET 2004
@@ -618,9 +638,14 @@ export default function PromptInput({
   const handlePaste = useCallback(
     (raw: string) =>
     {
+      if (heldKeysRef.current)
+      {
+        heldKeysRef.current.push({ paste: raw })
+        return
+      }
       const text = sanitizePastedText(raw)
       if (!text) return
-      if (search.active)
+      if (searchRef.current.active)
       {
         const entries = getHistoryEntries?.() ?? []
         setSearch((current) =>
@@ -642,7 +667,7 @@ export default function PromptInput({
       {
         // release payloads no draft, undo, yank, or vi register can reach
         const referenced = referencedPasteIds([
-          value,
+          draftRef.current.value,
           searchSavedRef.current.value,
           ...memoryRef.current.undoStack.map((snapshot) => snapshot.value),
           ...killRingRef.current,
@@ -669,7 +694,13 @@ export default function PromptInput({
       insertPastedText(buildPastePlaceholder(id, text))
       setPendingPasteConfirm(true)
     },
-    [getHistoryEntries, insertPastedText, search.active, value]
+    [
+      getHistoryEntries,
+      insertPastedText,
+      searchRef,
+      setPendingPasteConfirm,
+      setSearch,
+    ]
   )
   usePaste(handlePaste, { isActive: focus })
 
@@ -804,30 +835,28 @@ export default function PromptInput({
   const menuOpen = completionRows.some((row) => !row.detail)
 
   const handleInput = useCallback(
-    (input: string, key: CoralKey) =>
+    function handleKey(input: string, key: CoralKey): void
     {
-      setPasteRejected(false)
-      if (pendingTerminalSequenceRef.current)
+      if (heldKeysRef.current)
       {
-        const combinedInput = pendingTerminalSequenceRef.current + input
-
-        if (isParsedControlFragment(combinedInput))
-        {
-          pendingTerminalSequenceRef.current = combinedInput
-          return
-        }
-        if (isParsedControlSequence(combinedInput))
-        {
-          pendingTerminalSequenceRef.current = ''
-          return
-        }
-
-        pendingTerminalSequenceRef.current = ''
+        heldKeysRef.current.push({ input, key })
+        return
       }
+      setPasteRejected(false)
+      const live = draftRef.current
+      // the menu on screen was built for the rendered draft; once an earlier
+      // key of this stdin read changed the draft it no longer applies
+      const menuLive =
+        menuOpen &&
+        !dismissedRef.current &&
+        live.value === value &&
+        live.cursorOffset === resolvedCursor.cursorOffset
+      const menuIndex = Math.min(selectedIndexRef.current, items.length - 1)
+      const searching = searchRef.current.active
 
       if (key.ctrl && input === 'c')
       {
-        if (search.active) finishSearch(true)
+        if (searching) finishSearch(true)
         onInterrupt()
         return
       }
@@ -913,7 +942,7 @@ export default function PromptInput({
           editorBusyRef.current = true
           const editorEpoch = resetEpochRef.current
           void onOpenEditor(
-            expandPastePlaceholders(value, (id) =>
+            expandPastePlaceholders(live.value, (id) =>
               pasteRegistryRef.current.get(id)
             )
           )
@@ -951,27 +980,27 @@ export default function PromptInput({
 
       // ctrl+r opens reverse search over history; an active search owns every
       // key except ctrl+c, which cancels first then still interrupts
-      if (!search.active && getHistoryEntries && key.ctrl && input === 'r')
+      if (!searching && getHistoryEntries && key.ctrl && input === 'r')
       {
-        searchSavedRef.current = {
-          value,
-          cursorOffset: resolvedCursor.cursorOffset,
-        }
+        searchSavedRef.current = live
         setSearch(startHistorySearch())
         return
       }
-      if (search.active)
+      if (searching)
       {
         handleSearchInput(input, key)
         return
       }
 
+      // the engine's mode is live; the vimMode state only drives rendering
+      const engine = viMode ? vimEngineRef.current : null
+      const before = engine ? vimView(engine) : null
       // application shortcuts keep priority in vi mode; only editor input
       // reaches the engine, so ctrl/meta keys cannot become literal letters
       if (
-        viMode &&
-        vimEngineRef.current &&
-        (vimMode === 'normal' || (key.escape && !menuOpen))
+        engine &&
+        before &&
+        (before.mode === 'normal' || (key.escape && !menuLive))
       )
       {
         if (
@@ -981,17 +1010,27 @@ export default function PromptInput({
         )
           return
 
-        const engine = vimEngineRef.current
-        const before = vimView(engine)
-        if (
-          before.value !== value ||
-          before.cursorOffset !== resolvedCursor.cursorOffset
-        )
+        // a coalesced NORMAL run is a command sequence (`dw`, `ihello`);
+        // replay it one grapheme at a time so `i` hands the rest to INSERT
+        const offsets = before.mode === 'normal' ? graphemeOffsets(input) : []
+        if (offsets.length > 2)
         {
-          syncVimDraft(engine, value, resolvedCursor.cursorOffset)
+          for (let index = 0; index + 1 < offsets.length; index++)
+          {
+            handleKey(input.slice(offsets[index], offsets[index + 1]), key)
+          }
+          return
         }
 
-        const next = applyVimInput(vimEngineRef.current, {
+        if (
+          before.value !== live.value ||
+          before.cursorOffset !== live.cursorOffset
+        )
+        {
+          syncVimDraft(engine, live.value, live.cursorOffset)
+        }
+
+        const next = applyVimInput(engine, {
           input: key.return ? '' : key.ctrl && input === 'j' ? '\n' : input,
           escape: key.escape,
           return: key.return,
@@ -1003,12 +1042,12 @@ export default function PromptInput({
 
         if (next.submitRequested)
         {
-          if (pendingPasteConfirm)
+          if (pasteConfirmRef.current)
           {
             setPendingPasteConfirm(false)
             return
           }
-          onSubmit(
+          submitDraft(
             expandPastePlaceholders(next.value, (id) =>
               pasteRegistryRef.current.get(id)
             ),
@@ -1017,29 +1056,18 @@ export default function PromptInput({
           return
         }
 
-        if (next.value !== value)
-        {
-          onChange(next.value)
-        }
-        setCursor({
-          value: next.value,
-          cursorOffset: Math.min(next.cursorOffset, next.value.length),
-          cursorWidth: 0,
-        })
+        applyDraft(next.value, Math.min(next.cursorOffset, next.value.length))
         return
       }
 
       if (key.return && (key.meta || key.shift))
       {
-        commitEdit(
-          insertTextAt(value, resolvedCursor.cursorOffset, '\n'),
-          'other'
-        )
+        commitEdit(insertTextAt(live.value, live.cursorOffset, '\n'), 'other')
         return
       }
 
       // the completion menu owns arrows/tab/enter/escape while it's open
-      if (menuOpen)
+      if (menuLive)
       {
         if (key.upArrow)
         {
@@ -1060,9 +1088,9 @@ export default function PromptInput({
         // nothing to insert, so it sends instead of eating the keypress
         if (key.return)
         {
-          const item = items[safeIndex]!
-          const applied = applyCompletion(value, query!, item)
-          if (applied.value.trim() !== value.trim())
+          const item = items[menuIndex]!
+          const applied = applyCompletion(live.value, query!, item)
+          if (applied.value.trim() !== live.value.trim())
           {
             acceptCompletion()
             return
@@ -1076,12 +1104,9 @@ export default function PromptInput({
         }
       }
 
-      if (viMode && vimMode === 'insert' && key.return)
+      if (engine && key.return)
       {
-        commitEdit(
-          insertTextAt(value, resolvedCursor.cursorOffset, '\n'),
-          'other'
-        )
+        commitEdit(insertTextAt(live.value, live.cursorOffset, '\n'), 'other')
         return
       }
 
@@ -1091,8 +1116,8 @@ export default function PromptInput({
         // recall takes over at the first/last-line boundaries
         const deltaRows = key.upArrow ? -1 : 1
         const moved = movePromptVertically(
-          value,
-          resolvedCursor.cursorOffset,
+          live.value,
+          live.cursorOffset,
           deltaRows,
           contentWidth,
           preferredColRef.current
@@ -1100,11 +1125,7 @@ export default function PromptInput({
         if (moved)
         {
           preferredColRef.current = moved.preferredCol
-          setCursor({
-            value,
-            cursorOffset: moved.offset,
-            cursorWidth: 0,
-          })
+          applyDraft(live.value, moved.offset)
           return
         }
 
@@ -1141,7 +1162,7 @@ export default function PromptInput({
       }
       // meta+backspace edits the queue when one exists; otherwise it stays a
       // normal backward word-kill
-      if (key.meta && key.backspace && onQueueEdit && value.length === 0)
+      if (key.meta && key.backspace && onQueueEdit && live.value.length === 0)
       {
         if (onQueueEdit()) return
       }
@@ -1153,45 +1174,33 @@ export default function PromptInput({
       {
         // first Enter after a multi-line paste confirms it instead of sending
         // the whole block straight to the model
-        if (pendingPasteConfirm)
+        if (pasteConfirmRef.current)
         {
           setPendingPasteConfirm(false)
           return
         }
 
         // trailing '\' continues onto a new line instead of submitting
-        const continued = continueWithNewline(
-          value,
-          resolvedCursor.cursorOffset
-        )
+        const continued = continueWithNewline(live.value, live.cursorOffset)
         if (continued)
         {
           commitEdit(continued, 'other')
           return
         }
 
-        onSubmit(
-          expandPastePlaceholders(value, (id) =>
+        submitDraft(
+          expandPastePlaceholders(live.value, (id) =>
             pasteRegistryRef.current.get(id)
           ),
           'standard'
         )
         return
       }
-      if (isParsedControlFragment(input))
-      {
-        pendingTerminalSequenceRef.current = input
-        return
-      }
-      if (isParsedControlSequence(input))
-      {
-        return
-      }
       const nextState = applyPromptEdit({
-        value,
+        value: live.value,
         input,
         key,
-        cursor: resolvedCursor,
+        cursor: { cursorOffset: live.cursorOffset, cursorWidth: 0 },
       })
       if (!nextState) return
 
@@ -1199,50 +1208,69 @@ export default function PromptInput({
     },
     [
       acceptCompletion,
+      applyDraft,
+      chordOverrides,
       commitEdit,
       contentWidth,
+      dismissedRef,
       editOpKind,
       finishSearch,
       getHistoryEntries,
       handleSearchInput,
       items,
       menuOpen,
-      query,
-      safeIndex,
+      onEditorDiscarded,
       onEscape,
+      onHalfPageDown,
+      onHalfPageUp,
       onHistoryDown,
       onHistoryUp,
       onInterrupt,
-      chordOverrides,
-      onChange,
       onJumpBottom,
       onJumpTop,
-      onHalfPageDown,
-      onHalfPageUp,
+      onOpenEditor,
       onOpenPalette,
       onOpenTranscript,
       onPageDown,
       onPageUp,
+      onQueueEdit,
       onScrollDown,
       onScrollUp,
-      onSubmit,
       onTogglePermissions,
       onToggleThinking,
       onToggleToolOutput,
-      onOpenEditor,
-      onEditorDiscarded,
-      onQueueEdit,
-      pendingPasteConfirm,
-      resolvedCursor,
-      search.active,
+      pasteConfirmRef,
+      query,
+      resolvedCursor.cursorOffset,
+      searchRef,
+      selectedIndexRef,
+      setDismissed,
+      setPendingPasteConfirm,
+      setSearch,
+      setSelectedIndex,
+      submitDraft,
       undoEdit,
       value,
       viMode,
-      vimMode,
       yankPopCycle,
       yankText,
     ]
   )
+
+  // the reset & external-value effects above already resynced draftRef; a
+  // submit that moved focus elsewhere drops the rest of its read
+  useLayoutEffect(() =>
+  {
+    const held = heldKeysRef.current
+    if (!held) return
+    heldKeysRef.current = null
+    if (!focus) return
+    for (const item of held)
+    {
+      if ('paste' in item) handlePaste(item.paste)
+      else handleInput(item.input, item.key)
+    }
+  }, [focus, handleInput, handlePaste, submitCount])
 
   useCoralInput(handleInput, { isActive: focus })
 

@@ -11,6 +11,10 @@ import {
 // useTerminalModes subscribe here for packets Ink no longer emits
 export const terminalControlEvents = new EventEmitter()
 
+// Ink flushes a pending escape as keys after 20ms, so an older held tail
+// belongs to no packet
+const PENDING_TAIL_MS = 20
+
 // wrap the stdin handed to render() so every chunk Ink reads is also scanned;
 // a Proxy keeps listeners & raw mode on the real stream
 export function tapTerminalControls(
@@ -18,13 +22,21 @@ export function tapTerminalControls(
 ): NodeJS.ReadStream
 {
   let pending = ''
+  let pendingAt = 0
   const read = (size?: number) =>
   {
     const chunk: unknown = stdin.read(size)
     if (chunk !== null)
     {
-      const parsed = tokenizeTerminalChunk(String(chunk), pending)
+      const text = String(chunk)
+      const now = Date.now()
+      if (now - pendingAt > PENDING_TAIL_MS) pending = ''
+      const parsed = tokenizeTerminalChunk(text, pending)
       pending = parsed.pending
+      // a burst can end on the ESC that opens the next packet; a lone ESC
+      // read is the Escape key and is never held
+      if (!pending && text.length > 1 && text.endsWith('\x1b')) pending = '\x1b'
+      pendingAt = now
       for (const token of parsed.tokens)
       {
         if (isMouseOrFocusPacket(token))
