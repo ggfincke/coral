@@ -86,7 +86,7 @@ These profiles are catalogs, not a sandbox. `bash` still runs on the host.
 
 ### Output
 
-**`text`:** final assistant response plus a newline if nonempty.
+**`text`:** final assistant response plus a newline if nonempty. On a terminal, control sequences in the response are stripped; a pipe gets the raw text. Errors written to a terminal stderr are stripped the same way in every format.
 
 **`json`:** one `CoralExecResult` object.
 

@@ -20,6 +20,7 @@ fit together is in [`docs/architecture.md`](docs/architecture.md).
 
 ## Requirements
 
+- macOS or Linux; Windows is not supported
 - Node.js 24 or newer
 - A running [Ollama](https://ollama.com/) server
 - At least one model already pulled into Ollama
@@ -213,7 +214,7 @@ inspection; `logs --follow` can be interrupted without cancelling the task.
 worktree is not a sandbox. Workers are instructed to remain in their worktree
 and avoid Git mutations and background processes, but shell access is still
 host access. The task profile excludes MCP and nested workers. Container
-sandboxing, automatic integration, and Windows task execution are not included.
+sandboxing and automatic integration are not included.
 
 ## Interactive use
 
@@ -255,34 +256,34 @@ measurements show a dash. `/status` includes the session ID and message count.
 
 ### Slash commands
 
-| Command                                        | Behavior                                                             |
-| ---------------------------------------------- | -------------------------------------------------------------------- |
-| `/help`                                        | List commands and keybindings                                        |
-| `/clear` (`/reset`)                            | Clear conversation history and the transcript                        |
-| `/compact`                                     | Summarize older conversation history to free context                 |
-| `/status`                                      | Show model, session, token, context, permission, and Git branch info |
-| `/mcp`                                         | Show MCP config, launch, server, and available-tool status           |
-| `/skills`                                      | Show skill winners and rejected name collisions                      |
-| `/model [name]`                                | Open the model picker or switch to a named installed model           |
-| `/permissions [ask\|yolo]` (`/perm`, `/perms`) | Show or change approval mode                                         |
-| `/verify [on\|off]`                            | Toggle the post-edit read-only self-check                            |
-| `/theme [name]`                                | List or switch color themes                                          |
-| `/undo`                                        | Remove the latest live turn and safely revert captured edits         |
-| `/redo`                                        | Restore the latest undone turn and captured edits                    |
-| `/diff`                                        | Render the current Git diff                                          |
-| `/copy [code]`                                 | Copy the last response or its last fenced code block                 |
-| `/todo [clear]`                                | Show or clear the model-maintained task list                         |
-| `/index [rebuild]`                             | Refresh or fully rebuild the semantic code index                     |
-| `/sessions [count]` (`/ls`)                    | List recent saved sessions                                           |
-| `/resume [id]`                                 | Resume by ID, or open the searchable session picker                  |
-| `/rename <title>`                              | Rename the current saved session                                     |
-| `/new`                                         | Save the current session and start a new conversation                |
-| `/telemetry`                                   | Show local lifetime reliability counters per model                   |
-| `/exit` (`/quit`)                              | Exit Coral                                                           |
-| `/export [file                                 | --file "path.md"] [--tools] [--thinking]`                            | Export Markdown to clipboard or a new workspace file |
-| `/raw [on\|off]`                               | Switch to plain transcript output for native terminal selection      |
-| `/vim [on\|off]`                               | Toggle modal editing in the composer                                 |
-| `/keybindings`                                 | Show effective keybinding overrides and configuration errors         |
+| Command                                                   | Behavior                                                                |
+| --------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `/help`                                                   | List commands and keybindings                                           |
+| `/clear` (`/reset`)                                       | Clear conversation history and the transcript                           |
+| `/compact`                                                | Summarize older conversation history to free context                    |
+| `/status`                                                 | Show model, session, token, context, permission, and Git branch info    |
+| `/mcp`                                                    | Show MCP config, launch, server, and available-tool status              |
+| `/skills`                                                 | Show skill winners and rejected name collisions                         |
+| `/model [name]`                                           | Open the model picker or switch to a named installed model              |
+| `/permissions [ask\|yolo]` (`/perm`, `/perms`)            | Show or change approval mode                                            |
+| `/verify [on\|off]`                                       | Toggle the post-edit read-only self-check                               |
+| `/theme [name]`                                           | List or switch color themes                                             |
+| `/undo`                                                   | Remove the latest live turn and safely revert captured edits            |
+| `/redo`                                                   | Restore the latest undone turn and captured edits                       |
+| `/diff`                                                   | Render staged and unstaged changes, then list untracked files           |
+| `/copy [code]`                                            | Copy the last response or its last fenced code block                    |
+| `/todo [clear]`                                           | Show or clear the model-maintained task list                            |
+| `/index [rebuild\|force]`                                 | Refresh the semantic code index; `rebuild` or `force` rebuilds it fully |
+| `/sessions [count]` (`/ls`)                               | List recent saved sessions                                              |
+| `/resume [id]`                                            | Resume by ID, or open the searchable session picker                     |
+| `/rename <title>`                                         | Rename the current saved session                                        |
+| `/new`                                                    | Save the current session and start a new conversation                   |
+| `/telemetry`                                              | Show local lifetime reliability counters per model                      |
+| `/exit` (`/quit`)                                         | Exit Coral                                                              |
+| `/export [file\|--file "path.md"] [--tools] [--thinking]` | Export Markdown to clipboard or a new workspace file                    |
+| `/raw [on\|off]`                                          | Switch to plain transcript output for native terminal selection         |
+| `/vim [on\|off]`                                          | Toggle modal editing in the composer                                    |
+| `/keybindings`                                            | Show effective keybinding overrides and configuration errors            |
 
 ### Keybindings
 
