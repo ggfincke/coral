@@ -444,6 +444,21 @@ export class ConversationState
     return anchor
   }
 
+  // drop an accepted user message whose turn never ran; the turn produced no
+  // other messages, so removing just this one restores the prior history
+  discardActiveUserMessage(anchor: ConversationMessageAnchor): boolean
+  {
+    if (this.activeAnchor !== anchor) return false
+    const message = this.resolveAnchor(anchor)
+    this.activeAnchor = undefined
+    const index = message ? this.messages.lastIndexOf(message) : -1
+    if (!message || index < this.frozenPrefixLength) return false
+    this.messages.splice(index, 1)
+    this.estimatedTokenCount -= estimateMessageTokens(message)
+    this.touch()
+    return true
+  }
+
   commitActiveUserMessage(
     anchor: ConversationMessageAnchor,
     content: string,

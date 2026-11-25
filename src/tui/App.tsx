@@ -141,6 +141,8 @@ const SCROLL_LINES = 3
 const CTX_LOW_RATIO = 0.8
 // second escape inside this window opens the backtrack selector
 const BACKTRACK_DOUBLE_ESC_MS = 700
+// quiet period after the last resize event before the transcript re-wraps
+const RESIZE_SETTLE_MS = 80
 
 interface SlashDispatchResult
 {
@@ -386,6 +388,7 @@ export default function App({
     spinnerTick,
     waitingElapsed,
     showWaitingIndicator,
+    transcriptEpoch,
     view: agentTurnView,
     rebuildTranscript,
     run: runAgentTurn,
@@ -454,19 +457,35 @@ export default function App({
   const promptViewportRef = useRef({ maxOffset: 0, pageSize: 1 })
   const currentCwd = agent?.getCwd() ?? cwd ?? getCwd()
 
-  // say once per working dir when an instruction file was skipped for linking
-  // outside it; /status repeats the notice
-  const contextNoticeCwd = useRef<string | null>(null)
+  // say once per working dir and transcript when an instruction file was
+  // skipped for linking outside it (/resume, /clear, /undo, and compaction
+  // replace the transcript); /status repeats the notice
+  const contextNoticeKey = useRef<string | null>(null)
   useEffect(() =>
   {
-    if (!agent || contextNoticeCwd.current === currentCwd) return
-    contextNoticeCwd.current = currentCwd
+    const key = `${transcriptEpoch}:${currentCwd}`
+    if (!agent || contextNoticeKey.current === key) return
+    contextNoticeKey.current = key
     const notices = agent.getProjectContextNotices()
     if (notices.length === 0) return
     setOutput((previous) => [...previous, systemBlock(notices.join('\n'))])
-  }, [agent, currentCwd, setOutput])
+  }, [agent, currentCwd, setOutput, transcriptEpoch])
 
   const transcriptWidth = Math.max(terminalSize.columns - 2, 1)
+  // the whole-session re-wrap follows a settled width so a resize drag costs
+  // one layout, not one per event; LineList truncates rows to the live frame
+  // until then
+  const [layoutColumns, setLayoutColumns] = useState(terminalSize.columns)
+  useEffect(() =>
+  {
+    if (layoutColumns === terminalSize.columns) return
+    const timer = setTimeout(
+      () => setLayoutColumns(terminalSize.columns),
+      RESIZE_SETTLE_MS
+    )
+    return () => clearTimeout(timer)
+  }, [layoutColumns, terminalSize.columns])
+  const transcriptLayoutWidth = Math.max(layoutColumns - 2, 1)
   const sessionPickerVisible =
     sessionPickerOpen && !pickerVisible && !jobsOpen && Boolean(agent)
   const paletteVisible =
@@ -800,7 +819,7 @@ export default function App({
         cwd: currentCwd,
         blocks: output,
         streaming: streamBuf.text,
-        width: transcriptWidth,
+        width: transcriptLayoutWidth,
         spinnerTick,
         showWaitingIndicator,
         waitingElapsed,
@@ -819,7 +838,7 @@ export default function App({
       spinnerTick,
       streamBuf,
       themeGeneration,
-      transcriptWidth,
+      transcriptLayoutWidth,
       waitingElapsed,
       expansionTick,
     ]
@@ -1420,12 +1439,19 @@ export default function App({
           {
             if (acceptsTerminal())
             {
+              // an abortable step rethrows the user's own ctrl+c as its reason
+              const interrupted =
+                commandOperation.signal.aborted &&
+                (error === commandOperation.signal.reason ||
+                  (error instanceof Error && error.name === 'AbortError'))
               setOutput((prev) => [
                 ...prev,
-                {
-                  type: 'error',
-                  content: `Command failed: ${toErrorMessage(error)}`,
-                },
+                interrupted
+                  ? systemBlock('Command interrupted')
+                  : {
+                      type: 'error',
+                      content: `Command failed: ${toErrorMessage(error)}`,
+                    },
               ])
             }
             return { admitted: true, handled: true }
@@ -2104,7 +2130,8 @@ export default function App({
       setPaletteOpen(false)
       if (entry.command)
       {
-        void handleSubmit(entry.command)
+        // the palette never held the composer text, so the draft stays put
+        void handleSubmit(entry.command, true)
         return
       }
       if (entry.action)

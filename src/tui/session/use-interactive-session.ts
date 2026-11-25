@@ -8,6 +8,7 @@ import { ProjectWatcher } from '../../agent/watcher.js'
 import { resolveMcpConfig } from '../../config/mcp.js'
 import { createInferenceClient } from '../../providers/router.js'
 import type { ActiveMcpMode } from '../../mcp/types.js'
+import { SessionPersistenceError } from '../../session/errors.js'
 import { loadSession, renameSession } from '../../session/store.js'
 import type { SessionData, SessionMeta } from '../../session/types.js'
 import { recordReliability } from '../../telemetry/store.js'
@@ -59,6 +60,13 @@ export interface UseInteractiveSessionOptions
   view: InteractiveSessionView
   // persistent tool grants for the workspace of the Agent asking
   toolGrants?: (agent: Agent) => ToolGrantPersistence
+}
+
+export interface TurnCompletion extends OperationCompletion
+{
+  // the store refused this snapshot as one it would not load back; set once
+  // per run of refusals so the transcript names the cause a single time
+  saveRefused: boolean
 }
 
 export type PermissionTransitionResult =
@@ -125,7 +133,7 @@ export interface InteractiveSession
   settlePrompt: (id: number, settlement: PromptSettlement) => boolean
   // drop a session grant after its persistent grant is revoked
   forgetSessionToolGrant: (toolName: string) => void
-  completeTurn: (handle: OperationHandle<Agent>) => OperationCompletion
+  completeTurn: (handle: OperationHandle<Agent>) => TurnCompletion
   finishCommand: (handle: OperationHandle<Agent>) => boolean
   runOperation: <T>(
     handle: OperationHandle<Agent>,
@@ -138,6 +146,38 @@ export interface InteractiveSession
   isYolo: () => boolean
   isAcceptingTransitions: () => boolean
   shutdown: () => Promise<void>
+}
+
+// persist through the store & remember whether the latest save was refused
+// as a snapshot the codec would not load back; a later success re-arms it
+class SaveRefusalTracker
+{
+  private refused = false
+  private claimed = false
+
+  readonly persist = (
+    agent: Agent,
+    target: SessionMeta | null
+  ): SessionMeta | null =>
+  {
+    this.refused = false
+    const saved = persistAgentSession(agent, target, (error) =>
+    {
+      this.refused =
+        error instanceof SessionPersistenceError &&
+        error.code === 'invalid_snapshot'
+    })
+    if (saved) this.claimed = false
+    return saved
+  }
+
+  // true once for the first refused save after a success
+  claimRefusal(): boolean
+  {
+    if (!this.refused || this.claimed) return false
+    this.claimed = true
+    return true
+  }
 }
 
 function activeMcpMode(yolo: boolean): ActiveMcpMode
@@ -185,6 +225,8 @@ export function useInteractiveSession(
   const [todos, setTodos] = useState<TodoItem[]>(initialAgent?.getTodos() ?? [])
   const yoloRef = useRef(yolo)
   const viewRef = useRef(options.view)
+  const [saveRefusals] = useState(() => new SaveRefusalTracker())
+  const contextWindowRef = useRef(contextWindow)
   const closingRef = useRef(false)
   const closeRuntimeRef = useRef<Promise<void> | null>(null)
   const [projectFileCatalog] = useState(() => new ProjectFileCatalog())
@@ -209,7 +251,7 @@ export function useInteractiveSession(
     () =>
       new InteractiveSessionRuntime<Agent>(
         {
-          persist: persistAgentSession,
+          persist: saveRefusals.persist,
           recordTelemetry: (model, stats) => recordReliability(model, stats),
           onPromptChange: setActivePrompt,
           onSessionChange: setSessionMeta,
@@ -232,9 +274,12 @@ export function useInteractiveSession(
           const renamed = renameSession(id, title)
           if (renamed) runtime.updateCurrentSession(renamed)
         },
+        // a settlement that lands inside the next turn leaves the save to that
+        // turn's completion instead of writing a mid-turn snapshot
         onSettled: (id) =>
         {
-          if (runtime.getSessionId() === id) runtime.saveCurrent()
+          if (runtime.getSessionId() === id && !runtime.hasActiveOperation())
+            runtime.saveCurrent()
         },
       })
   )
@@ -662,6 +707,11 @@ export function useInteractiveSession(
 
   useEffect(() =>
   {
+    contextWindowRef.current = contextWindow
+  }, [contextWindow])
+
+  useEffect(() =>
+  {
     if (!agent) return
 
     const generation = runtime.getGeneration()
@@ -771,9 +821,11 @@ export function useInteractiveSession(
     [runtime]
   )
   const completeTurn = useCallback(
-    (handle: OperationHandle<Agent>): OperationCompletion =>
+    (handle: OperationHandle<Agent>): TurnCompletion =>
     {
       const completion = runtime.completeTurn(handle)
+      const saveRefused =
+        completion.persistence === 'error' && saveRefusals.claimRefusal()
       // a settled non-aborted turn may earn its background title; the offer is
       // fire-and-forget and can never affect the completion result
       if (completion.accepted && !completion.aborted && completion.session)
@@ -786,9 +838,13 @@ export function useInteractiveSession(
           handle.agent.getSessionInferenceClient()
         )
       }
-      return completion
+      // a failed window lookup (offline hosted provider) would otherwise hide
+      // the context meter until the Agent changes; each turn retries it
+      if (completion.accepted && contextWindowRef.current === 0)
+        fetchContextWindow(handle.agent)
+      return { ...completion, saveRefused }
     },
-    [runtime, titleGenerator]
+    [fetchContextWindow, runtime, saveRefusals, titleGenerator]
   )
   const finishCommand = useCallback(
     (handle: OperationHandle<Agent>) => runtime.finishCommand(handle),

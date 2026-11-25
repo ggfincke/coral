@@ -547,6 +547,7 @@ export class Agent
     {
       return {
         status: 'unknown',
+        errored: true,
         reason: `self-check failed: ${result.error.split('\n')[0]!.slice(0, 200)}`,
         editCount: diffs.length,
       }
@@ -662,6 +663,7 @@ export class Agent
   // restore previous messages while keeping the system prompt at index 0
   restoreMessages(savedMessages: OllamaMessage[]): void
   {
+    this.assertNoAcceptedTurn('restore messages')
     this.turnContext.clearFileObservations()
     this.state.restoreMessages(savedMessages)
   }
@@ -712,6 +714,7 @@ export class Agent
     redoStack: UndoTurn[] = []
   ): void
   {
+    this.assertNoAcceptedTurn('restore undo history')
     this.state.restoreUndoStack(undoStack, redoStack)
   }
 
@@ -733,11 +736,15 @@ export class Agent
 
   async undoLastTurn(signal?: AbortSignal): Promise<UndoResult>
   {
+    if (this.acceptedTurn)
+      return { ok: false, message: 'Cannot undo during an active turn' }
     return this.replay.undoLastTurn(signal)
   }
 
   async redoLastTurn(signal?: AbortSignal): Promise<UndoResult>
   {
+    if (this.acceptedTurn)
+      return { ok: false, message: 'Cannot redo during an active turn' }
     return this.replay.redoLastTurn(signal)
   }
 
@@ -846,6 +853,7 @@ export class Agent
   // reset conversation history to the system prompt and return the cleared count
   clearHistory(): number
   {
+    this.assertNoAcceptedTurn('clear history')
     this.turnContext.clearFileObservations()
     // the next turn rewrites the whole prefix, so refresh the root listing
     this.rootSummary = undefined
@@ -856,6 +864,7 @@ export class Agent
   // force compaction and return before-and-after stats
   async forceCompact(signal?: AbortSignal): Promise<CompactionResult | null>
   {
+    this.assertNoAcceptedTurn('compact')
     if (this.state.getMessageCount() < 4) return null
 
     // resolve the exact window before direct /compact so summary requests use the real budget
@@ -1533,6 +1542,27 @@ export class Agent
     )
     this.acceptedTurn = { handle, anchor, running: false }
     return handle
+  }
+
+  // undo an accepted turn whose run never started (a host step between accept
+  // and run threw): its user message never reached the model, so it is
+  // dropped; a running turn stays owned by its own finalize
+  releaseAcceptedTurn(accepted: AcceptedTurn): boolean
+  {
+    const active = this.acceptedTurn
+    if (!active || active.handle !== accepted || active.running) return false
+    this.acceptedTurn = undefined
+    this.state.discardActiveUserMessage(active.anchor)
+    return true
+  }
+
+  // history replacement & replay would orphan the accepted turn's anchor
+  private assertNoAcceptedTurn(action: string): void
+  {
+    if (this.acceptedTurn)
+    {
+      throw new Error(`Cannot ${action} during an active turn`)
+    }
   }
 
   run(
