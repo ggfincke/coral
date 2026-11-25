@@ -65,7 +65,7 @@ Windows: command must resolve to `.exe` or `.com`.
 
 `grep` and `glob` require `rg`. Install: https://github.com/BurntSushi/ripgrep#installation
 
-Timeout 15s, 5 MiB buffer, 200 grep hits / 100 glob files.
+Timeout 15s, 200 grep hits / 100 glob files. A larger result shows the first hits and the real total (`Showing N of M …`); at most 5 MiB of output text is kept.
 
 ---
 
@@ -83,8 +83,8 @@ Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete.
 
 ## Sessions and resume
 
-- `--resume` does **not** skip unusable cwds. Newest session whose directory is gone → CLI error, exit 1.
-- `--session` is exact id; `/resume` allows prefixes. Ambiguous prefix: list of matches, use the full id.
+- `--resume` skips sessions whose directory is gone. With none left: `No sessions to resume.`, exit 1.
+- `--session` and `/resume` accept an exact id or a unique prefix. Ambiguous prefix: list of matches, use the full id.
 - `Working directory no longer exists` — the session's `cwd` is gone. TUI: `Session unavailable: {id}`.
 - `Current session could not be saved; resume was canceled.` Same pattern for `/new`: `…the new conversation was not started.`
 - `/clear` and `/new` do not delete JSON files.
@@ -94,7 +94,7 @@ Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete.
 
 ## Undo
 
-`Nothing to undo`, `Cannot undo after compaction or history changes`, `file changed outside Coral`, `file is missing`, concurrent/stale history. Outside-workspace edits were never recorded. Compaction clears the stack.
+`Nothing to undo`, `Cannot undo after compaction or history changes`, `file changed outside Coral`, `file is missing`, concurrent/stale history. Outside-workspace edits were never recorded. Summarizing (`/compact` or auto-compaction) clears the stack; prune keeps it, and a trim keeps it for the turns that remain.
 
 ---
 
@@ -130,16 +130,17 @@ During a run, `Ctrl+C` / `Esc` abort the Agent (partial assistant or `(interrupt
 
 ## Durable tasks
 
-| Symptom                                                      | What to do                                                                                                                                                                                                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `coral jobs` says the task supervisor is restarting          | It stopped because it could not prove a worker's processes exited. Run the command again; the new supervisor re-checks the previous worker first. If startup itself fails, its launch log under `/tmp/coral-jobs-<uid>-<hash>/` is printed. |
-| `coral jobs list` prints `unreadable`                        | That task's `job.json` is invalid (often a hand-edit typo in a draft). Fix or restore the file; other tasks keep running.                                                                                                                   |
-| `needs_input`: source checkout is missing                    | The repository the task was approved against moved or was deleted. Restore it at the same path, then `coral jobs resume <id>`.                                                                                                              |
-| `needs_input`: the supervisor restarted before this task ran | Its starting environment was held only in memory. Resume it from a shell with the intended `PATH` and credentials.                                                                                                                          |
-| `needs_input`: repair or time budget exhausted               | Inspect `coral jobs show <id>` and the checks output, then resume with instructions, or plan a new task with larger limits.                                                                                                                 |
-| Task worktree is missing                                     | A verified worktree was deleted. It held the task's changes on `coral/job-<id>`; restore it or plan a new task.                                                                                                                             |
-| Branch `coral/job-<id>` already exists at a different commit | Something moved the task branch before its worktree was verified. Inspect or delete the branch, then resume.                                                                                                                                |
-| Resume asks for `--setup-resolution` or `--shell-resolution` | A command was interrupted with unknown effects. Inspect the files and the recorded command, then choose; see [Durable tasks](jobs.md#cancel-and-continue).                                                                                  |
+| Symptom                                                                                        | What to do                                                                                                                                                                                                                                      |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coral jobs` says the task supervisor is restarting                                            | It stopped because it could not prove a worker's processes exited. Run the command again; the new supervisor re-checks the previous worker first. If startup itself fails, its launch log under `/tmp/coral-jobs-<uid>-<hash>/` is printed.     |
+| `coral jobs list` prints `unreadable`                                                          | That task's `job.json` is invalid (often a hand-edit typo in a draft). Fix or restore the file; other tasks keep running.                                                                                                                       |
+| `needs_input`: source checkout is missing                                                      | The repository the task was approved against moved or was deleted. Restore it at the same path, then `coral jobs resume <id>`.                                                                                                                  |
+| `needs_input`: the supervisor restarted before this task ran                                   | Its starting environment was held only in memory. Resume it from a shell with the intended `PATH` and credentials.                                                                                                                              |
+| `needs_input`: repair or time budget exhausted                                                 | Inspect `coral jobs show <id>` and the checks output, then resume with instructions, or plan a new task with larger limits.                                                                                                                     |
+| Task worktree is missing                                                                       | A verified worktree was deleted. It held the task's changes on `coral/job-<id>`; restore it or plan a new task.                                                                                                                                 |
+| Branch `coral/job-<id>` already exists at a different commit                                   | Something moved the task branch before its worktree was verified. Inspect or delete the branch, then resume.                                                                                                                                    |
+| Resume asks for `--setup-resolution` or `--shell-resolution`                                   | A command was interrupted with unknown effects. Inspect the files and the recorded command, then choose; see [Durable tasks](jobs.md#cancel-and-continue).                                                                                      |
+| `Cannot establish ownership of task process group N; queue is blocked. Process record: <path>` | A crash left a command record, and Coral cannot prove the processes still in that group are the task's own (a member lacks the task's launch token). If none of that task's commands are still running, delete the named record file and retry. |
 
 ---
 

@@ -74,10 +74,13 @@ The **active-time budget** (`--time-limit`, default 120 minutes) counts setup,
 inference, shell commands, and checks, but not time in the queue. Consumed time
 and repair attempts carry over to continuations.
 
-Workers get file, search, `code_intel`, `bash`, read-only Git, and `todo_write`
-tools, all pre-approved. MCP and nested subagents are not available. Agent
-shell commands use the `bash` tool's 30-second default timeout unless the model
-asks for another; setup and check commands are bounded only by the task budget.
+Workers get file, search, `code_intel`, `bash`, read-only Git, `todo_write`,
+and `skill` tools, all pre-approved unless user or project config sets one to
+`always_deny`. Like other surfaces, they load `AGENTS_HOME/AGENTS.md` and the
+personal and project skills for the worktree. MCP and nested subagents are not available.
+Agent shell commands use the `bash` tool's 30-second default timeout unless the
+model asks for another, capped at the task's active-time limit; setup and check
+commands are bounded only by the task budget.
 
 ### Environment
 

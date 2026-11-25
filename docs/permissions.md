@@ -51,10 +51,12 @@ There is no TUI `off` permission mode. Turning MCP off for an interactive sessio
 
 ## Workspace path gate
 
-File/search/code-intel tools and `git_diff` / `git_log` / `git_add` that declare a `path` (or `paths`) argument still need a **separate** approval when that path is outside the workspace, even if their normal policy is `always_allow`. `write_file`, `edit_file`, `grep`, `glob`, and `list_files` default a missing path to `.`. `read_file` and `code_intel` require an explicit path.
+File/search/code-intel tools and `git_diff` / `git_log` / `git_add` that declare a `path` (or `paths`) argument still need a **separate** approval when that path is outside the workspace, even if their normal policy is `always_allow`. `grep`, `glob`, and `list_files` default a missing path to `.`. `read_file`, `write_file`, `edit_file`, and `code_intel` require an explicit path.
 
 - Lexical `..` escape: `Access outside workspace requires approval: …`
 - Symlink escape: **fail closed** — `Access outside workspace through symlink is not allowed: …` (not an approval prompt)
+- Dangling symlink, even one aimed inside the workspace: **fail closed** with `Cannot resolve … inside the workspace (dangling symlink or unreadable path)`
+- `~` or a path starting with `~/`: rejected, never expanded, with `Paths starting with ~ are not expanded; use an absolute path: …`
 
 After you approve, that invocation may read/write the resolved path. Outside-workspace **writes/edits are not undoable**. The approval prompt says the call is outside the workspace and still shows the diff for an outside `write_file` / `edit_file`.
 

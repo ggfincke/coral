@@ -6,11 +6,11 @@ Coral reads JSON from two files, environment variables, and CLI flags. Mutable s
 
 ## Files
 
-| File                      | What is read                                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------------ |
-| `~/.coral.json`           | `permissions`, `tools`, `providers`, `mcp` only. Path is always `join(homedir(), '.coral.json')` |
-| `<workspace>/.coral.json` | `permissions`, `tools`, `retrieval`, `context`, `verify` only                                    |
-| `CORAL_HOME/prefs.json`   | UI prefs; the code writes `theme`                                                                |
+| File                      | What is read                                                                                                         |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `~/.coral.json`           | `permissions`, `tools`, `providers`, `ollama`, `skills`, `mcp` only. Path is always `join(homedir(), '.coral.json')` |
+| `<workspace>/.coral.json` | `permissions`, `tools`, `retrieval`, `context`, `verify` only                                                        |
+| `CORAL_HOME/prefs.json`   | UI prefs; the code writes `theme` and `vim`                                                                          |
 
 Unknown top-level keys are ignored. User file ignores `retrieval` / `context` / `verify` even if present. Project file ignores `mcp` even if present.
 
@@ -228,7 +228,7 @@ No other `CORAL_*` variables are read by the product. Coral does not read `OLLAM
 
 MCP `passEnv` names are read from `process.env` at launch. **Unset** names disable that server for the session. An empty string is not treated as missing.
 
-The bundled TypeScript language server inherits a copy of `process.env`.
+The bundled TypeScript language server inherits a copy of `process.env` minus the hosted API keys (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`).
 
 ---
 
