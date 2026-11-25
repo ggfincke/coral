@@ -32,6 +32,17 @@ describe('/copy helpers', () =>
     assert.equal(lastAssistantText([{ role: 'user', content: 'hi' }]), null)
   })
 
+  test('lastAssistantText skips the interrupted-turn placeholder', () =>
+  {
+    const messages: OllamaMessage[] = [
+      { role: 'assistant', content: 'real answer' },
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: '(interrupted)' },
+    ]
+
+    assert.equal(lastAssistantText(messages), 'real answer')
+  })
+
   test('lastCodeBlock extracts the final fenced block', () =>
   {
     const md = 'intro\n\n```js\nconst a = 1\n```\n\nthen\n\n```py\nx = 2\n```\n'
