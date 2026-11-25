@@ -7,16 +7,18 @@ import { hostname } from 'node:os'
 import Database from 'better-sqlite3'
 import { coralHomePath } from '../utils/coral-home.js'
 import { ensurePrivateDir } from '../utils/fs.js'
+import {
+  isProcessStartTime,
+  processStartTimeSync,
+} from '../utils/process-identity.js'
 import { SessionPersistenceError } from './errors.js'
 import {
   isValidSessionId,
   type ProcessSessionRuntimeIdentity,
 } from './types.js'
 
-const PROCESS_STARTED_AT = new Date(
-  Date.now() - process.uptime() * 1_000
-).toISOString()
 const LEASE_SCHEMA_VERSION = 1
+let processStartedAtValue: string | undefined
 
 interface LeaseRow
 {
@@ -74,6 +76,16 @@ function openLeaseDatabase(): Database.Database
   return database
 }
 
+// the start time other runtimes compare against to detect pid reuse; the
+// uptime estimate fallback is never a known start time, so it reads as unknown
+function processStartedAt(): string
+{
+  processStartedAtValue ??=
+    processStartTimeSync(process.pid) ??
+    new Date(Date.now() - process.uptime() * 1_000).toISOString()
+  return processStartedAtValue
+}
+
 function isNonEmptyBoundedString(value: string): boolean
 {
   return value.length > 0 && value.length <= 256
@@ -98,7 +110,7 @@ function assertRuntimeIdentity(runtime: ProcessSessionRuntimeIdentity): void
   if (
     runtime.hostname !== hostname() ||
     runtime.processId !== process.pid ||
-    runtime.processStartedAt !== PROCESS_STARTED_AT
+    runtime.processStartedAt !== processStartedAt()
   )
   {
     throw new SessionPersistenceError(
@@ -108,7 +120,8 @@ function assertRuntimeIdentity(runtime: ProcessSessionRuntimeIdentity): void
   }
 }
 
-// only a conclusively absent process on this host is recoverable
+// only a conclusively gone process on this host is recoverable: its pid is
+// absent, or now runs a process whose known start time differs from the record
 function isConservativelyStale(row: LeaseRow): boolean
 {
   if (row.hostname !== hostname()) return false
@@ -119,16 +132,16 @@ function isConservativelyStale(row: LeaseRow): boolean
   try
   {
     process.kill(row.process_id, 0)
-    return false
   }
   catch (error)
   {
-    return (
-      error instanceof Error &&
-      'code' in error &&
-      (error as NodeJS.ErrnoException).code === 'ESRCH'
-    )
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    if (code === 'ESRCH') return true
+    if (code !== 'EPERM') return false
   }
+  if (!isProcessStartTime(row.process_started_at)) return false
+  const liveStartedAt = processStartTimeSync(row.process_id)
+  return liveStartedAt !== undefined && liveStartedAt !== row.process_started_at
 }
 
 function leaseRow(
@@ -144,6 +157,37 @@ function leaseRow(
         WHERE session_id = ?`
     )
     .get(sessionId) as LeaseRow | undefined
+}
+
+// drop a recoverable lease inside the caller's transaction; a live owner refuses
+function clearRecoverableLease(
+  database: Database.Database,
+  sessionId: string
+): void
+{
+  const row = leaseRow(database, sessionId)
+  if (!row) return
+  if (!isConservativelyStale(row))
+  {
+    throw new SessionPersistenceError(
+      'session_in_use',
+      `Session ${sessionId} is already in use`,
+      { sessionId }
+    )
+  }
+  const deleted = database
+    .prepare(
+      'DELETE FROM session_leases WHERE session_id = ? AND owner_token = ?'
+    )
+    .run(sessionId, row.owner_token)
+  if (deleted.changes !== 1)
+  {
+    throw new SessionPersistenceError(
+      'session_in_use',
+      `Session ${sessionId} lease changed during recovery`,
+      { sessionId }
+    )
+  }
 }
 
 function deleteOwnedLease(sessionId: string, ownerToken: string): boolean
@@ -222,7 +266,7 @@ export function createSessionRuntimeIdentity(
     runtimeId,
     hostname: hostname(),
     processId: process.pid,
-    processStartedAt: PROCESS_STARTED_AT,
+    processStartedAt: processStartedAt(),
   }
 }
 
@@ -249,32 +293,7 @@ export function acquireSessionLease(
     {
       const acquire = database.transaction(() =>
       {
-        const existing = leaseRow(database, sessionId)
-        if (existing && !isConservativelyStale(existing))
-        {
-          throw new SessionPersistenceError(
-            'session_in_use',
-            `Session ${sessionId} is already in use`,
-            { sessionId }
-          )
-        }
-        if (existing)
-        {
-          const deleted = database
-            .prepare(
-              'DELETE FROM session_leases WHERE session_id = ? AND owner_token = ?'
-            )
-            .run(sessionId, existing.owner_token)
-          if (deleted.changes !== 1)
-          {
-            throw new SessionPersistenceError(
-              'session_in_use',
-              `Session ${sessionId} lease changed during recovery`,
-              { sessionId }
-            )
-          }
-        }
-
+        clearRecoverableLease(database, sessionId)
         database
           .prepare(
             `INSERT INTO session_leases (
@@ -367,31 +386,7 @@ export function withSessionWriteLock<T>(
         }
         else if (refuseLeaseForSessionId)
         {
-          const row = leaseRow(database, refuseLeaseForSessionId)
-          if (row && !isConservativelyStale(row))
-          {
-            throw new SessionPersistenceError(
-              'session_in_use',
-              `Session ${refuseLeaseForSessionId} is already in use`,
-              { sessionId: refuseLeaseForSessionId }
-            )
-          }
-          if (row)
-          {
-            const deleted = database
-              .prepare(
-                'DELETE FROM session_leases WHERE session_id = ? AND owner_token = ?'
-              )
-              .run(refuseLeaseForSessionId, row.owner_token)
-            if (deleted.changes !== 1)
-            {
-              throw new SessionPersistenceError(
-                'session_in_use',
-                `Session ${refuseLeaseForSessionId} lease changed during recovery`,
-                { sessionId: refuseLeaseForSessionId }
-              )
-            }
-          }
+          clearRecoverableLease(database, refuseLeaseForSessionId)
         }
         return action()
       })
