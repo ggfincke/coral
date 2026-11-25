@@ -7,6 +7,10 @@ import { getThemeGeneration } from '../theme.js'
 
 const MAX_ENTRIES = 32
 const MAX_PAYLOAD_BYTES = 4 * 1_024 * 1_024
+// untagged fences run highlight.js auto-detect over every grammar, which grows
+// quadratically on short repeated tokens; past ~1k chars one block costs over
+// ~50 ms on the ui thread, so larger untagged blocks render plain
+const AUTO_DETECT_MAX_CHARS = 1_000
 const cache = new Map<string, { output: string; bytes: number }>()
 let payloadBytes = 0
 let presentation = ''
@@ -15,6 +19,7 @@ export function highlightCode(text: string, language?: string): string
 {
   const trimmed = text.replace(/\n$/, '')
   if (!trimmed) return ''
+  if (!language && trimmed.length > AUTO_DETECT_MAX_CHARS) return trimmed
 
   const currentPresentation = `${getThemeGeneration()}:${chalk.level}`
   if (presentation !== currentPresentation)

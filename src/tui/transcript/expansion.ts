@@ -16,11 +16,26 @@ export function toolResultBudgetLines(toolName: string): number
   return DEFAULT_BUDGET_LINES
 }
 
+// same answer as split('\n').length > max, but stops scanning at max + 1
+// lines; App runs this for every tool result on every render
+function hasMoreLinesThan(text: string, max: number): boolean
+{
+  let lines = 1
+  let at = text.indexOf('\n')
+  while (at !== -1)
+  {
+    lines += 1
+    if (lines > max) return true
+    at = text.indexOf('\n', at + 1)
+  }
+  return lines > max
+}
+
 export function isExpandableBlock(block: OutputBlock): boolean
 {
   return (
     block.type === 'tool_result' &&
-    block.content.split('\n').length > toolResultBudgetLines(block.toolName)
+    hasMoreLinesThan(block.content, toolResultBudgetLines(block.toolName))
   )
 }
 
@@ -123,13 +138,13 @@ export function resolveToolResultView(
   if (expanded) return { text: block.content, hiddenLines: 0, expanded: true }
 
   const budget = toolResultBudgetLines(block.toolName)
-  const lines = block.content.split('\n')
-  const total = lines.length
-  if (total <= budget)
+  if (!hasMoreLinesThan(block.content, budget))
   {
     return { text: block.content, hiddenLines: 0, expanded: false }
   }
 
+  const lines = block.content.split('\n')
+  const total = lines.length
   const shown = lines.slice(0, budget).join('\n')
   return {
     text: `${shown}\n… (${total - budget} more lines)`,
