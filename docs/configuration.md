@@ -29,7 +29,7 @@ Numeric `context.maxNumCtx` is still clamped to supported token bounds later. St
 | Context ceiling  | `CORAL_NUM_CTX` (integer `> 0`) **replaces** project `context.maxNumCtx`                                                  |
 | Embedding model  | `CORAL_EMBEDDING_MODEL` (nonempty trimmed) else project `retrieval.embeddingModel` else `nomic-embed-text`                |
 | Tool profile     | User + project `tools.disabled` union; project `tools.localTask` and `tools.localGitWrite` override user; default `false` |
-| Verify           | Project `verify.enabled` boolean; otherwise `false`                                                                       |
+| Verify           | Project `verify.enabled` boolean (Ollama models only); otherwise `false`                                                  |
 | MCP servers      | User `mcp` only                                                                                                           |
 | Theme            | `--theme` > `prefs.json` > `coral-reef`                                                                                   |
 | Ollama host      | `--host` else `http://localhost:11434` (not `OLLAMA_HOST`)                                                                |
@@ -177,7 +177,7 @@ mean f16.
 
 `context.maxNumCtx` is a **ceiling**, not a fixed allocation. See [Context](context.md).
 
-`verify.enabled` only affects **new** Agents. `/verify on|off` toggles the live Agent and is not written back to this file. `coral exec` always uses `verifyEdits: false`.
+`verify.enabled` only affects **new** Agents and only turns the self-check on for Ollama models, so a cloned repo cannot add paid requests on a hosted provider model; use `/verify on` there. `/verify on|off` toggles the live Agent and is not written back to this file. `coral exec` always uses `verifyEdits: false`.
 
 ---
 
@@ -211,13 +211,13 @@ Coral-owned reads in `src/`:
 
 | Variable                  | Behavior                                                                                                                                                                                                                                   |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CORAL_HOME`              | If set and nonempty, `resolve` that path (cwd-relative allowed). Else `~/.coral`. Relocates **mutable state only**, not `~/.coral.json`                                                                                                    |
+| `CORAL_HOME`              | If set and nonempty, `resolve` that path (a relative value resolves against `~`, not the cwd). Else `~/.coral`. Relocates **mutable state only**, not `~/.coral.json`                                                                      |
 | `CORAL_NUM_CTX`           | `parseInt` base 10. Used iff finite and `> 0`. Wins over project `maxNumCtx`. Still floored at **8192** unless native is smaller, and capped by native/memory. Local request prompts default to **32,768** tokens, configurable separately |
 | `CORAL_MAX_PROMPT_TOKENS` | `parseInt` base 10. Used iff finite and `> 0`; otherwise falls back to project `context.maxPromptTokens`, then `32768`. Local models only; bounded by the window minus response reserve                                                    |
 | `CORAL_EMBEDDING_MODEL`   | Trimmed nonempty wins over project embedding model                                                                                                                                                                                         |
 | `ANTHROPIC_API_KEY`       | Enables `anthropic/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                                       |
 | `OPENAI_API_KEY`          | Enables `openai/<id>` models and lists them in the picker. Read when a hosted model is first used                                                                                                                                          |
-| `AGENTS_HOME`             | Shared Agents directory; defaults to `~/.agents`. Personal skills use `skills/`, and standing instructions use `AGENTS.md`                                                                                                                 |
+| `AGENTS_HOME`             | Shared Agents directory; defaults to `~/.agents`. A relative value resolves against `~`. Personal skills use `skills/`, and standing instructions use `AGENTS.md`                                                                          |
 
 On Linux, hosted credentials can also be stored in the desktop keyring with
 `secret-tool`, using attributes `application coral` and `provider anthropic` or
@@ -241,9 +241,8 @@ Default root: `~/.coral`. Directories `0o700`, session/trust/index files typical
 | `sessions/<8hex>.json`                          | Authoritative conversations, todos, bounded undo/redo                                                                 |
 | `history.jsonl`                                 | Append-only prompt history; navigation uses newest 500 valid rows                                                     |
 | `prefs.json`                                    | Whole-file last-writer-wins; `theme`                                                                                  |
-| `telemetry.json`                                | Legacy baseline **read**; new interactive deltas go to `telemetry.d/`                                                 |
 | `telemetry.d/<uuid>.json`                       | Immutable per-Agent-lifetime reliability counters                                                                     |
-| `eval-telemetry.json` + `eval-telemetry.d/`     | Eval harness only (`npm run eval -- --save-telemetry`), not the interactive CLI                                       |
+| `eval-telemetry.d/<uuid>.json`                  | Eval harness only (`npm run eval -- --save-telemetry`), not the interactive CLI                                       |
 | `mcp-trust.json`                                | Legacy launch-trust baseline (read)                                                                                   |
 | `mcp-trust.d/<alias>.json`                      | Atomic per-alias approvals (write path for new trust)                                                                 |
 | `tool-grants.d/<64-hex>.json`                   | Persistent per-workspace tool grants from `(p)`; see [Permissions](permissions.md#session-and-workspace-grants)       |

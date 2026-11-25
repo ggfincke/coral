@@ -26,7 +26,8 @@ import { allTools, subagentTools } from '../tools/registry.js'
 import type { Tool } from '../tools/tool.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { agentsHomePath } from '../utils/agents-home.js'
-import { writeJsonFile } from '../utils/json.js'
+import { writeUserJsonFile } from '../utils/json.js'
+import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 
 export type ExecStatus =
   'completed' | 'failed' | 'cancelled' | 'iteration_limited'
@@ -72,6 +73,9 @@ export interface CoralExecDependencies
   createRunId?: () => string
   writeStdout?: (text: string) => void
   writeStderr?: (text: string) => void
+  // whether each stream is a terminal; defaults to the process streams
+  stdoutIsTTY?: boolean
+  stderrIsTTY?: boolean
 }
 
 const WORKSPACE_WRITE_TOOL_NAMES = new Set([
@@ -131,10 +135,18 @@ function usageResult(agent: Agent): CoralExecResult['usage']
   }
 }
 
+// model and server text bound for a terminal drops control sequences, while
+// pipes keep the raw bytes
+function terminalText(text: string, isTTY: boolean): string
+{
+  return isTTY ? sanitizeUntrustedText(text) : text
+}
+
 function emitResult(
   result: CoralExecResult,
   format: ExecOutputFormat,
-  writeStdout: (text: string) => void
+  writeStdout: (text: string) => void,
+  stdoutIsTTY: boolean
 ): void
 {
   if (format === 'stream-json')
@@ -147,7 +159,7 @@ function emitResult(
   }
   else if (result.response)
   {
-    writeStdout(`${result.response}\n`)
+    writeStdout(`${terminalText(result.response, stdoutIsTTY)}\n`)
   }
 }
 
@@ -161,6 +173,8 @@ export async function runCoralExec(
     dependencies.writeStdout ?? ((text: string) => process.stdout.write(text))
   const writeStderr =
     dependencies.writeStderr ?? ((text: string) => process.stderr.write(text))
+  const stdoutIsTTY = dependencies.stdoutIsTTY ?? process.stdout.isTTY === true
+  const stderrIsTTY = dependencies.stderrIsTTY ?? process.stderr.isTTY === true
   const emit = (event: Record<string, unknown>): void =>
   {
     if (options.outputFormat === 'stream-json')
@@ -305,7 +319,7 @@ export async function runCoralExec(
   {
     try
     {
-      writeJsonFile(options.resultFile, result)
+      writeUserJsonFile(options.resultFile, result)
     }
     catch (error)
     {
@@ -317,8 +331,8 @@ export async function runCoralExec(
       }
     }
   }
-  emitResult(result, options.outputFormat, writeStdout)
-  if (result.error) writeStderr(`${result.error}\n`)
+  emitResult(result, options.outputFormat, writeStdout, stdoutIsTTY)
+  if (result.error) writeStderr(`${terminalText(result.error, stderrIsTTY)}\n`)
   return result
 }
 
@@ -483,7 +497,7 @@ export async function runExecCli(
     {
       try
       {
-        writeJsonFile(resolve(opts.resultFile), result)
+        writeUserJsonFile(resolve(opts.resultFile), result)
       }
       catch (writeError)
       {
@@ -494,8 +508,15 @@ export async function runExecCli(
         }
       }
     }
-    emitResult(result, opts.outputFormat, (text) => process.stdout.write(text))
-    process.stderr.write(`${result.error}\n`)
+    emitResult(
+      result,
+      opts.outputFormat,
+      (text) => process.stdout.write(text),
+      process.stdout.isTTY === true
+    )
+    process.stderr.write(
+      `${terminalText(result.error ?? '', process.stderr.isTTY === true)}\n`
+    )
     return receivedSignal
       ? receivedSignal === 'SIGTERM'
         ? 143

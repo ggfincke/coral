@@ -37,9 +37,27 @@ interface JsonRequestOptions
   signal?: AbortSignal
 }
 
+// a misbehaving host must not push megabytes of error text into messages
+const MAX_ERROR_BODY_CHARS = 4_096
+
+// one NDJSON record past this size means the host is not speaking Ollama's stream
+const MAX_STREAM_LINE_CHARS = 16 * 1024 * 1024
+
 function throwApiError(status: number, body: string): never
 {
-  throw new OllamaApiError(status, body)
+  throw new OllamaApiError(
+    status,
+    body.length > MAX_ERROR_BODY_CHARS
+      ? `${body.slice(0, MAX_ERROR_BODY_CHARS)}...`
+      : body
+  )
+}
+
+function throwLineTooLong(): never
+{
+  throw new Error(
+    `Ollama chat stream sent a line longer than ${MAX_STREAM_LINE_CHARS} characters`
+  )
 }
 
 function formatConnectionError(baseUrl: string, detail: string): string
@@ -663,8 +681,9 @@ export class OllamaClient
 
     const reader = res.body.getReader()
     const decoder = new TextDecoder()
-    // collect partial-line chunks to avoid repeated string concatenation
-    const remainderParts: string[] = []
+    // pieces of the unfinished line, joined once when its newline arrives
+    const pending: string[] = []
+    let pendingChars = 0
 
     try
     {
@@ -678,13 +697,23 @@ export class OllamaClient
         const { done, value } = await reader.read()
         if (done) break
 
-        remainderParts.push(decoder.decode(value, { stream: true }))
-        const joined = remainderParts.join('')
-        remainderParts.length = 0
-
-        const lines = joined.split('\n')
+        const lines = decoder.decode(value, { stream: true }).split('\n')
         const tail = lines.pop() ?? ''
-        if (tail) remainderParts.push(tail)
+        if (lines.length > 0 && pending.length > 0)
+        {
+          if (pendingChars + lines[0].length > MAX_STREAM_LINE_CHARS)
+          {
+            throwLineTooLong()
+          }
+          lines[0] = pending.join('') + lines[0]
+          pending.length = 0
+          pendingChars = 0
+        }
+        if (tail)
+        {
+          pending.push(tail)
+          pendingChars += tail.length
+        }
 
         for (const line of lines)
         {
@@ -696,11 +725,13 @@ export class OllamaClient
             if (chunk.done) return
           }
         }
+
+        if (pendingChars > MAX_STREAM_LINE_CHARS) throwLineTooLong()
       }
 
       if (!signal?.aborted)
       {
-        const final = remainderParts.join('') + decoder.decode()
+        const final = pending.join('') + decoder.decode()
         if (final.trim())
         {
           const chunk = streamResponse(final)

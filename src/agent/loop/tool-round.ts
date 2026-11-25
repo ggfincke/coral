@@ -13,6 +13,7 @@ import type { ToolExecutionContext, ToolResult } from '../../tools/tool.js'
 import { validateToolArgs } from '../../tools/validation.js'
 import type { OllamaMessage, OllamaToolCall } from '../../types/inference.js'
 import { cloneTodoItems, type TodoState } from '../../types/todo.js'
+import { formatStoredToolResult } from '../../types/tool-result.js'
 import type { UndoFileChange, UndoTodoChange } from '../../types/undo.js'
 import { raceAbort } from '../../utils/abort.js'
 import {
@@ -222,6 +223,26 @@ function minimumToolResultMessage(toolName: string): OllamaMessage
     tool_name: toolName,
     content: `Error: ${TOOL_RESULT_REDACTED_OMITTED}`,
   })
+}
+
+// give each call a failed round never settled an interrupted result, so the
+// round whose completed calls changed files can still be committed
+function padInterruptedResults(
+  outcome: MutableToolRoundOutcome,
+  calls: readonly OllamaToolCall[]
+): void
+{
+  if (outcome.toolResults.length === 0) return
+  for (let index = outcome.toolResults.length; index < calls.length; index++)
+  {
+    outcome.toolResults.push(
+      Object.freeze({
+        role: 'tool',
+        tool_name: calls[index]!.function.name,
+        content: 'Error: Tool call interrupted',
+      })
+    )
+  }
 }
 
 function emptyOutcome(): MutableToolRoundOutcome
@@ -445,6 +466,7 @@ export class ToolRoundExecutor
     }
     catch (error)
     {
+      padInterruptedResults(outcome, input.round.calls)
       return {
         status: 'failed',
         error: toError(error),
@@ -811,11 +833,7 @@ export class ToolRoundExecutor
     const cappedError = error
       ? trimTrailingHighSurrogate(capErrorMessage(error))
       : error
-    const rawContent = cappedError
-      ? output
-        ? `Error: ${cappedError}\n${output}`
-        : `Error: ${cappedError}`
-      : output
+    const rawContent = formatStoredToolResult(output, cappedError)
     const minimumTokens = budget.minimumTokens[budget.nextResult]
     if (minimumTokens === undefined || budget.remainingCalls <= 0)
     {
@@ -872,7 +890,7 @@ export class ToolRoundExecutor
       const fallback: OllamaMessage = {
         role: 'tool',
         tool_name: toolName,
-        content: error ? `Error: ${notice}` : notice,
+        content: error ? formatStoredToolResult('', notice) : notice,
       }
       if (estimateModelRequestMessageTokens(fallback) > maxTokens)
       {
