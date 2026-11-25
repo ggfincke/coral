@@ -1,9 +1,10 @@
 // tests/scripts/eval/grade.ts
 // deterministic grader helpers used by eval tasks
 
+import { execFile } from 'node:child_process'
 import { readFile, readdir } from 'node:fs/promises'
 import { join, extname } from 'node:path'
-import { execFileCommand } from '../../../src/utils/process.js'
+import type { GradeResult } from './types.js'
 
 // default text extensions walked by treeContains/treeFreeOf
 const DEFAULT_TEXT_EXTS = ['.js', '.mjs', '.ts', '.json', '.txt']
@@ -51,25 +52,73 @@ export function answerContains(finalText: string, needle: string): boolean
   return finalText.toLowerCase().includes(needle.toLowerCase())
 }
 
-// run node in dir; reuse execFileCommand, map ok->0 else numeric code or 1
-export async function runNode(
+// run node in dir; exit code or 1 when it died w/o one. drop an inherited
+// NODE_TEST_CONTEXT so a nested node --test prints TAP, not the parent's protocol
+export function runNode(
   dir: string,
   args: string[],
   timeoutMs?: number
 ): Promise<{ code: number; stdout: string; stderr: string }>
 {
-  const result = await execFileCommand('node', args, {
-    cwd: dir,
-    timeout: timeoutMs,
-  })
-
-  if (result.ok)
+  const env = { ...process.env }
+  delete env.NODE_TEST_CONTEXT
+  return new Promise((resolve) =>
   {
-    return { code: 0, stdout: result.stdout, stderr: result.stderr }
-  }
+    execFile(
+      'node',
+      args,
+      { cwd: dir, timeout: timeoutMs, env, encoding: 'utf-8' },
+      (err, stdout, stderr) =>
+      {
+        const code =
+          err === null ? 0 : typeof err.code === 'number' ? err.code : 1
+        resolve({ code, stdout, stderr })
+      }
+    )
+  })
+}
 
-  const code = typeof result.code === 'number' ? result.code : 1
-  return { code, stdout: result.stdout, stderr: result.stderr }
+// escape a test name the way the TAP reporter does, then for a RegExp
+function tapNamePattern(name: string): string
+{
+  const tap = name.replace(/\\/g, '\\\\').replace(/#/g, '\\#')
+  return tap.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// run node --test w/ the TAP reporter & require each named test to report ok;
+// exit 0 alone is not enough since a source that exits early also exits 0
+export async function runLockedTests(
+  dir: string,
+  testPaths: string[],
+  testNames: string[],
+  timeoutMs?: number
+): Promise<GradeResult>
+{
+  if (testNames.length === 0)
+  {
+    throw new Error('runLockedTests needs at least one expected test name')
+  }
+  const { code, stdout } = await runNode(
+    dir,
+    ['--test', '--test-reporter=tap', ...testPaths],
+    timeoutMs
+  )
+  if (code !== 0)
+  {
+    return { passed: false, detail: `node --test exited ${code}` }
+  }
+  const missing = testNames.filter(
+    (name) =>
+      !new RegExp(`^\\s*ok \\d+ - ${tapNamePattern(name)}$`, 'm').test(stdout)
+  )
+  if (missing.length > 0)
+  {
+    return {
+      passed: false,
+      detail: `node --test exited 0 but did not pass: ${missing.join(', ')}`,
+    }
+  }
+  return { passed: true, detail: 'node --test passed' }
 }
 
 // recursively collect text-file paths under dir, skipping node_modules/.git
