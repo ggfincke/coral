@@ -6,7 +6,10 @@ import { getToolPolicy } from '../../config/permissions.js'
 import type { CodeIntelService } from '../../lsp/contracts.js'
 import { parseModelRef } from '../../providers/model-ref.js'
 import type { ToolCatalog } from '../../tools/catalog.js'
-import { requiresWorkspacePathApproval } from '../../tools/path-policy.js'
+import {
+  requiresWorkspacePathApproval,
+  touchesProtectedPath,
+} from '../../tools/path-policy.js'
 import type { SubagentRunner } from '../../tools/subagent.js'
 import { capErrorMessage } from '../../tools/tool-output.js'
 import type { ToolExecutionContext, ToolResult } from '../../tools/tool.js'
@@ -619,9 +622,14 @@ export class ToolRoundExecutor
         invocation.args,
         this.cwd
       )
+      const protectedPath = await touchesProtectedPath(
+        invocation.name,
+        invocation.args,
+        this.cwd
+      )
       const policy = this.resolveInvocationPolicy(
         invocation.name,
-        crossesWorkspace
+        crossesWorkspace || protectedPath
       )
 
       if (policy === 'always_deny')
@@ -651,7 +659,8 @@ export class ToolRoundExecutor
               invocation.args,
               invocation.presentation,
               invocation.id,
-              crossesWorkspace
+              crossesWorkspace,
+              protectedPath
             ),
             input.signal
           )
@@ -746,15 +755,15 @@ export class ToolRoundExecutor
     }
   }
 
+  // an always_allow tool is gated when its path leaves the workspace or hits
+  // a protected path
   private resolveInvocationPolicy(
     toolName: string,
-    crossesWorkspace: boolean
+    gated: boolean
   ): ToolPermissions[string]
   {
     const policy = getToolPolicy(this.permissions, toolName)
-    return policy === 'always_allow' && crossesWorkspace
-      ? 'require_approval'
-      : policy
+    return policy === 'always_allow' && gated ? 'require_approval' : policy
   }
 
   private canRunToolInParallel(

@@ -57,8 +57,8 @@ export interface UseInteractiveSessionOptions
   initialSession: SessionData | null
   exit: () => void
   view: InteractiveSessionView
-  // persistent per-workspace tool grants consulted by approval prompts
-  toolGrants?: ToolGrantPersistence
+  // persistent tool grants for the workspace of the Agent asking
+  toolGrants?: (agent: Agent) => ToolGrantPersistence
 }
 
 export type PermissionTransitionResult =

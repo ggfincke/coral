@@ -4,6 +4,7 @@
 import chalk from 'chalk'
 import wrapAnsi from 'wrap-ansi'
 import type { McpLaunchApprovalRequest } from '../../mcp/types.js'
+import { getBuiltInToolRegistration } from '../../tools/catalog.js'
 import type { ToolCallPresentation } from '../../tools/tool.js'
 import { ellipsize, trimTrailingHighSurrogate } from '../../utils/ellipsize.js'
 import { renderUnifiedDiff } from '../transcript/diff.js'
@@ -11,7 +12,12 @@ import { summarizeToolArgs } from '../transcript/transcript.js'
 import { boxFrame } from './status-line.js'
 import { style } from '../theme.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
-import { stringifyForDisplay } from '../../utils/untrusted-text.js'
+import {
+  flattenUntrustedText,
+  hasHiddenControls,
+  revealUntrustedText,
+  stringifyForDisplay,
+} from '../../utils/untrusted-text.js'
 import { truncateLine, visibleWidth } from '../wrap.js'
 import type { CoralKey } from '../input/terminal-input.js'
 import { previousGraphemeOffset } from '../prompt/grapheme.js'
@@ -162,6 +168,7 @@ function contentBuilder(width: number, label: string): ContentBuilder
   }
 }
 
+// hidden controls are shown escaped so every byte that will run is on screen
 function formatApprovalArgs(
   toolName: string,
   args: Record<string, unknown>,
@@ -172,15 +179,60 @@ function formatApprovalArgs(
   // prefix
   if (presentation?.mcp)
   {
-    const json = sanitizeUntrustedText(stringifyForDisplay(args, 2))
+    const json = revealUntrustedText(stringifyForDisplay(args, 2))
     if (json.length <= MAX_MCP_APPROVAL_ARG_CHARS) return json
     return `${trimTrailingHighSurrogate(json.slice(0, MAX_MCP_APPROVAL_ARG_CHARS))}\n… [MCP arguments truncated]`
   }
   const summary =
     presentation?.summary !== undefined
-      ? sanitizeUntrustedText(presentation.summary)
+      ? revealUntrustedText(presentation.summary)
       : summarizeToolArgs(args, presentation)
   return toolName === 'bash' ? `$ ${summary}` : summary
+}
+
+function containsHiddenControls(value: unknown): boolean
+{
+  if (typeof value === 'string') return hasHiddenControls(value)
+  if (Array.isArray(value)) return value.some(containsHiddenControls)
+  if (typeof value === 'object' && value !== null)
+  {
+    return Object.entries(value).some(
+      ([key, item]) => hasHiddenControls(key) || containsHiddenControls(item)
+    )
+  }
+  return false
+}
+
+// why a tool call reached approval; picks the grant text & offered actions
+export interface ApprovalScope
+{
+  // a workspace-persisted (p) grant may be offered
+  persistable?: boolean
+  // the path leaves the workspace; (a) then covers only outside calls
+  promoted?: boolean
+  // a write to git internals or Coral control files; no grant is offered
+  protectedPath?: boolean
+}
+
+// each (a) covers only its own scope, so the text says which one is granted
+function grantNotice(toolName: string, scope: ApprovalScope): string
+{
+  if (scope.protectedPath)
+  {
+    return 'Protected path (git internals or Coral control files): this approves one call; no grant covers it.'
+  }
+  if (scope.promoted)
+  {
+    return 'Outside the workspace. (a) grants this tool for outside-workspace paths for this session.'
+  }
+  const pathScoped =
+    getBuiltInToolRegistration(toolName)?.workspacePath !== undefined
+  const session = pathScoped
+    ? '(a) grants this tool for paths inside the workspace for this session; outside paths still ask'
+    : '(a) grants this tool with any arguments for this session'
+  return scope.persistable
+    ? `${session}; (p) also remembers it for this workspace until revoked.`
+    : `${session}.`
 }
 
 // lines come back fully styled; render without an outer Ink color prop so the
@@ -192,22 +244,28 @@ export function buildApprovalContent(
   diff?: string,
   previewMessage?: string,
   presentation?: ToolCallPresentation,
-  persistable = false
+  scope: ApprovalScope = {}
 ): PromptBoxContent
 {
   const box = contentBuilder(width, 'tool approval')
 
   const cleanToolName = ellipsize(
-    sanitizeUntrustedText(toolName).replace(/\s+/g, ' ').trim(),
+    flattenUntrustedText(toolName),
     MAX_APPROVAL_TOOL_NAME_CHARS
   )
   box.title(`Allow ${cleanToolName}?`)
-  box.title(
-    persistable
-      ? '(a) grants this tool with any arguments for this session; (p) also remembers it for this workspace until revoked.'
-      : '(a) grants this tool with any arguments for this session.',
-    box.warn
+  box.title(grantNotice(toolName, scope), box.warn)
+  if (
+    hasHiddenControls(toolName) ||
+    containsHiddenControls(args) ||
+    (diff !== undefined && hasHiddenControls(diff))
   )
+  {
+    box.title(
+      'Warning: this call contains control or invisible characters, shown escaped as \\xNN or \\uNNNN.',
+      box.warn
+    )
+  }
   box.push(formatApprovalArgs(toolName, args, presentation))
 
   if (diff)
@@ -222,14 +280,16 @@ export function buildApprovalContent(
   else if (previewMessage)
   {
     box.blank()
-    box.push(chalk.dim(sanitizeUntrustedText(previewMessage)))
+    box.push(chalk.dim(revealUntrustedText(previewMessage)))
   }
 
   return box.finish(
     [
       chalk.bold('(y) approve'),
-      box.warn('(a) allow always (session)'),
-      ...(persistable ? [box.warn('(p) allow always (workspace)')] : []),
+      ...(scope.protectedPath ? [] : [box.warn('(a) allow always (session)')]),
+      ...(scope.persistable && !scope.protectedPath
+        ? [box.warn('(p) allow always (workspace)')]
+        : []),
       '(n) reject + reason',
       chalk.dim('(esc) reject · ctrl+c interrupts'),
     ].join('  ')
@@ -349,6 +409,23 @@ function wrappedPromptContent(
   return wrapped
 }
 
+// full titles, actions, and one body row: the least a prompt is admitted at
+function pinnedPromptRows(titleRows: number, actionRows: number): number
+{
+  return titleRows + actionRows + 3
+}
+
+// the app admits a prompt only at this height and asks the renderer for it
+// instead of re-wrapping the content itself
+export function promptBoxMinRows(
+  content: PromptBoxContent,
+  width: number
+): number
+{
+  const wrapped = wrappedPromptContent(content, boxFrame(width, '').innerWidth)
+  return pinnedPromptRows(wrapped.titleLines.length, wrapped.actionLines.length)
+}
+
 // frame content into at most maxRows terminal rows; title and actions stay
 // pinned while the body scrolls behind a position indicator
 export function renderPromptBox(
@@ -395,7 +472,8 @@ export function renderPromptBox(
 
   // the app admits prompts only when full titles, actions, and one body row fit;
   // direct smaller renders retain scrolling titles for inspectable fallback
-  const pinFullTitle = rowLimit >= titleLines.length + actionLines.length + 3
+  const pinFullTitle =
+    rowLimit >= pinnedPromptRows(titleLines.length, actionLines.length)
   const insideRows = Math.max(rowLimit - 2, 0)
   const visibleActions = actionLines.slice(0, insideRows)
   const contentRows = Math.max(insideRows - visibleActions.length, 0)

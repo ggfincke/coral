@@ -73,15 +73,16 @@ export interface AgentEvents
     callId: number,
     diff?: string
   ) => void
-  // approve or reject a require_approval invocation; promoted marks any
-  // call whose path leaves the workspace, which is the only reason an
-  // always_allow tool gets gated
+  // approve or reject a require_approval invocation; promoted (path leaves the
+  // workspace) & protectedPath (write to git internals or Coral control files)
+  // are the only reasons an always_allow tool gets gated
   onToolApproval: (
     name: string,
     args: Record<string, unknown>,
     presentation?: ToolCallPresentation,
     callId?: number,
-    promoted?: boolean
+    promoted?: boolean,
+    protectedPath?: boolean
   ) => Promise<ToolApprovalDecision>
   // launch trust is separate from per-tool approval and is never automatic
   onMcpLaunchApproval?: (request: McpLaunchApprovalRequest) => Promise<boolean>

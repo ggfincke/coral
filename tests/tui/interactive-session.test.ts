@@ -26,6 +26,7 @@ import {
 } from '../../src/tui/session/agent-session.js'
 import { runAdmittedCommand } from '../../src/tui/commands/command-operation.js'
 import type { SessionMeta } from '../../src/session/types.js'
+import { workspaceToolGrants } from '../../src/config/tool-grants.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import { makeSessionMeta } from '../helpers/session.js'
 import { makeTempDirPool } from '../helpers/temp.js'
@@ -105,7 +106,7 @@ function makeRuntime(
     ) => SessionMeta | null
     recordTelemetry?: (model: string, trips: number) => void
     onPromptChange?: (prompt: ActivePrompt | null) => void
-    toolGrants?: ToolGrantPersistence
+    toolGrants?: (agent: FakeAgent) => ToolGrantPersistence
   } = {}
 ): InteractiveSessionRuntime<FakeAgent>
 {
@@ -624,14 +625,14 @@ test('persistent workspace grants approve eligible built-ins and never MCP or pr
   const trusted: string[] = []
   const runtime = makeRuntime(new FakeAgent('grants'), null, {
     onPromptChange: (prompt) => prompts.push(prompt),
-    toolGrants: {
+    toolGrants: () => ({
       isTrusted: (toolName) => persisted.has(toolName),
       trust: (toolName) =>
       {
         trusted.push(toolName)
         persisted.add(toolName)
       },
-    },
+    }),
   })
   const published = () => prompts.filter(Boolean).length
   const settle = (settlement: PromptSettlement) =>
@@ -706,6 +707,172 @@ test('persistent workspace grants approve eligible built-ins and never MCP or pr
   assert.equal(published(), 4)
   settle(true)
   assert.equal(await again, true)
+
+  await runtime.shutdown()
+})
+
+test('session grants stay in their scope and never cover protected or promoted-after-persisted calls', async () =>
+{
+  const prompts: Array<ActivePrompt | null> = []
+  const persisted = new Set<string>(['write_file'])
+  const runtime = makeRuntime(new FakeAgent('scopes'), null, {
+    onPromptChange: (prompt) => prompts.push(prompt),
+    toolGrants: () => ({
+      isTrusted: (toolName) => persisted.has(toolName),
+      trust: (toolName) => void persisted.add(toolName),
+    }),
+  })
+  const published = () => prompts.filter(Boolean).length
+  const settle = (settlement: PromptSettlement) =>
+  {
+    const prompt = prompts.at(-1)
+    assert.ok(prompt && prompt.kind === 'tool')
+    assert.equal(runtime.settlePrompt(prompt.id, settlement), true)
+  }
+  const run = runtime.beginOperation('turn')
+  assert.ok(run)
+
+  // a persisted grant used once in the workspace never covers a promoted call
+  assert.equal(
+    await runtime.requestToolApproval(run, {
+      toolName: 'write_file',
+      args: { path: 'src/x.ts' },
+    }),
+    true
+  )
+  assert.equal(published(), 0)
+  const outside = runtime.requestToolApproval(run, {
+    toolName: 'write_file',
+    args: { path: '../../.bashrc' },
+    promoted: true,
+  })
+  assert.equal(published(), 1)
+  settle({ approved: true, always: true })
+  assert.equal(await outside, true)
+
+  // (a) on the promoted prompt covers later promoted calls only
+  assert.equal(
+    await runtime.requestToolApproval(run, {
+      toolName: 'write_file',
+      args: { path: '../other' },
+      promoted: true,
+    }),
+    true
+  )
+  assert.equal(published(), 1)
+  const readOutside = runtime.requestToolApproval(run, {
+    toolName: 'read_file',
+    args: { path: '../secret' },
+    promoted: true,
+  })
+  assert.equal(published(), 2)
+  settle({ approved: true, always: true })
+  assert.equal(await readOutside, true)
+  const readInside = runtime.requestToolApproval(run, {
+    toolName: 'read_file',
+    args: { path: 'a.txt' },
+  })
+  assert.equal(published(), 3)
+  settle(true)
+  assert.equal(await readInside, true)
+
+  // a protected write prompts despite both grants, and (a) on it records nothing
+  for (const promoted of [false, true])
+  {
+    const protectedWrite = runtime.requestToolApproval(run, {
+      toolName: 'write_file',
+      args: { path: '.git/config' },
+      promoted,
+      protectedPath: true,
+    })
+    const before = published()
+    settle({ approved: true, always: true, persist: true })
+    assert.equal(await protectedWrite, true)
+    const again = runtime.requestToolApproval(run, {
+      toolName: 'write_file',
+      args: { path: '.git/config' },
+      promoted,
+      protectedPath: true,
+    })
+    assert.equal(published(), before + 1)
+    settle(false)
+    assert.equal(await again, false)
+  }
+
+  await runtime.shutdown()
+})
+
+test('persisted grants follow the active Agent workspace across a resume', async () =>
+{
+  class WorkspaceAgent extends FakeAgent
+  {
+    constructor(readonly cwd: string)
+    {
+      super(cwd)
+    }
+  }
+  const workspaceA = await tempDir('coral-grants-a-')
+  const workspaceB = await tempDir('coral-grants-b-')
+  workspaceToolGrants(workspaceA).trust('bash')
+
+  const prompts: Array<ActivePrompt | null> = []
+  const runtime = new InteractiveSessionRuntime<WorkspaceAgent>(
+    {
+      persist: (_agent, target) => target,
+      recordTelemetry: () => undefined,
+      onPromptChange: (prompt) => prompts.push(prompt),
+      onSessionChange: () => undefined,
+      onTransitionChange: () => undefined,
+      toolGrants: (agent) => workspaceToolGrants(agent.cwd),
+    },
+    new WorkspaceAgent(workspaceA),
+    null
+  )
+  const published = () => prompts.filter(Boolean).length
+
+  // workspace A's persisted grant approves in A
+  const inA = runtime.beginOperation('turn')
+  assert.ok(inA)
+  assert.equal(
+    await runtime.requestToolApproval(inA, {
+      toolName: 'bash',
+      args: { command: 'ls' },
+    }),
+    true
+  )
+  assert.equal(published(), 0)
+  runtime.completeTurn(inA)
+
+  // after resuming a session rooted in B, bash prompts and (p) persists to B
+  await runtime.replaceAgent(new WorkspaceAgent(workspaceB), null)
+  const inB = runtime.beginOperation('turn')
+  assert.ok(inB)
+  const approval = runtime.requestToolApproval(inB, {
+    toolName: 'bash',
+    args: { command: 'ls' },
+  })
+  assert.equal(published(), 1)
+  const prompt = prompts.at(-1)
+  assert.ok(prompt && prompt.kind === 'tool')
+  runtime.settlePrompt(prompt.id, {
+    approved: true,
+    always: true,
+    persist: true,
+  })
+  assert.equal(await approval, true)
+  assert.deepEqual(
+    workspaceToolGrants(workspaceB)
+      .list()
+      .map((record) => record.toolName),
+    ['bash']
+  )
+  assert.deepEqual(
+    workspaceToolGrants(workspaceA)
+      .list()
+      .map((record) => record.toolName),
+    ['bash']
+  )
+  runtime.completeTurn(inB)
 
   await runtime.shutdown()
 })

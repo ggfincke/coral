@@ -25,8 +25,10 @@ export type ActivePrompt =
       diff?: string
       previewMessage?: string
       presentation?: ToolCallPresentation
-      // gated only because the path leaves the workspace; never persistable
+      // the path leaves the workspace; grants for it stay per session & scope
       promoted?: boolean
+      // a file write to git internals or Coral control files; never granted
+      protectedPath?: boolean
     }
   | {
       id: number
@@ -100,9 +102,11 @@ interface ActiveLifecycleTransition<A extends InteractiveLifetimeAgent>
   task: Promise<void> | null
 }
 
-interface PendingPrompt
+interface PendingPrompt<A extends InteractiveLifetimeAgent>
 {
   prompt: ActivePrompt
+  // the Agent whose operation asked; its workspace owns persisted grants
+  agent: A
   settled: boolean
   resolve: (settlement: PromptSettlement) => void
 }
@@ -111,7 +115,8 @@ interface PendingPrompt
 export interface ToolPromptAnswer
 {
   approved: boolean
-  // approve & grant this tool identity for the rest of the session
+  // approve & grant this tool identity in the prompt's scope (inside or
+  // outside the workspace) for the rest of the session
   always?: boolean
   // also remember the grant for this workspace; implies always
   persist?: boolean
@@ -126,18 +131,20 @@ export type ToolApprovalRequest = Omit<
   'id' | 'kind'
 >
 
-// grants fingerprint tool identity only, never args; dynamic MCP names carry
-// their stable server qualifier so they can never collide w/ a built-in
+// grants fingerprint tool identity & scope, never args; dynamic MCP names
+// carry their stable server qualifier so they can never collide w/ a built-in,
+// and an outside-workspace grant never covers in-workspace calls or vice versa
 export function sessionToolGrantFingerprint(
   toolName: string,
-  presentation?: ToolCallPresentation
+  presentation?: ToolCallPresentation,
+  outsideWorkspace = false
 ): string
 {
-  if (presentation?.mcp === true || toolName.startsWith('mcp__'))
-  {
-    return `mcp:${toolName}`
-  }
-  return toolName
+  const identity =
+    presentation?.mcp === true || toolName.startsWith('mcp__')
+      ? `mcp:${toolName}`
+      : toolName
+  return outsideWorkspace ? `outside:${identity}` : identity
 }
 
 export function settlementApproved(settlement: PromptSettlement): boolean
@@ -160,14 +167,26 @@ export function toolApprovalResult(
   return settlementApproved(settlement)
 }
 
+// protected writes always prompt, so no session or persisted grant covers them
+export function isSessionGrantEligible(
+  prompt: Pick<ToolApprovalRequest, 'protectedPath'>
+): boolean
+{
+  return prompt.protectedPath !== true
+}
+
 // persistent grants cover trusted built-ins gated by policy alone; dynamic
 // MCP tools keep their authority in user config and launch trust, and
 // outside-workspace promotions stay per-session
 export function isPersistentGrantEligible(
-  prompt: Pick<ToolApprovalRequest, 'toolName' | 'presentation' | 'promoted'>
+  prompt: Pick<
+    ToolApprovalRequest,
+    'toolName' | 'presentation' | 'promoted' | 'protectedPath'
+  >
 ): boolean
 {
   return (
+    isSessionGrantEligible(prompt) &&
     prompt.promoted !== true &&
     prompt.presentation?.mcp !== true &&
     !prompt.toolName.startsWith('mcp__')
@@ -191,7 +210,9 @@ export interface InteractiveRuntimeDependencies<
   onPromptChange: (prompt: ActivePrompt | null) => void
   onSessionChange: (meta: SessionMeta | null) => void
   onTransitionChange: (transition: LifecycleTransitionSnapshot | null) => void
-  toolGrants?: ToolGrantPersistence
+  // resolved from the Agent that owns each call, so persisted grants follow
+  // its workspace across resumes instead of the launch directory
+  toolGrants?: (agent: A) => ToolGrantPersistence
 }
 
 export interface OperationCompletion
@@ -223,7 +244,7 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
   private nextTransitionId = 1
   private binding: SessionBinding
   private operation: ActiveOperation<A> | null = null
-  private prompt: PendingPrompt | null = null
+  private prompt: PendingPrompt<A> | null = null
   private transition: ActiveLifecycleTransition<A> | null = null
   // session-scoped tool approval grants; cleared whenever the binding changes
   private readonly sessionToolGrants = new Set<string>()
@@ -492,6 +513,7 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
       const prompt = { ...request, id: this.nextPromptId++ } as ActivePrompt
       this.prompt = {
         prompt,
+        agent: handle.agent,
         settled: false,
         resolve,
       }
@@ -499,10 +521,9 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
     })
   }
 
-  // grant-aware tool approval consumption: a recorded fingerprint settles
-  // approved without publishing any prompt, a persisted workspace grant is
-  // promoted into the session set on first use, and an always-approve
-  // settlement records its grant for the rest of the session binding
+  // a session grant for the call's scope, or a persisted workspace grant on
+  // first use, approves w/o a prompt; protected calls skip every grant. an
+  // always-approve settlement records its grant for the rest of the binding
   async requestToolApproval(
     handle: OperationHandle<A>,
     request: ToolApprovalRequest
@@ -510,18 +531,24 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
   {
     if (!this.acceptsEvent(handle)) return false
 
-    const fingerprint = sessionToolGrantFingerprint(
-      request.toolName,
-      request.presentation
-    )
-    if (this.sessionToolGrants.has(fingerprint)) return true
-    if (
-      isPersistentGrantEligible(request) &&
-      this.dependencies.toolGrants?.isTrusted(request.toolName) === true
-    )
+    if (isSessionGrantEligible(request))
     {
-      this.sessionToolGrants.add(fingerprint)
-      return true
+      const fingerprint = sessionToolGrantFingerprint(
+        request.toolName,
+        request.presentation,
+        request.promoted === true
+      )
+      if (this.sessionToolGrants.has(fingerprint)) return true
+      if (
+        isPersistentGrantEligible(request) &&
+        this.dependencies
+          .toolGrants?.(handle.agent)
+          .isTrusted(request.toolName) === true
+      )
+      {
+        this.sessionToolGrants.add(fingerprint)
+        return true
+      }
     }
 
     const settlement = await this.requestPrompt(handle, {
@@ -538,26 +565,35 @@ export class InteractiveSessionRuntime<A extends InteractiveLifetimeAgent>
       typeof settlement === 'object' &&
       settlement.approved &&
       (settlement.always === true || settlement.persist === true) &&
-      this.prompt.prompt.kind === 'tool'
+      this.prompt.prompt.kind === 'tool' &&
+      isSessionGrantEligible(this.prompt.prompt)
     )
     {
       const prompt = this.prompt.prompt
       this.sessionToolGrants.add(
-        sessionToolGrantFingerprint(prompt.toolName, prompt.presentation)
+        sessionToolGrantFingerprint(
+          prompt.toolName,
+          prompt.presentation,
+          prompt.promoted === true
+        )
       )
       // a persist request on an ineligible prompt degrades to a session grant
       if (settlement.persist === true && isPersistentGrantEligible(prompt))
       {
-        this.dependencies.toolGrants?.trust(prompt.toolName)
+        this.dependencies.toolGrants?.(this.prompt.agent).trust(prompt.toolName)
       }
     }
     return this.settlePromptInternal(settlement)
   }
 
-  // drop one session grant so a revoked tool prompts again on its next call
+  // drop a tool's session grants in both scopes so a revoked tool prompts
+  // again on its next call
   forgetSessionToolGrant(toolName: string): void
   {
     this.sessionToolGrants.delete(sessionToolGrantFingerprint(toolName))
+    this.sessionToolGrants.delete(
+      sessionToolGrantFingerprint(toolName, undefined, true)
+    )
   }
 
   abortActive(): boolean

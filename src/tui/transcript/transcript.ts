@@ -28,7 +28,10 @@ import {
 } from '../wrap.js'
 import type { ToolCallPresentation } from '../../tools/tool.js'
 import { ellipsize } from '../../utils/ellipsize.js'
-import { stringifyForDisplay } from '../../utils/untrusted-text.js'
+import {
+  flattenUntrustedText,
+  stringifyForDisplay,
+} from '../../utils/untrusted-text.js'
 import { sanitizeUntrustedText, sanitizeStyledText } from './sanitize.js'
 import type { OutputBlock, ToolCallBlock } from './types.js'
 
@@ -88,10 +91,7 @@ export function summarizeToolArgs(
 ): string
 {
   const summary = display?.summary ?? stringifyForDisplay(args)
-  return ellipsize(
-    sanitizeUntrustedText(summary).replace(/\s+/g, ' ').trim(),
-    60
-  )
+  return ellipsize(flattenUntrustedText(summary), 60)
 }
 
 function getCachedBlockLines(
@@ -137,7 +137,7 @@ function toolDisplayLabel(
   display?: ToolCallPresentation
 ): string
 {
-  return sanitizeUntrustedText(display?.label ?? toolName)
+  return flattenUntrustedText(display?.label ?? toolName)
 }
 
 // format an in-progress tool call that depends on the current spinner frame
@@ -310,8 +310,8 @@ function maybeLinkifyPathArg(
     const value = args[field]
     if (typeof value !== 'string' || value === '') continue
 
-    const shown = sanitizeUntrustedText(value)
-    if (!argSummary.includes(shown)) continue
+    const shown = flattenUntrustedText(value)
+    if (!shown || !argSummary.includes(shown)) continue
 
     // a replacer fn keeps `$&` and friends in the path literal
     const link = buildFileLink(value, shown, { enabled: true, cwd })
