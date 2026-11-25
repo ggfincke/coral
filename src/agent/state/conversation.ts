@@ -18,6 +18,7 @@ import {
 import {
   cloneMessages,
   cloneUndoTurn,
+  findUserTurnStarts,
   isUndoTurnAligned,
   MAX_UNDO_TURNS,
   type UndoFileChange,
@@ -32,6 +33,8 @@ import { cloneTodoItems } from '../../types/todo.js'
 import type { OllamaMessage } from '../../types/inference.js'
 
 export const DEFAULT_MAX_HISTORY = 100
+// a count trim drops to this many messages so the next one waits for real growth
+export const HISTORY_TRIM_WATERMARK = 70
 
 declare const messageAnchorBrand: unique symbol
 
@@ -636,12 +639,14 @@ export class ConversationState
     const record = this.consumeCurrentSummaryPlan(plan)
     if (!record) return { status: 'stale' }
 
+    const gitContext = this.newestGitContext()
     this.messages = buildCompactedMessages(
       record.frozenPrefix,
       summary,
       record.toKeep
     )
     this.frozenPrefixLength = record.frozenPrefix.length + 1
+    this.rehomeGitContext(gitContext)
     this.clearUndoRedoStacks()
     if (record.mode !== 'manual') this.compactFailureCount = 0
     this.rebuildTokenEstimate()
@@ -763,6 +768,8 @@ export class ConversationState
     }
   }
 
+  // drop the oldest live turns down to maxHistory, cutting at a turn start;
+  // the transition shows no change when nothing could be dropped
   trimToMax(maxHistory = DEFAULT_MAX_HISTORY): ConversationTransition
   {
     const beforeStoredTokens = this.estimatedTokenCount
@@ -918,26 +925,62 @@ export class ConversationState
       throw new RangeError('maxHistory must be a non-negative integer')
     }
 
+    const start = this.trimStart(maxHistory, preserve)
+    const removed = start - this.frozenPrefixLength
+    if (removed <= 0) return
+
+    const gitContext = this.newestGitContext()
     const frozen = this.messages.slice(0, this.frozenPrefixLength)
+    this.messages = [...frozen, ...this.messages.slice(start)]
+    this.rehomeGitContext(gitContext)
+    // surviving turns keep undo; their indices move w/ the dropped prefix
+    const rebase = (turns: UndoTurn[]): UndoTurn[] =>
+      turns
+        .filter((turn) => turn.startIndex >= start)
+        .map((turn) => ({
+          ...turn,
+          startIndex: turn.startIndex - removed,
+          endIndex: turn.endIndex - removed,
+        }))
+    this.undoStack = rebase(this.undoStack)
+    this.redoStack = rebase(this.redoStack)
+    this.rebuildTokenEstimate()
+  }
+
+  // first kept index: the oldest turn start that fits the budget, never past
+  // the preserved active turn; a single oversized turn falls back to a
+  // tool-round boundary
+  private trimStart(maxHistory: number, preserve?: OllamaMessage): number
+  {
     const liveBudget = Math.max(maxHistory - this.frozenPrefixLength, 0)
-    let start = Math.max(
+    const minStart = Math.max(
       this.frozenPrefixLength,
       this.messages.length - liveBudget
     )
-
-    if (preserve)
+    const preserveIndex = preserve ? this.messages.indexOf(preserve) : -1
+    if (preserveIndex >= this.frozenPrefixLength && preserveIndex <= minStart)
     {
-      const preserveIndex = this.messages.indexOf(preserve)
-      if (preserveIndex >= this.frozenPrefixLength && preserveIndex < start)
-      {
-        start = preserveIndex
-      }
+      return preserveIndex
     }
 
-    start = alignToolRoundStart(this.messages, start, this.frozenPrefixLength)
-    this.messages = [...frozen, ...this.messages.slice(start)]
-    this.clearUndoRedoStacks()
-    this.rebuildTokenEstimate()
+    const turnStart = findUserTurnStarts(this.messages, this.undoStack).find(
+      (index) => index >= minStart
+    )
+    if (turnStart !== undefined) return turnStart
+    return alignToolRoundStart(this.messages, minStart, this.frozenPrefixLength)
+  }
+
+  // keep the newest Git snapshot when the turn that held it was dropped, so
+  // later turns that skipped an unchanged snapshot still send one
+  private rehomeGitContext(gitContext: string | undefined): void
+  {
+    if (gitContext === undefined || this.newestGitContext() !== undefined)
+    {
+      return
+    }
+    const live = this.messages.slice(this.frozenPrefixLength)
+    const holder = live.find((message) => message.role === 'user')
+    if (holder) holder.gitContext = gitContext
   }
 
   private makeTransition(

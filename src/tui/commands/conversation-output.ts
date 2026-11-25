@@ -36,15 +36,18 @@ export function formatAutoCompactionResult(result: CompactionResult): string
     return `Auto-pruned ${details.join(' and ')} (~${formatTokenCount(savedTokens)} tokens freed)`
   }
 
+  // a trim keeps undo for the turns it did not drop
   const header =
-    result.type === 'trimmed'
-      ? 'Context trimmed to recent history (summarization unavailable)'
-      : 'Context auto-compacted'
+    result.type !== 'trimmed'
+      ? 'Context auto-compacted'
+      : result.trimReason === 'message_limit'
+        ? 'Context trimmed to recent history (message limit reached)'
+        : 'Context trimmed to recent history (summarization unavailable)'
   return [
     header,
     `  ${result.beforeMessages} -> ${result.afterMessages} messages`,
     `  ~${formatTokenCount(result.beforeTokens)} -> ~${formatTokenCount(result.afterTokens)} tokens (~${formatTokenCount(savedTokens)} freed)`,
-    '  Undo history cleared',
+    ...(result.type === 'trimmed' ? [] : ['  Undo history cleared']),
   ].join('\n')
 }
 

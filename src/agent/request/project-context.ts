@@ -141,6 +141,21 @@ function readDirectory(dir: string): RootEntry[] | null
   }
 }
 
+// control & line-separator characters let a file name start its own prompt line
+const LINE_BREAKING_CHARS = /[\p{Cc}\p{Zl}\p{Zp}]/gu
+
+// quote a name that could break out of the one-line entry list; JSON escapes
+// only C0 controls, so C1, DEL & line separators are escaped here
+function formatRootEntryName(entry: RootEntry): string
+{
+  const name = formatProjectTreeEntryName(entry)
+  if (!name.match(LINE_BREAKING_CHARS)) return name
+  return JSON.stringify(name).replace(
+    LINE_BREAKING_CHARS,
+    (char) => `\\u${char.codePointAt(0)!.toString(16).padStart(4, '0')}`
+  )
+}
+
 // root summaries include hidden entries
 function formatRootSummary(cwd: string, root: RootEntry[] | null): string
 {
@@ -152,7 +167,7 @@ function formatRootSummary(cwd: string, root: RootEntry[] | null): string
     .filter((entry) => shouldIncludeProjectTreeEntry(entry.name, IGNORED_DIRS))
     .sort(compareProjectTreeEntries)
     .slice(0, 12)
-    .map(formatProjectTreeEntryName)
+    .map(formatRootEntryName)
   const suffix = entries.length === 12 ? ' (truncated)' : ''
   const summary = entries.length > 0 ? entries.join(', ') : '(empty)'
   const projectType = detectProjectType(root)

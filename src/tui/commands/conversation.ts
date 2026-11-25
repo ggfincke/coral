@@ -3,7 +3,9 @@
 
 import { resolve } from 'node:path'
 import { writeFileSync } from 'node:fs'
+import type { CompactionResult } from '../../agent/agent.js'
 import { copyToClipboard } from '../../utils/clipboard.js'
+import { toErrorMessage } from '../../utils/errors.js'
 import { pluralize } from '../../utils/pluralize.js'
 import { style } from '../theme.js'
 import { buildSessionMarkdown } from '../shell/export-markdown.js'
@@ -50,7 +52,22 @@ const compactCommand: Command = {
 
     ctx.pushOutput(systemBlock('Compacting conversation...'))
 
-    const result = await ctx.agent.forceCompact(ctx.signal)
+    let result: CompactionResult | null
+    try
+    {
+      result = await ctx.agent.forceCompact(ctx.signal)
+    }
+    catch (error)
+    {
+      ctx.pushTerminalOutput(
+        systemBlock(
+          ctx.signal?.aborted
+            ? 'Compaction interrupted'
+            : `Compaction failed: ${toErrorMessage(error)}`
+        )
+      )
+      return
+    }
 
     if (!result)
     {

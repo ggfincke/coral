@@ -10,6 +10,9 @@ export const RESPONSE_RESERVE_FRACTION = 0.125
 export const MAX_HOSTED_RESPONSE_RESERVE_TOKENS = 64_000
 export const ATTACHMENT_FLEXIBLE_SHARE = 0.5
 export const MAX_ATTACHMENT_TOKENS = MAX_TOOL_OUTPUT_CHARS / CHARS_PER_TOKEN
+// local thinking windows from this size keep at least the floor for replies
+const THINKING_RESERVE_MIN_WINDOW = 16_384
+const THINKING_RESERVE_FLOOR_TOKENS = 4_096
 
 export interface RequestBudgetCapacity
 {
@@ -58,13 +61,15 @@ export class RequestBudgetError extends Error
   readonly code: RequestBudgetOverflowCode
   readonly breakdown: RequestBudgetBreakdown
 
+  // action replaces the default cause & advice when the caller knows better
   constructor(
     code: RequestBudgetOverflowCode,
-    breakdown: RequestBudgetBreakdown
+    breakdown: RequestBudgetBreakdown,
+    action?: string
   )
   {
     const detail = `${breakdown.promptTokens}/${breakdown.promptLimit} prompt tokens`
-    const action =
+    action ??=
       code === 'fixed_cost_overflow'
         ? 'the system prompt, active tools, and current turn cannot fit; shorten the turn, disable optional MCP tools, or raise the context limit'
         : 'protected conversation history cannot fit; start a new session, compact earlier, or raise the context limit'
@@ -136,8 +141,8 @@ export function requestBudgetCapacity(
     1,
     Math.min(
       MAX_RESPONSE_RESERVE_TOKENS,
-      thinking && window >= 16_384
-        ? Math.max(4_096, fractionalReserve)
+      thinking && window >= THINKING_RESERVE_MIN_WINDOW
+        ? Math.max(THINKING_RESERVE_FLOOR_TOKENS, fractionalReserve)
         : fractionalReserve
     )
   )
@@ -169,9 +174,11 @@ export function requestBudgetCapacity(
 }
 
 // smallest local window whose prompt limit still reaches the prompt cap; any
-// larger pinned num_ctx only allocates KV cache the planner never fills
+// larger pinned num_ctx only allocates KV cache the planner never fills.
+// thinking windows that land on the reserve floor need the floor on top
 export function usefulLocalContextWindow(
-  maxPromptTokens = MAX_REQUEST_PROMPT_TOKENS
+  maxPromptTokens = MAX_REQUEST_PROMPT_TOKENS,
+  thinking = true
 ): number
 {
   const cap =
@@ -179,9 +186,16 @@ export function usefulLocalContextWindow(
       ? Math.floor(maxPromptTokens)
       : MAX_REQUEST_PROMPT_TOKENS
   const fractional = Math.ceil(cap / (1 - RESPONSE_RESERVE_FRACTION))
-  return fractional * RESPONSE_RESERVE_FRACTION <= MAX_RESPONSE_RESERVE_TOKENS
-    ? fractional
-    : cap + MAX_RESPONSE_RESERVE_TOKENS
+  const window =
+    fractional * RESPONSE_RESERVE_FRACTION <= MAX_RESPONSE_RESERVE_TOKENS
+      ? fractional
+      : cap + MAX_RESPONSE_RESERVE_TOKENS
+  const floorBound =
+    thinking &&
+    window >= THINKING_RESERVE_MIN_WINDOW &&
+    Math.floor(window * RESPONSE_RESERVE_FRACTION) <
+      THINKING_RESERVE_FLOOR_TOKENS
+  return floorBound ? cap + THINKING_RESERVE_FLOOR_TOKENS : window
 }
 
 export function createRequestBudgetBreakdown(
@@ -245,10 +259,17 @@ export function requestBudgetOverflowCode(
     : 'history_overflow'
 }
 
-export function assertRequestBudget(breakdown: RequestBudgetBreakdown): void
+export function assertRequestBudget(
+  breakdown: RequestBudgetBreakdown,
+  action?: string
+): void
 {
   if (breakdown.fits) return
-  throw new RequestBudgetError(requestBudgetOverflowCode(breakdown), breakdown)
+  throw new RequestBudgetError(
+    requestBudgetOverflowCode(breakdown),
+    breakdown,
+    action
+  )
 }
 
 export function attachmentAllowanceTokens(

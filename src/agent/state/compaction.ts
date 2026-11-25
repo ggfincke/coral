@@ -81,6 +81,8 @@ export interface CompactionResult
   prunedResults?: number
   // number of completed assistant reasoning fields removed
   prunedThinking?: number
+  // why a trim ran: the stored message cap or repeated summary failures
+  trimReason?: 'message_limit' | 'summary_failed'
 }
 
 // estimate the token count for one message
@@ -363,6 +365,12 @@ export function stripThinkingForCompaction(
 }
 
 // format messages into the summarizer transcript
+// indent continuation lines so quoted text cannot start its own turn line
+function indentContinuation(text: string): string
+{
+  return text.replace(/\r\n|[\r\n\u0085\u2028\u2029]/g, '\n  ')
+}
+
 function formatMessagesForSummary(messages: OllamaMessage[]): string
 {
   const lines: string[] = []
@@ -372,12 +380,12 @@ function formatMessagesForSummary(messages: OllamaMessage[]): string
     switch (msg.role)
     {
       case 'user':
-        lines.push(`User: ${msg.content}`)
+        lines.push(`User: ${indentContinuation(msg.content)}`)
         break
       case 'assistant':
         if (msg.content)
         {
-          lines.push(`Assistant: ${msg.content}`)
+          lines.push(`Assistant: ${indentContinuation(msg.content)}`)
         }
         if (msg.tool_calls?.length)
         {
@@ -391,8 +399,12 @@ function formatMessagesForSummary(messages: OllamaMessage[]): string
         break
       case 'tool':
       {
-        // cap long tool results before summarization
-        const content = ellipsize(msg.content, 300)
+        // cap long tool results before summarization; one line, so tool
+        // output cannot forge a `User:` turn in the transcript
+        const content = ellipsize(
+          msg.content.replace(/[\s\u0085]+/g, ' ').trim(),
+          300
+        )
         lines.push(`  [${msg.tool_name ?? 'tool'} result] ${content}`)
         break
       }
