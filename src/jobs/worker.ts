@@ -9,17 +9,21 @@ import {
 import { AgentTodoState } from '../agent/state/todos.js'
 import type { AgentEvents } from '../agent/contracts.js'
 import type { SessionData } from '../session/types.js'
+import { discoverSkills, loadUserInstructions } from '../skills/discover.js'
 import { BASH_DEFAULT_TIMEOUT_MS } from '../tools/bash.js'
 import { allTools } from '../tools/registry.js'
 import type { Tool } from '../tools/tool.js'
+import { agentsHomePath } from '../utils/agents-home.js'
 import { toError } from '../utils/errors.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 import { assertJobWorktree, ensureJobWorktree, getJobDiff } from './git.js'
 import { runJobCommand } from './process.js'
 import {
   appendJobEvent,
+  isJobCommand,
   JOB_OUTPUT_TAIL_CHARS,
   jobSpecDigest,
+  MAX_JOB_COMMAND_CHARS,
   readJob,
   readJobSnapshot,
   writeJob,
@@ -42,6 +46,7 @@ const WORKER_TOOLS = new Set([
   'git_diff',
   'git_log',
   'todo_write',
+  'skill',
 ])
 
 export interface JobWorkerDependencies
@@ -131,8 +136,11 @@ export async function executeJob(
       throw error
     }
   }
-  const event = (type: string, text: string) =>
-    durable(() => io.appendJobEvent(id, type, text))
+  // stream and tool events are frequent, so they reach disk in coalesced batches
+  const event = (type: string, text: string, coalesce = false) =>
+    durable(() =>
+      io.appendJobEvent(id, type, text, coalesce ? { coalesce } : undefined)
+    )
   const save = (terminal = false) =>
   {
     const now = Date.now()
@@ -198,8 +206,8 @@ export async function executeJob(
   let pendingThinking = ''
   const flushStream = () =>
   {
-    if (pendingTokens) event('token', pendingTokens)
-    if (pendingThinking) event('thinking', pendingThinking)
+    if (pendingTokens) event('token', pendingTokens, true)
+    if (pendingThinking) event('thinking', pendingThinking, true)
     pendingTokens = ''
     pendingThinking = ''
   }
@@ -218,11 +226,11 @@ export async function executeJob(
     onToolCall(name, args)
     {
       flushStream()
-      event('tool_call', JSON.stringify({ name, args }))
+      event('tool_call', JSON.stringify({ name, args }), true)
     },
     onToolResult(name, output, error)
     {
-      event('tool_result', JSON.stringify({ name, output, error }))
+      event('tool_result', JSON.stringify({ name, output, error }), true)
     },
     async onToolApproval()
     {
@@ -243,6 +251,15 @@ export async function executeJob(
     },
   }
 
+  // honor the bash tool's advertised default so a watch-mode command cannot
+  // hold the task until its time budget runs out; sub-1 ms, negative, or huge
+  // values would otherwise become a 1 ms timer
+  const commandTimeout = (requested: unknown): number =>
+    typeof requested === 'number' &&
+    Number.isFinite(requested) &&
+    requested >= 1
+      ? Math.min(requested, job.spec.activeTimeLimitMs)
+      : BASH_DEFAULT_TIMEOUT_MS
   const createAgent = (restored?: SessionData, readOnly = false) =>
   {
     const tools: Tool[] = allTools
@@ -261,6 +278,17 @@ export async function executeJob(
             if (tool.name === 'bash')
             {
               const command = String(args.command)
+              // a command the record cannot hold must fail as a tool error
+              // before its intent is recorded, never as a durability failure
+              if (!isJobCommand(command))
+                return {
+                  output: '',
+                  error: !command.trim()
+                    ? 'bash requires a nonempty command.'
+                    : command.includes('\0')
+                      ? 'Task shell commands cannot contain NUL bytes.'
+                      : `Command is ${command.length} characters; task commands are limited to ${MAX_JOB_COMMAND_CHARS}. Write long file content with write_file, then run a short command.`,
+                }
               if (prohibitedShellReplays.has(command))
                 return {
                   output: '',
@@ -280,12 +308,7 @@ export async function executeJob(
                 cwd: job.worktree!.path,
                 signal: context?.signal ?? signal,
                 jobId: id,
-                // honor the bash tool's advertised default so a watch-mode
-                // command cannot hold the task until its time budget runs out
-                timeoutMs:
-                  typeof args.timeout === 'number'
-                    ? args.timeout
-                    : BASH_DEFAULT_TIMEOUT_MS,
+                timeoutMs: commandTimeout(args.timeout),
               })
               intent.result = {
                 ok: result.ok,
@@ -311,6 +334,8 @@ export async function executeJob(
           }
         },
       }))
+    // tasks follow the same standing instructions and skills as other surfaces
+    const agentsHome = agentsHomePath()
     const options: AgentOptions = {
       tools,
       permissions: Object.fromEntries(
@@ -324,6 +349,8 @@ export async function executeJob(
       historicalUsageUnknown: Boolean(
         restored?.meta.messageCount && !restored.sessionCost
       ),
+      skills: discoverSkills({ cwd: job.worktree!.path, agentsHome }),
+      userInstructions: loadUserInstructions(agentsHome),
     }
     const next =
       dependencies.createAgent?.(job, options) ??

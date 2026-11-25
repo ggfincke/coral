@@ -7,7 +7,8 @@ import { join, resolve } from 'node:path'
 import { READ_ONLY_GIT_CONFIG } from '../utils/git.js'
 import { execFileCommand, formatProcessError } from '../utils/process.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
-import { jobDirectory, writeJob } from './store.js'
+import { assertJobsPlatform } from './process.js'
+import { jobBranchName, jobDirectory, writeJob } from './store.js'
 import type { JobRecord, JobRepository } from './types.js'
 
 const MAX_GIT_BYTES = 4 * 1024 * 1024
@@ -36,21 +37,13 @@ async function git(
   return result.stdout
 }
 
-function assertPlatform(): void
-{
-  if (process.platform !== 'darwin' && process.platform !== 'linux')
-  {
-    throw new Error('Durable tasks currently support macOS and Linux')
-  }
-}
-
 export async function resolveJobRepository(
   cwd: string,
   ref?: string,
   signal?: AbortSignal
 ): Promise<JobRepository>
 {
-  assertPlatform()
+  assertJobsPlatform()
   signal?.throwIfAborted()
   const source = await realpath(
     (await git(resolve(cwd), ['rev-parse', '--show-toplevel'], signal)).trim()
@@ -120,11 +113,11 @@ export async function ensureJobWorktree(
   signal?: AbortSignal
 ): Promise<JobRecord>
 {
-  assertPlatform()
+  assertJobsPlatform()
   signal?.throwIfAborted()
   const directory = await realpath(jobDirectory(job.id))
   const path = join(directory, 'worktree')
-  const branch = `codex/job-${job.id}`
+  const branch = jobBranchName(job.id)
   if (job.worktree)
   {
     if (job.worktree.path !== path || job.worktree.branch !== branch)
@@ -213,7 +206,7 @@ export async function assertJobWorktree(
   if (
     path !== expected ||
     job.worktree.path !== expected ||
-    job.worktree.branch !== `codex/job-${job.id}` ||
+    job.worktree.branch !== jobBranchName(job.id) ||
     (await lstat(job.worktree.path)).isSymbolicLink()
   )
   {
@@ -293,6 +286,21 @@ async function diffPart(
   return result.stdout + (result.ok ? '' : '\n[diff truncated]\n')
 }
 
+// untracked text as a real added-file hunk, so every content row carries its
+// "+" prefix and a diff reader never mistakes a row like "--- x" for a header
+function addedFileHunk(content: string): string
+{
+  if (!content) return ''
+  const lines = content.split('\n')
+  const terminated = lines.at(-1) === ''
+  if (terminated) lines.pop()
+  return (
+    `@@ -0,0 +1${lines.length === 1 ? '' : `,${lines.length}`} @@\n` +
+    lines.map((line) => `+${line}\n`).join('') +
+    (terminated ? '' : '\\ No newline at end of file\n')
+  )
+}
+
 export async function getJobDiff(
   job: JobRecord,
   signal?: AbortSignal
@@ -331,18 +339,20 @@ export async function getJobDiff(
     }
     const filePath = join(path, file)
     const info = await lstat(filePath)
-    let content: string
+    let body: string
     if (info.isSymbolicLink())
-      content = `[symbolic link -> ${await readlink(filePath)}]`
-    else if (!info.isFile()) content = '[non-regular file]'
+      body = `[symbolic link -> ${await readlink(filePath)}]\n`
+    else if (!info.isFile()) body = '[non-regular file]\n'
     else if (info.size > 64 * 1024)
-      content = `[file content omitted: ${info.size} bytes]`
+      body = `[file content omitted: ${info.size} bytes]\n`
     else
     {
       const buffer = await readFile(filePath)
-      content = buffer.includes(0) ? '[binary file]' : buffer.toString('utf8')
+      body = buffer.includes(0)
+        ? '[binary file]\n'
+        : addedFileHunk(buffer.toString('utf8'))
     }
-    const shown = `\n--- /dev/null\n+++ b/${file}\n${content}\n`
+    const shown = `\n--- /dev/null\n+++ b/${file}\n${body}`
     parts.push(shown)
     bytes += Buffer.byteLength(shown)
   }
