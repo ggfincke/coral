@@ -52,6 +52,13 @@ describe('notify builders', () =>
     )
   })
 
+  test('sanitizeOscPayload strips C1 controls and bidi isolates but keeps other unicode', () =>
+  {
+    assert.equal(sanitizeOscPayload('a\u009c\u009b2Jb'), 'a2Jb')
+    assert.equal(sanitizeOscPayload('a\u2066b\u2069c'), 'abc')
+    assert.equal(sanitizeOscPayload('café-日本語 🚀'), 'café-日本語 🚀')
+  })
+
   test('sanitizeOscPayload collapses whitespace runs, trims, and caps at 200 chars', () =>
   {
     assert.equal(sanitizeOscPayload('  a \t\n b   c '), 'a b c')

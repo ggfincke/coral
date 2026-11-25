@@ -28,6 +28,7 @@ import { formatBlocksPlain } from '../../src/tui/transcript/plain.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
 import { coralHomePath } from '../../src/utils/coral-home.js'
 import type { OllamaMessage } from '../../src/types/inference.js'
+import type { UndoTurn } from '../../src/types/undo.js'
 import type {
   SessionData,
   SessionMeta,
@@ -58,14 +59,15 @@ const HOUR = 3_600_000
 // persist a crafted snapshot so listSessions/loadSession see controlled data
 async function seedSession(
   overrides: Partial<SessionMeta> & Pick<SessionMeta, 'id' | 'updatedAt'>,
-  messages: OllamaMessage[] = []
+  messages: OllamaMessage[] = [],
+  undo?: UndoTurn[]
 ): Promise<SessionMeta>
 {
   const meta = makeSessionMeta({
     cwd: process.env.CORAL_HOME ?? '/tmp',
     ...overrides,
   })
-  const data: SessionData = { meta, messages }
+  const data: SessionData = { meta, messages, undo }
   const dir = coralHomePath('sessions')
   await mkdir(dir, { recursive: true })
   await writeFile(
@@ -290,6 +292,38 @@ test('backward preview tails preserve plain transcript policy without formatting
     'line 999',
   ])
   assert.equal(visited.size, 3)
+})
+
+test('preview tails hide internal corrective prompts named by stored undo turns', async () =>
+{
+  const messages: OllamaMessage[] = [
+    { role: 'user', content: 'fix the bug' },
+    { role: 'assistant', content: 'looking' },
+    { role: 'user', content: 'internal nudge: call a tool' },
+    { role: 'assistant', content: 'fixed it' },
+  ]
+  const meta = await seedSession(
+    { id: 'abab1212', updatedAt: '2026-08-21T09:00:00.000Z' },
+    messages,
+    [
+      {
+        startIndex: 0,
+        endIndex: 4,
+        userMessage: 'fix the bug',
+        messages,
+        changes: [],
+      },
+    ]
+  )
+
+  const loaded = await loadSessionPreview(meta.id)
+  if (loaded.kind !== 'loaded') assert.fail('fixture must load')
+  const rendered = plain(
+    buildSessionPreviewTail(loaded.messages, 24, loaded.undo).lines
+  )
+  assert.ok(rendered.includes('fix the bug'))
+  assert.ok(rendered.includes('fixed it'))
+  assert.ok(!rendered.includes('internal nudge'))
 })
 
 test('preview loader revalidates replacements and bounds cache admission without clipping display', async () =>

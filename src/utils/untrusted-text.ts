@@ -143,6 +143,14 @@ export function sanitizeUntrustedText(text: string): string
   return sanitized
 }
 
+// one-row display of untrusted text w/ ANSI sequences & controls removed,
+// whitespace runs collapsed, ends trimmed; approval surfaces escape instead
+// through flattenUntrustedText so nothing that runs is hidden
+export function sanitizeUntrustedLine(text: string): string
+{
+  return sanitizeUntrustedText(text).replace(/\s+/g, ' ').trim()
+}
+
 // ASCII controls read as `\xNN`; anything wider uses the braced `\u{...}`
 // form so an astral code point never reads as four digits plus a literal
 function escapeHiddenChar(code: number): string

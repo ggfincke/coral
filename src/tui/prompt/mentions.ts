@@ -1,12 +1,7 @@
 // src/tui/prompt/mentions.ts
 // parse @-file mention syntax and format transcript notices
 
-import type {
-  AttachmentReport,
-  AttachmentReportAttached,
-  AttachmentReportSkip,
-  AttachmentSkipReason,
-} from '../../types/attachments.js'
+import type { AttachmentReport } from '../../types/attachments.js'
 import {
   decodeMentionPath,
   MENTION_BOUNDARY,
@@ -20,9 +15,6 @@ const MENTION_PATTERN = new RegExp(
   'g'
 )
 
-export type MentionSkipReason = AttachmentSkipReason
-export type MentionAttachment = AttachmentReportAttached
-export type MentionSkip = AttachmentReportSkip
 export type MentionExpansion = Pick<
   AttachmentReport,
   'attached' | 'skipped' | 'omittedOverBudget'

@@ -357,48 +357,37 @@ function bodyBg(kind: RowKind): ChalkInstance | null
   return null
 }
 
-// unified-mode rows for one pair group; pairs stay stacked like classic diffs
-function renderUnifiedGroup(
-  group: PairGroup,
+// one unified-mode row; paired rows stay stacked like classic diffs
+function renderUnifiedRow(
+  row: DiffRow,
+  cells: CellSegment[] | undefined,
   contentWidth: number,
   num: (n: number | undefined) => string
-): string[]
+): string
 {
-  const out: string[] = []
-  const sides: Array<{ row: DiffRow; cells?: CellSegment[] }> = []
-  if (group.left) sides.push({ row: group.left, cells: group.leftCells })
-  if (group.right && group.right !== group.left)
+  const fg = bodyFg(row.kind)
+  let body: string
+  let cut = false
+  if (cells && visibleWidth(row.text) <= contentWidth)
   {
-    sides.push({ row: group.right, cells: group.rightCells })
+    // cells hold the sign-stripped body; unified rows keep the +/- sign
+    body = row.text.slice(0, 1) + paintSegments(cells, fg)
+  }
+  else
+  {
+    // truncation semantics preserved: over-long rows cut w/ an ellipsis
+    const fit = fitContent(row.text, contentWidth)
+    body = fg(fit.text)
+    cut = fit.cut
   }
 
-  for (const { row, cells } of sides)
-  {
-    const fg = bodyFg(row.kind)
-    let body: string
-    let cut = false
-    if (cells && visibleWidth(row.text) <= contentWidth)
-    {
-      // cells hold the sign-stripped body; unified rows keep the +/- sign
-      body = row.text.slice(0, 1) + paintSegments(cells, fg)
-    }
-    else
-    {
-      // truncation semantics preserved: over-long rows cut w/ an ellipsis
-      const fit = fitContent(row.text, contentWidth)
-      body = fg(fit.text)
-      cut = fit.cut
-    }
-
-    const padded = cut ? body : padEnd(body, contentWidth)
-    const bg = bodyBg(row.kind)
-    const bodyCol = bg ? bg(padded) : padded
-    const gutter = bgStyle('gutter')(
-      chalk.dim(`${num(row.oldNum)} ${num(row.newNum)}`)
-    )
-    out.push(`${gutter} ${bodyCol}${cut ? chalk.dim('…') : ''}`)
-  }
-  return out
+  const padded = cut ? body : padEnd(body, contentWidth)
+  const bg = bodyBg(row.kind)
+  const bodyCol = bg ? bg(padded) : padded
+  const gutter = bgStyle('gutter')(
+    chalk.dim(`${num(row.oldNum)} ${num(row.newNum)}`)
+  )
+  return `${gutter} ${bodyCol}${cut ? chalk.dim('…') : ''}`
 }
 
 // side-by-side rows for one pair group; both panes wrap independently inside
@@ -504,13 +493,7 @@ export function renderUnifiedDiff(unified: string, width: number): string[]
       }
       for (const row of item.rows)
       {
-        result.push(
-          ...renderUnifiedGroup(
-            { left: row, leftCells: segments.get(row) },
-            contentWidth,
-            num
-          )
-        )
+        result.push(renderUnifiedRow(row, segments.get(row), contentWidth, num))
       }
     }
   }

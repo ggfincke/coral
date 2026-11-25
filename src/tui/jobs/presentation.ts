@@ -2,13 +2,18 @@
 // present durable task records using existing terminal styles and renderers
 
 import { jobCommandOutputPath } from '../../jobs/store.js'
-import type { JobEvent, JobRecord } from '../../jobs/types.js'
+import {
+  unsettledShellCommands,
+  type JobEvent,
+  type JobRecord,
+} from '../../jobs/types.js'
 import type { SessionData } from '../../session/types.js'
 import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
 import { style } from '../theme.js'
 import { renderUnifiedDiff } from '../transcript/diff.js'
 import { buildRestoredBlocks } from '../transcript/restored-blocks.js'
 import { buildTranscriptLines } from '../transcript/transcript.js'
+import type { OutputBlock } from '../transcript/types.js'
 import { physicalLines } from '../wrap.js'
 
 export const JOB_TABS = [
@@ -87,14 +92,13 @@ export function jobOverview(job: JobRecord, now: number): string[]
       sanitizeUntrustedText(job.pendingCommand.command),
       ''
     )
-  if (job.unsettledShells?.some((shell) => !shell.result))
+  const unsettled = unsettledShellCommands(job)
+  if (unsettled.length > 0)
     lines.push(
       style('warning')(
         'Agent shell commands with uncertain results; inspect their effects before continuation:'
       ),
-      ...job.unsettledShells
-        .filter((shell) => !shell.result)
-        .map((shell) => sanitizeUntrustedText(shell.command)),
+      ...unsettled.map(sanitizeUntrustedText),
       ''
     )
   if (job.summary)
@@ -120,6 +124,21 @@ export function jobOverview(job: JobRecord, now: number): string[]
   return lines
 }
 
+// restored blocks per checkpoint; the transcript caches key on block and array
+// identity, so a poll that leaves the checkpoint unchanged re-renders nothing
+const SNAPSHOT_BLOCKS = new WeakMap<SessionData, OutputBlock[]>()
+
+function snapshotBlocks(snapshot: SessionData): OutputBlock[]
+{
+  let blocks = SNAPSHOT_BLOCKS.get(snapshot)
+  if (!blocks)
+  {
+    blocks = buildRestoredBlocks(snapshot.messages, snapshot.undo)
+    SNAPSHOT_BLOCKS.set(snapshot, blocks)
+  }
+  return blocks
+}
+
 export function jobDetailLines(
   job: JobRecord,
   tab: JobTab,
@@ -141,7 +160,7 @@ export function jobDetailLines(
           '',
           ...buildTranscriptLines({
             cwd: job.worktree?.path,
-            blocks: buildRestoredBlocks(snapshot.messages),
+            blocks: snapshotBlocks(snapshot),
             streaming: '',
             width,
           }),
