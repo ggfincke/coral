@@ -9,6 +9,11 @@ import { ensurePrivateDir } from '../utils/fs.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { writeJsonFile } from '../utils/json.js'
 import {
+  bootIdentity,
+  isBootIdentity,
+  processIdentity,
+} from '../utils/process-identity.js'
+import {
   BoundedOutput,
   childProcessEnv,
   drainChildOutput,
@@ -17,51 +22,10 @@ import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 import { jobDirectory } from './store.js'
 import { queryDarwinProcesses } from './darwin-process.js'
 
+export { processIdentity }
+
 const OUTPUT_LIMIT = 1024 * 1024
 const PROCESS_TOKEN_KEY = 'CORAL_JOB_PROCESS_TOKEN'
-const BOOT_ID = /^[0-9a-f-]{36}$/
-let bootIdentityValue: Promise<string | undefined> | undefined
-
-// a record from an earlier boot cannot own any live process, whatever its pid.
-// macOS ownership depends on it; on Linux it is a best-effort shortcut, so an
-// unreadable boot id leaves ownership to the identity checks as before
-function bootIdentity(): Promise<string | undefined>
-{
-  bootIdentityValue ??= new Promise((resolve, reject) =>
-  {
-    if (process.platform === 'linux')
-    {
-      try
-      {
-        const identity = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8')
-          .trim()
-          .toLowerCase()
-        resolve(BOOT_ID.test(identity) ? identity : undefined)
-      }
-      catch
-      {
-        resolve(undefined)
-      }
-      return
-    }
-    execFile(
-      '/usr/sbin/sysctl',
-      ['-n', 'kern.bootsessionuuid'],
-      (error, stdout) =>
-      {
-        const identity = stdout.trim().toLowerCase()
-        if (error || !BOOT_ID.test(identity))
-          reject(
-            new Error(
-              'Cannot establish the macOS boot identity for task ownership.'
-            )
-          )
-        else resolve(identity)
-      }
-    )
-  })
-  return bootIdentityValue
-}
 
 export interface OwnedJobProcess
 {
@@ -129,27 +93,6 @@ function identityStartMs(identity: string): number | undefined
   const split = identity.trimEnd().lastIndexOf(' ')
   const started = Date.parse(identity.slice(0, split))
   return split > 0 && Number.isFinite(started) ? started : undefined
-}
-
-// start time and process group distinguish a live owner from a reused pid
-export async function processIdentity(
-  pid: number
-): Promise<string | undefined>
-{
-  const row = await ps([
-    '-p',
-    String(pid),
-    '-o',
-    'lstart=',
-    '-o',
-    'pgid=',
-    '-o',
-    'stat=',
-  ])
-  if (!row) return undefined
-  const state = row.split(/\s+/).at(-1)!
-  if (state.startsWith('Z')) return undefined
-  return row.slice(0, -state.length).trim() || undefined
 }
 
 async function groupMembers(pid: number): Promise<number[]>
@@ -380,7 +323,7 @@ export function decodeOwner(value: unknown): OwnedJobProcess
       (typeof owner.uniqueId !== 'string' ||
         !/^[1-9][0-9]*$/.test(owner.uniqueId))) ||
     (owner.bootId !== undefined &&
-      (typeof owner.bootId !== 'string' || !BOOT_ID.test(owner.bootId)))
+      (typeof owner.bootId !== 'string' || !isBootIdentity(owner.bootId)))
   )
     throw new Error('Invalid task process ownership record; queue is blocked.')
   return owner as OwnedJobProcess

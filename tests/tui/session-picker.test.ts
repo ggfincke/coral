@@ -692,10 +692,11 @@ test('/resume reports ambiguity & misses without touching resumeSession', async 
   assert.ok(plain(output.map((block) => block.content)).includes('not found'))
 })
 
-test('bare /resume at the command layer still resolves latest directly', async () =>
+test('bare /resume at the command layer prints usage & resumes nothing', async () =>
 {
   const output: OutputBlock[] = []
   const resumedIds: string[] = []
+  let saves = 0
   const ctx = makeCommandContext({
     pushOutput: (...blocks) => output.push(...blocks),
     resumeSession: (id) =>
@@ -703,21 +704,22 @@ test('bare /resume at the command layer still resolves latest directly', async (
       resumedIds.push(id)
       return true
     },
-    saveCurrentSession: () => ({ status: 'saved', id: 'current0' }),
+    saveCurrentSession: () =>
+    {
+      saves++
+      return { status: 'saved', id: 'current0' }
+    },
   })
 
-  const oldest = await seedSession({
-    id: 'bbbb1111',
-    updatedAt: '2026-08-19T09:00:00.000Z',
-  })
   await seedSession({
     id: 'cccc2222',
     updatedAt: '2026-08-21T09:00:00.000Z',
   })
 
-  // the app intercepts bare /resume to open the picker; the command body
-  // itself keeps today's latest-session fallback for direct dispatch callers
-  assert.equal(await dispatchCommand('/resume', ctx), true)
-  assert.deepEqual(resumedIds, ['cccc2222'])
-  assert.ok(oldest)
+  // the app opens the picker for bare /resume; a mixed-case /Resume that reaches
+  // the command must not fall back to the newest session from any workspace
+  assert.equal(await dispatchCommand('/Resume', ctx), true)
+  assert.deepEqual(resumedIds, [])
+  assert.equal(saves, 0)
+  assert.match((output.at(-1) as { content: string }).content, /Usage:/)
 })

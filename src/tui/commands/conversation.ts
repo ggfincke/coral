@@ -1,7 +1,8 @@
 // src/tui/commands/conversation.ts
 // conversation-history, export, view-mode, and task-list commands
 
-import { resolve } from 'node:path'
+import { homedir } from 'node:os'
+import { join, resolve, sep } from 'node:path'
 import { writeFileSync } from 'node:fs'
 import type { CompactionResult } from '../../agent/agent.js'
 import { copyToClipboard } from '../../utils/clipboard.js'
@@ -17,6 +18,15 @@ import {
   formatUndoResult,
 } from './conversation-output.js'
 import { committedSaveWarning, systemBlock } from './output.js'
+
+// a leading ~ or ~/ in a typed path means the home directory, as in a shell
+function expandHome(path: string): string
+{
+  if (path === '~') return homedir()
+  if (path.startsWith('~/') || path.startsWith(`~${sep}`))
+    return join(homedir(), path.slice(2))
+  return path
+}
 
 // /clear command
 
@@ -285,7 +295,7 @@ const exportCommand: Command = {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     const path = resolve(
       ctx.getCwd(),
-      destination ?? `coral-export-${stamp}.md`
+      destination ? expandHome(destination) : `coral-export-${stamp}.md`
     )
     try
     {

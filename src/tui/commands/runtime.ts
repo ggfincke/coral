@@ -520,9 +520,22 @@ const themeCommand: Command = {
       return
     }
 
+    // notify right after applying so cached rows repaint even if the save fails
     setTheme(theme)
-    savePrefs({ theme: theme.name })
     ctx.notifyThemeChanged()
+    try
+    {
+      savePrefs({ theme: theme.name })
+    }
+    catch (error)
+    {
+      ctx.pushOutput(
+        systemBlock(
+          `Theme → ${theme.label} (applied, but not saved to prefs: ${toErrorMessage(error)})`
+        )
+      )
+      return
+    }
     ctx.pushOutput(systemBlock(`Theme → ${theme.label} (saved to prefs)`))
   },
 }

@@ -42,9 +42,22 @@ const resumeCommand: Command = {
   description: 'Resume a saved session (bare opens picker)',
   async execute(args, ctx)
   {
+    // an empty id would resolve to the newest session from any workspace, so
+    // a bare call that slipped past the picker intercept stops here
+    const requestedId = args.trim()
+    if (!requestedId)
+    {
+      ctx.pushOutput(
+        systemBlock(
+          `Usage: ${style('user')('/resume')} for the session picker, or ${style('user')('/resume <id>')}`
+        )
+      )
+      return
+    }
+
     const target = await resolveResumeSession({
       signal: ctx.signal,
-      requestedId: args,
+      requestedId,
       currentSessionId: ctx.sessionLabelId,
       allowPrefix: true,
       requireExistingCwd: true,
