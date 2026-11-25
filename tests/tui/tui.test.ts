@@ -423,10 +423,11 @@ test('buildTranscriptLines neutralizes untrusted terminal control sequences', ()
   assert.ok(plain(rendered).includes('hello  world'))
   assert.ok(plain(rendered).includes('system note'))
   assert.ok(plain(rendered).includes('beforeafter'))
-  assert.ok(plain(rendered).includes('Unsafe label'))
-  assert.ok(plain(rendered).includes('badsummary'))
-  assert.ok(plain(rendered).includes('Settled label'))
-  assert.ok(plain(rendered).includes('settledsummary'))
+  // tool headers show controls escaped instead of deleting them
+  assert.ok(plain(rendered).includes('Unsafe\\x1b]52;c;LABEL\\x07 label'))
+  assert.ok(plain(rendered).includes('bad\\x1b[2Jsummary'))
+  assert.ok(plain(rendered).includes('Settled\\x1b]52;c;LABEL\\x07 label'))
+  assert.ok(plain(rendered).includes('settled\\x1b[2Jsummary'))
   assert.ok(!plain(rendered).includes('completed-summary-must-not-fall-back'))
 
   assert.equal(
@@ -835,7 +836,7 @@ test('approval and confirm boxes share framed prompt rendering', () =>
     })
   )
   assert.ok(!hostileTitle.includes('\x1b[2J'))
-  assert.ok(hostileTitle.includes('Allow unsafe name?'))
+  assert.ok(hostileTitle.includes('Allow unsafe\\x1b[2J name?'))
 
   // full MCP launch identity must stay inspectable before trust persists
   const mcpContent = buildMcpApprovalContent(
@@ -1522,7 +1523,7 @@ test('approval shortcuts cannot grant permission and complete diffs remain inspe
     undefined,
     undefined,
     undefined,
-    true
+    { persistable: true }
   )
   assert.match(
     stripAnsi(persistable.actionLine),

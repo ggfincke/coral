@@ -5,7 +5,7 @@ import { diffWords } from 'diff'
 import chalk, { type ChalkInstance } from 'chalk'
 import { getTheme, style, type Role } from '../theme.js'
 import { expandTabs, padEnd, visibleWidth } from '../wrap.js'
-import { sanitizeUntrustedText } from './sanitize.js'
+import { revealUntrustedText } from '../../utils/untrusted-text.js'
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
 
@@ -452,7 +452,8 @@ function renderSideBySideGroup(
 export function renderUnifiedDiff(unified: string, width: number): string[]
 {
   const wordDiffDeadline = Date.now() + WORD_DIFF_BUDGET_MS
-  const rawLines = sanitizeUntrustedText(unified).split('\n')
+  // controls show escaped so an OSC run can never hide whole diff lines
+  const rawLines = revealUntrustedText(unified).split('\n')
   const numWidth = gutterWidth(rawLines)
   const gutterCols = numWidth * 2 + 1
   const sideBySide = width > SIDE_BY_SIDE_MIN_WIDTH

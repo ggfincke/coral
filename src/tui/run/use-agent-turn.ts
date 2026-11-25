@@ -390,12 +390,22 @@ export function useAgentTurn(
                 } satisfies ToolCallBlock,
               ])
             },
-            async onToolApproval(name, args, presentation, _callId, promoted)
+            async onToolApproval(
+              name,
+              args,
+              presentation,
+              _callId,
+              promoted,
+              protectedPath
+            )
             {
               if (!acceptsEvent(operation)) return false
               if (isYolo()) return true
+              // an outside-workspace write still shows its content before
+              // the user approves it
               const preview = await previewToolDiff(name, args, {
                 cwd: runAgent.getCwd(),
+                allowOutsideWorkspace: promoted === true,
               })
               if (!acceptsEvent(operation)) return false
               return requestToolApproval(operation, {
@@ -406,6 +416,7 @@ export function useAgentTurn(
                   preview?.kind === 'message' ? preview.message : undefined,
                 presentation,
                 promoted: promoted === true,
+                protectedPath: protectedPath === true,
               })
             },
             onMcpLaunchApproval(request)

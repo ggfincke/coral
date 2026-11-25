@@ -21,8 +21,10 @@ load that TUI.
   No authentication method is advertised or required.
 - Create one session per connection, send text turns, and receive streamed text,
   thinking, usage and tool evidence. A `resource_link` block becomes a plain
-  reference (name and URI) in the turn; Coral never fetches it. Approvals allow one call, always allow
-  that tool for the rest of the session, or reject one call.
+  reference (name and URI) in the turn; Coral never fetches it. Approvals allow
+  one call, always allow that tool for the rest of the session in the call's
+  scope (inside or outside the workspace), or reject one call. Protected-path
+  writes are labelled protected and offer no always option.
 - Pick a runtime mode with the `coral.runtime-mode` session config option, even
   mid-turn; the next approval uses the new mode.
 - Cancel an active turn, then continue the same session. Updates the cancelled
@@ -37,8 +39,9 @@ Runtime modes:
 - `approval-required` (Supervised): every gated call asks. Each new or resumed
   session starts here; Coral does not save the mode.
 - `auto-accept-edits`: `write_file` and `edit_file` inside the workspace run
-  without asking. Shell, git, outside-workspace paths, and other gated tools
-  still ask.
+  without asking. Shell, git, outside-workspace paths, protected paths (`.git`,
+  `CORAL_HOME`, `AGENTS_HOME`, `~/.coral.json`), and other gated tools still
+  ask.
 - `full-access`: every gated call runs without asking, like TUI yolo, including
   outside-workspace paths.
 

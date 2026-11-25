@@ -77,15 +77,17 @@ export function selectedRuntimeMode(
 
 // decide whether a mode approves a call that already reached approval;
 // always_deny never gets here, so no mode can override it. auto-accept-edits
-// covers only in-workspace file edits, & full-access matches TUI yolo
+// covers only in-workspace file edits off protected paths, & full-access
+// matches TUI yolo
 export function runtimeModeAutoApproves(
   mode: CoralRuntimeMode,
   toolName: string,
-  crossesWorkspace: boolean
+  crossesWorkspace: boolean,
+  protectedPath: boolean
 ): boolean
 {
   if (mode === 'full-access') return true
   if (mode === 'auto-accept-edits')
-    return EDIT_TOOLS.has(toolName) && !crossesWorkspace
+    return EDIT_TOOLS.has(toolName) && !crossesWorkspace && !protectedPath
   return false
 }

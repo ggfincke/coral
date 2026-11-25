@@ -330,7 +330,7 @@ One round:
 
 1. Model streams text and/or `tool_calls`.
 2. Coral validates names and JSON arguments. Name repair is lowercase + strip separators, not fuzzy matching.
-3. Policy: `always_deny` → error to the model; `require_approval` → TUI prompt (or auto-true in yolo); `always_allow` → run, unless a workspace path escapes and is promoted.
+3. Policy: `always_deny` → error to the model; `require_approval` → TUI prompt (or auto-true in yolo); `always_allow` → run, unless a workspace path escapes and is promoted, or a file write hits a protected path.
 4. Execute. Capture diffs for the TUI (not sent back to the model). Capture `change` / `todoChange` for undo.
 5. Bound the result (~100,000 characters) and, if needed, omit it to fit the next request.
 6. Append assistant + tool messages. Repeat.

@@ -4,6 +4,7 @@
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
 import { checkWorkspacePath } from '../shared/workspace-path.js'
+import { tryParseJson } from '../utils/json.js'
 import {
   runGitCommand,
   currentBranchLabel,
@@ -304,10 +305,15 @@ export const gitAddTool: Tool = {
     'change (tracked & untracked).',
   display: {
     label: 'Git Add',
+    // read all & paths the way validateToolArgs coerces them, so a
+    // JSON-string array still shows every path that will be staged
     summarize: (args) =>
     {
-      if (args.all) return 'all'
-      return Array.isArray(args.paths) ? args.paths.join(', ') : ''
+      if (args.all === true || args.all === 'true') return 'all'
+      const paths =
+        typeof args.paths === 'string' ? tryParseJson(args.paths) : args.paths
+      if (Array.isArray(paths)) return paths.map(String).join(', ')
+      return typeof args.paths === 'string' ? args.paths : ''
     },
   },
   parameters: {

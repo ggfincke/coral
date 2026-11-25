@@ -166,7 +166,14 @@ test('event projection preserves exact tool identity and session permission', as
 
   events.onToolCall('search_code', args, 0)
   assert.equal(
-    await events.onToolApproval('search_code', args, undefined, 0),
+    await events.onToolApproval(
+      'search_code',
+      args,
+      undefined,
+      0,
+      false,
+      false
+    ),
     true
   )
   assert.equal(

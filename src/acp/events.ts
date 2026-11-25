@@ -12,11 +12,14 @@ import type {
 } from '@agentclientprotocol/sdk/unstable'
 import { methods } from '@agentclientprotocol/sdk/unstable'
 import type { AgentEvents } from '../agent/contracts.js'
+import { sessionToolGrantFingerprint } from '../runtime/interactive-session.js'
+import { getBuiltInToolRegistration } from '../tools/catalog.js'
 import type { ToolCallPresentation } from '../tools/tool.js'
 import type { SessionCostSnapshot } from '../types/session-cost.js'
 import type { TodoItem } from '../types/todo.js'
 import { truncateToLineBoundary } from '../utils/truncate-output.js'
 import {
+  flattenUntrustedText,
   sanitizeUntrustedText,
   stringifyForDisplay,
 } from '../utils/untrusted-text.js'
@@ -50,7 +53,8 @@ export interface AcpEventProjectionOptions
   getSessionCost?: () => SessionCostSnapshot | undefined
   // read at each approval so a mid-turn mode change applies to the next call
   getRuntimeMode: () => CoralRuntimeMode
-  // in-memory allow-always grants owned by the session binding
+  // in-memory allow-always grants owned by the session binding, keyed by
+  // sessionToolGrantFingerprint so each grant covers only its own scope
   sessionToolGrants: Set<string>
 }
 
@@ -91,13 +95,14 @@ function toolKind(name: string): ToolKind
   return 'other'
 }
 
+// controls show escaped so the title never hides part of what will run
 function toolTitle(name: string, presentation?: ToolCallPresentation): string
 {
   const label = presentation?.label || name
   const title = presentation?.summary
     ? `${label}: ${presentation.summary}`
     : label
-  return sanitizeUntrustedText(title).slice(0, MAX_TOOL_TITLE_CHARS)
+  return flattenUntrustedText(title).slice(0, MAX_TOOL_TITLE_CHARS)
 }
 
 function toolLocation(
@@ -132,15 +137,30 @@ function toolInput(call: ActiveToolCall): Record<string, unknown>
   }
 }
 
-function permissionToolCall(call: ActiveToolCall): ToolCallUpdate
+// a protected write is labelled in the title, as the TUI approval box does
+function permissionToolCall(
+  call: ActiveToolCall,
+  protectedPath: boolean
+): ToolCallUpdate
 {
+  const title = toolTitle(call.name, call.presentation)
   return {
     toolCallId: call.acpId,
     kind: toolKind(call.name),
     status: 'pending',
-    title: toolTitle(call.name, call.presentation),
+    title: protectedPath ? `Protected path: ${title}` : title,
     rawInput: toolInput(call),
   }
+}
+
+// each allow_always covers only its own scope, so its name says which one,
+// matching grantNotice in src/tui/run/approval-box.ts
+function alwaysAllowName(toolName: string, crossesWorkspace: boolean): string
+{
+  if (crossesWorkspace) return 'Always allow outside the workspace this session'
+  return getBuiltInToolRegistration(toolName)?.workspacePath === undefined
+    ? 'Always allow this session'
+    : 'Always allow inside the workspace this session'
 }
 
 export class AcpEventProjection
@@ -190,7 +210,8 @@ export class AcpEventProjection
     name: string,
     args: Record<string, unknown>,
     callId: number | undefined,
-    crossesWorkspace: boolean
+    crossesWorkspace: boolean,
+    protectedPath: boolean
   ): Promise<boolean>
   {
     if (callId === undefined) return false
@@ -205,13 +226,20 @@ export class AcpEventProjection
     }
     if (call.permissionRequested) return false
     call.permissionRequested = true
-    // auto-approved calls skip only the prompt; tool_call & its update still flow
+    const grantKey = sessionToolGrantFingerprint(
+      name,
+      call.presentation,
+      crossesWorkspace
+    )
+    // auto-approved calls skip only the prompt; tool_call & its update still
+    // flow. no session grant covers a protected path
     if (
-      this.options.sessionToolGrants.has(name) ||
+      (!protectedPath && this.options.sessionToolGrants.has(grantKey)) ||
       runtimeModeAutoApproves(
         this.options.getRuntimeMode(),
         name,
-        crossesWorkspace
+        crossesWorkspace,
+        protectedPath
       )
     )
     {
@@ -227,18 +255,22 @@ export class AcpEventProjection
       methods.client.session.requestPermission,
       {
         sessionId: this.options.sessionId,
-        toolCall: permissionToolCall(call),
+        toolCall: permissionToolCall(call, protectedPath),
         options: [
           {
             optionId: allowId,
             name: 'Allow once',
             kind: 'allow_once',
           },
-          {
-            optionId: alwaysId,
-            name: 'Always allow this session',
-            kind: 'allow_always',
-          },
+          ...(protectedPath
+            ? []
+            : [
+                {
+                  optionId: alwaysId,
+                  name: alwaysAllowName(name, crossesWorkspace),
+                  kind: 'allow_always' as const,
+                },
+              ]),
           {
             optionId: rejectId,
             name: 'Reject once',
@@ -250,11 +282,12 @@ export class AcpEventProjection
     )
     if (!this.options.isCurrent()) return false
     if (response.outcome.outcome !== 'selected') return false
-    // like the TUI's (a), the grant covers the tool name w/ any arguments,
-    // including outside-workspace paths, until the binding is released
-    if (response.outcome.optionId === alwaysId)
+    // like the TUI's (a), the grant covers the tool w/ any arguments in this
+    // call's scope only (inside or outside the workspace) until the binding is
+    // released; protected calls never offer it
+    if (response.outcome.optionId === alwaysId && !protectedPath)
     {
-      this.options.sessionToolGrants.add(name)
+      this.options.sessionToolGrants.add(grantKey)
       return true
     }
     return response.outcome.optionId === allowId
@@ -265,7 +298,7 @@ export class AcpEventProjection
     this.enqueue({
       sessionUpdate: 'plan',
       entries: this.options.getTodos().map((todo) => ({
-        content: todo.content,
+        content: flattenUntrustedText(todo.content),
         priority: 'medium',
         status: todo.status,
       })),
@@ -338,13 +371,22 @@ export class AcpEventProjection
         this.tools.delete(callId)
         if (name === 'todo_write') this.emitPlan()
       },
-      onToolApproval: (name, args, _presentation, callId, crossesWorkspace) =>
+      onToolApproval: (
+        name,
+        args,
+        _presentation,
+        callId,
+        crossesWorkspace,
+        protectedPath
+      ) =>
         this.requestToolApproval(
           name,
           args,
           callId,
-          // fail closed: only an explicit in-workspace call can auto-accept edits
-          crossesWorkspace !== false
+          // fail closed: only an explicit in-workspace, unprotected call can
+          // auto-accept edits or use a session grant
+          crossesWorkspace !== false,
+          protectedPath !== false
         ),
       onMcpLaunchApproval: async () => false,
       // ACP has no continue prompt, so the turn says why it stops

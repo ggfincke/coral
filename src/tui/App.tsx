@@ -46,7 +46,7 @@ import { useTerminalModes } from './input/use-terminal-modes.js'
 const QUEUE_PREVIEW_ROWS = 3
 import CommandPalette from './palette/command-palette.js'
 import { getThemeGeneration, inkColor, style } from './theme.js'
-import { physicalLines, truncateLine } from './wrap.js'
+import { truncateLine } from './wrap.js'
 import {
   buildActivityLines,
   buildComposerRule,
@@ -85,6 +85,7 @@ import {
   buildConfirmContent,
   buildMcpApprovalContent,
   formatRejectReasonRow,
+  promptBoxMinRows,
   reduceRejectReasonKey,
   renderPromptBox,
   resolveApprovalKey,
@@ -109,6 +110,7 @@ import JobPanel from './jobs/panel.js'
 import { buildPaletteEntries, type PaletteEntry } from './palette/palette.js'
 import {
   isPersistentGrantEligible,
+  isSessionGrantEligible,
   type OperationHandle,
   type ToolGrantPersistence,
 } from './session/interactive-runtime.js'
@@ -275,28 +277,32 @@ export default function App({
     []
   )
 
-  // persistent per-workspace tool grants; a failed save degrades to a session
-  // grant and is reported once the transcript setter exists
+  // persisted grants bind to the asking Agent's workspace, not the launch dir;
+  // a failed save degrades to a session grant and is reported once the
+  // transcript setter exists
   const reportGrantError = useRef<(message: string) => void>(() => undefined)
-  const [toolGrants] = useState(() => workspaceToolGrants(cwd ?? getCwd()))
-  const toolGrantPersistence = useMemo<ToolGrantPersistence>(
-    () => ({
-      isTrusted: (toolName) => toolGrants.isTrusted(toolName),
-      trust: (toolName) =>
-      {
-        try
+  const toolGrantPersistence = useCallback(
+    (grantAgent: Agent): ToolGrantPersistence =>
+    {
+      const grants = workspaceToolGrants(grantAgent.getCwd())
+      return {
+        isTrusted: (toolName) => grants.isTrusted(toolName),
+        trust: (toolName) =>
         {
-          toolGrants.trust(toolName)
-        }
-        catch (error)
-        {
-          reportGrantError.current(
-            `Could not save the workspace grant for ${toolName}: ${toErrorMessage(error)}`
-          )
-        }
-      },
-    }),
-    [toolGrants]
+          try
+          {
+            grants.trust(toolName)
+          }
+          catch (error)
+          {
+            reportGrantError.current(
+              `Could not save the workspace grant for ${toolName}: ${toErrorMessage(error)}`
+            )
+          }
+        },
+      }
+    },
+    []
   )
 
   const interactive = useInteractiveSession({
@@ -486,7 +492,11 @@ export default function App({
         activePrompt.diff,
         activePrompt.previewMessage,
         activePrompt.presentation,
-        isPersistentGrantEligible(activePrompt)
+        {
+          persistable: isPersistentGrantEligible(activePrompt),
+          promoted: activePrompt.promoted === true,
+          protectedPath: activePrompt.protectedPath === true,
+        }
       )
     }
     if (activePrompt?.kind === 'doom')
@@ -641,15 +651,7 @@ export default function App({
     0
   )
   const approvalPinnedRows = activePromptContent
-    ? physicalLines(
-        activePromptContent.titleLines,
-        Math.max(transcriptWidth - 4, 1)
-      ).length +
-      physicalLines(
-        [activePromptContent.actionLine],
-        Math.max(transcriptWidth - 4, 1)
-      ).length +
-      3
+    ? promptBoxMinRows(activePromptContent, transcriptWidth)
     : 0
   useEffect(() =>
   {
@@ -1117,7 +1119,14 @@ export default function App({
         }
         else if (action === 'always')
         {
-          settlePrompt(activePrompt.id, { approved: true, always: true })
+          // protected prompts offer no grant, so the key does nothing there
+          if (
+            activePrompt.kind !== 'tool' ||
+            isSessionGrantEligible(activePrompt)
+          )
+          {
+            settlePrompt(activePrompt.id, { approved: true, always: true })
+          }
         }
         else if (action === 'persist')
         {
@@ -1488,12 +1497,15 @@ export default function App({
             // /vim reads the live state back to toggle correctly
             isVimMode: () => viMode,
             manageQueue,
+            // same workspace binding the runtime consults for approvals
             toolGrants: {
-              list: () => toolGrants.list(),
+              list: () => workspaceToolGrants(commandAgent.getCwd()).list(),
               revoke: (toolName) =>
               {
                 forgetSessionToolGrant(toolName)
-                return toolGrants.revoke(toolName)
+                return workspaceToolGrants(commandAgent.getCwd()).revoke(
+                  toolName
+                )
               },
             },
           }
@@ -1528,7 +1540,6 @@ export default function App({
       addHistoryEntry,
       openTranscript,
       forgetSessionToolGrant,
-      toolGrants,
       beginOperation,
       clearInput,
       clearSession,
