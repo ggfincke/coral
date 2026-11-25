@@ -36,7 +36,7 @@ async function trackedChanges(cwd: string): Promise<GitCommandResult>
   )
   const diffs = head.error
     ? [['diff', '--cached'], ['diff']]
-    : [['diff', 'HEAD']]
+    : [['diff', 'HEAD', '--']]
   const outputs: string[] = []
   for (const args of diffs)
   {
