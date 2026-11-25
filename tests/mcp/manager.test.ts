@@ -182,6 +182,11 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
           (tool) => tool.function.name === 'mcp__fixture__echo'
         )
         assert.match(echo?.function.description ?? '', /\[redacted\]/)
+        // wide is left out for the context budget, not for a schema problem
+        assert.match(
+          agent.getMcpStatus().servers[0]?.message ?? '',
+          /context budget: wide/
+        )
         assert.doesNotMatch(
           JSON.stringify(echo?.function.parameters ?? {}),
           /bridge|\\u001b|\[31m/
@@ -240,7 +245,10 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
         )
         assert.ok((largeResult?.content?.length ?? Infinity) < 101_000)
         assert.equal(disconnectResult?.role, 'tool')
-        assert.match(disconnectResult?.content ?? '', /connection closed/i)
+        assert.match(
+          disconnectResult?.content ?? '',
+          /MCP server connection closed/
+        )
         assert.doesNotMatch(disconnectResult?.content ?? '', /context budget/)
         // strictly-invalid-but-coercible args must fail strict MCP validation
         yield echoCall({

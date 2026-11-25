@@ -278,6 +278,51 @@ describe('MCP tool adapter', () =>
     }
   })
 
+  test('MCP schemas keep tools whose structural text only shares short or dialect values', () =>
+  {
+    const tool = createMcpTool({
+      name: 'mcp__fixture__common',
+      displayLabel: 'MCP · fixture · common',
+      inputSchema: {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        type: 'object',
+        properties: {
+          count: { type: 'string', pattern: '^[1-9][0-9]{0,5}$' },
+          pair: { type: 'array', prefixItems: [{ type: 'string' }] },
+        },
+      } as unknown as JsonSchema,
+      secretValues: ['json', '12', '1'],
+      invoke: async () => ({ output: 'unused' }),
+    })
+    const parameters = tool.parameters as Record<string, unknown>
+    assert.equal('$schema' in parameters, false)
+    assert.match(JSON.stringify(parameters), /\^\[1-9\]\[0-9\]\{0,5\}\$/)
+    // the raw $schema still selects 2020-12, so prefixItems is enforced
+    assert.equal(tool.validateArgs?.({ count: '7', pair: ['a'] })?.ok, true)
+    assert.equal(tool.validateArgs?.({ pair: [1] })?.ok, false)
+  })
+
+  test('MCP schemas skip a tool whose enum data holds a forwarded value', () =>
+  {
+    const secret = 'enum-object-secret'
+    assert.throws(
+      () =>
+        createMcpTool({
+          name: 'mcp__fixture__enum',
+          displayLabel: 'MCP · fixture · enum',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              choice: { enum: [{ description: `use ${secret}` }] },
+            },
+          } as unknown as JsonSchema,
+          secretValues: [secret],
+          invoke: async () => ({ output: 'unused' }),
+        }),
+      /outside annotations contains a forwarded environment value/
+    )
+  })
+
   test('MCP schema compilation keeps unknown-format warnings off the console', (context) =>
   {
     const warn = context.mock.method(console, 'warn', () => undefined)

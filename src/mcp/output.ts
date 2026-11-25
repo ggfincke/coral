@@ -13,6 +13,8 @@ const MAX_STRUCTURED_CONTENT_DEPTH = 20
 const MAX_STRUCTURED_COLLECTION_ITEMS = 200
 const MAX_TOOL_RESULT_ERROR_CHARS = 2_000
 const MCP_OUTPUT_SCAN_CHARS = 16_384
+// shorter forwarded values only redact as whole tokens
+export const MIN_SUBSTRING_SECRET_CHARS = 4
 
 function sanitizeDiagnostic(text: string): string
 {
@@ -77,7 +79,7 @@ function redactSecrets(text: string, secrets: readonly string[]): string
   for (const value of secrets)
   {
     result =
-      value.length >= 4
+      value.length >= MIN_SUBSTRING_SECRET_CHARS
         ? result.replaceAll(value, '[redacted]')
         : redactShortValue(result, value)
   }

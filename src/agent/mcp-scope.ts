@@ -46,8 +46,8 @@ export class McpToolScope
   private currentManager?: AgentMcpManager
   private installedManager?: AgentMcpManager
   private bootstrapEpoch = 0
-  private bootstrapPromise?: Promise<void>
-  private bootstrapPromiseSignal?: AbortSignal
+  // the running bootstrap & the composite signal joiners check for its abort
+  private activeBootstrap?: { promise: Promise<void>; signal: AbortSignal }
   private readonly retirements = new Set<Promise<void>>()
   private readonly managerRetirements = new WeakMap<
     AgentMcpManager,
@@ -118,11 +118,11 @@ export class McpToolScope
     {
       return Promise.resolve()
     }
-    if (this.bootstrapPromise && this.bootstrapPromiseSignal)
+    if (this.activeBootstrap)
     {
       return this.joinBootstrap(
-        this.bootstrapPromise,
-        this.bootstrapPromiseSignal,
+        this.activeBootstrap.promise,
+        this.activeBootstrap.signal,
         options,
         bootstrapSignal
       )
@@ -130,13 +130,12 @@ export class McpToolScope
 
     const epoch = this.bootstrapEpoch
     const bootstrap = this.bootstrapInternal(options, bootstrapSignal, epoch)
-    this.bootstrapPromise = bootstrap
-    this.bootstrapPromiseSignal = bootstrapSignal
+    this.activeBootstrap = { promise: bootstrap, signal: bootstrapSignal }
     const clear = () =>
     {
-      if (this.bootstrapPromise === bootstrap)
+      if (this.activeBootstrap?.promise === bootstrap)
       {
-        this.bootstrapPromise = undefined
+        this.activeBootstrap = undefined
       }
     }
     bootstrap.then(clear, clear)
@@ -166,9 +165,9 @@ export class McpToolScope
   retireCurrent(afterDetach: () => void): Promise<void>
   {
     const manager = this.currentManager
-    const bootstrap = this.bootstrapPromise
+    const bootstrap = this.activeBootstrap?.promise
     this.bootstrapEpoch++
-    this.bootstrapPromise = undefined
+    this.activeBootstrap = undefined
     this.currentManager = undefined
     this.installedManager = undefined
 
@@ -360,7 +359,7 @@ export class McpToolScope
 
   private async disposeInternal(): Promise<void>
   {
-    await this.bootstrapPromise?.catch(() => undefined)
+    await this.activeBootstrap?.promise.catch(() => undefined)
     await Promise.allSettled([...this.retirements])
     await this.retireManager(this.currentManager)
   }

@@ -14,6 +14,7 @@ import type { Tool, ToolArgumentValidation, ToolResult } from '../tools/tool.js'
 import { ellipsize } from '../utils/ellipsize.js'
 import {
   formatToolResult,
+  MIN_SUBSTRING_SECRET_CHARS,
   redactDiagnostic,
   type McpOutputValidator,
 } from './output.js'
@@ -57,12 +58,21 @@ const ANNOTATION_KEYS = new Set([
   'examples',
 ])
 
+// enum & const hold instance data the validator compares verbatim, so strings
+// under annotation-named keys inside them are checked, not redacted
+const INSTANCE_KEYS = new Set(['enum', 'const'])
+
+// short values follow the redactor's rule that they are too common to be credentials,
+// so only values at its substring threshold can make a schema position unsafe
 function assertVerbatimSchemaText(
   text: string,
   secretValues: readonly string[]
 ): void
 {
-  if (redactDiagnostic(text, secretValues) !== text)
+  const longValues = secretValues.filter(
+    (value) => value.length >= MIN_SUBSTRING_SECRET_CHARS
+  )
+  if (redactDiagnostic(text, longValues) !== text)
   {
     throw new Error(
       'schema text outside annotations contains a forwarded environment value or control characters'
@@ -73,12 +83,13 @@ function assertVerbatimSchemaText(
 function schemaForModel(
   value: unknown,
   secretValues: readonly string[],
-  key?: string
+  key?: string,
+  instance = false
 ): unknown
 {
   if (typeof value === 'string')
   {
-    if (key !== undefined && ANNOTATION_KEYS.has(key))
+    if (!instance && key !== undefined && ANNOTATION_KEYS.has(key))
     {
       return ellipsize(
         redactDiagnostic(value, secretValues),
@@ -92,7 +103,9 @@ function schemaForModel(
   {
     // examples items inherit the annotation key; other array items are structural
     const itemKey = key === 'examples' ? key : undefined
-    return value.map((item) => schemaForModel(item, secretValues, itemKey))
+    return value.map((item) =>
+      schemaForModel(item, secretValues, itemKey, instance)
+    )
   }
   if (typeof value === 'object' && value !== null)
   {
@@ -100,11 +113,27 @@ function schemaForModel(
     for (const [childKey, childValue] of Object.entries(value))
     {
       assertVerbatimSchemaText(childKey, secretValues)
-      result[childKey] = schemaForModel(childValue, secretValues, childKey)
+      result[childKey] = schemaForModel(
+        childValue,
+        secretValues,
+        childKey,
+        instance || INSTANCE_KEYS.has(childKey)
+      )
     }
     return result
   }
   return value
+}
+
+// the validator reads the dialect from the raw schema, so the model never needs $schema
+function modelParameters(
+  schema: JsonSchema,
+  secretValues: readonly string[]
+): JsonSchema
+{
+  const projected = { ...(schema as Record<string, unknown>) }
+  delete projected.$schema
+  return schemaForModel(projected, secretValues) as JsonSchema
 }
 
 // preserve the namespace shape expected by NodeNext for this CJS export
@@ -212,10 +241,7 @@ export function createMcpTool(options: CreateMcpToolOptions): Tool
   return {
     name: options.name,
     description: sanitizeDescription(options.description, options.secretValues),
-    parameters: schemaForModel(
-      options.inputSchema,
-      options.secretValues
-    ) as JsonSchema,
+    parameters: modelParameters(options.inputSchema, options.secretValues),
     display: { label: options.displayLabel },
     validateArgs,
     execute: (args, context) =>
