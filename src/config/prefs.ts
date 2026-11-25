@@ -15,12 +15,24 @@ export interface Prefs
   keybindings?: unknown
 }
 
-// load preferences, treating a missing or corrupt file as empty
+// expected JSON type of each typed field; keybindings validate at consumption
+const PREF_FIELD_TYPES = {
+  theme: 'string',
+  vim: 'boolean',
+  notifications: 'boolean',
+} as const
+
+// load preferences, treating a missing or corrupt file as empty and dropping
+// hand-edited fields of the wrong type
 export function loadPrefs(): Prefs
 {
-  return (
-    (readJsonObjectFile(coralHomePath('prefs.json')) as Prefs | undefined) ?? {}
-  )
+  const prefs = readJsonObjectFile(coralHomePath('prefs.json')) ?? {}
+  for (const [key, type] of Object.entries(PREF_FIELD_TYPES))
+  {
+    if (Object.hasOwn(prefs, key) && typeof prefs[key] !== type)
+      delete prefs[key]
+  }
+  return prefs as Prefs
 }
 
 // merge a patch into disk preferences and return the result
