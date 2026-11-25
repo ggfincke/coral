@@ -6,8 +6,29 @@ import { getAllComments } from './ruleContext.js'
 const TOOL_DIRECTIVE = /^(?:eslint|@ts-|istanbul|c8\b|v8\b)/i
 const STRUCTURED_PREFIX = /^(?:[*!?]\s|TODO(?:\([^)]*\):)?\s)/
 
+// product names keep canonical casing; twin of PROPER_NAMES in scripts/check-comment-style.py
+const PROPER_NAMES = new Set([
+  'Anthropic',
+  'Claude',
+  'Codex',
+  'Coral',
+  'Gemma',
+  'Git',
+  'Ink',
+  'Linux',
+  'Ollama',
+  'Python',
+  'Qwen',
+  'React',
+  'Unicode',
+  'Vim',
+])
+
 const isCodeLikeToken = (token) =>
-  token === 'No.' || /[A-Z]/.test(token.slice(1)) || /[._\d]/.test(token)
+  token === 'No.' ||
+  /[A-Z]/.test(token.slice(1)) ||
+  /[._\d]/.test(token) ||
+  PROPER_NAMES.has(token.match(/^[A-Za-z]+/)?.[0])
 
 const rule = {
   meta: {
@@ -20,7 +41,7 @@ const rule = {
     schema: [],
     messages: {
       uppercaseComment:
-        'Plain comments start lowercase; preserve uppercase only for exact code symbols',
+        'Plain comments start lowercase; preserve uppercase only for exact code symbols & product names',
     },
   },
 

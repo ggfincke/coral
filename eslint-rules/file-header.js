@@ -3,12 +3,12 @@
 
 import { isAbsolute, relative } from 'node:path'
 
-import { getCwd, getFilename, getSourceCode } from './ruleContext.js'
+import { getFilename, getSourceCode, REPO_ROOT } from './ruleContext.js'
 
 const normalizePath = (value) => value.replace(/\\/g, '/')
 
-const resolveRelativePath = (filename, cwd) =>
-  normalizePath(isAbsolute(filename) ? relative(cwd, filename) : filename)
+const resolveRelativePath = (filename) =>
+  normalizePath(isAbsolute(filename) ? relative(REPO_ROOT, filename) : filename)
 
 const descriptionText = (comment) => comment.value.trim()
 
@@ -43,7 +43,6 @@ const rule = {
   {
     const sourceCode = getSourceCode(context)
     const filename = getFilename(context)
-    const cwd = getCwd(context)
 
     return {
       Program(node)
@@ -56,7 +55,7 @@ const rule = {
         const descriptionLine = headerLine + 1
         const headerComment = comments[headerIndex]
 
-        const relativePath = resolveRelativePath(filename, cwd)
+        const relativePath = resolveRelativePath(filename)
 
         // require the path comment to be the first source line
         if (
@@ -69,7 +68,7 @@ const rule = {
           return
         }
 
-        // keep the header path tied to the cwd-relative filename
+        // keep the header path tied to the repo-relative filename
         const headerPath = headerComment.value.trim()
         if (headerPath !== relativePath)
         {

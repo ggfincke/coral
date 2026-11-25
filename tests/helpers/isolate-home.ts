@@ -1,5 +1,5 @@
 // tests/helpers/isolate-home.ts
-// preload that points each test process at an empty home & a fixed git identity
+// preload that points each test process at an empty home, a clean env & a fixed git identity
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -19,5 +19,23 @@ process.env.USERPROFILE = home
 process.env.XDG_CONFIG_HOME = join(home, '.config')
 process.env.GIT_CONFIG_GLOBAL = gitConfig
 process.env.GIT_CONFIG_NOSYSTEM = '1'
+
+// exported overrides & provider keys would otherwise bypass the empty home
+for (const name of Object.keys(process.env))
+{
+  if (name.startsWith('CORAL_')) delete process.env[name]
+}
+for (const name of [
+  'AGENTS_HOME',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'OLLAMA_HOST',
+])
+{
+  delete process.env[name]
+}
+
+// a dead session bus makes the linux keyring lookup (secret-tool) fail fast
+process.env.DBUS_SESSION_BUS_ADDRESS = `unix:path=${join(home, 'no-session-bus')}`
 
 process.on('exit', () => rmSync(home, { recursive: true, force: true }))

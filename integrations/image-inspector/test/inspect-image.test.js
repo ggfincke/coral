@@ -140,6 +140,11 @@ test('image wire contract returns bounded observations without image bytes or re
   {
     if (index === 2) return response.end('{broken')
     if (index === 3) return success(response, 'x'.repeat(10_000))
+    if (index === 4)
+      return success(
+        response,
+        'Answer: white rectangle.\n\n## Uncertainty\nLow.'
+      )
     success(response, 'Answer: white rectangle.')
   })
   const result = await inspectImage(
@@ -181,6 +186,12 @@ test('image wire contract returns bounded observations without image bytes or re
   )
   assert.ok(limited.content[0].text.length <= 8_000)
   assert.match(limited.content[0].text, /output truncated/)
+  const heading = await inspectImage(
+    { path: state.image, question: 'Read.' },
+    state.settings
+  )
+  assert.match(heading.content[0].text, /## Uncertainty\nLow\./)
+  assert.doesNotMatch(heading.content[0].text, /not explicitly stated/)
 })
 
 test('MCP cancellation and stdin closure abort upstream work and shut down promptly', async (t) =>

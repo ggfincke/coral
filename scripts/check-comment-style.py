@@ -20,13 +20,31 @@ TOOLING_COMMENT_RE = re.compile(
 	r"^#\s*(?:noqa\b|type:\s*ignore\b|pragma:\s*no cover\b|pyright:|mypy:|ruff:|fmt:|isort:|coverage:)",
 	re.IGNORECASE,
 )
-TODO_PREFIX_RE = re.compile(r"^#\s*todo\b", re.IGNORECASE)
+# an uppercase TODO word or a tag-shaped todo, so prose that starts "todo list" passes
+TODO_PREFIX_RE = re.compile(r"^#\s*(?:TODO\b|(?i:todo)\s*[(:])")
 VALID_TODO_RE = re.compile(r"^# TODO(?:\([a-z0-9][a-z0-9._/-]*\):)?\s+\S")
 TAG_PREFIX_RE = re.compile(r"^#\s*([*!?])")
 VALID_TAG_RE = re.compile(r"^# [*!?] \S")
 LEGACY_TAG_RE = re.compile(r"^#\s*(?:FOOTGUN|HACK|NOTE|WARN(?:ING)?|FIXME|XXX):\s*", re.IGNORECASE)
 PLAIN_COMMENT_RE = re.compile(r"^#\s+([A-Z][^\s]*)")
 SKIP_PARTS = {".venv", "__pycache__", "migrations", "node_modules"}
+# product names keep canonical casing; twin of PROPER_NAMES in eslint-rules/plain-comment-case.js
+PROPER_NAMES = {
+	"Anthropic",
+	"Claude",
+	"Codex",
+	"Coral",
+	"Gemma",
+	"Git",
+	"Ink",
+	"Linux",
+	"Ollama",
+	"Python",
+	"Qwen",
+	"React",
+	"Unicode",
+	"Vim",
+}
 
 
 # === violation model and source helpers ===
@@ -76,10 +94,12 @@ def is_test_path(path: Path) -> bool:
 
 
 def is_code_like_token(token: str) -> bool:
+	word = re.match(r"[A-Za-z]+", token)
 	return (
 		token == "No."
 		or any(char.isupper() for char in token[1:])
 		or bool(re.search(r"[._\d]", token))
+		or (word is not None and word.group(0) in PROPER_NAMES)
 	)
 
 
@@ -231,7 +251,7 @@ def comment_violations(path: Path, text: str, header_lines: set[int]) -> list[Vi
 				Violation(
 					path,
 					token.start[0],
-					"plain comments start lowercase; preserve uppercase only for exact code symbols",
+					"plain comments start lowercase; preserve uppercase only for exact code symbols & product names",
 				)
 			)
 	return violations
