@@ -226,59 +226,40 @@ test('MCP config reports malformed raw section shapes', () =>
   ])
 })
 
-test('MCP trust sidecars preserve legacy aliases and fail closed when invalid', async () =>
+test('MCP trust sidecars round-trip and fail closed when invalid', async () =>
 {
   const coralHome = await tempDir('coral-mcp-home-')
   process.env.CORAL_HOME = coralHome
 
-  const legacy: McpLaunchDescriptor = {
-    alias: 'legacy',
+  const current: McpLaunchDescriptor = {
+    alias: 'current',
     command: 'node',
     executable: '/usr/local/bin/node',
-    args: ['legacy.js'],
+    args: ['current.js'],
     launchCwd: homedir(),
     passEnv: [],
     enabledTools: ['echo'],
     yoloTools: [],
   }
-  const current: McpLaunchDescriptor = {
-    ...legacy,
-    alias: 'current',
-    args: ['current.js'],
+  const broken: McpLaunchDescriptor = {
+    ...current,
+    alias: 'broken',
+    args: ['broken.js'],
   }
   const dangling: McpLaunchDescriptor = {
-    ...legacy,
+    ...current,
     alias: 'dangling',
     args: ['dangling.js'],
   }
-  await writeFile(
-    join(coralHome, 'mcp-trust.json'),
-    JSON.stringify({
-      version: 1,
-      servers: {
-        legacy: {
-          fingerprint: fingerprintMcpLaunch(legacy),
-          approvedAt: '2026-07-17T00:00:00.000Z',
-        },
-        dangling: {
-          fingerprint: fingerprintMcpLaunch(dangling),
-          approvedAt: '2026-07-17T00:00:00.000Z',
-        },
-      },
-    }),
-    'utf-8'
-  )
 
   trustMcpLaunch(current)
-
-  assert.equal(isMcpLaunchTrusted(legacy), true)
+  trustMcpLaunch(broken)
   assert.equal(isMcpLaunchTrusted(current), true)
-  assert.equal(isMcpLaunchTrusted(dangling), true)
+  assert.equal(isMcpLaunchTrusted(broken), true)
+  assert.equal(isMcpLaunchTrusted(dangling), false)
 
-  const legacySidecar = join(coralHome, 'mcp-trust.d', 'legacy.json')
-  await writeFile(legacySidecar, '{', 'utf-8')
-
-  assert.equal(isMcpLaunchTrusted(legacy), false)
+  await writeFile(join(coralHome, 'mcp-trust.d', 'broken.json'), '{', 'utf-8')
+  assert.equal(isMcpLaunchTrusted(broken), false)
   assert.equal(isMcpLaunchTrusted(current), true)
 
   if (process.platform !== 'win32')
