@@ -5,6 +5,8 @@ updates:
     schedule:
       interval: 'weekly'
       day: 'monday'
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: 'deps:'
     open-pull-requests-limit: 5
@@ -20,9 +22,24 @@ updates:
       - dependency-name: 'eslint'
         update-types:
           - 'version-update:semver-major'
-      - dependency-name: '@eslint/js'
+    labels:
+      - 'dependencies'
+
+  - package-ecosystem: 'npm'
+    directory: '/integrations/image-inspector'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: 'deps:'
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
         update-types:
-          - 'version-update:semver-major'
+          - 'minor'
+          - 'patch'
     labels:
       - 'dependencies'
 
