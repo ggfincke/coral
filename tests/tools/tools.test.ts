@@ -513,7 +513,7 @@ test('bash preserves stdout separately from stderr failures', async () =>
   const result = await bashTool.execute({ command })
 
   assert.equal(result.output, 'out')
-  assert.equal(result.error, 'err')
+  assert.equal(result.error, 'err\n[exit code 4]')
 })
 
 test('bash kills the spawned child when the run is aborted', async () =>

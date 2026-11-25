@@ -28,7 +28,7 @@ TUI labels (Read, Write, Shell, …) are display only.
 | `git_add`     | require_approval | `paths`              | no       | no       |                                     |
 | `git_commit`  | require_approval | no                   | no       | no       | Staged only                         |
 | `git_switch`  | require_approval | no                   | no       | no       |                                     |
-| `git_push`    | require_approval | no                   | no       | no       | 60s timeout                         |
+| `git_push`    | require_approval | no                   | no       | no       | 5 min timeout                       |
 | `task`        | always_allow     | no                   | no       | no       | Spawns read-only child              |
 | `todo_write`  | always_allow     | no                   | no       | no       | Primary session only                |
 
@@ -36,7 +36,7 @@ Ollama models do not get `task`, `git_add`, `git_commit`, `git_switch`, or `git_
 
 Subagent set: the ten `yes` rows under Subagent. `coral exec --permission-profile read-only` uses that same set. `workspace-write` adds `write_file`, `edit_file`, `bash` only.
 
-Ripgrep timeout 15s, buffer 5 MiB. Git default timeout 10s except `git_push` (60s). Tool results fed to the model are capped at about 100,000 characters.
+Ripgrep timeout 15s, buffer 5 MiB. Git default timeout 10s except `git_commit`, `git_switch`, and `git_push` (5 min, since they run hooks). Tool results fed to the model are capped at about 100,000 characters.
 
 ---
 
@@ -131,7 +131,7 @@ The server starts on first use, is shared with `task` subagents, and stops when 
 
 ### `bash`
 
-**Required:** `command`. Optional `timeout` milliseconds (default **30,000**, not clamped). Output buffer 1 MiB.
+**Required:** `command`. Optional `timeout`, a whole number of milliseconds from 1 to 2,147,483,647 (default **30,000**). Runs under `/bin/bash -c` in its own process group with no stdin and no controlling terminal; a timeout or cancel stops the whole group, while background jobs of a finished command keep running with their later output discarded. Output past 1,048,576 characters per stream keeps only its tail. A failure ends with a trailer naming the exit code, signal, timeout, or cancel. Commands containing raw control characters other than tab and newline are refused. Hosted API keys (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`) are removed from the environment of `bash`, Git, and task commands.
 
 Runs in the session cwd. **Not sandboxed.** Network and paths outside the project are allowed once you approve the command (or yolo auto-approves).
 
@@ -139,7 +139,7 @@ Runs in the session cwd. **Not sandboxed.** Network and paths outside the projec
 
 ## Git
 
-Refs/paths starting with `-` are rejected so git does not treat them as options. Pathspecs starting with `:` (pathspec magic) are rejected, and `path` / `paths` go through the workspace path gate. Every call disables `core.fsmonitor`. Read-only calls (status, diff, log, and Coral's own git context) also turn off every hook (`core.hooksPath` and each event a config-defined `hook.*` names) and blank every `filter.*` driver in the repository's own config; a config too large to override that way makes the read fail instead. Filter drivers defined in a submodule's own config are not covered and can still run when status or diff recurse into it. Durable tasks (`coral jobs`) run git on the source repo with fsmonitor and hooks off but filter drivers on, so a configured `clean` filter there still runs. Diffs add `--no-ext-diff --no-textconv --no-color` and logs `--no-color --no-show-signature`. Hooks and filter drivers still run for the approval-gated `git_add`, `git_commit`, `git_switch`, and `git_push`, so repo config can run commands there. `git_push` refuses a remote with `mirror = true` or a push refspec led by `+` or `:` (with no remote given, any such remote).
+Refs/paths starting with `-` are rejected so git does not treat them as options. Pathspecs starting with `:` (pathspec magic) are rejected, and `path` / `paths` go through the workspace path gate. Every call disables `core.fsmonitor`. Read-only calls (status, diff, log, and Coral's own git context) also turn off every hook (`core.hooksPath` and each event a config-defined `hook.*` names) and blank every `filter.*` driver in the repository's own config; a config too large to override that way makes the read fail instead. Filter drivers defined in a submodule's own config are not covered and can still run when status or diff recurse into it. Durable tasks (`coral jobs`) run git on the source repo with fsmonitor and hooks off but filter drivers on, so a configured `clean` filter there still runs. Diffs add `--no-ext-diff --no-textconv --no-color` and logs `--no-color --no-show-signature`. Hooks and filter drivers still run for the approval-gated `git_add`, `git_commit`, `git_switch`, and `git_push`, so repo config can run commands there. Those four run without a terminal, so a credential, host-key, passphrase, or terminal pinentry prompt fails instead of waiting; use a credential helper, ssh-agent, or GUI pinentry. A timeout stops their hooks too. `git_push` refuses a remote with `mirror = true` or a push refspec led by `+` or `:` (with no remote given, any such remote).
 
 ### Read
 
@@ -152,7 +152,7 @@ Refs/paths starting with `-` are rejected so git does not treat them as options.
 - **`git_add`** — `all:true` → `git add -A`; else `git add -- …paths`. Requires `paths` or `all`.
 - **`git_commit`** — required nonempty `message` after trim (`git_commit requires a non-empty message`). Does **not** auto-stage. `git commit -m`.
 - **`git_switch`** — required `branch`; optional `create` (default false), `startPoint` (requires `create:true`). Create path runs `git check-ref-format --branch`.
-- **`git_push`** — `git push --porcelain`; optional `remote` (must be a configured remote), `branch` (requires `remote`; `HEAD` or a plain branch name, no `+`, `:`, `^`, `~`, or `@{`), `setUpstream` (requires both) → `-u`. Timeout 60s.
+- **`git_push`** — `git push --porcelain`; optional `remote` (must be a configured remote), `branch` (requires `remote`; `HEAD` or a plain branch name, no `+`, `:`, `^`, `~`, or `@{`), `setUpstream` (requires both) → `-u`. Timeout 5 min.
 
 `/diff` in the TUI is a user command (`git diff`), not this tool.
 

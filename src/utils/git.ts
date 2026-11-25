@@ -3,9 +3,11 @@
 
 import { toErrorMessage } from './errors.js'
 import {
+  childProcessEnv,
   DEFAULT_CHILD_PROCESS_MAX_BUFFER,
   execFileCommand,
   formatProcessError,
+  runProcessGroup,
   type ChildProcessFailure,
   type ChildProcessOptions,
   type ChildProcessResult,
@@ -121,16 +123,59 @@ function disableConfiguredCommands(
   return { args }
 }
 
-// execFile throws at spawn (E2BIG, a NUL byte in an arg) instead of calling
-// back, so turn that into an ordinary failure the caller can report
-async function execGit(
+// a mutating run fires hooks that may spawn their own children, so it gets
+// its own process group (a timeout stops the hooks too) & no terminal (a
+// credential or host-key prompt fails instead of drawing over the TUI)
+async function execMutatingGit(
   args: string[],
   options: ChildProcessOptions
 ): Promise<ChildProcessResult>
 {
+  const result = await runProcessGroup('git', args, {
+    cwd: options.cwd,
+    timeout: options.timeout,
+    signal: options.signal,
+    maxOutput: options.maxBuffer,
+    env: options.env,
+  })
+  const { stdout, stderr } = result
+  if (result.exitCode === 0 && !result.stopped)
+    return { ok: true, stdout, stderr }
+  if (result.launchError)
+  {
+    return {
+      ok: false,
+      stdout,
+      stderr,
+      message: `git could not start: ${result.launchError}`,
+    }
+  }
+  return {
+    ok: false,
+    stdout,
+    stderr,
+    message: `git exited with ${result.signal ?? `code ${String(result.exitCode)}`}`,
+    code: result.exitCode ?? undefined,
+    // only a group coral stopped reads as a signal, which the caller reports
+    // as a timeout; an outside kill shows in the message instead
+    signal: result.stopped ? 'SIGTERM' : undefined,
+  }
+}
+
+// execFile throws at spawn (E2BIG, a NUL byte in an arg) instead of calling
+// back, so turn that into an ordinary failure the caller can report. git
+// never prompts on the terminal, whatever path runs it
+async function execGit(
+  args: string[],
+  options: ChildProcessOptions,
+  mutating = false
+): Promise<ChildProcessResult>
+{
+  const env = childProcessEnv({ GIT_TERMINAL_PROMPT: '0' })
+  if (mutating) return execMutatingGit(args, { ...options, env })
   try
   {
-    return await execFileCommand('git', args, options)
+    return await execFileCommand('git', args, { ...options, env })
   }
   catch (err)
   {
@@ -264,12 +309,11 @@ export async function runGitCommand(
   const policy = await withGitPolicy(args, cwd, { timeout, maxBuffer, signal })
   signal?.throwIfAborted()
   if ('error' in policy) return { output: '', error: policy.error }
-  const result = await execGit(policy.args, {
-    cwd,
-    timeout,
-    maxBuffer,
-    signal,
-  })
+  const result = await execGit(
+    policy.args,
+    { cwd, timeout, maxBuffer, signal },
+    MUTATING_SUBCOMMANDS.has(args[0] ?? '')
+  )
   signal?.throwIfAborted()
   if (result.ok)
   {

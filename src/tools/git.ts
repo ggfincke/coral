@@ -117,6 +117,10 @@ async function forcingRemotes(
   return new Set([...mirrors, ...refspecs])
 }
 
+// approved mutations run hooks (lint-staged, tsc, test suites) that can take
+// minutes; they cannot be cancelled once started, so this is their only limit
+const HOOK_GIT_TIMEOUT_MS = 5 * 60_000
+
 // run a git command, applying a display placeholder when output is empty
 async function runGit(
   args: string[],
@@ -387,7 +391,8 @@ export const gitCommitTool: Tool = {
     return runGit(
       ['commit', '-m', message],
       context?.cwd ?? getCwd(),
-      '(commit created)'
+      '(commit created)',
+      { timeout: HOOK_GIT_TIMEOUT_MS }
     )
   },
 }
@@ -472,7 +477,9 @@ export const gitSwitchTool: Tool = {
     if (startPoint) flags.push(startPoint)
 
     // once started, a mutation and its report finish so success is never shown as a cancellation
-    const switched = await runGitCommand(flags, cwd)
+    const switched = await runGitCommand(flags, cwd, {
+      timeout: HOOK_GIT_TIMEOUT_MS,
+    })
     if (switched.error) return switched
 
     const currentBranch = await currentBranchLabel(cwd)
@@ -571,9 +578,9 @@ export const gitPushTool: Tool = {
     if (remote) flags.push(remote)
     if (branch) flags.push(branch)
 
-    // pushes hit the network — allow more time than the default git timeout
+    // pushes hit the network & run pre-push hooks
     return runGit(flags, cwd, '(pushed)', {
-      timeout: 60_000,
+      timeout: HOOK_GIT_TIMEOUT_MS,
     })
   },
 }
