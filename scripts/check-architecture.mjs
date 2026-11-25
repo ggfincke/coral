@@ -128,11 +128,110 @@ function exportIsTypeOnly(node)
   )
 }
 
+// template literals w/o substitutions are as static as quoted strings
+function literalText(node)
+{
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
+    ? node.text
+    : undefined
+}
+
+// local names for node:module's createRequire, including renamed imports
+function createRequireNames(sourceFile)
+{
+  const names = new Set(['createRequire'])
+  for (const statement of sourceFile.statements)
+  {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !['module', 'node:module'].includes(
+        literalText(statement.moduleSpecifier)
+      )
+    )
+    {
+      continue
+    }
+    const bindings = statement.importClause?.namedBindings
+    if (!bindings || !ts.isNamedImports(bindings)) continue
+    for (const element of bindings.elements)
+    {
+      const imported = element.propertyName?.text ?? element.name.text
+      if (imported === 'createRequire') names.add(element.name.text)
+    }
+  }
+  return names
+}
+
+function isCreateRequireCall(node, factoryNames)
+{
+  if (!ts.isCallExpression(node)) return false
+  const callee = node.expression
+  return ts.isIdentifier(callee)
+    ? factoryNames.has(callee.text)
+    : ts.isPropertyAccessExpression(callee) &&
+        callee.name.text === 'createRequire'
+}
+
+// const names bound to `createRequire(...)`, so their calls count as module loads
+function requireBindings(sourceFile, factoryNames)
+{
+  const names = new Set()
+  function visit(node)
+  {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      isCreateRequireCall(node.initializer, factoryNames) &&
+      ts.isVariableDeclarationList(node.parent) &&
+      (node.parent.flags & ts.NodeFlags.Const) !== 0
+    )
+    {
+      names.add(node.name.text)
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return names
+}
+
+// a require function is readable only when bound to a const or called in place;
+// any other use (reassignment, aliasing, passing it on) hides its loads
+function isTrackedRequireUse(node, factoryNames, requireNames)
+{
+  const parent = node.parent
+  if (isCreateRequireCall(node, factoryNames))
+  {
+    return (
+      (ts.isCallExpression(parent) && parent.expression === node) ||
+      (ts.isVariableDeclaration(parent) &&
+        ts.isIdentifier(parent.name) &&
+        requireNames.has(parent.name.text))
+    )
+  }
+  if (ts.isIdentifier(node) && factoryNames.has(node.text))
+  {
+    return (
+      ts.isImportSpecifier(parent) ||
+      (ts.isCallExpression(parent) && parent.expression === node)
+    )
+  }
+  if (!ts.isIdentifier(node) || !requireNames.has(node.text)) return true
+  return (
+    (ts.isVariableDeclaration(parent) && parent.name === node) ||
+    (ts.isCallExpression(parent) && parent.expression === node) ||
+    (ts.isPropertyAccessExpression(parent) &&
+      parent.expression === node &&
+      parent.name.text === 'resolve')
+  )
+}
+
 function collectEdges(files)
 {
   const edges = []
   const external = []
   const unresolved = []
+  const opaque = []
   const sourcePaths = new Set(files)
 
   function addEdge(source, specifier, runtime, kind)
@@ -199,18 +298,70 @@ function collectEdges(files)
           'export'
         )
       }
+      else if (
+        ts.isImportEqualsDeclaration(statement) &&
+        ts.isExternalModuleReference(statement.moduleReference)
+      )
+      {
+        const specifier = literalText(statement.moduleReference.expression)
+        if (specifier === undefined)
+        {
+          opaque.push({
+            source: toRepoPath(file),
+            text: statement.getText(sourceFile),
+          })
+        }
+        else
+        {
+          addEdge(file, specifier, !statement.isTypeOnly, 'import-equals')
+        }
+      }
+    }
+
+    const factoryNames = createRequireNames(sourceFile)
+    const requireNames = requireBindings(sourceFile, factoryNames)
+
+    // a load whose target the checker cannot read would bypass every rule
+    function addLoad(node, kind)
+    {
+      const specifier =
+        node.arguments.length > 0 ? literalText(node.arguments[0]) : undefined
+      if (specifier === undefined)
+      {
+        opaque.push({
+          source: toRepoPath(file),
+          text: node.getText(sourceFile),
+        })
+        return
+      }
+      if (kind === 'require' && specifier.endsWith('package.json')) return
+      addEdge(file, specifier, true, kind)
     }
 
     function visit(node)
     {
+      if (!isTrackedRequireUse(node, factoryNames, requireNames))
+      {
+        opaque.push({
+          source: toRepoPath(file),
+          text: node.getText(sourceFile),
+        })
+      }
       if (
         ts.isCallExpression(node) &&
-        node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-        node.arguments.length === 1 &&
-        ts.isStringLiteral(node.arguments[0])
+        node.expression.kind === ts.SyntaxKind.ImportKeyword
       )
       {
-        addEdge(file, node.arguments[0].text, true, 'dynamic')
+        addLoad(node, 'dynamic')
+      }
+      else if (
+        ts.isCallExpression(node) &&
+        (isCreateRequireCall(node.expression, factoryNames) ||
+          (ts.isIdentifier(node.expression) &&
+            requireNames.has(node.expression.text)))
+      )
+      {
+        addLoad(node, 'require')
       }
       else if (
         ts.isImportTypeNode(node) &&
@@ -225,7 +376,7 @@ function collectEdges(files)
     ts.forEachChild(sourceFile, visit)
   }
 
-  return { edges, external, unresolved }
+  return { edges, external, unresolved, opaque }
 }
 
 function runtimeCycles(files, edges)
@@ -331,7 +482,11 @@ function dependencyErrors(edges)
     }
     if (source === 'agent')
     {
-      forbid(edge, ['tui', 'session', 'telemetry'], 'Agent boundary')
+      forbid(
+        edge,
+        ['tui', 'session', 'telemetry', 'runtime', 'acp'],
+        'Agent boundary'
+      )
       if (
         edge.source.startsWith('src/agent/state/') &&
         (edge.target.startsWith('src/agent/effects/') ||
@@ -379,7 +534,11 @@ function dependencyErrors(edges)
     }
     if (source === 'tools')
     {
-      forbid(edge, ['agent', 'tui', 'session', 'mcp'], 'tool boundary')
+      forbid(
+        edge,
+        ['agent', 'tui', 'session', 'mcp', 'runtime', 'acp', 'providers'],
+        'tool boundary'
+      )
       if (target === 'lsp' && edge.target !== 'src/lsp/contracts.ts')
       {
         errors.push(
@@ -389,7 +548,11 @@ function dependencyErrors(edges)
     }
     if (source === 'session')
     {
-      forbid(edge, ['agent', 'tui'], 'session boundary')
+      forbid(
+        edge,
+        ['agent', 'tui', 'runtime', 'acp', 'providers'],
+        'session boundary'
+      )
       if (target === 'tools' && edge.target !== 'src/tools/tool.ts')
       {
         errors.push(
@@ -425,22 +588,15 @@ function dependencyErrors(edges)
         `types must remain a neutral source leaf: ${edge.source} -> ${edge.target}`
       )
     }
-    if (source === 'utils')
+    // the ambient cwd allowlist below owns utility edges into src/cwd.ts
+    if (
+      source === 'utils' &&
+      !['utils', 'types'].includes(target) &&
+      edge.target !== 'src/cwd.ts'
+    )
     {
-      forbid(
-        edge,
-        [
-          'agent',
-          'tools',
-          'tui',
-          'session',
-          'telemetry',
-          'mcp',
-          'lsp',
-          'retrieval',
-          'ollama',
-        ],
-        'utility boundary'
+      errors.push(
+        `utilities may depend only on utils and types: ${edge.source} -> ${edge.target}`
       )
     }
     if (source === 'config' && target === 'retrieval')
@@ -570,19 +726,23 @@ function dependencyErrors(edges)
     )
   }
 
-  // hosted SDK graphs load only when the router first needs that provider
+  // hosted SDK graphs load only when the router first needs that provider,
+  // so no outside module may runtime-load anything in a provider directory
   for (const client of HOSTED_CLIENTS)
   {
+    const providerDir = client.slice(0, client.lastIndexOf('/') + 1)
     for (const edge of edges)
     {
-      if (edge.target !== client || !edge.runtime) continue
+      if (!edge.target.startsWith(providerDir) || !edge.runtime) continue
+      if (edge.source.startsWith(providerDir)) continue
       if (
+        edge.target !== client ||
         edge.kind !== 'dynamic' ||
         edge.source !== 'src/providers/router.ts'
       )
       {
         errors.push(
-          `hosted clients load only through the router's dynamic import: ${edge.kind} ${edge.source} -> ${client}`
+          `hosted provider modules load only through the router's dynamic client import: ${edge.kind} ${edge.source} -> ${edge.target}`
         )
       }
     }
@@ -645,7 +805,7 @@ function externalDependencyErrors(external)
 }
 
 const files = collectSourceFiles(SOURCE_ROOT)
-const { edges, external, unresolved } = collectEdges(files)
+const { edges, external, unresolved, opaque } = collectEdges(files)
 const cycles = runtimeCycles(files, edges)
 const errors = [
   ...dependencyErrors(edges),
@@ -655,6 +815,12 @@ const errors = [
 for (const item of unresolved)
 {
   errors.push(`unresolved local import: ${item.source} -> ${item.specifier}`)
+}
+for (const item of opaque)
+{
+  errors.push(
+    `module load the checker cannot trace: ${item.source}: ${item.text}`
+  )
 }
 for (const cycle of cycles)
 {
