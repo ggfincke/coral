@@ -133,10 +133,12 @@ test('chatStream ends a body that never sends a newline with a bounded error', a
   const piece = new TextEncoder().encode('a'.repeat(1024 * 1024))
   let reads = 0
   const stream = new ReadableStream<Uint8Array>({
+    // close after 32 MiB so a broken cap fails the assertion instead of hanging
     pull(controller)
     {
       reads += 1
-      controller.enqueue(piece)
+      if (reads > 32) controller.close()
+      else controller.enqueue(piece)
     },
   })
 
