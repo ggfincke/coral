@@ -307,7 +307,10 @@ export async function terminateOwnedGroup(
     const members = await ownedGroupMembers(owner)
     if (!members.length) return
     const native = await darwinDescendants(owner)
-    if ((await groupMembers(owner.pid)).length)
+    // * signal the whole group only when every live member is proven ours; a
+    // reused leader pid can head a foreign group while our token holders live on
+    const group = await groupMembers(owner.pid)
+    if (group.length && group.every((pid) => members.includes(pid)))
     {
       try
       {

@@ -56,6 +56,13 @@ export async function runJobService(kind: string, id?: string): Promise<void>
     ownerLost = true
     cancel()
   }
+  // ! a SIGKILLed worker loses events still waiting on the store's flush
+  // interval (EVENT_FLUSH_MS); every stop it is told about flushes first
+  const flushOnStop = () =>
+  {
+    if (id && kind === '_worker') flushJobEvents(id, { deferError: true })
+  }
+  abort.signal.addEventListener('abort', flushOnStop, { once: true })
   process.on('SIGTERM', cancel)
   process.on('SIGINT', cancel)
   try

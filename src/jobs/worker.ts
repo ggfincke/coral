@@ -252,10 +252,12 @@ export async function executeJob(
   }
 
   // honor the bash tool's advertised default so a watch-mode command cannot
-  // hold the task until its time budget runs out; zero, negative, or huge
+  // hold the task until its time budget runs out; sub-1 ms, negative, or huge
   // values would otherwise become a 1 ms timer
   const commandTimeout = (requested: unknown): number =>
-    typeof requested === 'number' && Number.isFinite(requested) && requested > 0
+    typeof requested === 'number' &&
+    Number.isFinite(requested) &&
+    requested >= 1
       ? Math.min(requested, job.spec.activeTimeLimitMs)
       : BASH_DEFAULT_TIMEOUT_MS
   const createAgent = (restored?: SessionData, readOnly = false) =>

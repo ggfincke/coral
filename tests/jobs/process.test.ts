@@ -315,34 +315,49 @@ test(
     const root = await pool.tempDir('coral-job-reused-pid-')
     process.env.CORAL_HOME = join(root, 'home')
     const id = randomBytes(4).toString('hex')
+    const token = randomUUID()
     // stands in for an unrelated process that reused the recorded pid
     const foreign = spawn('/bin/sleep', ['20'], {
       detached: true,
       stdio: 'ignore',
     })
+    // a detached descendant of the dead command that still holds its token
+    const holder = spawn('/bin/sleep', ['20'], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, CORAL_JOB_PROCESS_TOKEN: token },
+    })
+    const holderExit = new Promise<NodeJS.Signals | null>((resolve) =>
+      holder.once('exit', (_code, signal) => resolve(signal))
+    )
     try
     {
-      await new Promise((resolve) => foreign.once('spawn', resolve))
+      await Promise.all(
+        [foreign, holder].map(
+          (child) => new Promise((resolve) => child.once('spawn', resolve))
+        )
+      )
       const directory = join(jobDirectory(id), 'processes')
       mkdirSync(directory, { recursive: true, mode: 0o700 })
-      const token = randomUUID()
       const record = join(directory, `${token}.json`)
       // the dead command's identity: same pid and group, an earlier start
-      writeFileSync(
-        record,
-        JSON.stringify({
-          pid: foreign.pid,
-          token,
-          identity: `Mon Nov 23 09:00:00 2026 ${foreign.pid}`,
-        })
-      )
+      const owner = {
+        pid: foreign.pid!,
+        token,
+        identity: `Mon Nov 23 09:00:00 2026 ${foreign.pid}`,
+      }
+      writeFileSync(record, JSON.stringify(owner))
+      assert.deepEqual(await ownedGroupMembers(owner), [holder.pid])
       await cleanupJobProcesses(id)
       assert.equal(existsSync(record), false)
+      assert.equal(await holderExit, 'SIGTERM')
       assert.ok(await processIdentity(foreign.pid!), 'foreign process survives')
     }
     finally
     {
       process.kill(-foreign.pid!, 'SIGKILL')
+      if (holder.exitCode === null && holder.signalCode === null)
+        holder.kill('SIGKILL')
     }
   }
 )

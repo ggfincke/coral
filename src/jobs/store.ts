@@ -585,24 +585,30 @@ export function appendJobEvent(
     pendingEvents.set(id, pending)
   }
   pending.events.push(entry)
-  pending.timer ??= setTimeout(() =>
-  {
-    try
-    {
-      flushJobEvents(id)
-    }
-    catch (error)
-    {
-      pendingEvents.set(id, { events: [], error })
-    }
-  }, EVENT_FLUSH_MS)
+  pending.timer ??= setTimeout(
+    () => flushJobEvents(id, { deferError: true }),
+    EVENT_FLUSH_MS
+  )
 }
 
-// write coalesced events now; the worker calls this before it exits
-export function flushJobEvents(id: string): void
+// write coalesced events now; the worker calls this when it is told to stop
+// and before it exits. deferError keeps a failure for the next append or flush
+// to report, as a timer flush does
+export function flushJobEvents(
+  id: string,
+  options: { deferError?: boolean } = {}
+): void
 {
-  const pending = takePendingEvents(id)
-  if (pending?.events.length) writeEvents(id, pending.events)
+  try
+  {
+    const pending = takePendingEvents(id)
+    if (pending?.events.length) writeEvents(id, pending.events)
+  }
+  catch (error)
+  {
+    if (!options.deferError) throw error
+    pendingEvents.set(id, { events: [], error })
+  }
 }
 
 export function writeJobSnapshot(id: string, session: SessionData): string

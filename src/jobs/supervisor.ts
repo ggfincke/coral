@@ -538,15 +538,16 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
       catch (error)
       {
         failClosed(error)
+        // stop the worker first so its flushed events precede this one;
+        // leave ownership journals intact when cleanup cannot be proved
+        if (activeOwner) await terminateOwnedGroup(activeOwner).catch(() =>
+        {})
+        else child.kill('SIGTERM')
         appendJobEvent(
           job.id,
           'error',
           `Queue stopped: ${toErrorMessage(error)}. The next task command restarts the supervisor and recovers this task.`
         )
-        // leave ownership journals intact when cleanup cannot be proved
-        if (activeOwner) await terminateOwnedGroup(activeOwner).catch(() =>
-        {})
-        else child.kill('SIGTERM')
       }
       finally
       {
