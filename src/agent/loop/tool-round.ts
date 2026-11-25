@@ -13,6 +13,7 @@ import type { ToolExecutionContext, ToolResult } from '../../tools/tool.js'
 import { validateToolArgs } from '../../tools/validation.js'
 import type { OllamaMessage, OllamaToolCall } from '../../types/inference.js'
 import { cloneTodoItems, type TodoState } from '../../types/todo.js'
+import { formatStoredToolResult } from '../../types/tool-result.js'
 import type { UndoFileChange, UndoTodoChange } from '../../types/undo.js'
 import { raceAbort } from '../../utils/abort.js'
 import {
@@ -832,11 +833,7 @@ export class ToolRoundExecutor
     const cappedError = error
       ? trimTrailingHighSurrogate(capErrorMessage(error))
       : error
-    const rawContent = cappedError
-      ? output
-        ? `Error: ${cappedError}\n${output}`
-        : `Error: ${cappedError}`
-      : output
+    const rawContent = formatStoredToolResult(output, cappedError)
     const minimumTokens = budget.minimumTokens[budget.nextResult]
     if (minimumTokens === undefined || budget.remainingCalls <= 0)
     {
@@ -893,7 +890,7 @@ export class ToolRoundExecutor
       const fallback: OllamaMessage = {
         role: 'tool',
         tool_name: toolName,
-        content: error ? `Error: ${notice}` : notice,
+        content: error ? formatStoredToolResult('', notice) : notice,
       }
       if (estimateModelRequestMessageTokens(fallback) > maxTokens)
       {
