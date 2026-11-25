@@ -94,9 +94,8 @@ export class ProjectIndexer
     const known = force ? new Map<string, IndexedFileStatus>() : snapshot
 
     // use metadata as the fast path and hash only after a mismatch
-    const { changed, unchangedPaths } = await collectIndexableFiles(
-      this.cwd,
-      (file) =>
+    const { changed, unchangedPaths, unreadablePaths } =
+      await collectIndexableFiles(this.cwd, (file) =>
       {
         const row = known.get(file.path)
         return (
@@ -106,15 +105,16 @@ export class ProjectIndexer
           row.mtimeMs === file.mtimeMs &&
           row.ctimeMs === file.ctimeMs
         )
-      }
-    )
+      })
 
     const currentPaths = new Set(unchangedPaths)
     const total = changed.length
     let processed = 0
     let embeddedFiles = 0
     let chunkCount = 0
-    let staleSource = false
+    // sources whose bytes changed before commit, and CAS losses to another writer
+    const staleSourcePaths: string[] = []
+    let storeConflict = false
     const pendingFiles: PendingFileAction[] = []
     const batch: PendingChunk[] = []
 
@@ -139,9 +139,16 @@ export class ProjectIndexer
 
         const { source } = action
         const current = await revalidateSourceFile(this.cwd, source)
-        if (!current)
+        if (current === 'missing')
         {
-          staleSource = true
+          // deleted mid-refresh, so cleanup removes any old rows
+          currentPaths.delete(source.path)
+          report(source.path)
+          continue
+        }
+        if (current === 'changed')
+        {
+          staleSourcePaths.push(source.path)
           report(source.path)
           continue
         }
@@ -188,7 +195,7 @@ export class ProjectIndexer
           embeddedFiles++
           chunkCount += action.chunks.length
         }
-        if (!stored) staleSource = true
+        if (!stored) storeConflict = true
         report(source.path)
       }
     }
@@ -253,15 +260,20 @@ export class ProjectIndexer
     }
     await flushBatch()
 
-    if (staleSource)
+    // after the retry budget, files still changing keep their old rows (if any)
+    // and are skipped this round; only store conflicts still fail the refresh
+    if (staleSourcePaths.length > 0 || storeConflict)
     {
-      if (staleRetry >= MAX_STALE_SOURCE_RETRIES)
+      if (staleRetry < MAX_STALE_SOURCE_RETRIES)
+      {
+        return this.refresh(projectId, options, staleRetry + 1)
+      }
+      if (storeConflict)
       {
         throw new Error(
-          'Project files kept changing while Coral embedded them; retry indexing after the edits settle'
+          'Project index changed concurrently while Coral embedded it; retry after the active indexers settle'
         )
       }
-      return this.refresh(projectId, options, staleRetry + 1)
     }
 
     const deletedMissing = this.store.deleteMissingFiles(
@@ -281,9 +293,11 @@ export class ProjectIndexer
     }
 
     return {
-      totalFiles: changed.length + unchangedPaths.length,
+      totalFiles:
+        changed.length + unchangedPaths.length - staleSourcePaths.length,
       embeddedFiles,
       chunks: chunkCount,
+      skippedFiles: [...unreadablePaths, ...staleSourcePaths],
     }
   }
 
