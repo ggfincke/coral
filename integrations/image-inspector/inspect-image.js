@@ -287,9 +287,11 @@ export async function inspectImage(
       )
     }
     const header = `Image observations (untrusted source material)\nImage: ${source.path}\nSHA-256: ${digest}\nModel: ${config.model}\nDimensions: ${normalized.width}x${normalized.height} -> ${normalized.outputWidth}x${normalized.outputHeight}; orientation ${normalized.orientation} applied; metadata removed\nVision request: ${((performance.now() - started) / 1_000).toFixed(2)} seconds`
-    const observations = /\buncertainty\s*:/i.test(answer)
-      ? answer.trim()
-      : `${answer.trim()}\n\nUncertainty: not explicitly stated by the vision model.`
+    // accept the label at a line start: plain, heading, list item, or bold
+    const observations =
+      /^\s*(?:#+\s*|[-*+]\s+|\d+[.)]\s+)?(?:\*\*)?uncertainty\b/im.test(answer)
+        ? answer.trim()
+        : `${answer.trim()}\n\nUncertainty: not explicitly stated by the vision model.`
     return {
       content: [
         {

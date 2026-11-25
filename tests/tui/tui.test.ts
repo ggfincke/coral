@@ -1259,6 +1259,7 @@ test('dispatchCommand passes the command abort signal into /index', async () =>
           totalFiles: 1,
           embeddedFiles: 1,
           chunks: 1,
+          skippedFiles: [],
         }),
       } as never,
     }
