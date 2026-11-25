@@ -6,7 +6,7 @@ import type { Model } from '../../types/inference.js'
 import { formatBytes } from '../../utils/bytes.js'
 import { clamp } from '../../utils/clamp.js'
 import { selectionStyle, style } from '../theme.js'
-import { sanitizeUntrustedText } from '../transcript/sanitize.js'
+import { sanitizeUntrustedLine } from '../../utils/untrusted-text.js'
 import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
 
 // preferred default model, pinned to the top and selected at startup
@@ -51,8 +51,6 @@ export function buildModelPickerLines(
   const columns = Math.max(Math.floor(width), 0)
   const rows = Math.max(Math.floor(height), 0)
   if (columns === 0 || rows === 0) return []
-  const clean = (text: string) =>
-    sanitizeUntrustedText(text).replace(/\s+/g, ' ').trim()
 
   if (models.length === 0)
   {
@@ -99,7 +97,10 @@ export function buildModelPickerLines(
       columns - 3 - (size ? visibleWidth(size) + 2 : 0),
       0
     )
-    const name = padEnd(truncateLine(clean(model.name), nameWidth), nameWidth)
+    const name = padEnd(
+      truncateLine(sanitizeUntrustedLine(model.name), nameWidth),
+      nameWidth
+    )
     const row = truncateLine(
       ` ${active ? '›' : ' '} ${active ? chalk.bold(name) : name}${size ? `  ${active ? size : chalk.dim(size)}` : ''}`,
       columns
@@ -113,14 +114,14 @@ export function buildModelPickerLines(
   }
   if (detailRows >= 3) lines.push('')
   if (detailRows >= 1)
-    lines.push(chalk.dim(`Selected: ${clean(selected.name)}`))
+    lines.push(chalk.dim(`Selected: ${sanitizeUntrustedLine(selected.name)}`))
   if (detailRows >= 3)
   {
     lines.push(
       chalk.dim(
         selected.size === undefined
           ? 'Hosted API · billed per token'
-          : `Size: ${formatBytes(selected.size)} · Modified: ${clean(selected.modified_at ?? '')}`
+          : `Size: ${formatBytes(selected.size)} · Modified: ${sanitizeUntrustedLine(selected.modified_at ?? '')}`
       )
     )
   }

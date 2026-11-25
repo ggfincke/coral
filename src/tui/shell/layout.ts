@@ -55,27 +55,16 @@ export function buildHeaderLine(opts: HeaderOptions): string
   )
 }
 
-// activity never loses its tail to a long shortcut; the hint gets another row
-export function buildActivityLines(
-  activity: string,
-  hint: string,
-  width: number
-): string[]
+// activity fills one padded row when it fits w/ two columns of slack, else wraps
+export function buildActivityLines(activity: string, width: number): string[]
 {
   const budget = Math.max(width, 1)
-  if (visibleWidth(activity) + visibleWidth(hint) + 2 <= budget)
-  {
-    return [
-      padEnd(activity, budget - visibleWidth(hint)) + style('muted')(hint),
-    ]
-  }
-  const rows = wrapAnsi(activity, budget, {
+  if (visibleWidth(activity) + 2 <= budget) return [padEnd(activity, budget)]
+  return wrapAnsi(activity, budget, {
     hard: true,
     trim: false,
     wordWrap: true,
   }).split('\n')
-  if (hint) rows.push(style('muted')(truncateLine(hint, budget)))
-  return rows
 }
 
 export function buildComposerRule(width: number, label: string): string

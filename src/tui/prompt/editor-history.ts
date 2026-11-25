@@ -44,11 +44,11 @@ export function pushUndo(
   return { undoStack: nextStack, lastOpCharInsert: op === 'char-insert' }
 }
 
-// pop the newest past state to restore; returns null when nothing to undo
+// pop the newest past state to restore; returns current when nothing to undo
 export function popUndo(
   memory: EditorMemory,
   current: EditorSnapshot
-): { memory: EditorMemory; restore: EditorSnapshot | null }
+): { memory: EditorMemory; restore: EditorSnapshot }
 {
   if (memory.undoStack.length === 0)
   {
@@ -59,7 +59,7 @@ export function popUndo(
   const restore = stack.pop() ?? current
   return {
     memory: { undoStack: stack, lastOpCharInsert: false },
-    restore: restore ?? current,
+    restore,
   }
 }
 

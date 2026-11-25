@@ -4,7 +4,7 @@
 import chalk from 'chalk'
 import { selectionStyle, style } from '../theme.js'
 import { padEnd, truncateLine } from '../wrap.js'
-import { sanitizeUntrustedText } from './sanitize.js'
+import { sanitizeUntrustedLine } from '../../utils/untrusted-text.js'
 import type { OllamaMessage } from '../../types/inference.js'
 import { findUserTurnStarts, type UndoTurn } from '../../types/undo.js'
 
@@ -68,7 +68,7 @@ export function buildBacktrackTurns(
 // collapse a stored prompt into one bounded selector row
 export function previewBacktrackTurn(content: string): string
 {
-  const flat = sanitizeUntrustedText(content).replace(/\s+/g, ' ').trim()
+  const flat = sanitizeUntrustedLine(content)
   return flat.length > PREVIEW_MAX_CHARS
     ? `${flat.slice(0, PREVIEW_MAX_CHARS - 1)}…`
     : flat

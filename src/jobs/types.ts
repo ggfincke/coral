@@ -110,6 +110,37 @@ export interface JobRecord
   error?: string
 }
 
+// the supervisor cancels a running task by stopping its worker and settles
+// any other status listed here directly
+const CANCELLABLE_JOB_STATUSES: readonly JobStatus[] = [
+  'draft',
+  'queued',
+  'running',
+  'interrupted',
+  'needs_input',
+]
+
+export function canCancelJob(job: Pick<JobRecord, 'status'>): boolean
+{
+  return CANCELLABLE_JOB_STATUSES.includes(job.status)
+}
+
+// status rule only; continuing also needs an approval matching the spec
+export function canContinueJob(job: Pick<JobRecord, 'status'>): boolean
+{
+  return (SETTLED_JOB_STATUSES as readonly JobStatus[]).includes(job.status)
+}
+
+// agent shell commands whose effects are unknown; continuing needs a decision
+export function unsettledShellCommands(
+  job: Pick<JobRecord, 'unsettledShells'>
+): string[]
+{
+  return (job.unsettledShells ?? [])
+    .filter((shell) => !shell.result)
+    .map((shell) => shell.command)
+}
+
 export interface JobEvent
 {
   sequence: number
