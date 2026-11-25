@@ -18,6 +18,7 @@ import {
 } from '../state/compaction.js'
 import {
   DEFAULT_MAX_HISTORY,
+  HISTORY_TRIM_WATERMARK,
   type ConversationMessageAnchor,
   type ConversationState,
   type ConversationTransition,
@@ -30,6 +31,18 @@ import {
 
 const COMPACTION_SYSTEM_PROMPT =
   'You are a helpful assistant. Produce a concise structured summary of the conversation.'
+
+// a summary request either produced text or failed w/ a reportable cause
+type SummaryOutcome =
+  { status: 'ok'; summary: string } | { status: 'failed'; error: Error }
+
+function summaryFailure(error: unknown): SummaryOutcome
+{
+  return {
+    status: 'failed',
+    error: error instanceof Error ? error : new Error(String(error)),
+  }
+}
 
 export interface CompactionRuntime
 {
@@ -112,20 +125,39 @@ export class CompactionCoordinator
     })
     if (!prepared) return null
 
-    const summary = await this.buildSummary(
+    const outcome = await this.buildSummary(
       prepared.messages,
       runtime,
       undefined,
       signal
     )
-    if (summary === null) return null
+    if (outcome.status === 'failed')
+    {
+      // a failed request is reported, not mistaken for too little history
+      if (signal?.aborted) return null
+      throw outcome.error
+    }
     const committed = this.state.commitSummary(
       prepared.plan,
-      summary,
+      outcome.summary,
       new Date().toISOString()
     )
     if (committed.status === 'stale') return null
     return this.resultForTransition(committed.transition, runtime)
+  }
+
+  // when the stored count passes the cap, trim once to the watermark,
+  // cutting at a turn start, so the request prefix changes only at this crossing
+  enforceHistoryLimit(
+    runtime: CompactionRuntime,
+    callbacks?: CompactionCallbacks
+  ): boolean
+  {
+    if (this.state.getMessageCount() <= DEFAULT_MAX_HISTORY) return false
+    const transition = this.state.trimToMax(HISTORY_TRIM_WATERMARK)
+    if (transition.afterMessages === transition.beforeMessages) return false
+    this.resultForTransition(transition, runtime, callbacks, 'message_limit')
+    return true
   }
 
   // report awaited summary work even when it failed or could not commit
@@ -176,13 +208,13 @@ export class CompactionCoordinator
     })
     if (!prepared) return false
 
-    const summary = await this.buildSummary(
+    const outcome = await this.buildSummary(
       prepared.messages,
       runtime,
       callbacks,
       signal
     )
-    if (summary === null)
+    if (outcome.status === 'failed')
     {
       // cancellation is not an automatic-compaction failure
       if (signal?.aborted) return true
@@ -192,14 +224,19 @@ export class CompactionCoordinator
       )
       if (failure.status === 'recorded' && failure.transition)
       {
-        this.resultForTransition(failure.transition, runtime, callbacks)
+        this.resultForTransition(
+          failure.transition,
+          runtime,
+          callbacks,
+          'summary_failed'
+        )
       }
       return true
     }
 
     const committed = this.state.commitSummary(
       prepared.plan,
-      summary,
+      outcome.summary,
       new Date().toISOString()
     )
     if (committed.status === 'committed')
@@ -218,17 +255,17 @@ export class CompactionCoordinator
     if (this.state.indexOf(anchor) <= 1) return false
     const prepared = this.state.prepareSummary({ mode: 'hard-fit' })
     if (!prepared) return false
-    const summary = await this.buildSummary(
+    const outcome = await this.buildSummary(
       prepared.messages,
       runtime,
       callbacks,
       signal
     )
     signal?.throwIfAborted()
-    if (summary === null) return false
+    if (outcome.status === 'failed') return false
     const committed = this.state.commitSummary(
       prepared.plan,
-      summary,
+      outcome.summary,
       new Date().toISOString()
     )
     if (committed.status === 'stale') return false
@@ -254,7 +291,8 @@ export class CompactionCoordinator
   private resultForTransition(
     transition: ConversationTransition,
     runtime: CompactionRuntime,
-    callbacks?: CompactionCallbacks
+    callbacks?: CompactionCallbacks,
+    trimReason?: CompactionResult['trimReason']
   ): CompactionResult
   {
     const result: CompactionResult = {
@@ -277,6 +315,7 @@ export class CompactionCoordinator
       ...(transition.prunedThinking === undefined
         ? {}
         : { prunedThinking: transition.prunedThinking }),
+      ...(trimReason === undefined ? {} : { trimReason }),
     }
     callbacks?.onResult?.(result)
     return result
@@ -319,13 +358,13 @@ export class CompactionCoordinator
     return best
   }
 
-  // build a model-generated summary, returning null on failure or empty text
+  // build a model-generated summary; failures keep their cause for /compact
   private async buildSummary(
     messagesToSummarize: OllamaMessage[],
     runtime: CompactionRuntime,
     callbacks?: CompactionCallbacks,
     signal?: AbortSignal
-  ): Promise<string | null>
+  ): Promise<SummaryOutcome>
   {
     const cleaned = stripThinkingForCompaction(messagesToSummarize)
     const fullPrompt = buildCompactionPrompt(cleaned)
@@ -343,7 +382,12 @@ export class CompactionCoordinator
       estimateModelRequestMessageTokens(systemMessage) -
       estimateRequestFramingTokens(2)
     const compactionPrompt = this.fitPrompt(fullPrompt, promptTokens)
-    if (compactionPrompt === null) return null
+    if (compactionPrompt === null)
+    {
+      return summaryFailure(
+        new Error('The summary request does not fit the context window')
+      )
+    }
     let summary = ''
 
     callbacks?.onStart?.()
@@ -365,16 +409,19 @@ export class CompactionCoordinator
         signal
       ))
       {
-        if (signal?.aborted) return null
+        signal?.throwIfAborted()
         if (chunk.message.content) summary += chunk.message.content
       }
     }
-    catch
+    catch (error)
     {
-      return null
+      return summaryFailure(error)
     }
 
-    if (!summary.trim()) return null
-    return summary
+    if (!summary.trim())
+    {
+      return summaryFailure(new Error('The model returned an empty summary'))
+    }
+    return { status: 'ok', summary }
   }
 }

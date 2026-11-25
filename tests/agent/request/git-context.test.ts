@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import { test } from 'node:test'
 import {
   buildGitContextMessage,
+  compactGitContext,
   GIT_CONTEXT_HEADING,
 } from '../../../src/agent/request/git-context.js'
 import { makeTempDirPool } from '../../helpers/temp.js'
@@ -158,5 +159,35 @@ test(
     assert.match(message.content, /status: unknown/)
     assert.match(message.content, /staged files: unknown/)
     assert.doesNotMatch(message.content, /status: clean/)
+  }
+)
+
+test(
+  'a built snapshot compacts to its heading, preamble & identity fields',
+  { skip: !HAS_GIT },
+  async () =>
+  {
+    const dir = await tempDir('coral-git-compact-')
+    const run = initTestRepo(dir)
+    await writeFile(join(dir, 'tracked.txt'), 'one\n', 'utf-8')
+    assert.equal(run('add', '-A').status, 0)
+    assert.equal(run('commit', '-m', 'init').status, 0)
+    await writeFile(join(dir, 'untracked.txt'), 'new\n', 'utf-8')
+
+    const message = await buildGitContextMessage(dir)
+    const compacted = compactGitContext(message!.content)!
+    const lines = compacted.split('\n')
+
+    assert.equal(lines[0], GIT_CONTEXT_HEADING)
+    assert.match(lines[1]!, /not a user message;/)
+    for (const field of ['root', 'cwd', 'branch', 'operation', 'status'])
+    {
+      assert.ok(
+        lines.some((line) => line.startsWith(`- ${field}:`)),
+        field
+      )
+    }
+    assert.ok(!compacted.includes('untracked.txt'))
+    assert.equal(lines.at(-1), '- detail: omitted to fit request budget')
   }
 )

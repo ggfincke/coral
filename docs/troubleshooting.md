@@ -31,7 +31,7 @@ Streamed reasoning missing without an error: `/api/chat` 400/404/422 whose body 
 
 Pinned window unexpectedly small: full-attention models are KV-capped (`0.75 × RAM − weights − 6 GiB`). Gemma-family sliding-window models pin native after the weight check. Missing weight metadata is treated as 0 (more optimistic). On a small GPU, running Ollama with a quantized K/V cache and declaring it in `~/.coral.json` `ollama.kvCacheType` roughly doubles the window that fits.
 
-`/compact` says `Conversation too short to compact` or `Compaction skipped — not enough context to summarize`. Auto-compact notices: prune (`Auto-pruned …`, undo kept), summarize (`Context auto-compacted` + `Undo history cleared`), or trim (`Context trimmed to recent history (summarization unavailable)` + `Undo history cleared`).
+`/compact` says `Conversation too short to compact` or `Compaction skipped — not enough context to summarize`. Auto-compact notices: prune (`Auto-pruned …`, undo kept), summarize (`Context auto-compacted` + `Undo history cleared`), or trim (`Context trimmed to recent history (summarization unavailable)` or `(message limit reached)`, undo kept for the remaining turns). `Compaction failed: …` means the summary request itself failed (for example Ollama is unreachable).
 
 ---
 

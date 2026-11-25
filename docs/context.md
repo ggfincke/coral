@@ -45,7 +45,7 @@ If it does not fit, `RequestPlanner` degrades in order: compact Git → drop Git
 
 Git context is a turn-start snapshot (`## Git Context`) appended to your message: branch, status lists (max 12 each), `--stat`, last 5 oneline commits, truncated at 6,000 characters. Absent if cwd is not a git work tree.
 
-Coral stores the snapshot with its turn (session field `gitContext`, never shown in the transcript) and resends it unchanged on every later request, so earlier turns stay byte-identical and a prompt cache can reuse them. A new turn gets a snapshot only when it differs from the newest one still in history, so no snapshot on a turn means nothing changed. Older snapshots are cleared when old tool results are pruned. If a request is over budget, the active turn's snapshot shrinks to its header lines or is dropped, and stays that way for the rest of the turn.
+Coral stores the snapshot with its turn (session field `gitContext`, never shown in the transcript) and resends it unchanged on every later request, so earlier turns stay byte-identical and a prompt cache can reuse them. A new turn gets a snapshot only when it differs from the newest one still in history, so no snapshot on a turn means nothing changed. Older snapshots are cleared when old tool results are pruned. When a trim or summary drops the turn holding the newest snapshot, Coral moves it onto the oldest kept turn. If a request is over budget, the active turn's snapshot shrinks to its header lines or is dropped, and stays that way for the rest of the turn.
 
 `@` attachments: up to 64 files, 1 MiB text each, mention order, **4 MiB** aggregate capture, skip reasons `not found` | `too large` | `binary` | `unreadable` | `outside workspace` | `over budget`. The committed user message can include a `Referenced files (from @-mentions):` block; `displayContent` keeps your typed text for the UI.
 
@@ -57,12 +57,12 @@ During `runInternal`, before a request:
 
 1. **Prune** old tool results if there are at least **10** messages and estimated tokens exceed **75%** of the window. One prune works down toward **50%** so the next one waits for real growth instead of rewriting history every round: the newest **6** tool results are kept when that is enough, otherwise older ones go first, never fewer than the newest **2** and never a result from the round that just ran. Every `skill` result loaded in the active turn is also kept; after finalization, the newest completed skill result remains protected. Others become markers like `[tool result pruned — toolName: preview, ~N tokens]`. The same pass clears every stored Git snapshot except the newest. Prune does **not** clear undo. TUI: `Auto-pruned N old tool results (~… tokens freed)`.
 2. **Summarize** if at least **20** messages and tokens exceed **90%**. Newest **10** messages stay verbatim. The summarizer is a tool-free Ollama call with a structured handoff prompt (Goal, Decisions, Work completed, Work remaining, Relevant files). Thinking is replaced with `[reasoning was used]`. TUI first line: `Context auto-compacted`, then `Undo history cleared`.
-3. If summarization fails **2** times, Coral **trims** to the most recent **100** messages (`DEFAULT_MAX_HISTORY`). TUI: `Context trimmed to recent history (summarization unavailable)` plus `Undo history cleared`.
-4. **Every** request iteration, if stored messages exceed 100, Coral also trims to 100 (preserving the active turn). That guard is independent of whether prune/summarize ran.
+3. If summarization fails **2** times, Coral **trims** to the most recent **100** messages (`DEFAULT_MAX_HISTORY`), cutting at a turn start. TUI: `Context trimmed to recent history (summarization unavailable)`.
+4. Before each request, if stored messages exceed 100, Coral trims once to at most **70** (`HISTORY_TRIM_WATERMARK`), cutting at the latest turn start that fits, so long turns can leave fewer, and never into the active turn, so history is rewritten only at that crossing. TUI: `Context trimmed to recent history (message limit reached)`. That guard is independent of whether prune/summarize ran.
 
 Automatic summaries freeze a user message starting with `[Conversation handoff`. At most **4** frozen summaries; extra ones are consolidated. Frozen prefix is Coral bookkeeping — sliding-window/MLX models may still re-prefill the prompt.
 
-Summarize, trim, `/compact`, and `/clear` **clear undo/redo**. Prune does not. Run stage during a summarization call: `compacting context`.
+Summarize, `/compact`, and `/clear` **clear undo/redo**. Prune does not, and a trim drops undo only for the turns it removes. Run stage during a summarization call: `compacting context`.
 
 ---
 
@@ -72,6 +72,7 @@ Manual summarize. The TUI refuses with `Conversation too short to compact` when 
 
 - Success: `Context compacted` and `Undo history cleared`; session saved
 - Not enough to summarize: `Compaction skipped — not enough context to summarize`
+- Summary request failed: `Compaction failed: <error>`; history is unchanged
 - Interrupt: `Compaction interrupted`
 
 Manual compact uses a frozen prefix of **system only** (then the new handoff), unlike automatic which can keep prior frozen summaries.

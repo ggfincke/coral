@@ -33,6 +33,7 @@ import {
   type ProjectContextSnapshot,
 } from './request/project-context.js'
 import { setCwd, getCwd } from '../cwd.js'
+import { pluralize } from '../utils/pluralize.js'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import {
@@ -46,7 +47,6 @@ import {
 } from './state/compaction.js'
 import {
   ConversationState,
-  DEFAULT_MAX_HISTORY,
   type ConversationMessageAnchor,
 } from './state/conversation.js'
 import {
@@ -111,8 +111,10 @@ import {
   type CompactionRuntime,
 } from './loop/compactor.js'
 import {
+  FileNoticePlacement,
   RequestPlanner,
   type PreparedModelRequest,
+  type SystemPromptPlan,
 } from './loop/request-planner.js'
 import {
   ToolRoundExecutor,
@@ -290,6 +292,11 @@ export class Agent
   private totalCachedPromptTokens = 0
   private totalDroppedThinkingBlocks = 0
   private contextWindowSize = 0
+  // root listing frozen per session so a new top-level entry never rewrites
+  // the leading system message; a model switch or /clear refreshes it
+  private rootSummary?: string
+  // keeps an outstanding file-change notice where it first went out
+  private readonly fileNotices = new FileNoticePlacement()
   private lastRequestBudget?: RequestBudgetBreakdown
   private reliabilityStats: ReliabilityStats = makeReliabilityStats()
   private telemetryStatsByModel = new Map<string, ReliabilityStats>()
@@ -525,7 +532,7 @@ export class Agent
   {
     // the subagent inherits this window, so size the diffs to its prompt limit
     const subagentPromptLimit = requestBudgetCapacity(
-      this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
+      this.effectiveContextWindow,
       this.hostedOutputTokens,
       this.maxPromptTokens,
       this.thinkMode !== false
@@ -629,7 +636,7 @@ export class Agent
   private dynamicToolTokenBudget(): number
   {
     const promptLimit = requestBudgetCapacity(
-      this.contextWindowSize || MIN_NUM_CTX,
+      this.effectiveContextWindow,
       this.hostedOutputTokens,
       this.maxPromptTokens,
       this.thinkMode !== false
@@ -801,8 +808,11 @@ export class Agent
     signal?.throwIfAborted()
     this.lifecycleAbort.signal.throwIfAborted()
 
-    // stage fallible derivations before the synchronous model commit
+    // stage fallible derivations before the synchronous model commit; the
+    // prompt is rebuilt anyway, so the root listing refreshes w/ it
     const catalog = this.createToolCatalog([], nextModel)
+    this.rootSummary = undefined
+    this.fileNotices.clear()
     const systemContent = this.buildSystemContent(
       nextModel,
       this.projectContextBudget(this.contextWindowSize),
@@ -837,6 +847,9 @@ export class Agent
   clearHistory(): number
   {
     this.turnContext.clearFileObservations()
+    // the next turn rewrites the whole prefix, so refresh the root listing
+    this.rootSummary = undefined
+    this.fileNotices.clear()
     return this.state.clearHistory()
   }
 
@@ -1103,7 +1116,10 @@ export class Agent
               MIN_NUM_CTX,
               Math.min(
                 resolved.contextWindow,
-                usefulLocalContextWindow(this.maxPromptTokens)
+                usefulLocalContextWindow(
+                  this.maxPromptTokens,
+                  this.thinkMode !== false
+                )
               )
             )
     this.contextWindowSize = contextWindow
@@ -1148,12 +1164,18 @@ export class Agent
     this.state.appendMessages(messages)
   }
 
+  // pinned window, or the request-budget fallback before it resolves
+  private get effectiveContextWindow(): number
+  {
+    return this.numCtx || this.contextWindowSize || MIN_NUM_CTX
+  }
+
   // snapshot mutable Agent inputs for one compaction operation
   private compactionRuntime(): CompactionRuntime
   {
     return {
       model: this.model,
-      contextWindow: this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
+      contextWindow: this.effectiveContextWindow,
       numCtx: this.numCtx || undefined,
       hostedOutputTokens: this.hostedOutputTokens,
       maxPromptTokens: this.maxPromptTokens,
@@ -1239,30 +1261,19 @@ export class Agent
 
     if (this.acceptedTurn)
     {
-      const activeMessage = this.state.getMessage(this.acceptedTurn.anchor)
-      if (!activeMessage)
-      {
-        throw new Error('Accepted turn is no longer present in Agent history')
-      }
-      const contextWindow = this.numCtx || this.contextWindowSize || MIN_NUM_CTX
-      const projectContextSnapshot = captureProjectContext(this.cwd)
-      const plan = this.requestPlanner.fitSystemPrompt({
-        contextWindow,
-        activeContent: activeMessage.content,
-        tools: catalog.ollamaTools,
-        desiredProjectContextBudget: this.projectContextBudget(contextWindow),
-        systemContentAt: (projectContextBudget) =>
-          this.buildSystemContent(
-            this.model,
-            projectContextBudget,
-            catalog,
-            projectContextSnapshot
-          ),
-      })
+      const plan = this.planSystemPromptFit(this.acceptedTurn.anchor, catalog)
       if (!plan.budget.fits)
       {
         this.lastRequestBudget = plan.budget
-        assertRequestBudget(plan.budget)
+        // name the schemas when the same turn would fit without them
+        const mcpTokens =
+          catalog.definitionTokens - catalog.trustedDefinitionTokens
+        assertRequestBudget(
+          plan.budget,
+          mcpTokens > 0 && plan.budget.overflowTokens <= mcpTokens
+            ? `the ${pluralize(tools.length, 'MCP tool schema')} (~${mcpTokens} tokens) cannot fit with this turn; shorten the turn, disable MCP servers, or raise the context limit`
+            : undefined
+        )
       }
       systemContent = plan.content
       promptLimit = plan.promptLimit
@@ -1289,7 +1300,7 @@ export class Agent
     model: string,
     projectContextBudget = this.projectContextBudget(this.contextWindowSize),
     catalog: ToolCatalog = this.toolCatalog,
-    projectContextSnapshot?: ProjectContextSnapshot
+    projectContextSnapshot = this.captureProjectContext(projectContextBudget)
   ): string
   {
     return buildSystemPrompt({
@@ -1301,34 +1312,53 @@ export class Agent
       skills: this.skills,
       userInstructions: this.userInstructions,
       supplementalBudget: supplementalBudgetForWindow(
-        this.numCtx || this.contextWindowSize || MIN_NUM_CTX
+        this.effectiveContextWindow
       ),
     })
   }
 
-  // shrink only auto-loaded project context until fixed request sources fit
-  private fitSystemPromptToBudget(anchor: ConversationMessageAnchor): void
+  // read instruction files each turn but reuse the session's root listing
+  private captureProjectContext(
+    maxTotalChars?: number
+  ): ProjectContextSnapshot
+  {
+    const snapshot = captureProjectContext(this.cwd, { maxTotalChars })
+    this.rootSummary ??= snapshot.rootSummary
+    return { ...snapshot, rootSummary: this.rootSummary }
+  }
+
+  // fit the system prompt to one turn & catalog; callers own commit order
+  private planSystemPromptFit(
+    anchor: ConversationMessageAnchor,
+    catalog: ToolCatalog
+  ): SystemPromptPlan
   {
     const activeMessage = this.state.getMessage(anchor)
     if (!activeMessage)
     {
       throw new Error('Accepted turn is no longer present in Agent history')
     }
-    const contextWindow = this.numCtx || this.contextWindowSize || MIN_NUM_CTX
-    const projectContextSnapshot = captureProjectContext(this.cwd)
-    const plan = this.requestPlanner.fitSystemPrompt({
+    const contextWindow = this.effectiveContextWindow
+    const projectContextSnapshot = this.captureProjectContext()
+    return this.requestPlanner.fitSystemPrompt({
       contextWindow,
       activeContent: activeMessage.content,
-      tools: this.toolCatalog.ollamaTools,
+      tools: catalog.ollamaTools,
       desiredProjectContextBudget: this.projectContextBudget(contextWindow),
       systemContentAt: (projectContextBudget) =>
         this.buildSystemContent(
           this.model,
           projectContextBudget,
-          this.toolCatalog,
+          catalog,
           projectContextSnapshot
         ),
     })
+  }
+
+  // shrink only auto-loaded project context until fixed request sources fit
+  private fitSystemPromptToBudget(anchor: ConversationMessageAnchor): void
+  {
+    const plan = this.planSystemPromptFit(anchor, this.toolCatalog)
     this.replaceSystemPrompt(plan.content)
     if (!plan.budget.fits)
     {
@@ -1352,7 +1382,7 @@ export class Agent
     // tie this allocation to the admitted turn, never to historical attachments
     if (this.state.indexOf(anchor) < 0) return 0
     return this.requestPlanner.attachmentBudgetChars({
-      contextWindow: this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
+      contextWindow: this.effectiveContextWindow,
       systemContent: this.state.getSystemContent(),
       cleanActiveContent: cleanContent,
       tools: this.toolCatalog.ollamaTools,
@@ -1373,7 +1403,7 @@ export class Agent
       throw new Error('Accepted turn is no longer present in Agent history')
     }
     return this.requestPlanner.measureRequest({
-      contextWindow: this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
+      contextWindow: this.effectiveContextWindow,
       messages,
       activeIndex,
       cleanActiveContent: cleanContent,
@@ -1403,7 +1433,7 @@ export class Agent
       }
 
       const plan = this.requestPlanner.reserveToolResults({
-        contextWindow: this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
+        contextWindow: this.effectiveContextWindow,
         storedMessages: this.state.getMessages(),
         activeIndex,
         cleanActiveContent: cleanContent,
@@ -1739,14 +1769,15 @@ export class Agent
           })
           signal.throwIfAborted()
 
-          // preserve the active turn when the hard message-count guard fires
-          if (this.state.getMessageCount() > DEFAULT_MAX_HISTORY)
-          {
-            this.state.trimToMax(DEFAULT_MAX_HISTORY)
-          }
+          // the message-count guard keeps the active turn & surviving undo
+          this.compactor.enforceHistoryLimit(
+            this.compactionRuntime(),
+            compactionCallbacks
+          )
 
           let preparedRequest: PreparedModelRequest | null = null
           let historyCompactionAvailable = true
+          let fileChangesAt = 0
           while (!preparedRequest)
           {
             // compaction can await inference while external edits keep arriving
@@ -1764,15 +1795,20 @@ export class Agent
               )
             }
 
+            const storedMessages = this.state.getMessages()
+            fileChangesAt = this.fileNotices.indexFor(
+              fileChanges,
+              storedMessages
+            )
             const plan = this.requestPlanner.planModelRequest({
-              contextWindow:
-                this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
-              storedMessages: this.state.getMessages(),
+              contextWindow: this.effectiveContextWindow,
+              storedMessages,
               activeIndex,
               cleanActiveContent: userMessage,
               baseSystemContent: this.buildSystemContent(this.model, 0),
               tools: this.toolCatalog.ollamaTools,
               fileChanges,
+              fileChangesAt,
               ...(attachmentsCommitted
                 ? {}
                 : {
@@ -1815,6 +1851,7 @@ export class Agent
           this.lastRequestBudget = requestBudget
           assertRequestBudget(requestBudget)
           signal.throwIfAborted()
+          this.fileNotices.record(fileChanges, fileChangesAt, requestMessages)
 
           // keep the stored snapshot equal to what this request sends, so a
           // budget degrade does not make later requests diverge from it
