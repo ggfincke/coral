@@ -147,7 +147,6 @@ function formatSupplementalContext(
   return `${userSection}${SKILLS_PREFIX}${catalog}`
 }
 
-// build the complete system prompt for a model and project context
 const HOSTED_BACKEND_LABELS = {
   anthropic: 'the Anthropic API',
   openai: 'the OpenAI API',
@@ -162,6 +161,7 @@ function backendDescription(model: string): string
     : `a coding agent running via ${HOSTED_BACKEND_LABELS[provider]}`
 }
 
+// build the complete system prompt for a model and project context
 export function buildSystemPrompt(ctx: {
   model: string
   cwd: string

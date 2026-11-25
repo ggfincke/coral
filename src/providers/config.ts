@@ -29,11 +29,6 @@ export const DEFAULT_HOSTED_MAX_CONTEXT_TOKENS = 200_000
 
 const EFFORTS = new Set<string>(['low', 'medium', 'high', 'xhigh', 'max'])
 
-export function apiKeyEnvName(provider: HostedProvider): string
-{
-  return API_KEY_ENV[provider]
-}
-
 interface ResolvedApiKey
 {
   key: string

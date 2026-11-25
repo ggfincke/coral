@@ -24,6 +24,7 @@ import {
 } from '../../../src/agent/loop/tool-round.js'
 import { estimateModelRequestMessageTokens } from '../../../src/agent/request/projection.js'
 import type { ToolPermissions } from '../../../src/config/permissions.js'
+import { MALFORMED_TOOL_ARGUMENTS_KEY } from '../../../src/types/inference.js'
 import { makeTempDirPool } from '../../helpers/temp.js'
 
 const { tempDir } = makeTempDirPool()
@@ -545,6 +546,69 @@ test('ToolRoundExecutor isolates validator failures and records a final-call abo
   assert.deepEqual(execution.outcome.effects.fileChanges, [
     { path: 'success.ts', before: 'old', after: 'new' },
   ])
+})
+
+test('ToolRoundExecutor answers a malformed hosted call w/o approval and runs its sibling', async () =>
+{
+  const cwd = await tempDir('coral-tool-round-malformed-')
+  const executed: string[] = []
+  let approvals = 0
+  const tool = (name: string, parallelSafe: boolean): Tool => ({
+    name,
+    description: 'malformed-arguments fixture',
+    parameters: { type: 'object', properties: {} },
+    parallelSafe,
+    async execute()
+    {
+      executed.push(name)
+      return { output: `${name} ran` }
+    },
+  })
+  const catalog = new ToolCatalog({
+    trustedTools: [tool('search_code', true), tool('bash', false)],
+  })
+  const executor = createExecutor(cwd, {
+    search_code: 'always_allow',
+    bash: 'require_approval',
+  })
+  const malformed = {
+    [MALFORMED_TOOL_ARGUMENTS_KEY]:
+      'OpenAI model sent malformed arguments for bash; the call was not run',
+  }
+  const round = executor.prepare(
+    [
+      { function: { name: 'bash', arguments: malformed } },
+      { function: { name: 'search_code', arguments: malformed } },
+      { function: { name: 'search_code', arguments: {} } },
+    ],
+    catalog
+  )
+
+  const execution = await executor.execute({
+    model: 'test-model',
+    round,
+    allowance: allowanceFor(round),
+    doomLoop: new DoomLoopDetector(),
+    events: {
+      onToolCall()
+      {},
+      onToolApproval()
+      {
+        approvals++
+        return Promise.resolve(true)
+      },
+      onToolResult()
+      {},
+    },
+  })
+
+  assert.equal(execution.status, 'settled')
+  assert.equal(approvals, 0)
+  assert.deepEqual(executed, ['search_code'])
+  const contents = execution.outcome.toolResults.map((result) => result.content)
+  assert.match(contents[0]!, /^Error: .*malformed arguments for bash/)
+  assert.match(contents[1]!, /^Error: .*malformed arguments/)
+  assert.equal(contents[2], 'search_code ran')
 })
 
 test('ToolRoundExecutor fills every model reply after approval abort', async () =>

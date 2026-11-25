@@ -24,6 +24,7 @@ import {
   type TextFileReadOptions,
   type TextFileReadResult,
 } from '../../utils/file-read.js'
+import { isAbortError } from '../../utils/abort.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { MAX_TOOL_OUTPUT_CHARS } from '../../utils/limits.js'
 import { truncateToLineBoundary } from '../../utils/truncate-output.js'
@@ -96,14 +97,6 @@ export interface CaptureAttachmentsOptions
 function frozen<T extends object>(value: T): Readonly<T>
 {
   return Object.freeze(value)
-}
-
-function isAbortError(error: unknown): boolean
-{
-  return (
-    error instanceof Error &&
-    (error.name === 'AbortError' || error.message === 'Aborted')
-  )
 }
 
 function failureReason(result: Extract<TextFileReadResult, { ok: false }>): {

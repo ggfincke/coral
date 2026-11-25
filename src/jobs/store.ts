@@ -10,7 +10,11 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import { decodeSessionData, encodeSessionData } from '../session/codec.js'
+import {
+  decodeSessionData,
+  decodeSessionPreview,
+  encodeSessionData,
+} from '../session/codec.js'
 import type { SessionData } from '../session/types.js'
 import { coralHomePath } from '../utils/coral-home.js'
 import { ensurePrivateDir } from '../utils/fs.js'
@@ -34,7 +38,6 @@ const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/
 const DIGEST = /^[0-9a-f]{64}$/
 const MAX_RECORD_BYTES = 16 * 1024 * 1024
 const MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024
-const MAX_OUTPUT_FILE_BYTES = 4 * 1024 * 1024
 // records keep only this much of each command's output so they stay small
 // enough to rewrite on every heartbeat
 export const JOB_OUTPUT_TAIL_CHARS = 8_192
@@ -614,7 +617,7 @@ export function flushJobEvents(
 export function writeJobSnapshot(id: string, session: SessionData): string
 {
   const encoded = encodeSessionData(session)
-  const valid = decodeSessionData(encoded)
+  const valid = decodeSessionPreview(encoded)
   if (!valid || valid.meta.id !== id)
     throw new Error(`Invalid task checkpoint: ${id}`)
   const data = JSON.stringify(encoded, null, 2)
@@ -643,22 +646,6 @@ export function jobCommandOutputPath(id: string, name: string): string
 {
   if (!OUTPUT_NAME.test(name)) throw new Error('Invalid task output name')
   return join(jobDirectory(id), name)
-}
-
-export function readJobCommandOutput(id: string, name: string): string
-{
-  assertStateDirectories(id)
-  const path = jobCommandOutputPath(id, name)
-  const info = lstatSync(path)
-  if (
-    !info.isFile() ||
-    info.isSymbolicLink() ||
-    info.size > MAX_OUTPUT_FILE_BYTES
-  )
-  {
-    throw new Error(`Invalid or oversized task output file: ${path}`)
-  }
-  return readFileSync(path, 'utf8')
 }
 
 export function readJobSnapshot(id: string, name: string): SessionData

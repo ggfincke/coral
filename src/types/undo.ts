@@ -113,6 +113,14 @@ export function cloneMessages(messages: OllamaMessage[]): OllamaMessage[]
   })
 }
 
+export function cloneUndoTodoChange(change: UndoTodoChange): UndoTodoChange
+{
+  return {
+    before: cloneTodoItems(change.before),
+    after: cloneTodoItems(change.after),
+  }
+}
+
 export function cloneUndoTurn(turn: UndoTurn): UndoTurn
 {
   const cloned: UndoTurn = {
@@ -120,13 +128,7 @@ export function cloneUndoTurn(turn: UndoTurn): UndoTurn
     messages: cloneMessages(turn.messages),
     changes: turn.changes.map((change) => ({ ...change })),
   }
-  if (turn.todoChange)
-  {
-    cloned.todoChange = {
-      before: cloneTodoItems(turn.todoChange.before),
-      after: cloneTodoItems(turn.todoChange.after),
-    }
-  }
+  if (turn.todoChange) cloned.todoChange = cloneUndoTodoChange(turn.todoChange)
 
   return cloned
 }

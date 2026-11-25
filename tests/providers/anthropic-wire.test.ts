@@ -9,7 +9,10 @@ import {
   toAnthropicMessages,
 } from '../../src/providers/anthropic/wire.js'
 import { estimateModelRequestMessageTokens } from '../../src/agent/request/projection.js'
-import type { ModelRequestMessage } from '../../src/types/inference.js'
+import {
+  MALFORMED_TOOL_ARGUMENTS_KEY,
+  type ModelRequestMessage,
+} from '../../src/types/inference.js'
 import { estimateUtf8Tokens } from '../../src/utils/limits.js'
 
 const MODEL = 'claude-opus-5-5'
@@ -201,8 +204,13 @@ test('an unfinished stop or non-object input never yields a runnable call', () =
     /mid tool call/
   )
   const arrayInput = { ...signedTurn[1], input: ['a.ts'] }
-  assert.throws(
-    () => finalChunkFrom(stoppedMessage('tool_use', [arrayInput]), MODEL),
+  const chunk = finalChunkFrom(stoppedMessage('tool_use', [arrayInput]), MODEL)
+  assert.match(
+    String(
+      chunk.message.tool_calls?.[0]?.function.arguments[
+        MALFORMED_TOOL_ARGUMENTS_KEY
+      ]
+    ),
     /malformed arguments for read_file/
   )
 })

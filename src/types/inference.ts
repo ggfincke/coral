@@ -83,6 +83,10 @@ export interface OllamaMessage extends ModelRequestMessage
   gitContext?: string
 }
 
+// argument key a hosted adapter sets when a finished call's arguments were
+// not one JSON object; the tool round answers that call with its text unrun
+export const MALFORMED_TOOL_ARGUMENTS_KEY = '_coral_malformed_arguments'
+
 export interface OllamaToolCall
 {
   // provider call id; Ollama omits it and adapters pair results by position

@@ -72,11 +72,10 @@ export async function realpathNearestEntry(
 
 export function resolveWorkspacePath(
   cwd: string,
-  rawPath: string | undefined,
-  defaultPath = '.'
+  rawPath: string | undefined
 ): ResolvedWorkspacePath
 {
-  const path = resolvePath(rawPath ?? defaultPath, cwd)
+  const path = resolvePath(rawPath ?? '.', cwd)
   return {
     path,
     isInsideWorkspace: isPathInsideProject(cwd, path),
@@ -86,11 +85,10 @@ export function resolveWorkspacePath(
 export async function checkWorkspacePath(
   cwd: string,
   rawPath: string | undefined,
-  allowOutsideWorkspace: boolean,
-  defaultPath = '.'
+  allowOutsideWorkspace: boolean
 ): Promise<WorkspacePathCheck>
 {
-  const resolved = resolveWorkspacePath(cwd, rawPath, defaultPath)
+  const resolved = resolveWorkspacePath(cwd, rawPath)
   if (rawPath !== undefined && HOME_SHORTHAND.test(rawPath))
   {
     return {

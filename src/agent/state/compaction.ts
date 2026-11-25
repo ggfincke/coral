@@ -54,7 +54,8 @@ const MIN_RECENT_MESSAGES = 10
 // compaction thresholds and retention settings
 export interface CompactionConfig
 {
-  // model context window size in tokens
+  // token ceiling for the prune and summarize thresholds; the coordinator
+  // sets it to the request prompt limit
   contextWindow: number
   // minimum recent messages to preserve verbatim
   minRecentMessages: number

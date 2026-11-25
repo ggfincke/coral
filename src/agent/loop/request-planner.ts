@@ -317,36 +317,37 @@ export class RequestPlanner
     // start from the stored snapshot so a degrade stays in place for the turn
     let gitContext = storedActive.gitContext ?? null
     let fileChanges = input.fileChanges ?? null
-    let candidate = this.requestCandidate(
-      input,
-      systemContent,
-      gitContext,
-      fileChanges,
-      input.pendingAttachments ? fullMaterialization!.context : undefined
-    )
+    let finalMaterialization = fullMaterialization
+    // each step changes one binding and re-measures with the current values
+    const measureWith = (attachmentContext?: string | null) =>
+      this.requestCandidate(
+        input,
+        systemContent,
+        gitContext,
+        fileChanges,
+        attachmentContext
+      )
+    const measure = () => measureWith(finalMaterialization?.context)
+    const fitAttachments = (pending: PendingAttachmentPlan) =>
+    {
+      finalMaterialization = materializeAttachmentsToFit(
+        pending.capture,
+        pending.maxChars,
+        (context) => measureWith(context).budget.fits
+      )
+    }
+    let candidate = measure()
 
     // degrade volatile repository detail before durable context
     if (!candidate.budget.fits && gitContext)
     {
       gitContext = compactGitContext(gitContext)
-      candidate = this.requestCandidate(
-        input,
-        systemContent,
-        gitContext,
-        fileChanges,
-        input.pendingAttachments ? fullMaterialization!.context : undefined
-      )
+      candidate = measure()
     }
     if (!candidate.budget.fits && gitContext)
     {
       gitContext = null
-      candidate = this.requestCandidate(
-        input,
-        systemContent,
-        gitContext,
-        fileChanges,
-        input.pendingAttachments ? fullMaterialization!.context : undefined
-      )
+      candidate = measure()
     }
 
     // keep a minimal stale-file warning before shedding durable context
@@ -357,26 +358,14 @@ export class RequestPlanner
         content:
           'Previously observed workspace files changed on disk. Reread relevant files before relying on earlier contents or editing them.',
       }
-      candidate = this.requestCandidate(
-        input,
-        systemContent,
-        gitContext,
-        fileChanges,
-        input.pendingAttachments ? fullMaterialization!.context : undefined
-      )
+      candidate = measure()
     }
 
     // remove optional project text before protected history or turn bytes
     if (!candidate.budget.fits && systemContent !== input.baseSystemContent)
     {
       systemContent = input.baseSystemContent
-      candidate = this.requestCandidate(
-        input,
-        systemContent,
-        gitContext,
-        fileChanges,
-        input.pendingAttachments ? fullMaterialization!.context : undefined
-      )
+      candidate = measure()
     }
 
     if (!candidate.budget.fits && input.historyCompactionAvailable)
@@ -389,56 +378,18 @@ export class RequestPlanner
       }
     }
 
-    let finalMaterialization = fullMaterialization
     if (input.pendingAttachments)
     {
-      finalMaterialization = materializeAttachmentsToFit(
-        input.pendingAttachments.capture,
-        input.pendingAttachments.maxChars,
-        (context) =>
-          this.requestCandidate(
-            input,
-            systemContent,
-            gitContext,
-            fileChanges,
-            context
-          ).budget.fits
-      )
-      candidate = this.requestCandidate(
-        input,
-        systemContent,
-        gitContext,
-        fileChanges,
-        finalMaterialization.context
-      )
+      fitAttachments(input.pendingAttachments)
+      candidate = measure()
     }
 
     // notices stay pending in turn context when even the warning cannot fit
     if (!candidate.budget.fits && fileChanges)
     {
       fileChanges = null
-      if (input.pendingAttachments)
-      {
-        finalMaterialization = materializeAttachmentsToFit(
-          input.pendingAttachments.capture,
-          input.pendingAttachments.maxChars,
-          (context) =>
-            this.requestCandidate(
-              input,
-              systemContent,
-              gitContext,
-              fileChanges,
-              context
-            ).budget.fits
-        )
-      }
-      candidate = this.requestCandidate(
-        input,
-        systemContent,
-        gitContext,
-        fileChanges,
-        input.pendingAttachments ? finalMaterialization!.context : undefined
-      )
+      if (input.pendingAttachments) fitAttachments(input.pendingAttachments)
+      candidate = measure()
     }
 
     const attachmentCommit = finalMaterialization

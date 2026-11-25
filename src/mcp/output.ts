@@ -7,6 +7,8 @@ import stripAnsi from 'strip-ansi'
 import type { ToolResult } from '../tools/tool.js'
 import { ellipsize, trimTrailingHighSurrogate } from '../utils/ellipsize.js'
 import { MAX_TOOL_OUTPUT_CHARS } from '../utils/limits.js'
+import { truncationFooter } from '../utils/truncate-output.js'
+import { isUnsafeTerminalControl } from '../utils/untrusted-text.js'
 
 const MAX_STRUCTURED_CONTENT_CHARS = 80_000
 const MAX_STRUCTURED_CONTENT_DEPTH = 20
@@ -16,6 +18,8 @@ const MCP_OUTPUT_SCAN_CHARS = 16_384
 // shorter forwarded values only redact as whole tokens
 export const MIN_SUBSTRING_SECRET_CHARS = 4
 
+// unsafe controls become U+FFFD rather than vanishing; CR survives so CRLF
+// protocol text keeps its line ends
 function sanitizeDiagnostic(text: string): string
 {
   const clean = stripAnsi(text)
@@ -25,11 +29,7 @@ function sanitizeDiagnostic(text: string): string
   {
     const code = character.codePointAt(0) ?? 0
     chunk +=
-      code <= 8 || code === 11 || code === 12 || code === 127
-        ? '�'
-        : code >= 14 && code <= 31
-          ? '�'
-          : character
+      isUnsafeTerminalControl(code) && code !== 0x0d ? '\ufffd' : character
     if (chunk.length >= 4_096)
     {
       parts.push(chunk)
@@ -175,10 +175,7 @@ class McpOutputAccumulator
     const boundary = this.lastNewline > 0 ? this.lastNewline : retained.length
     const head = trimTrailingHighSurrogate(retained.slice(0, boundary))
     const omitted = this.totalOutputLength - head.length
-    return (
-      `${head}\n\n[output truncated: ${omitted} of ${this.totalOutputLength} chars omitted` +
-      ` — narrow the scope (e.g. diff a specific path) to see the rest]`
-    )
+    return `${head}\n\n${truncationFooter(omitted, this.totalOutputLength)}`
   }
 
   private writeRaw(text: string): void

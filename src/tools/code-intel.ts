@@ -1,6 +1,7 @@
 // src/tools/code-intel.ts
 // provide TypeScript and JavaScript code intelligence
 
+import { getCwd } from '../cwd.js'
 import { isCodeIntelPath, type CodeIntelOperation } from '../lsp/contracts.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { checkWorkspacePath } from '../shared/workspace-path.js'
@@ -76,7 +77,7 @@ export const codeIntelTool: Tool = {
       }
     }
 
-    const cwd = context?.cwd ?? process.cwd()
+    const cwd = context?.cwd ?? getCwd()
     const allowed = await checkWorkspacePath(
       cwd,
       typeof args.path === 'string' ? args.path : undefined,

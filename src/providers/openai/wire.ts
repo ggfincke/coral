@@ -24,7 +24,7 @@ import { tryParseJson } from '../../utils/json.js'
 import {
   hostedOutputBudget,
   INTERRUPTED_TOOL_RESULT,
-  malformedArgumentsError,
+  malformedArguments,
   orphanToolResultText,
   syntheticCallId,
 } from '../hosted-wire.js'
@@ -240,11 +240,10 @@ function toolCallsFrom(response: Response): OllamaToolCall[]
   {
     if (item.type !== 'function_call') return []
     if (item.status !== undefined && item.status !== 'completed') return []
-    const args = tryParseJson(item.arguments)
-    if (!isPlainObject(args))
-    {
-      throw malformedArgumentsError('OpenAI model', item.name)
-    }
+    const parsed = tryParseJson(item.arguments)
+    const args = isPlainObject(parsed)
+      ? parsed
+      : malformedArguments('OpenAI model', item.name)
     return [
       {
         id: item.call_id,

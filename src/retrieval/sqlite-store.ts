@@ -20,7 +20,7 @@ import type {
 
 export const RETRIEVAL_SCHEMA_VERSION = 2
 export const RETRIEVAL_APPLICATION_ID = 0x43524c32
-export const RETRIEVAL_BUSY_TIMEOUT_MS = 5_000
+const RETRIEVAL_BUSY_TIMEOUT_MS = 5_000
 const MAX_BUSY_RETRY_DELAY_MS = 100
 const BUSY_RETRY_SIGNAL = new Int32Array(new SharedArrayBuffer(4))
 

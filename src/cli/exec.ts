@@ -7,12 +7,10 @@ import { createReadStream } from 'node:fs'
 import type { Readable } from 'node:stream'
 import { resolve } from 'node:path'
 import {
-  parseCliArgs,
   type CliOptions,
   type ExecPermissionProfile,
   type ExecOutputFormat,
 } from './args.js'
-export type { ExecPermissionProfile, ExecOutputFormat } from './args.js'
 import { Agent } from '../agent/agent.js'
 import type { AgentInferenceClient, TokenUsage } from '../agent/agent.js'
 import {
@@ -447,15 +445,8 @@ async function resolveExecPrompt(
   return value
 }
 
-export async function runExecCli(
-  input: string[] | CliOptions
-): Promise<number>
+export async function runExecCli(opts: CliOptions): Promise<number>
 {
-  const parsed = Array.isArray(input)
-    ? parseCliArgs(['exec', ...input])
-    : { kind: 'exec' as const, options: input }
-  if (parsed.kind === 'exit') return parsed.code
-  const opts = parsed.options
   const controller = new AbortController()
   let receivedSignal: 'SIGINT' | 'SIGTERM' | undefined
   const abortFor = (signal: 'SIGINT' | 'SIGTERM') => () =>

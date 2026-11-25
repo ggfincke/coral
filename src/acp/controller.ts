@@ -12,7 +12,6 @@ import {
   type AgentRunOutcome,
 } from '../agent/contracts.js'
 import { AgentTodoState } from '../agent/state/todos.js'
-import type { McpConfigResolution } from '../config/mcp.js'
 import { parseModelRef } from '../providers/model-ref.js'
 import { createInferenceClient } from '../providers/router.js'
 import {
@@ -64,10 +63,7 @@ import {
   selectedInteractionMode,
   selectedRuntimeMode,
 } from './session-policy.js'
-import type {
-  CoralInteractionMode,
-  CoralRuntimeMode,
-} from './session-policy.js'
+import type { CoralRuntimeMode } from './session-policy.js'
 
 const require = createRequire(import.meta.url)
 const { version: CORAL_VERSION } = require('../../package.json') as {
@@ -84,6 +80,7 @@ interface CoralAcpAgent
   extends InteractiveLifetimeAgent, ProviderTurnSnapshotAgent
   {
   acceptTurn(input: string): AcceptedTurn
+  releaseAcceptedTurn(accepted: AcceptedTurn): boolean
   runAcceptedTurn(
     accepted: AcceptedTurn,
     events: AgentEvents,
@@ -95,21 +92,12 @@ interface CoralAcpAgent
   getFrozenPrefix(): { contextWindow: number }
 }
 
-// per-binding policy handed to the Agent factory
-interface AgentBindingPolicy
-{
-  mcpConfig: McpConfigResolution
-  runtimeMode: CoralRuntimeMode
-  interactionMode: CoralInteractionMode
-}
-
 interface CoralAcpControllerDependencies
 {
   createAgent: (
     model: string,
     cwd: string,
-    restored: SessionData | undefined,
-    binding: AgentBindingPolicy
+    restored: SessionData | undefined
   ) => CoralAcpAgent
   listModels: (signal?: AbortSignal) => Promise<Model[]>
   createRuntimeIdentity: () => ProcessSessionRuntimeIdentity
@@ -230,8 +218,7 @@ function defaultCreateAgent(
   options: CoralAcpControllerOptions,
   model: string,
   cwd: string,
-  restored: SessionData | undefined,
-  binding: AgentBindingPolicy
+  restored: SessionData | undefined
 ): CoralAcpAgent
 {
   const agentsHome = agentsHomePath()
@@ -243,7 +230,9 @@ function defaultCreateAgent(
     verifyEdits: false,
     trackFileChanges: true,
     mcpMode: 'off',
-    mcpConfig: binding.mcpConfig,
+    // ACP has no MCP capability, including user-configured servers; an
+    // explicit empty config keeps the scope from reading the user's
+    mcpConfig: { servers: [], issues: [] },
     todoState: new AgentTodoState(restored?.todos),
     sessionCost: restored?.sessionCost,
     historicalUsageUnknown: Boolean(
@@ -288,8 +277,8 @@ export class CoralAcpController
   {
     const client = createInferenceClient(options.host)
     this.dependencies = {
-      createAgent: (model, cwd, restored, binding) =>
-        defaultCreateAgent(options, model, cwd, restored, binding),
+      createAgent: (model, cwd, restored) =>
+        defaultCreateAgent(options, model, cwd, restored),
       listModels: (signal) => client.listModels(signal),
       createRuntimeIdentity: createSessionRuntimeIdentity,
       acquireLease: acquireSessionLease,
@@ -446,12 +435,6 @@ export class CoralAcpController
     return names.includes(DEFAULT_ACP_MODEL) ? DEFAULT_ACP_MODEL : names[0]!
   }
 
-  // ACP has no MCP capability, including user-configured servers
-  private bindingMcpConfig(): McpConfigResolution
-  {
-    return { servers: [], issues: [] }
-  }
-
   private configOptions(
     agent: CoralAcpAgent,
     names: readonly string[],
@@ -462,19 +445,6 @@ export class CoralAcpController
       buildModelConfigOption(agent.getModel(), names),
       buildRuntimeModeConfigOption(runtimeMode),
     ]
-  }
-
-  private createAgent(
-    model: string,
-    cwd: string,
-    restored: SessionData | undefined
-  ): CoralAcpAgent
-  {
-    return this.dependencies.createAgent(model, cwd, restored, {
-      mcpConfig: this.bindingMcpConfig(),
-      runtimeMode: 'approval-required',
-      interactionMode: 'default',
-    })
   }
 
   private bind(
@@ -558,7 +528,7 @@ export class CoralAcpController
       signal.throwIfAborted()
       const model = this.selectedNewModel(names)
       // build the Agent first so a construction failure leaves no session file
-      const agent = this.createAgent(model, cwd, undefined)
+      const agent = this.dependencies.createAgent(model, cwd, undefined)
       const runtimeIdentity = this.dependencies.createRuntimeIdentity()
       let created: ReturnType<typeof createProviderSession>
       try
@@ -667,7 +637,11 @@ export class CoralAcpController
             lastCompactedAt: session.meta.lastCompactedAt,
           },
         })
-        agent = this.createAgent(resumed.meta.model, resumed.meta.cwd, resumed)
+        agent = this.dependencies.createAgent(
+          resumed.meta.model,
+          resumed.meta.cwd,
+          resumed
+        )
         this.bind(resumed, lease, runtimeIdentity, agent, names)
       }
       catch (error)
@@ -767,7 +741,6 @@ export class CoralAcpController
     {
       throw coralAcpError('session_busy', 'A Coral operation is already active')
     }
-    const accepted = handle.agent.acceptTurn(prompt)
     const signal = AbortSignal.any([handle.signal, requestSignal])
     const projection = new AcpEventProjection(
       {
@@ -788,6 +761,25 @@ export class CoralAcpController
       binding.ids
     )
 
+    // a refused turn settles its operation so the session is not left busy;
+    // a turn whose run never started is released, not wedged
+    let accepted: AcceptedTurn
+    try
+    {
+      accepted = handle.agent.acceptTurn(prompt)
+    }
+    catch (error)
+    {
+      try
+      {
+        binding.runtime.completeTurn(handle)
+      }
+      catch
+      {
+        // the refusal below is the error the client needs
+      }
+      throw error
+    }
     let failure: Error | undefined
     let outcome: AgentRunOutcome | undefined
     try
@@ -799,6 +791,7 @@ export class CoralAcpController
     catch (error)
     {
       failure = toError(error)
+      handle.agent.releaseAcceptedTurn(accepted)
     }
 
     let notificationError: Error | undefined
