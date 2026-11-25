@@ -8,8 +8,8 @@ import Database from 'better-sqlite3'
 import { coralHomePath } from '../utils/coral-home.js'
 import { ensurePrivateDir } from '../utils/fs.js'
 import {
-  isProcessStartTime,
-  processStartTimeSync,
+  isRecordedProcessGone,
+  ownProcessStartTime,
 } from '../utils/process-identity.js'
 import { SessionPersistenceError } from './errors.js'
 import {
@@ -81,7 +81,7 @@ function openLeaseDatabase(): Database.Database
 function processStartedAt(): string
 {
   processStartedAtValue ??=
-    processStartTimeSync(process.pid) ??
+    ownProcessStartTime() ??
     new Date(Date.now() - process.uptime() * 1_000).toISOString()
   return processStartedAtValue
 }
@@ -128,20 +128,7 @@ function isConservativelyStale(row: LeaseRow): boolean
   if (!Number.isSafeInteger(row.process_id) || row.process_id <= 0) return false
   if (!isNonEmptyBoundedString(row.runtime_id)) return false
   if (!isNonEmptyBoundedString(row.process_started_at)) return false
-
-  try
-  {
-    process.kill(row.process_id, 0)
-  }
-  catch (error)
-  {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code
-    if (code === 'ESRCH') return true
-    if (code !== 'EPERM') return false
-  }
-  if (!isProcessStartTime(row.process_started_at)) return false
-  const liveStartedAt = processStartTimeSync(row.process_id)
-  return liveStartedAt !== undefined && liveStartedAt !== row.process_started_at
+  return isRecordedProcessGone(row.process_id, row.process_started_at)
 }
 
 function leaseRow(

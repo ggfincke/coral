@@ -267,3 +267,57 @@ test(
     await second.release()
   }
 )
+
+test(
+  'a same-host lease recorded in another pid namespace stays in use',
+  { skip: process.platform !== 'linux' },
+  async () =>
+  {
+    const sessionId = 'feedface'
+    const first = acquireSessionLease(
+      sessionId,
+      createSessionRuntimeIdentity('namespace-owner')
+    )
+    const { processStartedAt } = createSessionRuntimeIdentity()
+    assert.match(processStartedAt, /^[0-9a-f-]{36}:\d+:\d+$/)
+    const [bootId, namespace, ticks] = processStartedAt.split(':')
+    const database = new Database(
+      join(process.env.CORAL_HOME!, 'sessions', 'leases.sqlite')
+    )
+    const recordOwner = (processId: number, ownerNamespace: string) =>
+      database
+        .prepare(
+          `UPDATE session_leases SET process_id = ?, process_started_at = ?
+            WHERE session_id = ? AND owner_token = ?`
+        )
+        .run(
+          processId,
+          `${bootId}:${ownerNamespace}:${Number(ticks) + 1}`,
+          sessionId,
+          first.ownerToken
+        )
+    const contend = () =>
+      acquireSessionLease(
+        sessionId,
+        createSessionRuntimeIdentity('namespace-contender')
+      )
+    const otherNamespace = `${Number(namespace) + 1}`
+    try
+    {
+      // a container owner's pid names an unrelated or absent process here
+      recordOwner(process.pid, otherNamespace)
+      assertPersistenceError(contend, 'session_in_use')
+      recordOwner(2_147_483_647, otherNamespace)
+      assertPersistenceError(contend, 'session_in_use')
+      recordOwner(process.pid, namespace!)
+    }
+    finally
+    {
+      database.close()
+    }
+    const second = contend()
+    assert.equal(verifySessionLeaseOwnership(first), false)
+    assert.equal(verifySessionLeaseOwnership(second), true)
+    await second.release()
+  }
+)

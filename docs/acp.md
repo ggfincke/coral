@@ -94,8 +94,9 @@ writes follow the same retry rule.
   storage while an owner may still be alive. Same-host leases are automatically
   recovered only when their process is conclusively gone: the PID is absent, or
   it now runs a process whose start time differs from the one the lease
-  recorded. Foreign-host leases and leases whose start time cannot be read
-  remain blocked conservatively.
+  recorded. Foreign-host leases, leases taken in another PID namespace (such as
+  a container), and leases whose start time cannot be read remain blocked
+  conservatively.
 - **Save failure:** repair disk space or permissions while the owning process
   remains alive, then retry. Close/shutdown also tries the captured write. If
   persistence remains impossible or the process is lost, only the last valid
