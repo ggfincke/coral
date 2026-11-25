@@ -480,3 +480,33 @@ test('previewToolDiff uses request cwd and does not leak off-workspace content',
   assert.ok(!JSON.stringify(outsideWrite).includes('SECRET_VALUE'))
   assert.ok(!JSON.stringify(outsideEdit).includes('SECRET_VALUE'))
 })
+
+test('exact edits in CRLF files keep whole CRLF pairs at the match edges', () =>
+{
+  const file = 'f() {\r\n\ty()\r\n}\r\n'
+  assert.deepEqual(applyEdit(file, '\n}', '\n\tx()\n}', false), {
+    ok: true,
+    after: 'f() {\r\n\ty()\r\n\tx()\r\n}\r\n',
+    count: 1,
+    matchType: 'exact',
+  })
+  // a match that ends on the CR replaces up to the whole pair, never a lone CR
+  assert.deepEqual(applyEdit('a\r\nb\r\n', 'a\r', 'A', false), {
+    ok: true,
+    after: 'A\r\nb\r\n',
+    count: 1,
+    matchType: 'exact',
+  })
+})
+
+test('fuzzy re-indent keeps alignment spaces after a tab as spaces', () =>
+{
+  const result = applyEdit(
+    '\t/**\n\t * doc  \n\t */\n',
+    '\t/**\n\t * doc\n\t */',
+    '\t/**\n\t * better doc\n\t */',
+    false
+  )
+  assert.ok(result.ok)
+  assert.equal(result.after, '\t/**\n\t * better doc\n\t */\n')
+})

@@ -21,7 +21,7 @@ export type ApplyEditResult =
 // capture a line's leading whitespace for fuzzy-match re-basing
 function leadingWhitespace(line: string): string
 {
-  const match = line.match(/^[ \t]*/)
+  const match = line.match(/^[^\S\r\n]*/)
   return match ? match[0] : ''
 }
 
@@ -135,8 +135,13 @@ function reindentNewLine(
   const body = line.slice(lineIndent.length)
   if (lineIndent === oldIndent) return fileIndent + body
   if (unitsDiffer) return null
-  // compare leading units only; alignment spaces after a tab are not refused but
-  // still re-base as tabs (pre-existing, same as main)
+  // a deeper line keeps its extra indent verbatim, so alignment spaces after a
+  // tab stay spaces instead of being counted as tabs
+  if (lineIndent.startsWith(oldIndent))
+  {
+    return fileIndent + lineIndent.slice(oldIndent.length) + body
+  }
+  // otherwise compare leading units only
   const units = new Set(
     [oldIndent[0], lineIndent[0], fileIndent[0]].filter(Boolean)
   )
@@ -243,19 +248,11 @@ function applyFuzzyEdit(
   return { ok: true, after, count: starts.length, matchType: 'fuzzy' }
 }
 
-// give a multi-line replacement the file's CRLF endings when every file line
-// break is CRLF & no lone CR exists; mixed-ending files & matches that split a
-// CRLF pair keep new_string as sent
-function matchLineEndings(
-  before: string,
-  oldString: string,
-  newString: string
-): string
+// true when every line break in the file is CRLF & no lone CR exists; only
+// then do exact edits rewrite new_string to CRLF (mixed files keep it as sent)
+function isAllCrlf(before: string): boolean
 {
-  if (!newString.includes('\n') || !before.includes('\r\n')) return newString
-  if (oldString.startsWith('\n') || oldString.endsWith('\r')) return newString
-  if (/(?<!\r)\n|\r(?!\n)/.test(before)) return newString
-  return newString.replace(/(?<!\r)\n/g, '\r\n')
+  return before.includes('\r\n') && !/(?<!\r)\n|\r(?!\n)/.test(before)
 }
 
 export function applyEdit(
@@ -275,10 +272,23 @@ export function applyEdit(
   if (count > 1 && !replaceAll) return { ok: false, reason: 'multiple', count }
   if (count >= 1)
   {
-    const inserted = matchLineEndings(before, oldString, newString)
+    let target = oldString
+    let inserted = newString
+    if (isAllCrlf(before))
+    {
+      // widen a match that splits a CRLF pair to the whole pair, so the
+      // replacement never leaves a bare LF or a lone CR behind
+      if (target.startsWith('\n')) target = `\r${target}`
+      if (target.endsWith('\r'))
+      {
+        target = `${target}\n`
+        inserted = `${inserted}\n`
+      }
+      inserted = inserted.replace(/(?<!\r)\n/g, '\r\n')
+    }
     const after = replaceAll
-      ? before.replaceAll(oldString, () => inserted)
-      : before.replace(oldString, () => inserted)
+      ? before.replaceAll(target, () => inserted)
+      : before.replace(target, () => inserted)
     return { ok: true, after, count, matchType: 'exact' }
   }
   // try a whitespace-tolerant block match after an exact miss
