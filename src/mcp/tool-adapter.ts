@@ -62,8 +62,8 @@ const ANNOTATION_KEYS = new Set([
 // under annotation-named keys inside them are checked, not redacted
 const INSTANCE_KEYS = new Set(['enum', 'const'])
 
-// short values follow the redactor's rule that they are too common to be credentials,
-// so only values at its substring threshold can make a schema position unsafe
+// short values are not treated as credentials in structural schema text, so
+// only values at the redactor's substring threshold make a position unsafe
 function assertVerbatimSchemaText(
   text: string,
   secretValues: readonly string[]

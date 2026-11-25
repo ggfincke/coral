@@ -26,7 +26,6 @@ import { listSessions, loadSession } from '../../src/session/store.js'
 import type { SessionMeta } from '../../src/session/types.js'
 import { loadTelemetry } from '../../src/telemetry/store.js'
 import { loadHistory } from '../../src/tui/prompt/input-history.js'
-import { writeJsonFile } from '../../src/utils/json.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import {
   finishRaceWorkers,
