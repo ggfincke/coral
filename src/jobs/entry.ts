@@ -3,19 +3,46 @@
 
 import { executeJob } from './worker.js'
 import { runJobSupervisor } from './supervisor.js'
-import { appendJobEvent, writeJob } from './store.js'
-import type { JobRecord } from './types.js'
+import { appendJobEvent, flushJobEvents, writeJob } from './store.js'
+import { toErrorMessage } from '../utils/errors.js'
+import {
+  SETTLED_JOB_STATUSES,
+  type JobRecord,
+  type SettledJobStatus,
+} from './types.js'
+
+function isSettledStatus(status: string): status is SettledJobStatus
+{
+  return (SETTLED_JOB_STATUSES as readonly string[]).includes(status)
+}
 
 // only the supervisor publishes terminal state after joining the worker and commands
 function writeWorkerJob(job: JobRecord): void
 {
-  if (['draft', 'queued', 'running'].includes(job.status)) writeJob(job)
-  else
-    writeJob({
-      ...job,
-      status: 'running',
-      settledStatus: job.status as NonNullable<JobRecord['settledStatus']>,
-    })
+  if (!isSettledStatus(job.status)) writeJob(job)
+  else writeJob({ ...job, status: 'running', settledStatus: job.status })
+}
+
+// the worker's stdio is ignored, so a fatal error is kept in the task log
+// where the user can read why the worker exited before settling
+async function executeWorker(id: string, signal: AbortSignal)
+{
+  try
+  {
+    return await executeJob(id, { writeJob: writeWorkerJob }, signal)
+  }
+  catch (error)
+  {
+    try
+    {
+      appendJobEvent(id, 'worker_error', toErrorMessage(error))
+    }
+    catch
+    {
+      // the log may be what failed; the supervisor still reports the exit
+    }
+    throw error
+  }
 }
 
 export async function runJobService(kind: string, id?: string): Promise<void>
@@ -29,6 +56,13 @@ export async function runJobService(kind: string, id?: string): Promise<void>
     ownerLost = true
     cancel()
   }
+  // ! a SIGKILLed worker loses events still waiting on the store's flush
+  // interval (EVENT_FLUSH_MS); every stop it is told about flushes first
+  const flushOnStop = () =>
+  {
+    if (id && kind === '_worker') flushJobEvents(id, { deferError: true })
+  }
+  abort.signal.addEventListener('abort', flushOnStop, { once: true })
   process.on('SIGTERM', cancel)
   process.on('SIGINT', cancel)
   try
@@ -62,11 +96,7 @@ export async function runJobService(kind: string, id?: string): Promise<void>
     })
     if (started && !abort.signal.aborted)
     {
-      const job = await executeJob(
-        id,
-        { writeJob: writeWorkerJob },
-        abort.signal
-      )
+      const job = await executeWorker(id, abort.signal)
       if (ownerLost)
       {
         job.status = 'interrupted'
@@ -86,6 +116,18 @@ export async function runJobService(kind: string, id?: string): Promise<void>
   }
   finally
   {
+    if (id && kind === '_worker')
+    {
+      try
+      {
+        flushJobEvents(id)
+      }
+      catch
+      {
+        // a stored flush error already failed the run's settled append;
+        // otherwise the run itself failed and only its last events are lost
+      }
+    }
     process.removeListener('SIGTERM', cancel)
     process.removeListener('SIGINT', cancel)
     process.removeListener('disconnect', loseOwner)

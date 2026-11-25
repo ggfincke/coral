@@ -16,8 +16,9 @@ import { isPlainObject } from '../utils/guards.js'
 import { listJobSource, readJobSource, resolveJobRepository } from './git.js'
 import {
   appendJobEvent,
+  isJobCommandList,
   jobDirectory,
-  MAX_JOB_ACTIVE_MS,
+  parseJobSpec,
   writeJob,
 } from './store.js'
 import {
@@ -89,23 +90,13 @@ function parseProposal(text: string): Proposal
       'Task planning did not produce valid JSON. No task was approved or started; retry planning.'
     )
   }
-  const commandList = (item: unknown): item is string[] =>
-    Array.isArray(item) &&
-    item.length <= 100 &&
-    item.every(
-      (command) =>
-        typeof command === 'string' &&
-        command.trim().length > 0 &&
-        command.length <= 16_384 &&
-        !command.includes('\0')
-    )
   if (
     !isPlainObject(value) ||
     typeof value.plan !== 'string' ||
     !value.plan.trim() ||
     value.plan.length > MAX_RESPONSE_CHARS ||
-    !commandList(value.setup) ||
-    !commandList(value.checks)
+    !isJobCommandList(value.setup) ||
+    !isJobCommandList(value.checks)
   )
   {
     throw new Error(
@@ -156,19 +147,6 @@ export async function createJobPlan(
   if (!options.model.trim()) throw new Error('Choose a model for the task')
   const activeTimeLimitMs = options.activeTimeLimitMs ?? DEFAULT_JOB_ACTIVE_MS
   const maxRepairs = options.maxRepairs ?? DEFAULT_JOB_REPAIRS
-  // reject limits the draft record would refuse before spending a planning run
-  if (
-    !Number.isSafeInteger(activeTimeLimitMs) ||
-    activeTimeLimitMs <= 0 ||
-    activeTimeLimitMs > MAX_JOB_ACTIVE_MS ||
-    !Number.isSafeInteger(maxRepairs) ||
-    maxRepairs < 0
-  )
-  {
-    throw new Error(
-      `Task active time must be a positive integer in milliseconds, at most ${MAX_JOB_ACTIVE_MS}, and repairs a nonnegative integer`
-    )
-  }
   const host = normalizeOllamaHost(options.host)
   const bounded = AbortSignal.timeout(10 * 60 * 1000)
   const planningSignal = signal ? AbortSignal.any([signal, bounded]) : bounded
@@ -178,6 +156,18 @@ export async function createJobPlan(
     options.ref,
     planningSignal
   )
+  // reject fields the draft record would refuse before spending a planning run
+  parseJobSpec({
+    objective,
+    model: options.model,
+    host,
+    repository,
+    plan: 'Pending proposal.',
+    setup: [],
+    checks: [],
+    activeTimeLimitMs,
+    maxRepairs,
+  })
   const files = await listJobSource(repository, planningSignal)
   const seeds: string[] = []
   for (const name of [
@@ -289,7 +279,8 @@ export async function createJobPlan(
     createdAt: now,
     updatedAt: now,
     status: 'draft',
-    spec: {
+    // name the field a proposal breaks instead of a generic write refusal
+    spec: parseJobSpec({
       objective,
       model: options.model,
       host,
@@ -297,7 +288,7 @@ export async function createJobPlan(
       ...proposal,
       activeTimeLimitMs,
       maxRepairs,
-    },
+    }),
     consumedMs: 0,
     repairs: 0,
     commandResults: [],

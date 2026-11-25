@@ -5,7 +5,9 @@ import { randomUUID } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
 import { readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { ensurePrivateDir } from '../utils/fs.js'
+import { toErrorMessage } from '../utils/errors.js'
 import { writeJsonFile } from '../utils/json.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 import { jobDirectory } from './store.js'
@@ -13,19 +15,38 @@ import { queryDarwinProcesses } from './darwin-process.js'
 
 const OUTPUT_LIMIT = 1024 * 1024
 const PROCESS_TOKEN_KEY = 'CORAL_JOB_PROCESS_TOKEN'
-let darwinBoot: Promise<string> | undefined
+const BOOT_ID = /^[0-9a-f-]{36}$/
+let bootIdentityValue: Promise<string | undefined> | undefined
 
-function darwinBootIdentity(): Promise<string>
+// a record from an earlier boot cannot own any live process, whatever its pid.
+// macOS ownership depends on it; on Linux it is a best-effort shortcut, so an
+// unreadable boot id leaves ownership to the identity checks as before
+function bootIdentity(): Promise<string | undefined>
 {
-  darwinBoot ??= new Promise((resolve, reject) =>
+  bootIdentityValue ??= new Promise((resolve, reject) =>
   {
+    if (process.platform === 'linux')
+    {
+      try
+      {
+        const identity = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8')
+          .trim()
+          .toLowerCase()
+        resolve(BOOT_ID.test(identity) ? identity : undefined)
+      }
+      catch
+      {
+        resolve(undefined)
+      }
+      return
+    }
     execFile(
       '/usr/sbin/sysctl',
       ['-n', 'kern.bootsessionuuid'],
       (error, stdout) =>
       {
         const identity = stdout.trim().toLowerCase()
-        if (error || !/^[0-9a-f-]{36}$/.test(identity))
+        if (error || !BOOT_ID.test(identity))
           reject(
             new Error(
               'Cannot establish the macOS boot identity for task ownership.'
@@ -35,7 +56,7 @@ function darwinBootIdentity(): Promise<string>
       }
     )
   })
-  return darwinBoot
+  return bootIdentityValue
 }
 
 export interface OwnedJobProcess
@@ -97,6 +118,15 @@ async function tokenMembers(token: string): Promise<number[]>
   })
 }
 
+// the start time in a processIdentity value ("<lstart> <pgid>"), or undefined
+// when the value is not one this module recorded
+function identityStartMs(identity: string): number | undefined
+{
+  const split = identity.trimEnd().lastIndexOf(' ')
+  const started = Date.parse(identity.slice(0, split))
+  return split > 0 && Number.isFinite(started) ? started : undefined
+}
+
 // start time and process group distinguish a live owner from a reused pid
 export async function processIdentity(
   pid: number
@@ -156,10 +186,11 @@ export async function captureOwnedProcess(
       token,
       identity,
       uniqueId: birth.uniqueId,
-      bootId: await darwinBootIdentity(),
+      bootId: await bootIdentity(),
     }
   }
-  return { pid, token, identity }
+  const bootId = await bootIdentity()
+  return { pid, token, identity, ...(bootId ? { bootId } : {}) }
 }
 
 // kernel parent identities survive reparenting and cover protected macOS binaries
@@ -198,12 +229,11 @@ export async function ownedGroupMembers(
 ): Promise<number[]>
 {
   decodeOwner(owner)
-  if (
-    process.platform === 'darwin' &&
-    owner.bootId &&
-    owner.bootId !== (await darwinBootIdentity())
-  )
-    return []
+  if (owner.bootId)
+  {
+    const current = await bootIdentity()
+    if (current !== undefined && current !== owner.bootId) return []
+  }
   const members = await groupMembers(owner.pid)
   const detached = await tokenMembers(owner.token)
   const native = await darwinDescendants(owner)
@@ -224,6 +254,20 @@ export async function ownedGroupMembers(
     (!owner.uniqueId || native.get(owner.pid) === owner.uniqueId)
   )
     return [...new Set([...members, ...proven])]
+  // * a pgid in use is never reallocated, so a leader pid that started later
+  // was reused after the recorded group emptied; never signal its members. a
+  // leader still holding our token is ours despite a wall-clock step
+  const recordedStart = identityStartMs(owner.identity)
+  const liveStart =
+    identity === undefined ? undefined : identityStartMs(identity)
+  if (
+    recordedStart !== undefined &&
+    liveStart !== undefined &&
+    liveStart > recordedStart &&
+    !proven.has(owner.pid) &&
+    (!owner.uniqueId || native.get(owner.pid) !== owner.uniqueId)
+  )
+    return [...proven]
 
   // after the leader exits, every remaining descendant must retain the launch token
   for (const member of members)
@@ -265,7 +309,10 @@ export async function terminateOwnedGroup(
     const members = await ownedGroupMembers(owner)
     if (!members.length) return
     const native = await darwinDescendants(owner)
-    if ((await groupMembers(owner.pid)).length)
+    // * signal the whole group only when every live member is proven ours; a
+    // reused leader pid can head a foreign group while our token holders live on
+    const group = await groupMembers(owner.pid)
+    if (group.length && group.every((pid) => members.includes(pid)))
     {
       try
       {
@@ -314,7 +361,7 @@ function processesDirectory(id: string): string
   return directory
 }
 
-function decodeOwner(value: unknown): OwnedJobProcess
+export function decodeOwner(value: unknown): OwnedJobProcess
 {
   const owner = value as Partial<OwnedJobProcess> | null
   if (
@@ -329,8 +376,7 @@ function decodeOwner(value: unknown): OwnedJobProcess
       (typeof owner.uniqueId !== 'string' ||
         !/^[1-9][0-9]*$/.test(owner.uniqueId))) ||
     (owner.bootId !== undefined &&
-      (typeof owner.bootId !== 'string' ||
-        !/^[0-9a-f-]{36}$/.test(owner.bootId)))
+      (typeof owner.bootId !== 'string' || !BOOT_ID.test(owner.bootId)))
   )
     throw new Error('Invalid task process ownership record; queue is blocked.')
   return owner as OwnedJobProcess
@@ -343,8 +389,18 @@ export async function cleanupJobProcesses(id: string): Promise<void>
   {
     if (!/^[0-9a-f-]{36}\.json$/.test(name)) continue
     const path = join(directory, name)
-    const owner = decodeOwner(JSON.parse(readFileSync(path, 'utf8')))
-    await terminateOwnedGroup(owner)
+    try
+    {
+      const owner = decodeOwner(JSON.parse(readFileSync(path, 'utf8')))
+      await terminateOwnedGroup(owner)
+    }
+    catch (error)
+    {
+      throw new Error(
+        `${toErrorMessage(error)} Process record: ${path}. If none of that task's commands are still running, remove the record and retry.`,
+        { cause: error }
+      )
+    }
     rmSync(path)
   }
 }
@@ -378,17 +434,22 @@ export async function runJobCommand(
   )
   let output = ''
   let truncated = false
-  const capture = (chunk: Buffer) =>
+  const append = (text: string) =>
   {
-    output += chunk.toString('utf8')
+    output += text
     if (output.length > OUTPUT_LIMIT)
     {
       output = output.slice(-OUTPUT_LIMIT)
       truncated = true
     }
   }
-  child.stdout.on('data', capture)
-  child.stderr.on('data', capture)
+  // one decoder per stream: a multibyte character may straddle two reads
+  const decoders = [child.stdout, child.stderr].map((stream) =>
+  {
+    const decoder = new StringDecoder('utf8')
+    stream.on('data', (chunk: Buffer) => append(decoder.write(chunk)))
+    return decoder
+  })
   child.stdin.on('error', () =>
   {})
   const exited = new Promise<number | null>((resolve, reject) =>
@@ -436,6 +497,7 @@ export async function runJobCommand(
     if (options.signal?.aborted) requestStop()
     else child.stdin.end('start\n')
     const code = await exited
+    for (const decoder of decoders) append(decoder.end())
     await stop
     if (stopError) throw stopError
     const leftover = (await ownedGroupMembers(owner)).length > 0
