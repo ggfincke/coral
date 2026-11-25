@@ -129,8 +129,9 @@ test('costs survive persistence, undo/redo, model switching, and resume; forks a
     loadSession(meta.id)!,
     {
       sessionId: meta.id,
-      token: 'fixture-lease',
-    } as Parameters<typeof buildProviderTurnSaveInput>[2]
+      ownerToken: 'fixture-lease',
+      runtimeId: 'fixture-runtime',
+    }
   )
   assert.deepEqual(providerInput.snapshot.sessionCost, resumed.getSessionCost())
 

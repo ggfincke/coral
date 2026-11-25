@@ -847,6 +847,7 @@ test('read_file pages cover the original contents and preserve full-file observa
   const observed: string[] = []
   const context = {
     cwd: dir,
+    ollamaHost: 'http://localhost:11434',
     observeFile: (_path: string, value: string) =>
     {
       observed.push(value)

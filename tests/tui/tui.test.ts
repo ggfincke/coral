@@ -61,6 +61,7 @@ import { buildTodoPanel } from '../../src/tui/transcript/todo-panel.js'
 import { AgentTodoState } from '../../src/agent/state/todos.js'
 import { visibleWidth, wrapLines } from '../../src/tui/wrap.js'
 import { makeFakeAgent } from '../helpers/agent-harness.js'
+import { blockText } from '../helpers/blocks.js'
 import { makeSessionMeta } from '../helpers/session.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 
@@ -94,7 +95,7 @@ function makeCommandContext(
     {},
     switchModel: async () => ({ status: 'unchanged' }),
     getCwd: () => '/tmp/project',
-    setYolo()
+    async setYolo()
     {},
     exitApp()
     {},
@@ -105,6 +106,10 @@ function makeCommandContext(
     toolGrants: { list: () => [], revoke: () => false },
     notifyThemeChanged()
     {},
+    setRawMode: () => false,
+    setVimMode()
+    {},
+    isVimMode: () => false,
   }
 }
 
@@ -175,7 +180,7 @@ test('command registry preserves order, aliases, help, and dispatch', async () =
     output
   )
   assert.equal(await dispatchCommand('/help', context), true)
-  const help = plain(output.map((block) => block.content))
+  const help = plain(output.map(blockText))
   let previous = -1
   for (const name of expectedOrder)
   {
@@ -448,6 +453,7 @@ test('buildTranscriptLines keeps app SGR styling in system blocks but strips con
         content: 'plain \x1b[36mcolored\x1b[39m end\x1b[2J\x1b]52;c;DDDD\x07',
       },
     ],
+    streaming: '',
     width: 80,
   }).join('\n')
 
@@ -659,7 +665,12 @@ test('streaming thinking preserves ANSI rows and only wraps newly completed line
       width,
     })
   const expected = inputs.map((content) => reference(content, 40))
-  const split = String.prototype.split
+  // pin the string/RegExp overload so the passthrough call typechecks
+  const split: (
+    this: string,
+    separator: string | RegExp,
+    limit?: number
+  ) => string[] = String.prototype.split
   let completedWraps = 0
   t.mock.method(
     String.prototype,
@@ -1007,10 +1018,7 @@ test('/new preserves the current conversation when session saving fails', async 
   assert.equal(await dispatchCommand('/new', context), true)
   assert.equal(historyClears, 0)
   assert.equal(sessionClears, 0)
-  assert.match(
-    plain(output.map((block) => block.content)),
-    /could not be saved.*not started/
-  )
+  assert.match(plain(output.map(blockText)), /could not be saved.*not started/)
 })
 
 test('dispatchCommand persists after successful manual compaction', async () =>
@@ -1053,7 +1061,7 @@ test('dispatchCommand persists after successful manual compaction', async () =>
           (block): block is Extract<OutputBlock, { type: 'system' }> =>
             block.type === 'system'
         )
-        .map((block) => block.content)
+        .map(blockText)
     ).includes('Undo history cleared')
   )
 })
@@ -1106,7 +1114,7 @@ test('dispatchCommand does not save interrupted manual compaction', async () =>
         (block): block is Extract<OutputBlock, { type: 'system' }> =>
           block.type === 'system'
       )
-      .map((block) => block.content)
+      .map(blockText)
   )
   assert.ok(rendered.includes('Compaction interrupted'))
   assert.ok(!rendered.includes('Context compacted'))
@@ -1161,7 +1169,7 @@ test('dispatchCommand handles undo and redo transcript rebuilds', async () =>
         (block): block is Extract<OutputBlock, { type: 'system' }> =>
           block.type === 'system'
       )
-      .map((block) => block.content)
+      .map(blockText)
   )
   assert.ok(
     rendered.includes('Undid last turn (3 messages removed, 1 file updated)')
@@ -1215,7 +1223,7 @@ test('an undo committed during cancellation still reconciles and persists', asyn
   assert.equal(await undo, true)
   assert.equal(rebuilds, 1)
   assert.equal(saves, 1)
-  assert.match(plain(output.map((block) => block.content)), /Undid last turn/)
+  assert.match(plain(output.map(blockText)), /Undid last turn/)
 })
 
 test('dispatchCommand reports empty undo stack without saving', async () =>
@@ -1236,9 +1244,7 @@ test('dispatchCommand reports empty undo stack without saving', async () =>
 
   assert.equal(await dispatchCommand('/undo', ctx), true)
   assert.equal(saves, 0)
-  assert.ok(
-    plain(output.map((block) => block.content)).includes('Nothing to undo')
-  )
+  assert.ok(plain(output.map(blockText)).includes('Nothing to undo'))
 })
 
 test('dispatchCommand passes the command abort signal into /index', async () =>
@@ -1255,14 +1261,10 @@ test('dispatchCommand passes the command abort signal into /index', async () =>
     space: embeddingSpace,
     ensureProject: () => 1,
     listFiles: () => new Map(),
-    touchFile()
-    {},
-    upsertFile()
-    {},
-    deleteFile()
-    {},
-    deleteMissingFiles()
-    {},
+    touchFile: () => true,
+    upsertFile: () => true,
+    deleteFile: () => true,
+    deleteMissingFiles: () => true,
     search: () => [],
     close()
     {
@@ -1294,7 +1296,7 @@ test('dispatchCommand passes the command abort signal into /index', async () =>
   assert.equal(await dispatchCommand('/index', ctx), true)
   assert.equal(seenSignal, controller.signal)
   assert.equal(closed, true)
-  assert.ok(plain(output.map((block) => block.content)).includes('Indexed 1/1'))
+  assert.ok(plain(output.map(blockText)).includes('Indexed 1/1'))
 })
 
 test('/model honors command cancellation and reports only committed switches', async () =>
@@ -1342,13 +1344,9 @@ test('/model honors command cancellation and reports only committed switches', a
     )
     assert.equal(seenSignals.at(-1), aborted.signal)
     assert.equal(abortedSwitches, 0)
-    assert.ok(
-      !plain(abortedOutput.map((block) => block.content)).includes(
-        'Switched model'
-      )
-    )
+    assert.ok(!plain(abortedOutput.map(blockText)).includes('Switched model'))
     assert.match(
-      plain(abortedOutput.map((block) => block.content)),
+      plain(abortedOutput.map(blockText)),
       /Model switch interrupted/
     )
 
@@ -1369,7 +1367,7 @@ test('/model honors command cancellation and reports only committed switches', a
     )
     assert.equal(saves, 0)
     assert.ok(
-      plain(committedOutput.map((block) => block.content)).includes(
+      plain(committedOutput.map(blockText)).includes(
         'Switched model: old-model'
       )
     )
@@ -1396,7 +1394,7 @@ test('/index preserves a configured model across async missing-model failure', a
   }
 
   assert.equal(await dispatchCommand('/index', ctx), true)
-  const rendered = plain(output.map((block) => block.content))
+  const rendered = plain(output.map(blockText))
   assert.match(rendered, /embedding model custom-embed/)
   assert.match(rendered, /ollama pull custom-embed/)
   assert.doesNotMatch(rendered, /ollama pull nomic-embed-text/)
@@ -1414,7 +1412,7 @@ test('/index does not suggest pulling for artifact identity drift', async () =>
   }
 
   assert.equal(await dispatchCommand('/index', ctx), true)
-  const rendered = plain(output.map((block) => block.content))
+  const rendered = plain(output.map(blockText))
   assert.match(rendered, /changed artifact identity/)
   assert.doesNotMatch(rendered, /ollama pull/)
 })

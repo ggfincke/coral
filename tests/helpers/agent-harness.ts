@@ -22,7 +22,7 @@ export interface FakeChunk
 
 // request-inspecting generator form; turns[][] is the canonical form
 export type FakeStream = (
-  request?: ChatRequest,
+  request: ChatRequest,
   signal?: AbortSignal
 ) => AsyncGenerator<FakeChunk>
 

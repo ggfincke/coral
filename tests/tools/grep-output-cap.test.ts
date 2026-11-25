@@ -25,7 +25,11 @@ test(
 
       const result = await grepTool.execute(
         { pattern: 'needle' },
-        { cwd: dir, allowOutsideWorkspace: false }
+        {
+          cwd: dir,
+          ollamaHost: 'http://localhost:11434',
+          allowOutsideWorkspace: false,
+        }
       )
 
       assert.equal(result.error, undefined)

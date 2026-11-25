@@ -32,6 +32,7 @@ import {
 import { formatSkillsStatus } from '../../src/tui/commands/runtime-output.js'
 import { buildRestoredBlocks } from '../../src/tui/transcript/restored-blocks.js'
 import { makeFakeAgent, makeAgentEvents } from '../helpers/agent-harness.js'
+import { blockText } from '../helpers/blocks.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 
@@ -316,7 +317,7 @@ test('slash invocation sends semantic content while preserving typed display tex
   assert.equal(requestUser?.content, resolution.prompt)
   assert.equal(requestUser?.displayContent, undefined)
   assert.equal(agent.getMessages()[1]?.displayContent, typed)
-  assert.equal(buildRestoredBlocks(agent.getMessages())[0]?.content, typed)
+  assert.equal(blockText(buildRestoredBlocks(agent.getMessages())[0]), typed)
 
   process.env.CORAL_HOME = await tempDir('coral-skill-session-')
   const meta = createSession('test-model', cwd, agent.getMessages())

@@ -241,6 +241,7 @@ class FakeAcpAgent
       completionTokens: 4,
       totalPromptTokens: this.turnCount * 10,
       totalCompletionTokens: this.turnCount * 4,
+      totalCachedPromptTokens: 0,
       contextTokens: 14,
       totalPromptEvalDurationNs: 0,
       totalEvalDurationNs: 0,
@@ -1290,7 +1291,7 @@ test('resume rejects missing, corrupt, mismatched, and actively leased sessions'
               acp.methods.agent.session.resume,
               { sessionId, cwd, mcpServers: [] }
             )
-            assert.equal(resumed.configOptions[0]!.currentValue, 'model-a')
+            assert.equal(resumed.configOptions?.[0]?.currentValue, 'model-a')
             const afterResume = loadSessionForTest(sessionId)
             assert.deepEqual(afterResume.messages, beforeResume.messages)
             await contenderCx.request(acp.methods.agent.session.close, {

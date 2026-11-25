@@ -19,11 +19,18 @@ import {
   saveProviderSession,
 } from '../../src/session/store.js'
 import type { SessionPersistenceErrorCode } from '../../src/session/errors.js'
+import type { ProcessSessionRuntimeIdentity } from '../../src/session/types.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 
 const { tempDir, cleanup } = makeTempDirPool({ autoCleanup: false })
 const restoreCoralHome = captureCoralHome()
+
+// readable runtime ids; the factory param is typed as a UUID but leases accept any id
+function labeledRuntime(label: string): ProcessSessionRuntimeIdentity
+{
+  return { ...createSessionRuntimeIdentity(), runtimeId: label }
+}
 
 beforeEach(async () =>
 {
@@ -82,7 +89,7 @@ test('a transient lease release lock failure can be retried and stays joined', a
 {
   const lease = acquireSessionLease(
     'acceded0',
-    createSessionRuntimeIdentity('release-retry-runtime')
+    labeledRuntime('release-retry-runtime')
   )
   const database = new Database(
     join(process.env.CORAL_HOME!, 'sessions', 'leases.sqlite')
@@ -118,16 +125,12 @@ test('a transient lease release lock failure can be retried and stays joined', a
 test('leases refuse active owners and recover only a conclusively dead process', async () =>
 {
   const sessionId = 'feedface'
-  const runtime = createSessionRuntimeIdentity('lease-owner-a')
+  const runtime = labeledRuntime('lease-owner-a')
   const first = acquireSessionLease(sessionId, runtime)
 
   assert.equal(verifySessionLeaseOwnership(first), true)
   assertPersistenceError(
-    () =>
-      acquireSessionLease(
-        sessionId,
-        createSessionRuntimeIdentity('lease-contender')
-      ),
+    () => acquireSessionLease(sessionId, labeledRuntime('lease-contender')),
     'session_in_use'
   )
 
@@ -158,10 +161,7 @@ test('leases refuse active owners and recover only a conclusively dead process',
   }
   assertPersistenceError(
     () =>
-      acquireSessionLease(
-        sessionId,
-        createSessionRuntimeIdentity('lease-foreign-contender')
-      ),
+      acquireSessionLease(sessionId, labeledRuntime('lease-foreign-contender')),
     'session_in_use'
   )
 
@@ -181,10 +181,7 @@ test('leases refuse active owners and recover only a conclusively dead process',
     staleDatabase.close()
   }
 
-  const second = acquireSessionLease(
-    sessionId,
-    createSessionRuntimeIdentity('lease-owner-b')
-  )
+  const second = acquireSessionLease(sessionId, labeledRuntime('lease-owner-b'))
   assert.equal(verifySessionLeaseOwnership(second), true)
 
   const firstRelease = first.release()
@@ -195,7 +192,7 @@ test('leases refuse active owners and recover only a conclusively dead process',
     () =>
       acquireSessionLease(
         sessionId,
-        createSessionRuntimeIdentity('lease-contender-after-stale')
+        labeledRuntime('lease-contender-after-stale')
       ),
     'session_in_use'
   )
@@ -203,10 +200,7 @@ test('leases refuse active owners and recover only a conclusively dead process',
   const secondRelease = second.release()
   assert.equal(second.release(), secondRelease)
   await secondRelease
-  const third = acquireSessionLease(
-    sessionId,
-    createSessionRuntimeIdentity('lease-owner-c')
-  )
+  const third = acquireSessionLease(sessionId, labeledRuntime('lease-owner-c'))
   assert.equal(verifySessionLeaseOwnership(third), true)
   await third.release()
 
@@ -228,7 +222,7 @@ test(
     const sessionId = 'cafebabe'
     const first = acquireSessionLease(
       sessionId,
-      createSessionRuntimeIdentity('start-time-owner')
+      labeledRuntime('start-time-owner')
     )
     const database = new Database(
       join(process.env.CORAL_HOME!, 'sessions', 'leases.sqlite')
@@ -241,10 +235,7 @@ test(
         )
         .run(startedAt, sessionId, first.ownerToken)
     const contend = () =>
-      acquireSessionLease(
-        sessionId,
-        createSessionRuntimeIdentity('start-time-contender')
-      )
+      acquireSessionLease(sessionId, labeledRuntime('start-time-contender'))
     try
     {
       assertPersistenceError(contend, 'session_in_use')
@@ -276,7 +267,7 @@ test(
     const sessionId = 'feedface'
     const first = acquireSessionLease(
       sessionId,
-      createSessionRuntimeIdentity('namespace-owner')
+      labeledRuntime('namespace-owner')
     )
     const { processStartedAt } = createSessionRuntimeIdentity()
     assert.match(processStartedAt, /^[0-9a-f-]{36}:\d+:\d+$/)
@@ -297,10 +288,7 @@ test(
           first.ownerToken
         )
     const contend = () =>
-      acquireSessionLease(
-        sessionId,
-        createSessionRuntimeIdentity('namespace-contender')
-      )
+      acquireSessionLease(sessionId, labeledRuntime('namespace-contender'))
     const otherNamespace = `${Number(namespace) + 1}`
     try
     {

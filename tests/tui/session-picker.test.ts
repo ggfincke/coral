@@ -34,6 +34,7 @@ import type {
   SessionMeta,
   SessionPreviewResult,
 } from '../../src/session/types.js'
+import { blockText } from '../helpers/blocks.js'
 import { makeSessionMeta } from '../helpers/session.js'
 import { makeTempDirPool } from '../helpers/temp.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
@@ -660,7 +661,7 @@ function makeCommandContext(
     {},
     switchModel: async () => ({ status: 'unchanged' }),
     getCwd: () => '/tmp/project',
-    setYolo()
+    async setYolo()
     {},
     exitApp()
     {},
@@ -671,6 +672,10 @@ function makeCommandContext(
     toolGrants: { list: () => [], revoke: () => false },
     notifyThemeChanged()
     {},
+    setRawMode: () => false,
+    setVimMode()
+    {},
+    isVimMode: () => false,
     ...overrides,
   }
 }
@@ -697,7 +702,7 @@ test('/resume prefix keeps direct resolution through ctx.resumeSession', async (
 
   assert.equal(await dispatchCommand('/resume eeee', ctx), true)
   assert.deepEqual(resumedIds, ['eeee1111'])
-  assert.ok(plain(output.map((block) => block.content)).includes('Resumed'))
+  assert.ok(plain(output.map(blockText)).includes('Resumed'))
 })
 
 test('/resume reports ambiguity & misses without touching resumeSession', async () =>
@@ -719,11 +724,11 @@ test('/resume reports ambiguity & misses without touching resumeSession', async 
 
   assert.equal(await dispatchCommand('/resume aaaa', ctx), true)
   assert.equal(resumeCalls, 0)
-  assert.ok(plain(output.map((block) => block.content)).includes('Ambiguous'))
+  assert.ok(plain(output.map(blockText)).includes('Ambiguous'))
 
   assert.equal(await dispatchCommand('/resume dead', ctx), true)
   assert.equal(resumeCalls, 0)
-  assert.ok(plain(output.map((block) => block.content)).includes('not found'))
+  assert.ok(plain(output.map(blockText)).includes('not found'))
 })
 
 test('bare /resume at the command layer prints usage & resumes nothing', async () =>

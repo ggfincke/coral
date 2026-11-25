@@ -63,15 +63,15 @@ test('leading system lifts, later system and tool results share one user turn', 
     messages.map((turn) => turn.role),
     ['user', 'assistant', 'user']
   )
-  const followUp = messages[2]!.content as { type: string }[]
+  const followUp = messages[2]!.content as {
+    type: string
+    tool_use_id?: string
+  }[]
   assert.deepEqual(
     followUp.map((block) => block.type),
     ['tool_result', 'text', 'text']
   )
-  assert.equal(
-    (followUp[0] as { tool_use_id: string }).tool_use_id,
-    'toolu_real'
-  )
+  assert.equal(followUp[0]!.tool_use_id, 'toolu_real')
 })
 
 test('signed blocks replay verbatim on the same model and rebuild after a switch', () =>
