@@ -2,15 +2,19 @@
 // bounded observations and request-only notices for changed workspace files
 
 import { createHash } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
-import { lstat, open, realpath } from 'node:fs/promises'
+import type { Stats } from 'node:fs'
 import { resolve } from 'node:path'
 import {
   formatProjectPath,
   isPathInsideProject,
 } from '../../shared/project-tree.js'
 import type { OllamaMessage } from '../../types/inference.js'
-import { TEXT_FILE_READ_LIMIT_BYTES } from '../../utils/file-read.js'
+import {
+  openRegularFile,
+  readOpenedFile,
+  TEXT_FILE_READ_LIMIT_BYTES,
+  type OpenedRegularFile,
+} from '../../utils/file-read.js'
 
 const MAX_OBSERVED_FILES = 128
 const MAX_OBSERVED_PATH_CHARS = 4_096
@@ -154,89 +158,41 @@ export class FileChangeContext
     const revision = observed.dirty
     let status: FileStatus | undefined
     let signature: string | undefined
-    let handle: Awaited<ReturnType<typeof open>> | undefined
+    let file: OpenedRegularFile | undefined
     try
     {
       signal.throwIfAborted()
-      const [workspace, target] = await Promise.all([
-        realpath(this.cwd),
-        realpath(path),
-      ])
-      signal.throwIfAborted()
-      if (!isPathInsideProject(workspace, target))
+      file = await openRegularFile(path, { root: this.cwd, signal })
+      if (file.stats.size > TEXT_FILE_READ_LIMIT_BYTES)
       {
         status = 'unreadable'
       }
       else
       {
-        handle = await open(
-          target,
-          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
-        )
-        signal.throwIfAborted()
-        const [currentWorkspace, currentTarget] = await Promise.all([
-          realpath(this.cwd),
-          realpath(path),
-        ])
-        signal.throwIfAborted()
-        if (currentWorkspace !== workspace || currentTarget !== target)
+        signature = metadataSignature(file.stats)
+        if (signature === observed.signature && revision === observed.checked)
         {
-          throw new Error('Workspace path changed while opening the file')
+          return
         }
-        const [info, currentInfo] = await Promise.all([
-          handle.stat(),
-          lstat(currentTarget),
-        ])
-        signal.throwIfAborted()
-        if (
-          !info.isFile() ||
-          !currentInfo.isFile() ||
-          info.dev !== currentInfo.dev ||
-          info.ino !== currentInfo.ino ||
-          info.size > TEXT_FILE_READ_LIMIT_BYTES
+        // read at most one byte past the cap, even if a writer grows the file
+        const read = await readOpenedFile(
+          file,
+          TEXT_FILE_READ_LIMIT_BYTES,
+          signal
         )
+        if (read.truncated)
         {
           status = 'unreadable'
         }
         else
         {
-          signature = metadataSignature(info)
-          if (
-            signature === observed.signature &&
-            revision === observed.checked
-          )
-          {
-            return
-          }
-          // read at most one byte past the cap, even if a writer grows the file
-          const buffer = Buffer.allocUnsafe(TEXT_FILE_READ_LIMIT_BYTES + 1)
-          let bytes = 0
-          while (bytes < buffer.length)
-          {
-            const result = await handle.read(
-              buffer,
-              bytes,
-              buffer.length - bytes,
-              bytes
-            )
-            signal.throwIfAborted()
-            if (result.bytesRead === 0) break
-            bytes += result.bytesRead
-          }
-          if (bytes > TEXT_FILE_READ_LIMIT_BYTES)
-          {
-            status = 'unreadable'
-          }
-          else
-          {
-            const after = await handle.stat()
-            signal.throwIfAborted()
-            status =
-              contentHash(buffer.toString('utf8', 0, bytes)) === observed.hash
-                ? undefined
-                : 'changed'
-            if (metadataSignature(after) !== signature) signature = undefined
-          }
+          const after = await file.handle.stat()
+          signal.throwIfAborted()
+          status =
+            contentHash(read.bytes.toString('utf8')) === observed.hash
+              ? undefined
+              : 'changed'
+          if (metadataSignature(after) !== signature) signature = undefined
         }
       }
     }
@@ -249,7 +205,7 @@ export class FileChangeContext
     }
     finally
     {
-      await handle?.close().catch(() => undefined)
+      await file?.handle.close().catch(() => undefined)
     }
 
     signal.throwIfAborted()

@@ -1,9 +1,10 @@
 // src/agent/effects/file-replay.ts
 // reverse or reapply one turn's file edits
 
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { toErrorMessage } from '../../utils/errors.js'
+import { readOptionalPreviousTextFile } from '../../utils/file-read.js'
 import { checkWorkspacePath } from '../../shared/workspace-path.js'
 import type { UndoFileChange } from '../../types/undo.js'
 
@@ -51,6 +52,8 @@ function mergeFileChanges(changes: UndoFileChange[]): NetChange[]
   return [...byPath.values()].filter((change) => change.before !== change.after)
 }
 
+// snapshots are strict UTF-8 under the text read limit, so a lossy, oversized,
+// or non-regular current file is an error; rewriting it would lose its bytes
 async function readCurrentFile(
   path: string,
   signal?: AbortSignal
@@ -60,19 +63,13 @@ async function readCurrentFile(
   error?: string
 }>
 {
-  try
+  const read = await readOptionalPreviousTextFile(path, { signal })
+  if (!read.ok) return { exists: false, content: '', error: read.message }
+  if (read.lossy)
   {
-    return {
-      exists: true,
-      content: await readFile(path, { encoding: 'utf-8', signal }),
-    }
+    return { exists: true, content: '', error: 'file is not valid UTF-8' }
   }
-  catch (err)
-  {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { exists: false, content: '' }
-    return { exists: false, content: '', error: toErrorMessage(err) }
-  }
+  return { exists: read.existed, content: read.content }
 }
 
 async function validateReplayPaths(

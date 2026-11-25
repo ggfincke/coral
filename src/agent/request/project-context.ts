@@ -1,14 +1,7 @@
 // src/agent/request/project-context.ts
 // project context loading for conversation starts
 
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  openSync,
-  readSync,
-  readdirSync,
-} from 'node:fs'
+import { readdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { createIgnoredEntrySet } from '../../shared/ignored-entries.js'
@@ -17,6 +10,7 @@ import {
   formatProjectTreeEntryName,
   shouldIncludeProjectTreeEntry,
 } from '../../shared/project-tree.js'
+import { readRegularFileSync } from '../../utils/file-read.js'
 import { CHARS_PER_TOKEN } from '../../utils/limits.js'
 
 // cap the bytes read from any single context file
@@ -91,47 +85,28 @@ export function projectContextBudgetForWindow(contextWindow: number): number
   return Math.min(Math.max(chars, MIN_TOTAL_CHARS), MAX_TOTAL_CHARS)
 }
 
-// read one context file within the byte limit
-function readContextFile(path: string): string | null
+// read one context file within the byte limit; a link that resolves outside
+// the workspace is skipped like a missing file
+function readContextFile(cwd: string, name: string): string | null
 {
-  let descriptor: number | undefined
   try
   {
-    descriptor = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK)
-    if (!fstatSync(descriptor).isFile()) return null
-    const buffer = Buffer.allocUnsafe(MAX_CONTEXT_FILE_BYTES + 1)
-    let bytes = 0
-    while (bytes < buffer.length)
-    {
-      const count = readSync(
-        descriptor,
-        buffer,
-        bytes,
-        buffer.length - bytes,
-        bytes
-      )
-      if (count === 0) break
-      bytes += count
-    }
-    if (bytes === 0) return null
-    if (bytes > MAX_CONTEXT_FILE_BYTES)
+    const read = readRegularFileSync(
+      join(cwd, name),
+      MAX_CONTEXT_FILE_BYTES,
+      cwd
+    )
+    if (read.bytes.length === 0) return null
+    if (read.truncated)
     {
       // leave a partial trailing UTF-8 code point out of the retained prefix
-      return (
-        new StringDecoder('utf8').write(
-          buffer.subarray(0, MAX_CONTEXT_FILE_BYTES)
-        ) + '\n… (truncated)'
-      )
+      return new StringDecoder('utf8').write(read.bytes) + '\n… (truncated)'
     }
-    return buffer.toString('utf8', 0, bytes)
+    return read.bytes.toString('utf8')
   }
   catch
   {
     return null
-  }
-  finally
-  {
-    if (descriptor !== undefined) closeSync(descriptor)
   }
 }
 
@@ -195,7 +170,7 @@ export function captureProjectContext(
   {
     for (const { name, label } of INSTRUCTION_FILES)
     {
-      const content = readContextFile(join(cwd, name))
+      const content = readContextFile(cwd, name)
       if (!content) continue
       loaded.push(Object.freeze({ label, name, content }))
       break

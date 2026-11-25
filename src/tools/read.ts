@@ -54,9 +54,13 @@ export const readTool: Tool = {
     const result = await readFileGuarded(allowed.path)
     if (!result.ok) return result.result
     context?.observeFile?.(allowed.path, result.content)
+    const notice = result.lossy
+      ? `Note: ${allowed.path} is not valid UTF-8; invalid bytes are shown ` +
+        `as U+FFFD, and edit_file & write_file will refuse to change it.\n`
+      : ''
     if (args.offset === undefined && args.limit === undefined)
     {
-      return { output: result.content }
+      return { output: notice + result.content }
     }
 
     // preserve line endings without counting a trailing newline as an extra line
@@ -69,13 +73,13 @@ export const readTool: Tool = {
     if (count <= 0)
     {
       return {
-        output: `Empty page at line ${offset}; total lines: ${lines.length}.`,
+        output: `${notice}Empty page at line ${offset}; total lines: ${lines.length}.`,
       }
     }
     const end = offset + count - 1
     const next = end < lines.length ? ` Next offset: ${end + 1}.` : ''
     return {
-      output: `Lines ${offset}-${end} of ${lines.length}.${next}\n${lines.slice(offset - 1, end).join('')}`,
+      output: `${notice}Lines ${offset}-${end} of ${lines.length}.${next}\n${lines.slice(offset - 1, end).join('')}`,
     }
   },
 }

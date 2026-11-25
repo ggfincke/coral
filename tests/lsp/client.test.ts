@@ -35,7 +35,9 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
   const readGate = gate()
   const readEntered = gate()
   let holdRead = false
-  let readSignal: AbortSignal | undefined
+  // a held read must stop at its abort check instead of reading on
+  let heldFollowUps = 0
+  const heldClosed = gate()
   const fileContent = (path: unknown): string =>
   {
     const content = files.get(String(path))
@@ -44,23 +46,56 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
       throw Object.assign(new Error('missing file'), { code: 'ENOENT' })
     return content
   }
-  t.mock.method(fs, 'stat', (async (path: unknown) => ({
+  const fileStats = (path: unknown) => ({
+    isFile: () => true,
+    dev: 1,
+    ino: 1,
     size: Buffer.byteLength(fileContent(path)),
-  })) as unknown as typeof fs.stat)
-  t.mock.method(fs, 'readFile', (async (
-    path: unknown,
-    options: { signal?: AbortSignal }
-  ) =>
+  })
+  t.mock.method(fs, 'realpath', (async (path: unknown) =>
   {
-    reads.push(String(path))
-    if (holdRead)
-    {
-      readSignal = options.signal
-      readEntered.release()
-      await readGate.promise
+    fileContent(path)
+    return String(path)
+  }) as unknown as typeof fs.realpath)
+  t.mock.method(fs, 'lstat', (async (path: unknown) =>
+    fileStats(path)) as unknown as typeof fs.lstat)
+  t.mock.method(fs, 'open', (async (path: unknown) =>
+  {
+    const content = Buffer.from(fileContent(path))
+    let held = false
+    return {
+      stat: async () => fileStats(path),
+      async read(
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number
+      )
+      {
+        if (position === 0)
+        {
+          reads.push(String(path))
+          if (holdRead)
+          {
+            held = true
+            readEntered.release()
+            await readGate.promise
+          }
+        }
+        else if (held)
+        {
+          heldFollowUps++
+        }
+        return {
+          bytesRead: content.copy(buffer, offset, position, position + length),
+        }
+      },
+      async close()
+      {
+        if (held) heldClosed.release()
+      },
     }
-    return fileContent(path)
-  }) as unknown as typeof fs.readFile)
+  }) as unknown as typeof fs.open)
   syncBuiltinESMExports()
 
   const client = new TypeScriptCodeIntel(cwd)
@@ -244,10 +279,11 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
   const disposal = client.dispose()
   assert.equal(client.dispose(), disposal)
   await Promise.all([activeAborted, queuedAborted])
-  assert.equal(readSignal?.aborted, true)
   assert.equal(events.includes('2:shutdown'), false)
   readGate.release()
   await disposal
+  await heldClosed.promise
+  assert.equal(heldFollowUps, 0)
   assert.equal(connectionDisposals, 2)
   assert.equal(events.filter((event) => event === '2:shutdown').length, 1)
   assert.equal(internal.documents.size, 0)

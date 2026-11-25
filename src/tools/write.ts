@@ -1,6 +1,7 @@
 // src/tools/write.ts
 // write content to a file, creating directories as needed
 
+import { constants } from 'node:fs'
 import { writeFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
@@ -9,6 +10,7 @@ import { getCwd } from '../cwd.js'
 import { formatBytes } from '../utils/bytes.js'
 import { computeDiff } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { formatNotUtf8Refusal } from './file-utils.js'
 import {
   readOptionalPreviousTextFile,
   TEXT_FILE_READ_LIMIT_BYTES,
@@ -43,6 +45,12 @@ export const writeTool: Tool = {
       // allow approved outside-workspace writes without undo capture
       if (allowOutside)
       {
+        // keep a non-UTF-8 file's bytes intact even w/o undo capture
+        const existing = await readOptionalPreviousTextFile(path)
+        if (existing.ok && existing.lossy)
+        {
+          return { output: '', error: formatNotUtf8Refusal('write', path) }
+        }
         await mkdir(dirname(path), { recursive: true })
         await writeFile(path, content, 'utf-8')
         context?.observeFile?.(path, content)
@@ -75,9 +83,19 @@ export const writeTool: Tool = {
             `(${before.message})`,
         }
       }
+      // undo would restore lossy text, not the original bytes
+      if (before.lossy)
+      {
+        return { output: '', error: formatNotUtf8Refusal('write', path) }
+      }
 
       await mkdir(dirname(path), { recursive: true })
-      await writeFile(path, content, 'utf-8')
+      // create new files exclusively so a link or file planted after the
+      // workspace check fails the write instead of being followed
+      const flag = before.existed
+        ? 'w'
+        : constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
+      await writeFile(path, content, { encoding: 'utf-8', flag })
       context?.observeFile?.(path, content)
       return {
         output: `Wrote ${formatBytes(contentBytes)} to ${path}`,

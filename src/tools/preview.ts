@@ -33,6 +33,15 @@ function diffPreview(before: string, after: string): ToolDiffPreview | null
       }
 }
 
+// the tool will refuse this file, so say that instead of showing a lossy diff
+function notUtf8Preview(path: string): ToolDiffPreview
+{
+  return {
+    kind: 'message',
+    message: `Preview skipped: ${path} is not valid UTF-8; the tool will refuse to change it.`,
+  }
+}
+
 // compute an approval diff without touching disk; null means no preview
 export async function previewToolDiff(
   toolName: string,
@@ -60,6 +69,7 @@ export async function previewToolDiff(
       {
         return { kind: 'message', message: formatPreviewSkipMessage(before) }
       }
+      if (before.lossy) return notUtf8Preview(allowed.path)
       return diffPreview(before.content, String(args.content ?? ''))
     }
 
@@ -80,6 +90,7 @@ export async function previewToolDiff(
       {
         return { kind: 'message', message: formatPreviewSkipMessage(before) }
       }
+      if (before.lossy) return notUtf8Preview(allowed.path)
       const result = applyEdit(
         before.content,
         String(args.old_string ?? ''),

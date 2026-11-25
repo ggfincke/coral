@@ -4,7 +4,7 @@
 import { writeFile } from 'node:fs/promises'
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { applyEdit, describeEditMiss } from './edit-operation.js'
-import { readFileGuarded } from './file-utils.js'
+import { formatNotUtf8Refusal, readFileGuarded } from './file-utils.js'
 import { checkWorkspacePath } from '../shared/workspace-path.js'
 import { getCwd } from '../cwd.js'
 import { formatBytes } from '../utils/bytes.js'
@@ -65,6 +65,10 @@ export const editTool: Tool = {
     const path = allowed.path
     const readResult = await readFileGuarded(path)
     if (!readResult.ok) return readResult.result
+    if (readResult.lossy)
+    {
+      return { output: '', error: formatNotUtf8Refusal('edit', path) }
+    }
     const content = readResult.content
 
     const result = applyEdit(content, oldString, newString, replaceAll)
