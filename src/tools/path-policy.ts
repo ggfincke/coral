@@ -35,9 +35,16 @@ function toolPathArgs(
     const parsed = tryParseJson(value)
     if (Array.isArray(parsed)) value = parsed
   }
+  return (Array.isArray(value) ? value : [value]).flatMap(pathArgText)
+}
+
+// schema validation coerces numbers & booleans to strings before the tool
+// runs, so the policy must see them as the same paths
+function pathArgText(value: unknown): string[]
+{
   if (typeof value === 'string') return [value]
-  if (Array.isArray(value))
-    return value.filter((entry): entry is string => typeof entry === 'string')
+  if (typeof value === 'number' || typeof value === 'boolean')
+    return [String(value)]
   return []
 }
 
