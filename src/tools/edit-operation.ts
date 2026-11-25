@@ -1,19 +1,27 @@
 // src/tools/edit-operation.ts
 // apply edit preconditions and compute the post-edit string
 
+// why an edit was refused; ambiguous, no_change, repeated_lines &
+// indent_mismatch come from a whitespace-normalized match Coral can't apply safely
+export type EditRefusalReason =
+  | 'empty'
+  | 'identical'
+  | 'not_found'
+  | 'multiple'
+  | 'ambiguous'
+  | 'no_change'
+  | 'repeated_lines'
+  | 'indent_mismatch'
+
 // share this transformation between editTool.execute and the approval preview
 export type ApplyEditResult =
   | { ok: true; after: string; count: number; matchType: 'exact' | 'fuzzy' }
-  | {
-      ok: false
-      reason: 'empty' | 'identical' | 'not_found' | 'multiple'
-      count: number
-    }
+  | { ok: false; reason: EditRefusalReason; count: number }
 
 // capture a line's leading whitespace for fuzzy-match re-basing
 function leadingWhitespace(line: string): string
 {
-  const match = line.match(/^[ \t]*/)
+  const match = line.match(/^[^\S\r\n]*/)
   return match ? match[0] : ''
 }
 
@@ -31,11 +39,7 @@ function retainedLineKey(line: string): string
 }
 
 // use prefix fallback to scan repetitive blocks without rescanning their lines
-function findBlockStarts(
-  beforeKeys: string[],
-  oldKeys: string[],
-  replaceAll: boolean
-): number[]
+function findBlockStarts(beforeKeys: string[], oldKeys: string[]): number[]
 {
   const prefixes = new Array<number>(oldKeys.length).fill(0)
   for (let i = 1, matched = 0; i < oldKeys.length; i++)
@@ -59,7 +63,6 @@ function findBlockStarts(
     if (matched === oldKeys.length)
     {
       starts.push(i - oldKeys.length + 1)
-      if (!replaceAll && starts.length === 2) break
       // restart after accepted blocks to preserve leftmost non-overlap
       matched = 0
     }
@@ -103,16 +106,46 @@ function contentLines(text: string): string[]
   return lines
 }
 
+// report whether old_string & the matched file lines indent a corresponding line
+// w/ different units; compare line by line so alignment spaces on one line (a
+// column-0 JSDoc ` * `, a Makefile continuation) don't stand in for the file's unit
+function indentUnitsDiffer(oldLines: string[], fileLines: string[]): boolean
+{
+  for (let i = 0; i < oldLines.length; i++)
+  {
+    if (oldLines[i].trim() === '') continue
+    const oldUnit = leadingWhitespace(oldLines[i])[0]
+    const fileUnit = leadingWhitespace(fileLines[i])[0]
+    if (oldUnit && fileUnit && oldUnit !== fileUnit) return true
+  }
+  return false
+}
+
 // re-base a changed replacement line onto the file's indentation while preserving
-// its relative indentation; unchanged lines reuse the file verbatim
+// its relative indentation; unchanged lines reuse the file verbatim. returns null
+// when indents use different units, since adding their counts would mix them
 function reindentNewLine(
   line: string,
   oldIndent: string,
-  fileIndent: string
-): string
+  fileIndent: string,
+  unitsDiffer: boolean
+): string | null
 {
   const lineIndent = leadingWhitespace(line)
   const body = line.slice(lineIndent.length)
+  if (lineIndent === oldIndent) return fileIndent + body
+  if (unitsDiffer) return null
+  // a deeper line keeps its extra indent verbatim, so alignment spaces after a
+  // tab stay spaces instead of being counted as tabs
+  if (lineIndent.startsWith(oldIndent))
+  {
+    return fileIndent + lineIndent.slice(oldIndent.length) + body
+  }
+  // otherwise compare leading units only
+  const units = new Set(
+    [oldIndent[0], lineIndent[0], fileIndent[0]].filter(Boolean)
+  )
+  if (units.size > 1) return null
   const cols = Math.max(
     0,
     fileIndent.length + lineIndent.length - oldIndent.length
@@ -128,8 +161,13 @@ function applyFuzzyEdit(
   oldString: string,
   newString: string,
   replaceAll: boolean
-): { after: string; count: number } | null
+): ApplyEditResult
 {
+  const refuse = (reason: EditRefusalReason, count = 0): ApplyEditResult => ({
+    ok: false,
+    reason,
+    count,
+  })
   const beforeLines = before.split('\n')
   const oldLines = contentLines(oldString)
   // treat an empty replacement as deletion instead of splicing a stray blank line
@@ -137,30 +175,32 @@ function applyFuzzyEdit(
     newString === ''
       ? []
       : contentLines(newString).map((line) => line.replace(/\r$/, ''))
-  if (oldLines.length === 0) return null
+  if (oldLines.length === 0) return refuse('not_found')
 
   const oldKeys = oldLines.map(editLineKey)
   // reject an all-blank old_string because it can match any blank-line run
-  if (oldKeys.every((key) => key === '')) return null
+  if (oldKeys.every((key) => key === '')) return refuse('not_found')
 
-  const starts = findBlockStarts(
-    beforeLines.map(editLineKey),
-    oldKeys,
-    replaceAll
-  )
-  if (starts.length === 0) return null
-  if (starts.length > 1 && !replaceAll) return null
+  const starts = findBlockStarts(beforeLines.map(editLineKey), oldKeys)
+  if (starts.length === 0) return refuse('not_found')
+  if (starts.length > 1 && !replaceAll)
+  {
+    return refuse('ambiguous', starts.length)
+  }
 
   const retainedKeys = oldLines.map(retainedLineKey)
   const bounds = retainedLineBounds(retainedKeys, newLines.map(retainedLineKey))
-  if (!bounds) return null
-  const oldIndent = leadingWhitespace(oldLines[0])
+  if (!bounds) return refuse('repeated_lines')
+  // base indentation on the first non-blank line; a leading blank has none
+  const baseLine = oldKeys.findIndex((key) => key !== '')
+  const oldIndent = leadingWhitespace(oldLines[baseLine])
   const result: string[] = []
   let cursor = 0
   for (const start of starts)
   {
     const fileLines = beforeLines.slice(start, start + oldLines.length)
-    const fileIndent = leadingWhitespace(fileLines[0])
+    const fileIndent = leadingWhitespace(fileLines[baseLine])
+    const unitsDiffer = indentUnitsDiffer(oldLines, fileLines)
     const useCrlf = fileLines.some((line) => line.endsWith('\r'))
     // count source-text changes per key so an interval check never rescans a run
     const changes = new Array<number>(oldLines.length)
@@ -181,7 +221,10 @@ function applyFuzzyEdit(
       if (earliest >= 0)
       {
         // repeated anchors may be interchangeable only when their bytes agree
-        if (changes[earliest] !== changes[bounds.latest[j]]) return null
+        if (changes[earliest] !== changes[bounds.latest[j]])
+        {
+          return refuse('repeated_lines')
+        }
         result.push(fileLines[earliest])
         continue
       }
@@ -191,7 +234,8 @@ function applyFuzzyEdit(
         result.push(useCrlf ? '\r' : '')
         continue
       }
-      const rebased = reindentNewLine(line, oldIndent, fileIndent)
+      const rebased = reindentNewLine(line, oldIndent, fileIndent, unitsDiffer)
+      if (rebased === null) return refuse('indent_mismatch')
       result.push(useCrlf ? `${rebased}\r` : rebased)
     }
     cursor = start + oldLines.length
@@ -199,9 +243,16 @@ function applyFuzzyEdit(
   for (; cursor < beforeLines.length; cursor++) result.push(beforeLines[cursor])
 
   const after = result.join('\n')
-  // report whitespace-only no-ops as misses
-  if (after === before) return null
-  return { after, count: starts.length }
+  // report whitespace-only no-ops instead of writing an unchanged file
+  if (after === before) return refuse('no_change')
+  return { ok: true, after, count: starts.length, matchType: 'fuzzy' }
+}
+
+// true when every line break in the file is CRLF & no lone CR exists; only
+// then do exact edits rewrite new_string to CRLF (mixed files keep it as sent)
+function isAllCrlf(before: string): boolean
+{
+  return before.includes('\r\n') && !/(?<!\r)\n|\r(?!\n)/.test(before)
 }
 
 export function applyEdit(
@@ -221,26 +272,32 @@ export function applyEdit(
   if (count > 1 && !replaceAll) return { ok: false, reason: 'multiple', count }
   if (count >= 1)
   {
+    let target = oldString
+    let inserted = newString
+    if (isAllCrlf(before))
+    {
+      // widen a match that splits a CRLF pair to the whole pair, so the
+      // replacement never leaves a bare LF or a lone CR behind
+      if (target.startsWith('\n')) target = `\r${target}`
+      if (target.endsWith('\r'))
+      {
+        target = `${target}\n`
+        inserted = `${inserted}\n`
+      }
+      inserted = inserted.replace(/(?<!\r)\n/g, '\r\n')
+    }
     const after = replaceAll
-      ? before.replaceAll(oldString, () => newString)
-      : before.replace(oldString, () => newString)
+      ? before.replaceAll(target, () => inserted)
+      : before.replace(target, () => inserted)
     return { ok: true, after, count, matchType: 'exact' }
   }
   // try a whitespace-tolerant block match after an exact miss
-  const fuzzy = applyFuzzyEdit(before, oldString, newString, replaceAll)
-  if (fuzzy)
-  {
-    return {
-      ok: true,
-      after: fuzzy.after,
-      count: fuzzy.count,
-      matchType: 'fuzzy',
-    }
-  }
-  return { ok: false, reason: 'not_found', count: 0 }
+  return applyFuzzyEdit(before, oldString, newString, replaceAll)
 }
 
-// describe the first-line mismatch after exact and fuzzy matching fail
+// describe the first-line mismatch after exact and fuzzy matching fail; a
+// single-line old_string that matches on whitespace never gets here because the
+// fuzzy path finds it
 export function describeEditMiss(before: string, oldString: string): string
 {
   const lines = contentLines(oldString)
@@ -252,10 +309,6 @@ export function describeEditMiss(before: string, oldString: string): string
   {
     if (beforeLines[i].trim() === target)
     {
-      if (lines.length === 1)
-      {
-        return ` old_string's line matches file line ${i + 1} on whitespace alone but changes nothing — re-read & copy the exact text incl. indentation.`
-      }
       return ` old_string's first line matches file line ${i + 1}, but later lines differ — re-read that region & copy it exactly.`
     }
   }

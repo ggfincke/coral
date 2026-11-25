@@ -2,7 +2,11 @@
 // surgical find/replace file edits
 
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
-import { applyEdit, describeEditMiss } from './edit-operation.js'
+import {
+  applyEdit,
+  describeEditMiss,
+  type EditRefusalReason,
+} from './edit-operation.js'
 import { formatNotUtf8Refusal, readFileGuarded } from './file-utils.js'
 import { checkWorkspacePath } from '../shared/workspace-path.js'
 import { getCwd } from '../cwd.js'
@@ -14,6 +18,42 @@ import {
   overwriteRegularFile,
   TEXT_FILE_READ_LIMIT_BYTES,
 } from '../utils/file-read.js'
+
+const EMPTY_OLD_STRING_ERROR = 'old_string must not be empty'
+const IDENTICAL_STRINGS_ERROR =
+  'old_string & new_string are identical — nothing to change'
+
+// explain a refused edit; whitespace-normalized refusals name the real cause so
+// the model doesn't chase a "later lines differ" hint that isn't true
+function formatEditRefusal(
+  reason: EditRefusalReason,
+  count: number,
+  path: string,
+  content: string,
+  oldString: string
+): string
+{
+  const normalized = `old_string matches ${path} only after normalizing whitespace`
+  switch (reason)
+  {
+    case 'not_found':
+      return `old_string not found in ${path}.${describeEditMiss(content, oldString)}`
+    case 'no_change':
+      return `${normalized}, & new_string differs from it only in whitespace, so the edit changes nothing. Re-read & copy the exact text incl. indentation.`
+    case 'ambiguous':
+      return `old_string matches ${count} places in ${path} after normalizing whitespace. Re-read & copy the exact text incl. indentation, w/ enough context to identify one match.`
+    case 'repeated_lines':
+      return `${normalized}, & new_string reorders or repeats its lines, so Coral can't map them to file lines. Re-read that region & copy old_string exactly incl. indentation.`
+    case 'indent_mismatch':
+      return `${normalized}, & tabs meet spaces in the indentation of old_string, new_string, or that file region, so changed lines can't be re-indented safely. Re-read that region & resend both strings w/ the file's exact indentation.`
+    case 'multiple':
+      return `Found ${count} matches in ${path} — provide more context to uniquely identify the target, or set replace_all to true`
+    case 'empty':
+      return EMPTY_OLD_STRING_ERROR
+    case 'identical':
+      return IDENTICAL_STRINGS_ERROR
+  }
+}
 
 export const editTool: Tool = {
   name: 'edit_file',
@@ -47,14 +87,11 @@ export const editTool: Tool = {
 
     if (!oldString)
     {
-      return { output: '', error: 'old_string must not be empty' }
+      return { output: '', error: EMPTY_OLD_STRING_ERROR }
     }
     if (oldString === newString)
     {
-      return {
-        output: '',
-        error: 'old_string & new_string are identical — nothing to change',
-      }
+      return { output: '', error: IDENTICAL_STRINGS_ERROR }
     }
 
     const allowed = await checkWorkspacePath(
@@ -76,16 +113,15 @@ export const editTool: Tool = {
     const result = applyEdit(content, oldString, newString, replaceAll)
     if (!result.ok)
     {
-      if (result.reason === 'not_found')
-      {
-        return {
-          output: '',
-          error: `old_string not found in ${path}.${describeEditMiss(content, oldString)}`,
-        }
-      }
       return {
         output: '',
-        error: `Found ${result.count} matches in ${path} — provide more context to uniquely identify the target, or set replace_all to true`,
+        error: formatEditRefusal(
+          result.reason,
+          result.count,
+          path,
+          content,
+          oldString
+        ),
       }
     }
     const updated = result.after
