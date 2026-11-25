@@ -1,17 +1,41 @@
 // src/jobs/types.ts
 // durable task values shared by the worker, supervisor, and clients
 
-export type JobStatus =
-  | 'draft'
-  | 'queued'
-  | 'running'
-  | 'ready_for_review'
-  | 'needs_input'
-  | 'interrupted'
-  | 'cancelled'
-  | 'failed'
+// the persisted status and phase vocabularies; record validation and the
+// supervisor derive their sets from these lists
+export const JOB_STATUSES = [
+  'draft',
+  'queued',
+  'running',
+  'ready_for_review',
+  'needs_input',
+  'interrupted',
+  'cancelled',
+  'failed',
+] as const
 
-export type JobPhase = 'setup' | 'implement' | 'checks' | 'repair' | 'reconcile'
+export type JobStatus = (typeof JOB_STATUSES)[number]
+
+// statuses a worker can settle into; these are also the resumable ones
+export const SETTLED_JOB_STATUSES = [
+  'ready_for_review',
+  'needs_input',
+  'interrupted',
+  'cancelled',
+  'failed',
+] as const satisfies readonly JobStatus[]
+
+export type SettledJobStatus = (typeof SETTLED_JOB_STATUSES)[number]
+
+export const JOB_PHASES = [
+  'setup',
+  'implement',
+  'checks',
+  'repair',
+  'reconcile',
+] as const
+
+export type JobPhase = (typeof JOB_PHASES)[number]
 
 export interface JobRepository
 {
@@ -53,7 +77,7 @@ export interface JobRecord
   createdAt: string
   updatedAt: string
   status: JobStatus
-  settledStatus?: Exclude<JobStatus, 'draft' | 'queued' | 'running'>
+  settledStatus?: SettledJobStatus
   spec: JobSpec
   approval?: { digest: string; approvedAt: string; hostShell: true }
   queuedAt?: string
