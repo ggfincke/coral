@@ -12,6 +12,7 @@ const AMBIENT_CWD_ALLOWLIST = new Set([
   'src/agent/agent.ts',
   'src/shared/workspace-path.ts',
   'src/tools/bash.ts',
+  'src/tools/code-intel.ts',
   'src/tools/edit.ts',
   'src/tools/git.ts',
   'src/tools/list-files.ts',

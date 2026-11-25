@@ -38,7 +38,7 @@ function toolPathArgs(
   if (typeof value === 'string') return [value]
   if (Array.isArray(value))
     return value.filter((entry): entry is string => typeof entry === 'string')
-  return rule.defaultPath === undefined ? [] : [rule.defaultPath]
+  return []
 }
 
 export function requiresWorkspacePathApproval(

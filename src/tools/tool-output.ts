@@ -5,7 +5,10 @@ import {
   MAX_ERROR_MESSAGE_CHARS,
   MAX_TOOL_OUTPUT_CHARS,
 } from '../utils/limits.js'
-import { truncateToLineBoundary } from '../utils/truncate-output.js'
+import {
+  truncateToLineBoundary,
+  truncationFooter,
+} from '../utils/truncate-output.js'
 import { trimLeadingLowSurrogate } from '../utils/ellipsize.js'
 
 export interface CapToolOutputOptions
@@ -34,8 +37,7 @@ export function capToolOutput(
       ? '\n[redacted] content present in omitted output'
       : ''
     return (
-      `${head}\n\n[output truncated: ${omitted} of ${output.length} chars omitted` +
-      ` — narrow the scope (e.g. diff a specific path) to see the rest]` +
+      `${head}\n\n${truncationFooter(omitted, output.length)}` +
       `${redactionNote}\n\n${tail}`
     )
   }
@@ -43,10 +45,7 @@ export function capToolOutput(
   const { head, omitted, truncated } = truncateToLineBoundary(output, budget)
   if (!truncated) return output
 
-  return (
-    `${head}\n\n[output truncated: ${omitted} of ${output.length} chars omitted` +
-    ` — narrow the scope (e.g. diff a specific path) to see the rest]`
-  )
+  return `${head}\n\n${truncationFooter(omitted, output.length)}`
 }
 
 // cap an oversized error string fed back to the model, keeping the head and

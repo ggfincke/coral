@@ -17,7 +17,7 @@ import {
   type Tool,
   type ToolResult,
 } from '../tools/tool.js'
-import { raceAbort } from '../utils/abort.js'
+import { isAbortError, raceAbort } from '../utils/abort.js'
 import { trimLeadingLowSurrogate } from '../utils/ellipsize.js'
 import { normalizeToolName } from '../utils/tool-name.js'
 import {
@@ -128,14 +128,6 @@ function cloneStatus(status: McpServerStatus): McpServerStatus
 function canonicalToolName(alias: string, toolName: string): string
 {
   return `mcp__${alias}__${toolName}`
-}
-
-function isAbortError(error: unknown): boolean
-{
-  return (
-    error instanceof Error &&
-    (error.name === 'AbortError' || error.message === 'Aborted')
-  )
 }
 
 function appendStderr(

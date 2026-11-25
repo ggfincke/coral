@@ -17,6 +17,7 @@ import {
 } from './compaction.js'
 import {
   cloneMessages,
+  cloneUndoTodoChange,
   cloneUndoTurn,
   findUserTurnStarts,
   isUndoTurnAligned,
@@ -29,7 +30,6 @@ import {
   cloneAttachmentReport,
   type AttachmentReport,
 } from '../../types/attachments.js'
-import { cloneTodoItems } from '../../types/todo.js'
 import type { OllamaMessage } from '../../types/inference.js'
 
 export const DEFAULT_MAX_HISTORY = 100
@@ -200,14 +200,6 @@ function cloneUndoStack(turns: readonly UndoTurn[]): UndoTurn[]
   return turns.map((turn) => cloneUndoTurn(turn))
 }
 
-function cloneTodoChange(change: UndoTodoChange): UndoTodoChange
-{
-  return {
-    before: cloneTodoItems(change.before),
-    after: cloneTodoItems(change.after),
-  }
-}
-
 /** Mutable conversation state with revision-checked transitions. */
 export class ConversationState
 {
@@ -305,11 +297,6 @@ export class ConversationState
     const record = messageAnchors.get(anchor)
     if (record?.owner !== this) return -1
     return this.messages.indexOf(record.message)
-  }
-
-  hasActiveTurn(): boolean
-  {
-    return this.activeAnchor !== undefined
   }
 
   appendMessage(message: OllamaMessage): void
@@ -550,7 +537,7 @@ export class ConversationState
       messages: cloneMessages(this.messages.slice(startIndex)),
       changes: changes.map((change) => ({ ...change })),
     }
-    if (todoChange) turn.todoChange = cloneTodoChange(todoChange)
+    if (todoChange) turn.todoChange = cloneUndoTodoChange(todoChange)
     this.undoStack.push(turn)
     this.undoStack = this.undoStack.slice(-MAX_UNDO_TURNS)
     this.redoStack = []

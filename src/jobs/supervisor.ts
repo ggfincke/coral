@@ -19,6 +19,10 @@ import { StringDecoder } from 'node:string_decoder'
 import { writeJsonFile } from '../utils/json.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
+  isRecordedProcessGone,
+  ownProcessStartTime,
+} from '../utils/process-identity.js'
+import {
   appendJobEvent,
   isValidJobRecord,
   jobSpecDigest,
@@ -54,7 +58,10 @@ export interface SupervisorOwner
   version: 1
   pid: number
   token: string
+  // ps start time and group, for readers that match a live process exactly
   identity: string
+  // clock-step-proof start time from ownProcessStartTime, when readable
+  startTime?: string
 }
 
 interface ActiveWorker
@@ -85,7 +92,9 @@ export function readSupervisorOwner(): SupervisorOwner | undefined
     typeof owner.token !== 'string' ||
     !/^[0-9a-f-]{36}$/.test(owner.token) ||
     typeof owner.identity !== 'string' ||
-    !owner.identity
+    !owner.identity ||
+    (owner.startTime !== undefined &&
+      (typeof owner.startTime !== 'string' || !owner.startTime))
   )
   {
     throw new Error(
@@ -93,6 +102,19 @@ export function readSupervisorOwner(): SupervisorOwner | undefined
     )
   }
   return owner
+}
+
+// an absent or zombie pid is gone; otherwise a wall-clock step moves ps
+// lstart, so a recorded start time decides and the exact identity match is
+// only the fallback for a record w/o one
+export async function isSupervisorOwnerGone(
+  owner: SupervisorOwner
+): Promise<boolean>
+{
+  const identity = await processIdentity(owner.pid)
+  if (identity === undefined) return true
+  if (owner.startTime === undefined) return identity !== owner.identity
+  return isRecordedProcessGone(owner.pid, owner.startTime)
 }
 
 function accountInterrupted(
@@ -203,11 +225,13 @@ async function acquireSupervisor(): Promise<SupervisorOwner | undefined>
   const identity = await processIdentity(process.pid)
   if (!identity)
     throw new Error('Could not establish supervisor process identity.')
+  const startTime = ownProcessStartTime()
   const owner: SupervisorOwner = {
     version: 1,
     pid: process.pid,
     token: randomUUID(),
     identity,
+    ...(startTime ? { startTime } : {}),
   }
   const candidate = `${paths.lock}.candidate-${owner.token}`
   mkdirSync(candidate, { mode: 0o700 })
@@ -221,8 +245,7 @@ async function acquireSupervisor(): Promise<SupervisorOwner | undefined>
       return publishSupervisorCandidate(candidate, paths.lock)
         ? owner
         : undefined
-    if ((await processIdentity(previous.pid)) === previous.identity)
-      return undefined
+    if (!(await isSupervisorOwnerGone(previous))) return undefined
     if (readSupervisorOwner()?.token !== previous.token) return undefined
     try
     {

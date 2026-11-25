@@ -20,7 +20,6 @@ import { toError } from '../utils/errors.js'
 export interface RetrievalDeps
 {
   createStore?: (space: EmbeddingSpace) => IndexStore
-  createClient?: (ollamaHost: string) => OllamaClient
   resolveSpace?: (
     client: OllamaClient,
     ollamaHost: string,
@@ -101,8 +100,7 @@ export async function buildIndexer(
     const config = resolveRetrievalConfig(cwd)
     embeddingModel = config.embeddingModel
     const normalizedHost = normalizeOllamaHost(ollamaHost)
-    const client =
-      deps.createClient?.(normalizedHost) ?? new OllamaClient(normalizedHost)
+    const client = new OllamaClient(normalizedHost)
     const embeddingSpace = await (
       deps.resolveSpace ?? resolveOllamaEmbeddingSpace
     )(client, normalizedHost, config.embeddingModel, signal)

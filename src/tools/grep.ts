@@ -8,7 +8,6 @@ import {
   resolveRgSearchTarget,
   RG_EXCLUDE_GIT_DIR,
 } from './ripgrep-utils.js'
-import { truncateOutput } from '../utils/truncate-output.js'
 
 const MAX_RESULTS = 200
 
@@ -84,12 +83,13 @@ export const grepTool: Tool = {
     const result = await execRipgrep(rgArgs, NO_MATCHES_MESSAGE, {
       cwd: isProjectPath ? cwd : undefined,
       signal: context?.signal,
+      maxItems: MAX_RESULTS,
+      label: 'matches',
     })
     if (result.error || result.output === NO_MATCHES_MESSAGE) return result
 
-    const output = isProjectPath
-      ? normalizeProjectGrepOutput(result.output)
-      : result.output
-    return { output: truncateOutput(output, MAX_RESULTS, 'matches') }
+    return isProjectPath
+      ? { output: normalizeProjectGrepOutput(result.output) }
+      : result
   },
 }

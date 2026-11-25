@@ -45,7 +45,7 @@ export interface TokenUsage
   totalEvalDurationNs: number
 }
 
-// settled turn status is independent of the legacy terminal callbacks;
+// settled turn status is reported independently of onDone and onError;
 // doom_loop_stopped means the host declined to continue a stuck loop
 export type AgentRunOutcome =
   | {
@@ -61,11 +61,11 @@ export type AgentRunOutcome =
 // exec, ACP, and durable tasks cap model rounds per turn; the TUI stays uncapped
 export const SURFACE_MAX_ITERATIONS = 100
 
-// callbacks for streaming tokens, tool calls, and completion
 // a rejection may carry the user's free-text reason; plain booleans stay valid
 export type ToolApprovalDecision =
   boolean | { approved: boolean; reason?: string }
 
+// callbacks for streaming tokens, tool calls, and completion
 export interface AgentEvents
 {
   onToken: (token: string) => void

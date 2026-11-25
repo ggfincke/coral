@@ -8,7 +8,10 @@ import {
   finalChunkFrom,
   toOpenAIInput,
 } from '../../src/providers/openai/wire.js'
-import type { ModelRequestMessage } from '../../src/types/inference.js'
+import {
+  MALFORMED_TOOL_ARGUMENTS_KEY,
+  type ModelRequestMessage,
+} from '../../src/types/inference.js'
 
 const MODEL = 'gpt-6-astra'
 
@@ -186,8 +189,12 @@ test('a completed call with malformed arguments never runs', () =>
       },
     ],
   })
-  assert.throws(
-    () => finalChunkFrom(response, MODEL),
+  const [call] = finalChunkFrom(response, MODEL).message.tool_calls ?? []
+  assert.deepEqual(Object.keys(call!.function.arguments), [
+    MALFORMED_TOOL_ARGUMENTS_KEY,
+  ])
+  assert.match(
+    String(call!.function.arguments[MALFORMED_TOOL_ARGUMENTS_KEY]),
     /malformed arguments for list_files/
   )
 })

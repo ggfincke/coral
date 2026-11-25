@@ -92,7 +92,7 @@ const REQUEST_BUDGET_CATEGORIES: readonly RequestBudgetCategory[] = [
   'framing',
 ]
 
-function nonNegativeInteger(value: number, label: string): number
+export function nonNegativeInteger(value: number, label: string): number
 {
   if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value))
   {

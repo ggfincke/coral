@@ -304,12 +304,13 @@ export async function readOpenedFile(
 }
 
 // sync openRegularFile + readOpenedFile for prompt assembly, w/ the same
-// real-path, no-follow, regular-file & inode checks; throws on any failure
+// real-path, no-follow, regular-file & inode checks; throws on any failure.
+// `path` is the real path the bytes were read from
 export function readRegularFileSync(
   path: string,
   maxBytes: number,
   root?: string
-): BoundedBytes
+): BoundedBytes & { path: string }
 {
   const before = resolvePathsSync(path, root)
   confinedTarget(before.target, before.root)
@@ -342,7 +343,7 @@ export function readRegularFileSync(
       if (count === 0) break
       length += count
     }
-    return boundedResult(buffer, length, maxBytes)
+    return { path: before.target, ...boundedResult(buffer, length, maxBytes) }
   }
   finally
   {
@@ -475,20 +476,6 @@ export function formatPreviewSkipMessage(failure: TextFileReadFailure): string
   }
 
   return `Preview skipped: ${failure.message}.`
-}
-
-export function formatDiffSkipMessage(failure: TextFileReadFailure): string
-{
-  if (failure.reason === 'missing')
-  {
-    return 'Diff skipped: previous file does not exist.'
-  }
-  if (failure.reason === 'oversized')
-  {
-    return `Diff skipped: previous file ${failure.message}.`
-  }
-
-  return `Diff skipped: ${failure.message}.`
 }
 
 export function readRequiredTextFile(

@@ -9,6 +9,7 @@ import type {
   ProviderState,
 } from '../../types/inference.js'
 import { isPlainObject } from '../../utils/guards.js'
+import { nonNegativeInteger } from './budget.js'
 import {
   CHARS_PER_TOKEN,
   estimateModelRequestValue,
@@ -19,15 +20,6 @@ import {
 const MODEL_REQUEST_FRAME = '{"messages":[],"tools":}'
 const MODEL_REQUEST_FRAME_UTF8_BYTES =
   estimateUtf8Tokens(MODEL_REQUEST_FRAME).utf8Bytes
-
-function nonNegativeInteger(value: number, label: string): number
-{
-  if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value))
-  {
-    throw new RangeError(`${label} must be a non-negative integer`)
-  }
-  return value
-}
 
 // separates a user turn from the Git snapshot stored w/ it
 export const GIT_CONTEXT_SEPARATOR = '\n\n'

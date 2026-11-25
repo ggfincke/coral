@@ -91,11 +91,6 @@ export class CompactionCoordinator
     this.config = { ...initialConfig }
   }
 
-  setConfig(config: Partial<CompactionConfig>): void
-  {
-    this.config = { ...this.config, ...config }
-  }
-
   setPromptLimit(promptLimit: number): void
   {
     this.config = { ...this.config, contextWindow: promptLimit }
