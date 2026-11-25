@@ -190,6 +190,38 @@ function diagnosticResponse(value: unknown): LspDiagnostic[]
   })
 }
 
+// initialize params for the bundled TypeScript language server
+export function initializeParams(cwd: string, tsserver: string)
+{
+  return {
+    processId: process.pid,
+    rootPath: cwd,
+    rootUri: pathToFileURL(cwd).href,
+    workspaceFolders: [{ name: basename(cwd), uri: pathToFileURL(cwd).href }],
+    // ATA would send npm registry requests that reveal project dependency names
+    initializationOptions: {
+      tsserver: { path: tsserver },
+      disableAutomaticTypingAcquisition: true,
+    },
+    capabilities: {
+      workspace: { configuration: true, workspaceFolders: true },
+      textDocument: {
+        synchronization: {
+          dynamicRegistration: false,
+          didSave: true,
+        },
+        definition: { dynamicRegistration: false, linkSupport: true },
+        references: { dynamicRegistration: false },
+        hover: {
+          dynamicRegistration: false,
+          contentFormat: ['markdown', 'plaintext'],
+        },
+      },
+      general: { positionEncodings: ['utf-16'] },
+    },
+  }
+}
+
 // * Own one TypeScript language server for an interactive Agent and its subagents
 export class TypeScriptCodeIntel implements CodeIntelService
 {
@@ -351,31 +383,7 @@ export class TypeScriptCodeIntel implements CodeIntelService
         (source) =>
           connection.sendRequest(
             'initialize',
-            {
-              processId: process.pid,
-              rootPath: this.cwd,
-              rootUri: pathToFileURL(this.cwd).href,
-              workspaceFolders: [
-                { name: basename(this.cwd), uri: pathToFileURL(this.cwd).href },
-              ],
-              initializationOptions: { tsserver: { path: tsserver } },
-              capabilities: {
-                workspace: { configuration: true, workspaceFolders: true },
-                textDocument: {
-                  synchronization: {
-                    dynamicRegistration: false,
-                    didSave: true,
-                  },
-                  definition: { dynamicRegistration: false, linkSupport: true },
-                  references: { dynamicRegistration: false },
-                  hover: {
-                    dynamicRegistration: false,
-                    contentFormat: ['markdown', 'plaintext'],
-                  },
-                },
-                general: { positionEncodings: ['utf-16'] },
-              },
-            },
+            initializeParams(this.cwd, tsserver),
             source.token
           ),
         STARTUP_TIMEOUT_MS,
@@ -425,12 +433,19 @@ export class TypeScriptCodeIntel implements CodeIntelService
       }
       this.startAttempts++
       this.startPromise = this.start(signal)
-        .catch((error) =>
-        {
-          // intentional cancellation must not consume the failure restart budget
-          if (isAbortError(error)) this.startAttempts--
-          throw error
-        })
+        .then(
+          () =>
+          {
+            // the cap bounds consecutive failed starts, not restarts after healthy sessions
+            this.startAttempts = 0
+          },
+          (error) =>
+          {
+            // intentional cancellation must not consume the failure restart budget
+            if (isAbortError(error)) this.startAttempts--
+            throw error
+          }
+        )
         .finally(() =>
         {
           this.startPromise = undefined

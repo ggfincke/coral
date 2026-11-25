@@ -42,6 +42,16 @@ test('recovers tool calls from the common text shapes', () =>
   assert.equal(wrapped?.[0]?.function.name, 'list_files')
 })
 
+test('treats a known call w/o an arguments key as argument-free', () =>
+{
+  const calls = parseToolCallsFromContent('{"name":"git_status"}', [
+    'git_status',
+  ])
+  assert.equal(calls?.length, 1)
+  assert.equal(calls?.[0]?.function.name, 'git_status')
+  assert.deepEqual(calls?.[0]?.function.arguments, {})
+})
+
 test('rejects JSON that is not a tool call', () =>
 {
   // unknown tool name
@@ -53,8 +63,11 @@ test('rejects JSON that is not a tool call', () =>
     null
   )
 
-  // known name but no arguments key — ordinary JSON mentioning a tool
-  assert.equal(parseToolCallsFromContent('{"name": "read_file"}', TOOLS), null)
+  // known name w/ an arguments key that is not an object
+  assert.equal(
+    parseToolCallsFromContent('{"name": "read_file", "arguments": 3}', TOOLS),
+    null
+  )
 
   // package.json-like content w/ a name field
   assert.equal(

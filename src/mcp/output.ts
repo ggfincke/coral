@@ -13,6 +13,8 @@ const MAX_STRUCTURED_CONTENT_DEPTH = 20
 const MAX_STRUCTURED_COLLECTION_ITEMS = 200
 const MAX_TOOL_RESULT_ERROR_CHARS = 2_000
 const MCP_OUTPUT_SCAN_CHARS = 16_384
+// shorter forwarded values only redact as whole tokens
+export const MIN_SUBSTRING_SECRET_CHARS = 4
 
 function sanitizeDiagnostic(text: string): string
 {
@@ -64,11 +66,20 @@ export function redactDiagnostic(
   secretValues: readonly string[]
 ): string
 {
-  let result = sanitizeDiagnostic(text)
-  for (const value of normalizedSecrets(secretValues))
+  return redactSecrets(
+    sanitizeDiagnostic(text),
+    normalizedSecrets(secretValues)
+  )
+}
+
+// replace each pre-normalized secret; short values only match as whole tokens
+function redactSecrets(text: string, secrets: readonly string[]): string
+{
+  let result = text
+  for (const value of secrets)
   {
     result =
-      value.length >= 4
+      value.length >= MIN_SUBSTRING_SECRET_CHARS
         ? result.replaceAll(value, '[redacted]')
         : redactShortValue(result, value)
   }
@@ -345,6 +356,8 @@ interface JsonBudget
 {
   remaining: number
   truncated: boolean
+  // normalized secrets redacted before truncation can split one
+  secrets: readonly string[]
 }
 
 const TRUNCATION_MARKER_COST = '"[truncated]"'.length
@@ -372,10 +385,11 @@ function boundedJsonValue(
 
   if (typeof value === 'string')
   {
-    const length = Math.min(value.length, budget.remaining)
+    const clean = redactSecrets(value, budget.secrets)
+    const length = Math.min(clean.length, budget.remaining)
     budget.remaining -= length + 2
-    if (length < value.length) budget.truncated = true
-    return ellipsize(value, length)
+    if (length < clean.length) budget.truncated = true
+    return ellipsize(clean, length)
   }
   if (
     value === null ||
@@ -414,11 +428,12 @@ function boundedJsonValue(
         budget.truncated = true
         break
       }
-      const keyLength = Math.min(key.length, budget.remaining)
-      const boundedKey = ellipsize(key, keyLength)
+      const cleanKey = redactSecrets(key, budget.secrets)
+      const keyLength = Math.min(cleanKey.length, budget.remaining)
+      const boundedKey = ellipsize(cleanKey, keyLength)
       // include key quotes and the ': ' separator in item overhead
       budget.remaining -= keyLength + serializedItemOverhead(depth) + 3
-      if (keyLength < key.length) budget.truncated = true
+      if (keyLength < cleanKey.length) budget.truncated = true
       result[boundedKey] = boundedJsonValue(object[key], budget, depth + 1)
       items += 1
     }
@@ -429,11 +444,15 @@ function boundedJsonValue(
   return `[unsupported ${typeof value}]`
 }
 
-function formatStructuredContent(value: Record<string, unknown>): string
+function formatStructuredContent(
+  value: Record<string, unknown>,
+  secretValues: readonly string[]
+): string
 {
   const budget: JsonBudget = {
     remaining: MAX_STRUCTURED_CONTENT_CHARS,
     truncated: false,
+    secrets: normalizedSecrets(secretValues),
   }
   const bounded = boundedJsonValue(value, budget)
   const label = budget.truncated
@@ -532,7 +551,9 @@ export function formatToolResult(
 
   if (callResult.structuredContent)
   {
-    accumulator.addPart(formatStructuredContent(callResult.structuredContent))
+    accumulator.addPart(
+      formatStructuredContent(callResult.structuredContent, secretValues)
+    )
   }
 
   const output = accumulator.finish()

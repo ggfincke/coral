@@ -116,9 +116,8 @@ The hash does **not** include executable file bytes or container image contents.
 
 Storage:
 
-- New approvals: `CORAL_HOME/mcp-trust.d/<alias>.json`
-- Legacy read: `CORAL_HOME/mcp-trust.json`
-- A nonempty sidecar **shadows** legacy even if invalid (fail closed)
+- Approvals: `CORAL_HOME/mcp-trust.d/<alias>.json`
+- A missing, unreadable, or invalid record leaves the launch untrusted (fail closed)
 
 Launch approvals in ask run sequentially in configuration order. Coral starts at most **two** authorized servers at once, then installs tools in configuration order (deterministic collisions and budget).
 

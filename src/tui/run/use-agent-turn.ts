@@ -136,6 +136,13 @@ export interface AgentTurnController
   stalled: boolean
 }
 
+// a failed call keeps its output too (a failing command's stdout); the model
+// saw it, so the user should be able to as well
+export function failedToolResultText(error: string, result: string): string
+{
+  return result ? `${error}\n${capStoredOutput(result).text}` : error
+}
+
 export function useAgentTurn(
   options: UseAgentTurnOptions
 ): AgentTurnController
@@ -160,7 +167,9 @@ export function useAgentTurn(
     runOperation,
   } = session
   const [output, setOutput] = useState<OutputBlock[]>(() =>
-    initialSession ? buildRestoredBlocks(initialSession.messages) : []
+    initialSession
+      ? buildRestoredBlocks(initialSession.messages, initialSession.undo)
+      : []
   )
   const [runStage, setRunStage] = useState<RunStage>('idle')
   const [runElapsed, setRunElapsed] = useState<string | null>(null)
@@ -206,7 +215,7 @@ export function useAgentTurn(
   const restoreSession = useCallback(
     (restored: SessionData, estimatedTokens: number) =>
     {
-      setOutput(buildRestoredBlocks(restored.messages))
+      setOutput(buildRestoredBlocks(restored.messages, restored.undo))
       setTokenUsage({ ...EMPTY_TOKEN_USAGE, context: estimatedTokens })
       resetRunState()
       scrollToLatest()
@@ -235,7 +244,11 @@ export function useAgentTurn(
   const rebuildTranscript = useCallback(
     (target: Agent | null = agent) =>
     {
-      setOutput(target ? buildRestoredBlocks(target.getMessages()) : [])
+      setOutput(
+        target
+          ? buildRestoredBlocks(target.getMessages(), target.getUndoStack())
+          : []
+      )
       setTokenUsage((previous) => ({
         ...previous,
         context: target?.getEstimatedTokens() ?? 0,
@@ -474,7 +487,7 @@ export function useAgentTurn(
                   next.push({
                     type: 'tool_result',
                     toolName: name,
-                    content: error,
+                    content: failedToolResultText(error, result),
                     isError: true,
                   })
                 }

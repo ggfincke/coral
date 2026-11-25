@@ -540,9 +540,8 @@ fresh manager or session.
 On first use, Coral resolves the executable to its real path and asks you to
 approve the alias, configured command, resolved executable, complete ordered
 arguments, neutral home-directory working directory, environment names,
-enabled tools, yolo-eligible tools, and SHA-256 launch fingerprint. Legacy
-approval is read from `CORAL_HOME/mcp-trust.json`; new approvals are stored as
-per-alias records under `CORAL_HOME/mcp-trust.d/`. A nonempty `yoloTools` list is
+enabled tools, yolo-eligible tools, and SHA-256 launch fingerprint. Approvals
+are stored as per-alias records under `CORAL_HOME/mcp-trust.d/`. A nonempty `yoloTools` list is
 fingerprinted, so adding, widening, narrowing, or removing yolo authority
 requires ask-mode approval again. Missing or empty `yoloTools` is omitted from
 the hash so unchanged v0.13 ask-only trust records stay valid. The fingerprint
@@ -600,11 +599,11 @@ By default Coral stores:
 | `~/.coral/sessions/*.json`                        | Authoritative saved conversations, todos, and bounded undo/redo        |
 | `~/.coral/history.jsonl`                          | Append-only prompt history; navigation loads the newest 500 valid rows |
 | `~/.coral/prefs.json`                             | Mutable UI preferences such as the selected theme                      |
-| `~/.coral/telemetry.json` + `telemetry.d`         | Legacy baseline plus immutable per-Agent-lifetime counter deltas       |
-| `~/.coral/eval-telemetry.json` + `.d`             | Legacy eval baseline plus optional immutable eval counter deltas       |
+| `~/.coral/telemetry.d/`                           | Immutable per-Agent-lifetime counter deltas                            |
+| `~/.coral/eval-telemetry.d/`                      | Optional immutable eval counter deltas                                 |
 | `~/.coral/retrieval/v2/spaces/*.chunks-v2.sqlite` | Semantic indexes isolated by embedding space and chunker version       |
 | `~/.coral/retrieval/index.sqlite`                 | Preserved legacy retrieval cache; current Coral does not open it       |
-| `~/.coral/mcp-trust.json` + `.d`                  | Legacy trust baseline plus atomic per-alias approval records           |
+| `~/.coral/mcp-trust.d/<alias>.json`               | Atomic per-alias MCP launch approval records                           |
 | `~/.coral/jobs/<id>/`                             | Durable task records, events, checkpoints, command output, worktree    |
 
 Personal skills live under `AGENTS_HOME/skills` (default

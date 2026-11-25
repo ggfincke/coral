@@ -8,7 +8,7 @@ import { basename, join } from 'node:path'
 import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import type { MessageConnection } from 'vscode-jsonrpc/node'
-import { TypeScriptCodeIntel } from '../../src/lsp/client.js'
+import { initializeParams, TypeScriptCodeIntel } from '../../src/lsp/client.js'
 
 function gate(): { promise: Promise<void>; release: () => void }
 {
@@ -258,7 +258,7 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
     await internal.queryTail
     assert.equal(internal.connection, current)
     assert.equal(internal.documents.get(dependency)?.content, undefined)
-    assert.equal(internal.startAttempts, 2)
+    assert.equal(internal.startAttempts, 0)
     changeGate.release()
     changeGate = undefined
     changeEntered = undefined
@@ -289,4 +289,73 @@ test('LSP transactions refresh retained dependencies and join cancellation', asy
   assert.equal(internal.documents.size, 0)
   assert.deepEqual(new Set(reads), new Set([dependency, importer]))
   await assert.rejects(hover('dependency.ts'), { name: 'AbortError' })
+})
+
+test('LSP initialize disables automatic typings acquisition', () =>
+{
+  const params = initializeParams('/coral-project', '/typescript/tsserver.js')
+  assert.equal(
+    params.initializationOptions.disableAutomaticTypingAcquisition,
+    true
+  )
+})
+
+test('LSP start budget bounds consecutive failures, not restarts', async (t) =>
+{
+  const cwd = '/coral-in-memory-restarts'
+  const source = 'export const value = 1\n'
+  t.mock.method(fs, 'stat', (async () => ({
+    size: Buffer.byteLength(source),
+  })) as unknown as typeof fs.stat)
+  t.mock.method(
+    fs,
+    'readFile',
+    (async () => source) as unknown as typeof fs.readFile
+  )
+  syncBuiltinESMExports()
+
+  const client = new TypeScriptCodeIntel(cwd)
+  const internal = client as unknown as {
+    start: (signal?: AbortSignal) => Promise<void>
+    connection?: MessageConnection
+    started: boolean
+    handleUnexpectedClose: (connection: MessageConnection) => void
+  }
+  let starts = 0
+  t.mock.method(internal, 'start', async () =>
+  {
+    starts++
+    internal.connection = {
+      async sendNotification()
+      {},
+      async sendRequest()
+      {
+        return { contents: 'value: number' }
+      },
+      dispose()
+      {},
+    } as unknown as MessageConnection
+    internal.started = true
+  })
+  t.after(async () =>
+  {
+    await client.dispose()
+    t.mock.restoreAll()
+    syncBuiltinESMExports()
+  })
+  const hover = () =>
+    client.query({
+      operation: 'hover',
+      path: 'value.ts',
+      line: 1,
+      character: 1,
+    })
+
+  // each crash after a healthy start gets a fresh restart
+  for (let round = 1; round <= 3; round++)
+  {
+    assert.match(await hover(), /value: number/)
+    assert.equal(starts, round)
+    internal.handleUnexpectedClose(internal.connection!)
+  }
 })
