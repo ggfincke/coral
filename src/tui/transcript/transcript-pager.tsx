@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { LineList } from '../components/line-list.js'
 import { useCoralInput } from '../input/use-coral-input.js'
 import { useLiveState } from '../input/use-live-state.js'
+import { appendDraftInput } from '../prompt/grapheme.js'
 import {
   buildPagerFooter,
   buildPagerTitle,
@@ -134,7 +135,16 @@ export default function TranscriptPager({
       }
       if (step.state !== live) setState(step.state)
     },
-    { isActive: active }
+    {
+      isActive: active,
+      // only an open search draft takes pasted text
+      onPaste: (text) =>
+        setState((live) =>
+          live.draft === null
+            ? live
+            : { ...live, draft: appendDraftInput(live.draft, text) }
+        ),
+    }
   )
 
   // the visible slice is a handful of rows, so build it each render and let

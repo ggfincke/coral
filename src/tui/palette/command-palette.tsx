@@ -10,6 +10,7 @@ import {
 } from './palette.js'
 import { useCoralInput } from '../input/use-coral-input.js'
 import { useLiveState } from '../input/use-live-state.js'
+import { appendDraftInput } from '../prompt/grapheme.js'
 import type { CoralKey } from '../input/terminal-input.js'
 import { LineList } from '../components/line-list.js'
 
@@ -97,7 +98,14 @@ export default function CommandPalette({
       )
       if (next.handled) setFilter(next.state)
     },
-    { isActive: active }
+    {
+      isActive: active,
+      onPaste: (text) =>
+        setFilter((live) => ({
+          query: appendDraftInput(live.query, text),
+          selectedIndex: 0,
+        })),
+    }
   )
 
   return <LineList lines={lines} />

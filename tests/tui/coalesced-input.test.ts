@@ -4,7 +4,12 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { PassThrough } from 'node:stream'
-import { createElement, useLayoutEffect, useState } from 'react'
+import {
+  createElement,
+  useLayoutEffect,
+  useState,
+  type ReactElement,
+} from 'react'
 import { Box, render } from 'ink'
 import PromptInput, {
   type PromptInputProps,
@@ -15,6 +20,9 @@ import {
   terminalControlEvents,
 } from '../../src/tui/input/control-tap.js'
 import { tokenizeTerminalChunk } from '../../src/tui/input/terminal-input.js'
+import { useCoralInput } from '../../src/tui/input/use-coral-input.js'
+import { useTerminalModes } from '../../src/tui/input/use-terminal-modes.js'
+import { resolveApprovalKey } from '../../src/tui/run/approval-box.js'
 
 const idle = () => undefined
 const callbacks: Omit<PromptInputProps, 'value'> = {
@@ -38,16 +46,13 @@ const callbacks: Omit<PromptInputProps, 'value'> = {
   onHistoryDown: idle,
 }
 
-// the real PromptInput under Ink; one stdin.write is one Ink read, and
-// echoKey is written from the commit that shows echoAfter
-async function createComposer(
-  options: { viMode?: boolean; echoAfter?: string; echoKey?: string } = {}
-)
+// fake terminal streams; one stdin.write is one Ink read
+function createStreams(isTTY = false)
 {
   const stdout = Object.assign(new PassThrough(), {
     columns: 80,
     rows: 24,
-    isTTY: false,
+    isTTY,
   })
   stdout.resume()
   const stdin = Object.assign(new PassThrough(), {
@@ -56,6 +61,63 @@ async function createComposer(
     ref: idle,
     unref: idle,
   })
+  return { stdin, stdout }
+}
+
+// render under Ink; write settles every render the read starts
+async function mountInk(
+  node: ReactElement,
+  { stdin, stdout }: ReturnType<typeof createStreams>
+)
+{
+  const instance = render(node, {
+    stdout: stdout as unknown as NodeJS.WriteStream,
+    stderr: stdout as unknown as NodeJS.WriteStream,
+    stdin: stdin as unknown as NodeJS.ReadStream,
+    debug: true,
+    patchConsole: false,
+    exitOnCtrlC: false,
+    interactive: false,
+  })
+  async function flush()
+  {
+    for (let pass = 0; pass < 4; pass++)
+    {
+      await instance.waitUntilRenderFlush()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    }
+  }
+  await flush()
+  return {
+    flush,
+    async write(text: string)
+    {
+      stdin.write(text)
+      await flush()
+    },
+    async close()
+    {
+      instance.unmount()
+      await instance.waitUntilExit()
+      stdin.destroy()
+      stdout.destroy()
+    },
+  }
+}
+
+// the real PromptInput; echoKey is written from the commit that shows
+// echoAfter, and clearOnSubmit clears the draft the way App does
+async function createComposer(
+  options: {
+    viMode?: boolean
+    echoAfter?: string
+    echoKey?: string
+    clearOnSubmit?: boolean
+  } = {}
+)
+{
+  const streams = createStreams()
+  const { stdin } = streams
   const controls = {
     value: '',
     submissions: [] as string[],
@@ -96,47 +158,24 @@ async function createComposer(
         onSubmit: (draft) =>
         {
           controls.submissions.push(draft)
+          if (!options.clearOnSubmit) return
+          setValue('')
+          setReset((current) => ({
+            epoch: current.epoch + 1,
+            kind: 'standard',
+          }))
         },
       })
     )
   }
-  const instance = render(createElement(Composer), {
-    stdout: stdout as unknown as NodeJS.WriteStream,
-    stderr: stdout as unknown as NodeJS.WriteStream,
-    stdin: stdin as unknown as NodeJS.ReadStream,
-    debug: true,
-    patchConsole: false,
-    exitOnCtrlC: false,
-    interactive: false,
-  })
-  async function flush()
-  {
-    for (let pass = 0; pass < 4; pass++)
-    {
-      await instance.waitUntilRenderFlush()
-      await new Promise<void>((resolve) => setImmediate(resolve))
-    }
-  }
-  await flush()
+  const ink = await mountInk(createElement(Composer), streams)
   return {
+    ...ink,
     controls,
-    flush,
-    async write(text: string)
-    {
-      stdin.write(text)
-      await flush()
-    },
     async seed(draft: string)
     {
       controls.seed(draft)
-      await flush()
-    },
-    async close()
-    {
-      instance.unmount()
-      await instance.waitUntilExit()
-      stdin.destroy()
-      stdout.destroy()
+      await ink.flush()
     },
   }
 }
@@ -190,6 +229,52 @@ test('a key read before the previous edit settles still sees it', async () =>
   finally
   {
     await composer.close()
+  }
+})
+
+test('keys after a submit in the same read edit the cleared draft', async () =>
+{
+  const composer = await createComposer({ clearOnSubmit: true })
+  try
+  {
+    await composer.write('a\rb\r')
+    assert.deepEqual(composer.controls.submissions, ['a', 'b'])
+    assert.equal(composer.controls.value, '')
+  }
+  finally
+  {
+    await composer.close()
+  }
+})
+
+test('a paste under an open tool approval never answers it', async () =>
+{
+  const actions: string[] = []
+  // the approval keys App binds, plus its lifetime paste listener
+  function Approval()
+  {
+    useTerminalModes({ enableMouseTracking: false })
+    useCoralInput((input, key) =>
+    {
+      const action = resolveApprovalKey('tool', input, key)
+      if (action) actions.push(action)
+    })
+    return null
+  }
+  const streams = createStreams(true)
+  let written = ''
+  streams.stdout.on('data', (chunk: Buffer) => (written += chunk.toString()))
+  const ink = await mountInk(createElement(Approval), streams)
+  try
+  {
+    await ink.write('\x1b[200~see notes\ry\ra\rp\r\x1b[201~')
+    await ink.write('n')
+    assert.deepEqual(actions, ['reason'])
+    assert.ok(written.includes('\x1b[?2004h'), 'bracketed paste stays on')
+  }
+  finally
+  {
+    await ink.close()
   }
 })
 

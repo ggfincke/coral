@@ -14,6 +14,8 @@ import {
 interface UseCoralInputOptions
 {
   isActive?: boolean
+  // bracketed-paste text for a consumer w/ a text field; without it, dropped
+  onPaste?: (text: string) => void
 }
 
 interface CoralStdinContext
@@ -30,16 +32,18 @@ export function useCoralInput(
 {
   const { setRawMode, internal_exitOnCtrlC, internal_eventEmitter } =
     useStdin() as unknown as CoralStdinContext
-  const { isActive = true } = options
+  const { isActive = true, onPaste } = options
   const pendingRef = useRef('')
   const handlerRef = useRef(handler)
+  const pasteRef = useRef(onPaste)
 
   // refresh during commit: a passive effect runs a stdin read later, so the
   // next key would still reach the previous render's handler
   useLayoutEffect(() =>
   {
     handlerRef.current = handler
-  }, [handler])
+    pasteRef.current = onPaste
+  }, [handler, onPaste])
 
   useEffect(() =>
   {
@@ -83,13 +87,20 @@ export function useCoralInput(
       if (event) handlerRef.current(event.input, event.key)
     }
 
+    const handlePaste = (text: string) =>
+    {
+      pasteRef.current?.(text)
+    }
+
     internal_eventEmitter.on('input', handleData)
+    internal_eventEmitter.on('paste', handlePaste)
     terminalControlEvents.on('packet', handlePacket)
 
     return () =>
     {
       pendingRef.current = ''
       internal_eventEmitter.removeListener('input', handleData)
+      internal_eventEmitter.removeListener('paste', handlePaste)
       terminalControlEvents.removeListener('packet', handlePacket)
     }
   }, [internal_eventEmitter, internal_exitOnCtrlC, isActive])

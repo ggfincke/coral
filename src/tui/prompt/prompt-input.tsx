@@ -150,6 +150,13 @@ interface LiveDraft
   cursorOffset: number
 }
 
+// a key that arrived after a submit, waiting for the parent's answer to render
+interface HeldKey
+{
+  input: string
+  key: CoralKey
+}
+
 const EMPTY_HISTORY_ENTRIES: readonly HistoryEntry[] = []
 const INITIAL_RESET: PromptReset = { epoch: 0, kind: 'external' }
 
@@ -417,6 +424,20 @@ export default function PromptInput({
       return changed
     },
     [onChange]
+  )
+
+  // keys after a submit in the same stdin read wait for the commit that
+  // carries the parent's answer (clear, queue, or keep), then replay
+  const heldKeysRef = useRef<HeldKey[] | null>(null)
+  const [submitCount, setSubmitCount] = useState(0)
+  const submitDraft = useCallback(
+    (text: string, kind: PromptSubmitKind) =>
+    {
+      heldKeysRef.current = []
+      setSubmitCount((count) => count + 1)
+      onSubmit(text, kind)
+    },
+    [onSubmit]
   )
 
   // splice the highlighted suggestion into the prompt and close the menu; the
@@ -814,6 +835,11 @@ export default function PromptInput({
   const handleInput = useCallback(
     function handleKey(input: string, key: CoralKey): void
     {
+      if (heldKeysRef.current)
+      {
+        heldKeysRef.current.push({ input, key })
+        return
+      }
       setPasteRejected(false)
       const live = draftRef.current
       // the menu on screen was built for the rendered draft; once an earlier
@@ -1019,7 +1045,7 @@ export default function PromptInput({
             setPendingPasteConfirm(false)
             return
           }
-          onSubmit(
+          submitDraft(
             expandPastePlaceholders(next.value, (id) =>
               pasteRegistryRef.current.get(id)
             ),
@@ -1160,7 +1186,7 @@ export default function PromptInput({
           return
         }
 
-        onSubmit(
+        submitDraft(
           expandPastePlaceholders(live.value, (id) =>
             pasteRegistryRef.current.get(id)
           ),
@@ -1208,7 +1234,6 @@ export default function PromptInput({
       onQueueEdit,
       onScrollDown,
       onScrollUp,
-      onSubmit,
       onTogglePermissions,
       onToggleThinking,
       onToggleToolOutput,
@@ -1221,6 +1246,7 @@ export default function PromptInput({
       setPendingPasteConfirm,
       setSearch,
       setSelectedIndex,
+      submitDraft,
       undoEdit,
       value,
       viMode,
@@ -1228,6 +1254,17 @@ export default function PromptInput({
       yankText,
     ]
   )
+
+  // the reset & external-value effects above already resynced draftRef; a
+  // submit that moved focus elsewhere drops the rest of its read
+  useLayoutEffect(() =>
+  {
+    const held = heldKeysRef.current
+    if (!held) return
+    heldKeysRef.current = null
+    if (!focus) return
+    for (const { input, key } of held) handleInput(input, key)
+  }, [focus, handleInput, submitCount])
 
   useCoralInput(handleInput, { isActive: focus })
 

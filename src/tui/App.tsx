@@ -40,6 +40,7 @@ import {
   formatRunningTitle,
 } from './shell/title.js'
 import { useCoralInput } from './input/use-coral-input.js'
+import { buildKey } from './input/terminal-input.js'
 import { useLiveState } from './input/use-live-state.js'
 import { useTerminalModes } from './input/use-terminal-modes.js'
 
@@ -1224,6 +1225,19 @@ export default function App({
     },
     {
       isActive: terminalTooSmall || pickerVisible || Boolean(activePrompt),
+      // a paste only types into a rejection reason; approval choices drop it
+      onPaste: (text) =>
+      {
+        const liveReason = rejectReasonRef.current
+        if (
+          activePrompt?.kind !== 'tool' ||
+          liveReason?.promptId !== activePrompt.id
+        )
+          return
+        const step = reduceRejectReasonKey(liveReason.draft, text, buildKey())
+        if (step.kind === 'edit')
+          setRejectReason({ promptId: activePrompt.id, draft: step.draft })
+      },
     }
   )
 

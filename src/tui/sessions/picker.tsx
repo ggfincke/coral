@@ -21,6 +21,7 @@ import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { buildRestoredBlocks } from '../transcript/restored-blocks.js'
 import { useCoralInput } from '../input/use-coral-input.js'
 import { useLiveState } from '../input/use-live-state.js'
+import { appendDraftInput } from '../prompt/grapheme.js'
 import { getThemeGeneration, selectionStyle, style } from '../theme.js'
 import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
 import { LineList } from '../components/line-list.js'
@@ -618,7 +619,19 @@ export default function SessionPicker({
         setFilter({ ...live, ...next.state })
       }
     },
-    { isActive: active }
+    {
+      isActive: active,
+      onPaste: (text) =>
+      {
+        if (state !== 'ready') return
+        setPreview(null)
+        setFilter((live) => ({
+          ...live,
+          query: appendDraftInput(live.query, text),
+          selectedIndex: 0,
+        }))
+      },
+    }
   )
 
   return (
