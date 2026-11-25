@@ -8,7 +8,9 @@ import {
   finalChunkFrom,
   toAnthropicMessages,
 } from '../../src/providers/anthropic/wire.js'
+import { estimateModelRequestMessageTokens } from '../../src/agent/request/projection.js'
 import type { ModelRequestMessage } from '../../src/types/inference.js'
+import { estimateUtf8Tokens } from '../../src/utils/limits.js'
 
 const MODEL = 'claude-opus-5-5'
 
@@ -161,14 +163,92 @@ test('the terminal chunk carries whole calls, summed usage, and replay state', (
   })
 })
 
-test('a truncated tool call fails instead of running', () =>
+function stoppedMessage(stopReason: string, content: unknown[]): BetaMessage
 {
-  const message = {
-    content: [signedTurn[1]],
-    stop_reason: 'max_tokens',
+  return {
+    content,
+    stop_reason: stopReason,
     stop_details: null,
     usage: { input_tokens: 1, output_tokens: 1 },
   } as unknown as BetaMessage
+}
 
-  assert.throws(() => finalChunkFrom(message, MODEL), /output token limit/)
+test('token-limit stops report length so the Agent fails the turn', () =>
+{
+  const text = { type: 'text', text: 'partial answer' }
+  for (const [stopReason, content] of [
+    ['max_tokens', [text]],
+    ['max_tokens', [signedTurn[1]]],
+    ['model_context_window_exceeded', [signedTurn[1]]],
+  ] as const)
+  {
+    const chunk = finalChunkFrom(
+      stoppedMessage(stopReason, [...content]),
+      MODEL
+    )
+    assert.equal(chunk.done_reason, 'length', stopReason)
+    assert.equal(chunk.message.tool_calls, undefined, stopReason)
+  }
+
+  const finished = finalChunkFrom(stoppedMessage('end_turn', [text]), MODEL)
+  assert.equal(finished.done_reason, undefined)
+})
+
+test('an unfinished stop or non-object input never yields a runnable call', () =>
+{
+  assert.throws(
+    () => finalChunkFrom(stoppedMessage('pause_turn', [signedTurn[1]]), MODEL),
+    /mid tool call/
+  )
+  const arrayInput = { ...signedTurn[1], input: ['a.ts'] }
+  assert.throws(
+    () => finalChunkFrom(stoppedMessage('tool_use', [arrayInput]), MODEL),
+    /malformed arguments for read_file/
+  )
+})
+
+test('the budget counts full tool inputs replayed w/ signed thinking', () =>
+{
+  const body = 'export const row = "0123456789abcdef"\n'.repeat(2_000)
+  const chunk = finalChunkFrom(
+    stoppedMessage('tool_use', [
+      signedTurn[0],
+      {
+        type: 'tool_use',
+        id: 'toolu_big',
+        name: 'write_file',
+        input: { path: 'big.ts', content: body },
+      },
+    ]),
+    MODEL
+  )
+  // history keeps a stub for an oversized argument after the call runs
+  const assistant: ModelRequestMessage = {
+    role: 'assistant',
+    content: '',
+    thinking: 'read the file first',
+    tool_calls: [
+      {
+        id: 'toolu_big',
+        function: {
+          name: 'write_file',
+          arguments: { _coral_notice: 'arguments omitted', keys: ['path'] },
+        },
+      },
+    ],
+    providerState: chunk.message.providerState,
+  }
+  const { messages } = toAnthropicMessages(
+    [
+      { role: 'user', content: 'write it' },
+      assistant,
+      { role: 'tool', tool_name: 'write_file', content: 'ok' },
+    ],
+    MODEL
+  )
+  const sent = estimateUtf8Tokens(JSON.stringify(messages[1])).tokens
+  const counted = estimateModelRequestMessageTokens(assistant)
+
+  assert.ok(counted >= sent * 0.9, `${counted} counted for ${sent} sent`)
+  assert.ok(counted <= sent * 1.5, `${counted} counted for ${sent} sent`)
 })

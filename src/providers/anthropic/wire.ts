@@ -19,6 +19,14 @@ import type {
 } from '../../types/inference.js'
 import type { HostedEffort } from '../config.js'
 import type { BillingUsage } from '../../types/session-cost.js'
+import { isPlainObject } from '../../utils/guards.js'
+import {
+  hostedOutputBudget,
+  INTERRUPTED_TOOL_RESULT,
+  malformedArgumentsError,
+  orphanToolResultText,
+  syntheticCallId,
+} from '../hosted-wire.js'
 
 export const ANTHROPIC_PROVIDER = 'anthropic'
 
@@ -29,12 +37,18 @@ export const ANTHROPIC_BETAS = [
   'thinking-binding-controls-2026-08-01',
 ]
 
-const DEFAULT_MAX_TOKENS = 16_000
-// thinking cannot be turned off, so tiny utility calls such as session titles
-// run at low effort with enough room to reason before the visible answer
-const SHORT_REQUEST_TOKENS = 1_024
-const MIN_MAX_TOKENS = 2_048
-const INTERRUPTED_TOOL_RESULT = 'Error: Tool call interrupted'
+// these stops cut generation at a token limit, so the turn is truncated
+const TRUNCATED_STOP_REASONS = new Set<BetaMessage['stop_reason']>([
+  'max_tokens',
+  'model_context_window_exceeded',
+])
+
+// only these stops leave every tool_use block whole
+const COMPLETE_STOP_REASONS = new Set<BetaMessage['stop_reason']>([
+  'end_turn',
+  'tool_use',
+  'stop_sequence',
+])
 
 type UserBlock = BetaContentBlockParam
 
@@ -48,11 +62,6 @@ function effortFor(
   if (think === false || shortRequest) return 'low'
   if (think === 'low' || think === 'medium' || think === 'high') return think
   return configured
-}
-
-export function syntheticToolUseId(messageIndex: number, callIndex: number)
-{
-  return `coral_${messageIndex}_${callIndex}`
 }
 
 // replay signed blocks only into the conversation and model that made them
@@ -93,7 +102,7 @@ function rebuiltAssistantBlocks(
   {
     blocks.push({
       type: 'tool_use',
-      id: call.id ?? syntheticToolUseId(messageIndex, callIndex),
+      id: call.id ?? syntheticCallId(messageIndex, callIndex),
       name: call.function.name,
       input: call.function.arguments,
     })
@@ -169,7 +178,7 @@ export function toAnthropicMessages(
       {
         userBlocks().push({
           type: 'text',
-          text: `Tool result (${message.tool_name ?? 'unknown'}):\n${content}`,
+          text: orphanToolResultText(message.tool_name, content),
         })
         return
       }
@@ -233,14 +242,10 @@ export function toAnthropicRequest(
     request.model
   )
   const tools = toAnthropicTools(request.tools)
-  const requested =
-    request.num_predict && request.num_predict > 0
-      ? request.num_predict
-      : DEFAULT_MAX_TOKENS
-  const shortRequest = requested < SHORT_REQUEST_TOKENS
+  const { maxOutputTokens, shortRequest } = hostedOutputBudget(request)
   return {
     model: request.model,
-    max_tokens: Math.max(requested, MIN_MAX_TOKENS),
+    max_tokens: maxOutputTokens,
     ...(system ? { system } : {}),
     messages,
     ...(tools.length > 0 ? { tools } : {}),
@@ -260,22 +265,21 @@ export function toAnthropicRequest(
 function toolCallsFrom(content: readonly BetaContentBlock[]): OllamaToolCall[]
 {
   return content.flatMap((block) =>
-    block.type === 'tool_use'
-      ? [
-          {
-            id: block.id,
-            type: 'function' as const,
-            function: {
-              name: block.name,
-              arguments:
-                block.input && typeof block.input === 'object'
-                  ? (block.input as Record<string, unknown>)
-                  : {},
-            },
-          },
-        ]
-      : []
-  )
+  {
+    if (block.type !== 'tool_use') return []
+    const input: unknown = block.input
+    if (!isPlainObject(input))
+    {
+      throw malformedArgumentsError('Claude', block.name)
+    }
+    return [
+      {
+        id: block.id,
+        type: 'function' as const,
+        function: { name: block.name, arguments: input },
+      },
+    ]
+  })
 }
 
 // keep the exact response blocks only when they carry signed reasoning that
@@ -318,7 +322,6 @@ export function finalChunkFrom(
   model: string
 ): ChatResponse
 {
-  const toolCalls = toolCallsFrom(message.content)
   if (message.stop_reason === 'refusal')
   {
     const category = message.stop_details?.category
@@ -326,10 +329,14 @@ export function finalChunkFrom(
       `Claude declined this request${category ? ` (${category})` : ''}`
     )
   }
-  if (message.stop_reason === 'max_tokens' && toolCalls.length > 0)
+  // a token-limit cut reports `length` and carries no calls, since the SDK
+  // partial-parses an unfinished input; other unfinished stops fail outright
+  const truncated = TRUNCATED_STOP_REASONS.has(message.stop_reason)
+  const toolCalls = truncated ? [] : toolCallsFrom(message.content)
+  if (toolCalls.length > 0 && !COMPLETE_STOP_REASONS.has(message.stop_reason))
   {
     throw new Error(
-      'Claude hit the output token limit mid tool call; the call was not run'
+      `Claude stopped mid tool call (${message.stop_reason ?? 'no stop reason'}); the call was not run`
     )
   }
 
@@ -349,6 +356,7 @@ export function finalChunkFrom(
       ...(providerState ? { providerState } : {}),
     },
     done: true,
+    ...(truncated ? { done_reason: 'length' } : {}),
     prompt_eval_count: usage.input_tokens + cacheRead + cacheWrite,
     eval_count: usage.output_tokens,
     cached_prompt_count: cacheRead,

@@ -203,6 +203,7 @@ test('real SDK adapters account for a paid refusal before reporting semantic err
 {
   const settings = {
     apiKey: 'test-key',
+    apiKeySource: 'TEST_API_KEY',
     effort: 'high' as const,
     maxContextTokens: 200_000,
   }

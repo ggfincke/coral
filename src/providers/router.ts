@@ -1,7 +1,10 @@
 // src/providers/router.ts
 // route Agent inference to Ollama or a hosted API by model ref
 
-import type { AgentInferenceClient } from '../agent/inference-client.js'
+import type {
+  AgentInferenceClient,
+  ListModelsOptions,
+} from '../agent/inference-client.js'
 import { OllamaClient } from '../ollama/client.js'
 import type {
   ChatRequest,
@@ -102,8 +105,12 @@ export class RoutingInferenceClient implements AgentInferenceClient
   }
 
   // list every reachable backend; one failing backend only hides its models
-  async listModels(signal?: AbortSignal): Promise<Model[]>
+  async listModels(
+    signal?: AbortSignal,
+    options: ListModelsOptions = {}
+  ): Promise<Model[]>
   {
+    if (options.localOnly) return this.ollama.listModels(signal)
     const available = await Promise.all(
       HOSTED_PROVIDERS.map((provider) => this.hasCredentials(provider))
     )
