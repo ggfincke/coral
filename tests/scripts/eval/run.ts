@@ -52,7 +52,6 @@ function requirePositiveInteger(value: number, flag: string): number
   return value
 }
 
-// coerce a --think flag value to the EvalOptions think type
 // only two sampling modes exist; anything else is a typo worth failing on
 function parseSampling(value: string): EvalOptions['sampling']
 {
@@ -64,6 +63,7 @@ function parseSampling(value: string): EvalOptions['sampling']
   fail(`--sampling must be pinned or model, got ${value}`)
 }
 
+// coerce a --think flag value to the EvalOptions think type
 function parseThink(value: string): EvalOptions['think']
 {
   const normalized = value.toLowerCase()
@@ -121,12 +121,13 @@ function printUsageAndExit(): never
   )
 }
 
-// resolve the task set via taskById so unknown ids fail loudly
+// resolve the task set via taskById so unknown ids fail loudly; a repeated
+// id runs once, in the order of its first flag
 function resolveTasks(taskFilter: string[]): EvalTask[]
 {
   if (taskFilter.length === 0) return TASKS
 
-  return taskFilter.map((id) =>
+  return [...new Set(taskFilter)].map((id) =>
   {
     const task = taskById(id)
     if (!task)
@@ -240,11 +241,6 @@ async function main(): Promise<void>
         models.push(arg)
         break
     }
-  }
-
-  if (taskFilter.length > 0)
-  {
-    opts.taskFilter = taskFilter
   }
 
   if (models.length === 0)

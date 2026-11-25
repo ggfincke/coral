@@ -1,6 +1,7 @@
 // tests/scripts/eval/tasks.ts
 // define the eval suite's fixtures, prompts, & deterministic graders
 
+import { randomUUID } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { initTestRepo } from '../../helpers/git.js'
@@ -13,6 +14,7 @@ import {
   answerContains,
   readFileSafe,
   readJson,
+  runLockedTests,
   runNode,
   treeContains,
   treeFreeOf,
@@ -39,6 +41,23 @@ const FIZZBUZZ_EXPECTED = [
   '14',
   'FizzBuzz',
 ]
+
+// read the top-level test names out of a locked node:test fixture; throw when
+// a test call has another shape so it can't drop out of the name check
+function lockedTestNames(...sources: string[]): string[]
+{
+  return sources.flatMap((source) =>
+  {
+    const names = [...source.matchAll(/^test\('([^'\\]+)'/gm)].map(
+      (match) => match[1]!
+    )
+    if (names.length !== (source.match(/\b(?:test|it)\(/g) ?? []).length)
+    {
+      throw new Error('locked fixture has a test name lockedTestNames missed')
+    }
+    return names
+  })
+}
 
 // narrow an unknown record's string field w/o trusting its shape
 function stringField(value: unknown, key: string): string | null
@@ -186,16 +205,19 @@ const searchMultiEdit: EvalTask = {
     {
       return { passed, detail }
     }
-    const { code } = await runNode(
+    // print a per-run nonce last so a module that exits 0 on import fails
+    const nonce = randomUUID()
+    const { code, stdout } = await runNode(
       ctx.dir,
       [
         '--input-type=module',
         '-e',
-        "const b = await import('./b.mjs'); if (b.bResult !== 'a') process.exit(1)",
+        `const b = await import('./b.mjs'); if (b.bResult !== 'a') process.exit(1); console.log('${nonce}')`,
       ],
       GRADE_TIMEOUT_MS
     )
-    if (code !== 0)
+    const lastLine = stdout.trim().split('\n').at(-1)?.trim()
+    if (code !== 0 || lastLine !== nonce)
     {
       return { passed: false, detail: 'renamed modules do not execute' }
     }
@@ -255,6 +277,8 @@ const SUM_TEST_FIXTURE = [
   '',
 ].join('\n')
 
+const SUM_TEST_NAMES = lockedTestNames(SUM_TEST_FIXTURE)
+
 // define a source-fix task w/ a locked test
 const bugFixVerify: EvalTask = {
   id: 'bug-fix-verify',
@@ -288,16 +312,12 @@ const bugFixVerify: EvalTask = {
       }
     }
     // run the locked test so only a real fix passes
-    const { code } = await runNode(
+    return runLockedTests(
       ctx.dir,
-      ['--test', 'sum.test.mjs'],
+      ['sum.test.mjs'],
+      SUM_TEST_NAMES,
       GRADE_TIMEOUT_MS
     )
-    const passed = code === 0
-    return {
-      passed,
-      detail: passed ? 'node --test passed' : `node --test exited ${code}`,
-    }
   },
 }
 
@@ -305,6 +325,10 @@ const bugFixVerify: EvalTask = {
 // names; passing requires reading across the tree and keeping the tests locked
 const LONG_CONTEXT_PROMPT =
   'npm test fails in this project: gold customers are being charged wrong. Find the cause, fix it in the source (not the tests), and run the tests to confirm.'
+
+const LONG_CONTEXT_TEST_NAMES = lockedTestNames(
+  ...Object.values(LONG_CONTEXT_TEST_FILES)
+)
 
 // pass only when the locked tests are untouched and the whole suite is green
 async function gradeLongContext(ctx: GradeContext): Promise<GradeResult>
@@ -319,12 +343,13 @@ async function gradeLongContext(ctx: GradeContext): Promise<GradeResult>
     }
   }
   // the whole suite must pass, not just the gold case
-  const { code } = await runNode(ctx.dir, ['--test', 'test/'], GRADE_TIMEOUT_MS)
-  const passed = code === 0
-  return {
-    passed,
-    detail: passed ? 'node --test passed' : `node --test exited ${code}`,
-  }
+  // run only the locked files so an added test can't stand in for a locked one
+  return runLockedTests(
+    ctx.dir,
+    Object.keys(LONG_CONTEXT_TEST_FILES),
+    LONG_CONTEXT_TEST_NAMES,
+    GRADE_TIMEOUT_MS
+  )
 }
 
 const longContextFix: EvalTask = {
