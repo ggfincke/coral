@@ -151,7 +151,7 @@ test('applyEdit fuzzy-matches whitespace drift & re-indents the replacement', ()
 
   // refuse an ambiguous fuzzy match rather than guessing
   const ambiguous = applyEdit('a1\n  a1\n', 'a1 ', 'b', false)
-  assert.deepEqual(ambiguous, { ok: false, reason: 'not_found', count: 0 })
+  assert.deepEqual(ambiguous, { ok: false, reason: 'ambiguous', count: 2 })
 
   const all = applyEdit('a1\n  a1\n', 'a1 ', 'b', true)
   assert.equal(all.ok, true)
@@ -248,7 +248,7 @@ test('fuzzy correspondence preserves repeated lines or refuses ambiguous deletio
   )
   assert.deepEqual(
     applyEdit('  act()\n    act()\n', 'act()  \nact()', 'act()', false),
-    { ok: false, reason: 'not_found', count: 0 }
+    { ok: false, reason: 'repeated_lines', count: 0 }
   )
   assert.deepEqual(
     applyEdit('  act()\n  act()\n', 'act()  \nact()', 'act()', false),
@@ -270,6 +270,80 @@ test('fuzzy correspondence preserves repeated lines or refuses ambiguous deletio
       matchType: 'fuzzy',
     }
   )
+})
+
+// refuse instead of adding tab & space counts when the model's indent unit differs
+test('fuzzy edits refuse to re-indent across tab & space units', () =>
+{
+  assert.deepEqual(
+    applyEdit(
+      'def f():\n    if a:\n        b()\n    return 1\n',
+      '\tif a:\n\t\tb()',
+      '\tif a:\n\t\tb()\n\tif c:\n\t\td()',
+      false
+    ),
+    { ok: false, reason: 'indent_mismatch', count: 0 }
+  )
+  assert.deepEqual(
+    applyEdit(
+      'func f() {\n\tif x {\n\t\tb()\n\t}\n}\n',
+      '    if x {\n        b()\n    }',
+      '    if x {\n        b()\n        c()\n    }',
+      false
+    ),
+    { ok: false, reason: 'indent_mismatch', count: 0 }
+  )
+  // a changed line at the block's base level takes the file's indent as is
+  assert.deepEqual(
+    applyEdit('\tif x {\n\t\tb()\n', '    if x {', '    if y {', false),
+    { ok: true, after: '\tif y {\n\t\tb()\n', count: 1, matchType: 'fuzzy' }
+  )
+})
+
+test('fuzzy refusals report why the normalized match was not applied', () =>
+{
+  assert.deepEqual(
+    applyEdit('  x\n   y\n  x\n   y\n', 'x\n  y', 'x\n  z', false),
+    {
+      ok: false,
+      reason: 'ambiguous',
+      count: 2,
+    }
+  )
+  assert.deepEqual(
+    applyEdit(
+      'func f() {\n\tif x {\n\t\tb()\n\t}\n}\n',
+      '    if x {\n        b()\n    }',
+      '    if x {\n        b()\n    }\n    if y {\n        c()\n    }',
+      false
+    ),
+    { ok: false, reason: 'repeated_lines', count: 0 }
+  )
+  assert.deepEqual(
+    applyEdit('  let x = 1\n', '\tlet x = 1', '\tlet x = 1 ', false),
+    {
+      ok: false,
+      reason: 'no_change',
+      count: 0,
+    }
+  )
+})
+
+test('exact edits in a CRLF file insert CRLF line breaks', () =>
+{
+  assert.deepEqual(applyEdit('a\r\nb\r\n', 'a', 'a\nc', false), {
+    ok: true,
+    after: 'a\r\nc\r\nb\r\n',
+    count: 1,
+    matchType: 'exact',
+  })
+  // a file that mixes endings keeps new_string as sent
+  assert.deepEqual(applyEdit('a\r\nb\n', 'a', 'a\nc', false), {
+    ok: true,
+    after: 'a\nc\r\nb\n',
+    count: 1,
+    matchType: 'exact',
+  })
 })
 
 test('fuzzy matching finds long repetitive blocks and keeps non-overlapping replacements', () =>
@@ -301,9 +375,6 @@ test('describeEditMiss points at a partial match or its absence', () =>
 
   const absent = describeEditMiss('let x = 1\n', 'totally unrelated')
   assert.match(absent, /No file line matches/)
-
-  const single = describeEditMiss('  let x = 1\n', '\tlet x = 1')
-  assert.match(single, /changes nothing/)
 })
 
 test('previewToolDiff reports oversized previous content without diffing', async () =>
