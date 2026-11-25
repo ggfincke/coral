@@ -490,6 +490,31 @@ test('streaming markdown never styles an unclosed fence mid-block', () =>
   const nested = splitStableMarkdown('- item\n\n    ```js\n    x\n\n    y')
   assert.equal(nested.unstableTail, '    ```js\n    x\n\n    y')
 
+  // a deeper-indented inner fence (markdown-in-markdown) does not close the
+  // outer one, so the streamed rows match the final render
+  const quoted = [
+    '```markdown',
+    '- item',
+    '',
+    '    ```js',
+    '    x',
+    '    ```',
+    '```',
+    '',
+    'Para after.',
+    '',
+    'More text.',
+  ].join('\n')
+  assert.equal(splitStableMarkdown(quoted).unstableTail, 'More text.')
+  assert.deepEqual(
+    renderStreamingMarkdown(quoted, 80, 3).map((row) =>
+      stripAnsi(row).trimEnd()
+    ),
+    stripAnsi(renderMarkdownToAnsi(quoted))
+      .split('\n')
+      .map((row) => `   ${row}`.trimEnd())
+  )
+
   // the live tail sits one blank row below the settled region, as it will
   // once it settles, so nothing shifts when the paragraph completes
   const partial = renderStreamingMarkdown('para one\n\n- a', 80, 3)

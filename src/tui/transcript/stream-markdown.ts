@@ -15,13 +15,50 @@ export interface StreamingSplit
   unstableTail: string
 }
 
-// any indent counts so fences nested in list items are tracked too
-const FENCE_START = /^\s*(`{3,}|~{3,})(.*)$/
+// any indent opens so fences nested in list items are tracked too
+const FENCE_LINE = /^([ \t]*)(`{3,}|~{3,})(.*)$/
 const TABLE_ROW = /^\s*\|/
 
 function isTableRow(line: string): boolean
 {
   return TABLE_ROW.test(line)
+}
+
+// open fence: marker char, run length, and leading columns of its line
+interface OpenFence
+{
+  marker: string
+  length: number
+  indent: number
+}
+
+// leading whitespace in columns, tabs advancing to the next 4-column stop
+function indentColumns(whitespace: string): number
+{
+  let columns = 0
+  for (const char of whitespace)
+  {
+    columns = char === '\t' ? columns - (columns % 4) + 4 : columns + 1
+  }
+  return columns
+}
+
+// commonmark closes on the same char, at least the opening length, nothing
+// but spaces after, and 0-3 columns of indent inside the fence's container;
+// the container is unknown mid-stream, so the opening indent stands in for it
+function closesFence(
+  fence: OpenFence,
+  indent: number,
+  marker: string,
+  suffix: string
+): boolean
+{
+  return (
+    marker[0] === fence.marker &&
+    marker.length >= fence.length &&
+    indent < fence.indent + 4 &&
+    !suffix.trim()
+  )
 }
 
 // walk paragraph boundaries keeping only provably settled prefixes: a
@@ -32,31 +69,25 @@ export function splitStableMarkdown(text: string): StreamingSplit
   if (!text) return { stableText: '', unstableTail: '' }
 
   const lines = text.split('\n')
-  let fence: { marker: string; length: number } | null = null
+  let fence: OpenFence | null = null
   let stableEnd = 0
 
   for (let i = 0; i < lines.length; i++)
   {
     const line = lines[i]!
-    const match = FENCE_START.exec(line)
+    const match = FENCE_LINE.exec(line)
     if (match)
     {
-      const marker = match[1]!
-      const suffix = match[2]!
+      const indent = indentColumns(match[1]!)
+      const marker = match[2]!
+      const suffix = match[3]!
       if (fence)
       {
-        if (
-          marker[0] === fence.marker &&
-          marker.length >= fence.length &&
-          !suffix.trim()
-        )
-        {
-          fence = null
-        }
+        if (closesFence(fence, indent, marker, suffix)) fence = null
       }
       else if (marker[0] !== '`' || !suffix.includes('`'))
       {
-        fence = { marker: marker[0]!, length: marker.length }
+        fence = { marker: marker[0]!, length: marker.length, indent }
       }
     }
 
