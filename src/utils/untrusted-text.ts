@@ -15,21 +15,16 @@ export function isUnsafeTerminalControl(code: number): boolean
   )
 }
 
-// bidi controls, zero-width marks, soft hyphens, and tag characters render as
-// nothing in Ink, so approval surfaces escape them too
+// default-ignorable and format code points (bidi controls, zero-width marks,
+// variation selectors, fillers, tags) render as nothing in Ink, and line or
+// paragraph separators break rows, so approval surfaces escape them too
+const INVISIBLE_FORMAT_CHAR =
+  /^[\p{Default_Ignorable_Code_Point}\p{Cf}\p{Zl}\p{Zp}]$/u
+
+// U+00AD is the lowest such code point, so plain ASCII skips the regex
 function isInvisibleFormatChar(code: number): boolean
 {
-  return (
-    code === 0x00ad ||
-    code === 0x061c ||
-    code === 0x180e ||
-    (code >= 0x200b && code <= 0x200f) ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2060 && code <= 0x2064) ||
-    (code >= 0x2066 && code <= 0x2069) ||
-    code === 0xfeff ||
-    (code >= 0xe0000 && code <= 0xe007f)
-  )
+  return code >= 0xad && INVISIBLE_FORMAT_CHAR.test(String.fromCodePoint(code))
 }
 
 function isHiddenChar(code: number): boolean

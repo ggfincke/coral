@@ -60,11 +60,11 @@ After you approve, that invocation may read/write the resolved path. Outside-wor
 
 ### Protected paths
 
-`write_file` and `edit_file` calls aimed at a protected path always ask in ask mode, even when the tool is `always_allow` or a session or workspace grant exists. Protected paths are any `.git` directory or file (judged on both the path given and its symlink-resolved target), `CORAL_HOME`, `AGENTS_HOME`, and `~/.coral.json`. The prompt labels the call protected and offers no `(a)` or `(p)`. A workspace nested inside `CORAL_HOME`, such as a jobs worktree, keeps its own files ordinary; a workspace that is itself one of these directories asks for every file write. ACP `auto-accept-edits` and its session grants never cover them; yolo and ACP `full-access` still allow them. `coral exec` and jobs reject them like any other approval.
+`write_file` and `edit_file` calls aimed at a protected path always ask in ask mode, even when the tool is `always_allow` or a session or workspace grant exists. Protected paths are any `.git` directory or file (judged on both the path given and its symlink-resolved target), `CORAL_HOME`, `AGENTS_HOME`, and `~/.coral.json`. The prompt labels the call protected and offers no `(a)` or `(p)`. On macOS and Windows the comparison ignores case, so `~/.Coral.json` counts too. Only a jobs worktree (`CORAL_HOME/jobs/<id>/worktree`) keeps its own files ordinary; any other workspace inside or equal to one of these directories asks for every file write. ACP `auto-accept-edits` and its session grants never cover them; yolo and ACP `full-access` still allow them. `coral exec` and jobs reject them like any other approval.
 
 ### Control characters on approval surfaces
 
-Approval prompts, tool-call headers, diffs, and ACP tool titles show C0/C1 control bytes, bidi controls, and zero-width marks escaped as `\xNN` or `\uNNNN` instead of removing them, and the prompt adds a warning row when the call contains any. Ordinary tool output in the transcript is still stripped.
+Approval prompts, tool-call headers, diffs, and ACP tool titles show C0/C1 control bytes, bidi controls, zero-width marks, variation selectors, other default-ignorable or format characters, and line or paragraph separators escaped as `\xNN` or `\uNNNN` instead of removing them, and the prompt adds a warning row when the call contains any. Ordinary tool output in the transcript is still stripped.
 
 **Not covered by path policy:** `bash`, the other `git_*` tools, `search_code`, `skill`, `task`, `todo_write`, MCP tools. The `skill` tool can read only its discovered package's `SKILL.md` and `references/`; it cannot execute scripts. `bash` runs in the session cwd with no workspace fence; after you approve the command, the shell can touch anything the OS user can.
 
@@ -104,7 +104,7 @@ On a tool approval, `(a)` approves and grants that tool identity, with **any arg
 - Protected-path writes are never covered by any grant (see [Protected paths](#protected-paths)).
 - `always_deny` is checked before any approval, so a grant can never override it. A project `require_approval` tightening does not block a grant, matching yolo.
 - Project config cannot create, read, or widen a grant. Only a key press in an interactive approval writes one.
-- `coral exec` and ACP never consult workspace grants. ACP's "Always allow this session" option keeps an in-memory grant for its session binding only, with the same in-workspace and outside-workspace scopes.
+- `coral exec` and ACP never consult workspace grants. ACP's always-allow option (named for its inside- or outside-workspace scope) keeps an in-memory grant for its session binding only, with the same in-workspace and outside-workspace scopes.
 
 `/permissions grants` lists the active session workspace's grants. `/permissions revoke <tool>` forgets one and also drops the matching session grant; `/permissions revoke all` forgets every grant for the workspace. Storage: `CORAL_HOME/tool-grants.d/<sha256>.json`, one file per grant, validated and fail-closed on read.
 

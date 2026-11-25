@@ -54,7 +54,8 @@ export function requiresWorkspacePathApproval(
   )
 }
 
-// ~/.coral.json is read by loadUserConfig in src/config/project-config.ts
+// ~/.coral.json is read by loadUserConfig in src/config/project-config.ts;
+// CORAL_HOME stays first for isInsideProtectedRoot
 function protectedRoots(): string[]
 {
   return [coralHomePath(), agentsHomePath(), join(homedir(), '.coral.json')]
@@ -65,23 +66,39 @@ function hasGitSegment(path: string): boolean
   return path.split(sep).some((segment) => segment.toLowerCase() === '.git')
 }
 
-// a workspace nested strictly inside a root (a jobs worktree under
-// CORAL_HOME) keeps its own files writable; the rest of the root stays
-// protected
+// darwin and win32 volumes match names case-insensitively by default, so a
+// case variant of a root that does not exist yet must still match it
+function foldPathCase(path: string): string
+{
+  const folds = process.platform === 'darwin' || process.platform === 'win32'
+  return folds ? path.toLowerCase() : path
+}
+
+// a task worktree sits at CORAL_HOME/jobs/<id>/worktree (jobDirectory in
+// src/jobs/store.ts) and keeps its own files writable; no other workspace
+// nested in a protected root gets that carve-out
+function isJobWorktree(coralHome: string, cwd: string): boolean
+{
+  const jobsRoot = join(coralHome, 'jobs')
+  if (!isPathInsideProject(jobsRoot, cwd)) return false
+  const segments = relative(jobsRoot, cwd).split(sep)
+  return segments.length === 2 && segments[1] === 'worktree'
+}
+
+// roots[0] is CORAL_HOME, the only root that can hold a task worktree
 function isInsideProtectedRoot(
   path: string,
   cwd: string,
   roots: readonly string[]
 ): boolean
 {
-  return roots.some(
-    (root) =>
-      isPathInsideProject(root, path) &&
-      !(
-        relative(root, cwd) !== '' &&
-        isPathInsideProject(root, cwd) &&
-        isPathInsideProject(cwd, path)
-      )
+  const [foldedPath, foldedCwd] = [foldPathCase(path), foldPathCase(cwd)]
+  const foldedRoots = roots.map(foldPathCase)
+  if (!foldedRoots.some((root) => isPathInsideProject(root, foldedPath)))
+    return false
+  return !(
+    isJobWorktree(foldedRoots[0], foldedCwd) &&
+    isPathInsideProject(foldedCwd, foldedPath)
   )
 }
 

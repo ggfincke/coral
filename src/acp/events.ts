@@ -13,6 +13,7 @@ import type {
 import { methods } from '@agentclientprotocol/sdk/unstable'
 import type { AgentEvents } from '../agent/contracts.js'
 import { sessionToolGrantFingerprint } from '../runtime/interactive-session.js'
+import { getBuiltInToolRegistration } from '../tools/catalog.js'
 import type { ToolCallPresentation } from '../tools/tool.js'
 import type { SessionCostSnapshot } from '../types/session-cost.js'
 import type { TodoItem } from '../types/todo.js'
@@ -136,15 +137,30 @@ function toolInput(call: ActiveToolCall): Record<string, unknown>
   }
 }
 
-function permissionToolCall(call: ActiveToolCall): ToolCallUpdate
+// a protected write is labelled in the title, as the TUI approval box does
+function permissionToolCall(
+  call: ActiveToolCall,
+  protectedPath: boolean
+): ToolCallUpdate
 {
+  const title = toolTitle(call.name, call.presentation)
   return {
     toolCallId: call.acpId,
     kind: toolKind(call.name),
     status: 'pending',
-    title: toolTitle(call.name, call.presentation),
+    title: protectedPath ? `Protected path: ${title}` : title,
     rawInput: toolInput(call),
   }
+}
+
+// each allow_always covers only its own scope, so its name says which one,
+// matching grantNotice in src/tui/run/approval-box.ts
+function alwaysAllowName(toolName: string, crossesWorkspace: boolean): string
+{
+  if (crossesWorkspace) return 'Always allow outside the workspace this session'
+  return getBuiltInToolRegistration(toolName)?.workspacePath === undefined
+    ? 'Always allow this session'
+    : 'Always allow inside the workspace this session'
 }
 
 export class AcpEventProjection
@@ -239,7 +255,7 @@ export class AcpEventProjection
       methods.client.session.requestPermission,
       {
         sessionId: this.options.sessionId,
-        toolCall: permissionToolCall(call),
+        toolCall: permissionToolCall(call, protectedPath),
         options: [
           {
             optionId: allowId,
@@ -251,9 +267,7 @@ export class AcpEventProjection
             : [
                 {
                   optionId: alwaysId,
-                  name: crossesWorkspace
-                    ? 'Always allow outside the workspace this session'
-                    : 'Always allow this session',
+                  name: alwaysAllowName(name, crossesWorkspace),
                   kind: 'allow_always' as const,
                 },
               ]),
