@@ -8,17 +8,30 @@ import {
   type KeybindingOverride,
 } from './keybinding-config.js'
 
-export type KeybindingAction =
-  | 'toggle-thinking'
-  | 'toggle-permissions'
-  | 'page-up'
-  | 'page-down'
-  | 'jump-top'
-  | 'jump-bottom'
-  | 'half-page-up'
-  | 'half-page-down'
-  | 'toggle-tool-output'
-  | 'open-transcript'
+// * every action a prompt chord can trigger: the union and the override set
+// both derive from this list
+const PROMPT_ACTIONS = [
+  'toggle-thinking',
+  'toggle-permissions',
+  'page-up',
+  'page-down',
+  'jump-top',
+  'jump-bottom',
+  'half-page-up',
+  'half-page-down',
+  'toggle-tool-output',
+  'open-transcript',
+  'open-palette',
+  'open-editor',
+] as const
+
+export type PromptKeybinding = (typeof PROMPT_ACTIONS)[number]
+
+// palette-runnable actions; the other two are wired in PromptInput only
+export type KeybindingAction = Exclude<
+  PromptKeybinding,
+  'open-palette' | 'open-editor'
+>
 
 export interface KeybindingSummary
 {
@@ -26,9 +39,6 @@ export interface KeybindingSummary
   description: string
   action?: KeybindingAction
 }
-
-// prompt-only handlers that are wired but not palette-runnable
-export type PromptKeybinding = KeybindingAction | 'open-palette' | 'open-editor'
 
 // minimal key shape so this module stays free of CoralKey
 export interface KeybindingKey
@@ -52,7 +62,8 @@ export interface KeybindingKey
   functionKey?: string
 }
 
-// single source for advertised bindings and PromptInput matchers
+// bindings advertised in help & the palette; matchPromptKeybinding owns the
+// default chords
 export const KEYBINDINGS: readonly KeybindingSummary[] = [
   {
     keys: 'ctrl+p',
@@ -176,20 +187,7 @@ const NAVIGABLE_KEYS: ReadonlySet<string> = new Set([
 
 // actions an override may target; anything else in prefs is ignored here so a
 // typo can never hijack composer input
-const OVERRIDABLE_ACTIONS: ReadonlySet<string> = new Set([
-  'toggle-thinking',
-  'toggle-permissions',
-  'page-up',
-  'page-down',
-  'jump-top',
-  'jump-bottom',
-  'half-page-up',
-  'half-page-down',
-  'toggle-tool-output',
-  'open-transcript',
-  'open-palette',
-  'open-editor',
-])
+const OVERRIDABLE_ACTIONS: ReadonlySet<string> = new Set(PROMPT_ACTIONS)
 
 // raw chord from the live event; normalizeChord canonicalizes the result, so
 // '+' as final key rides the trailing-separator form ('ctrl++')

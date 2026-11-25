@@ -3,7 +3,7 @@
 
 import type { CoralKey } from '../input/terminal-input.js'
 import { clamp } from '../../utils/clamp.js'
-import { buildLineStarts, locateOffset } from './line-index.js'
+import { lineSpanAt } from './line-index.js'
 import {
   isGraphemeBoundary,
   nextGraphemeOffset,
@@ -150,8 +150,7 @@ function deleteToLineStart(
   cursorOffset: number
 ): PromptEditResult
 {
-  const starts = buildLineStarts(value)
-  const rowStart = starts[locateOffset(starts, cursorOffset).row] ?? 0
+  const rowStart = lineSpanAt(value, cursorOffset).start
   if (cursorOffset <= rowStart)
   {
     return updateCursor(value, cursorOffset)
@@ -172,10 +171,7 @@ function deleteToLineEnd(
   cursorOffset: number
 ): PromptEditResult
 {
-  const starts = buildLineStarts(value)
-  const index = locateOffset(starts, cursorOffset).row
-  const rowEnd =
-    index + 1 < starts.length ? (starts[index + 1] ?? 0) - 1 : value.length
+  const rowEnd = lineSpanAt(value, cursorOffset).end
   if (cursorOffset >= rowEnd)
   {
     return updateCursor(value, cursorOffset)
@@ -211,10 +207,13 @@ function deleteWordAfter(
 ): PromptEditResult
 {
   const targetOffset = nextWordOffset(value, cursorOffset)
-  return updateCursor(
-    value.slice(0, cursorOffset) + value.slice(targetOffset),
-    cursorOffset
-  )
+  return {
+    ...updateCursor(
+      value.slice(0, cursorOffset) + value.slice(targetOffset),
+      cursorOffset
+    ),
+    killed: value.slice(cursorOffset, targetOffset),
+  }
 }
 
 function insertText(
@@ -260,6 +259,10 @@ export function continueWithNewline(
   )
 }
 
+// C0 controls & DEL other than tab and newline
+// eslint-disable-next-line no-control-regex
+const STRAY_CONTROL_RE = /[\x00-\x08\x0b-\x1f\x7f]/g
+
 export function applyPromptEdit({
   value,
   input,
@@ -267,21 +270,14 @@ export function applyPromptEdit({
   cursor,
 }: PromptEditInput): PromptEditResult | null
 {
-  if (key.ctrl && input === 'a')
+  // line ends are logical-line aware, like the kill commands
+  if ((key.ctrl && input === 'a') || key.home)
   {
-    return updateCursor(value, 0)
+    return updateCursor(value, lineSpanAt(value, cursor.cursorOffset).start)
   }
-  if (key.ctrl && input === 'e')
+  if ((key.ctrl && input === 'e') || key.end)
   {
-    return updateCursor(value, value.length)
-  }
-  if (key.home)
-  {
-    return updateCursor(value, 0)
-  }
-  if (key.end)
-  {
-    return updateCursor(value, value.length)
+    return updateCursor(value, lineSpanAt(value, cursor.cursorOffset).end)
   }
   if ((key.ctrl && input === 'j') || (key.meta && key.return))
   {
@@ -367,10 +363,13 @@ export function applyPromptEdit({
   {
     return deleteForward(value, cursor.cursorOffset)
   }
-  if (!input)
+  // unbound ctrl & meta chords never type their letter, and stray control
+  // bytes are dropped; pasted newlines and tabs stay
+  const text = key.ctrl || key.meta ? '' : input.replace(STRAY_CONTROL_RE, '')
+  if (!text)
   {
     return null
   }
 
-  return insertText(value, cursor.cursorOffset, input)
+  return insertText(value, cursor.cursorOffset, text)
 }

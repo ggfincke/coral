@@ -341,6 +341,22 @@ test('linewise P inserts above while p inserts below, including the final line',
   assert.equal(below.cursorOffset, 13)
 })
 
+test('yy and dd on the last line store the line alone', () =>
+{
+  assert.equal(
+    press(createVimEngine('a\nb'), 'j', 'y', 'y', 'p').value,
+    'a\nb\nb'
+  )
+  assert.equal(press(createVimEngine('a\nb'), 'j', 'd', 'd', 'p').value, 'a\nb')
+})
+
+test('a count prefix is swallowed instead of running 0 as a motion', () =>
+{
+  const engine = createVimEngine('abcdefghijkl')
+  press(engine, 'l', 'l', 'l', 'l', 'l', '1', '0', 'x')
+  assert.equal(vimView(engine).value, 'abcdeghijkl')
+})
+
 test('p/P paste charwise and yy+p duplicate lines', () =>
 {
   const engine = createVimEngine('hello')

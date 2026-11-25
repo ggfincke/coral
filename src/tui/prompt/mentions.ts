@@ -11,6 +11,7 @@ import {
   decodeMentionPath,
   MENTION_BOUNDARY,
   QUOTED_BODY,
+  trimUnquotedMention,
   UNQUOTED_RUN,
 } from './mention-path.js'
 
@@ -35,7 +36,10 @@ export function parseMentions(value: string): string[]
 
   for (const match of value.matchAll(MENTION_PATTERN))
   {
-    const path = match[1] !== undefined ? decodeMentionPath(match[1]) : match[2]
+    const path =
+      match[1] !== undefined
+        ? decodeMentionPath(match[1])
+        : trimUnquotedMention(match[2] ?? '')
     if (path && !seen.has(path))
     {
       seen.add(path)

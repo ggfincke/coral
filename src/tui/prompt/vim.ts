@@ -2,6 +2,12 @@
 // pure vi-modal editing engine for the prompt composer
 
 import {
+  buildLineStarts,
+  lineSpanAt,
+  rowSpan,
+  type LineSpan,
+} from './line-index.js'
+import {
   clampGraphemeOffset,
   graphemeOffsets,
   nextGraphemeOffset,
@@ -28,6 +34,8 @@ export interface VimView
   statusHint: string | null
   // set once when a :wq or :x ex command evaluates; the consumer resets the engine
   submitRequested: boolean
+  // set once by NORMAL `u`; the consumer owns the undo history
+  undoRequested: boolean
 }
 
 export type VimEngine = {
@@ -42,6 +50,16 @@ interface ChangeSpec
 {
   operator: Operator
   target: string
+  // text a `c` change typed before Esc, replayed with it
+  text?: string
+}
+
+// a `c` change waiting for its INSERT session to end
+interface PendingChangeInsert
+{
+  change: ChangeSpec
+  before: string
+  start: number
 }
 
 interface VimState
@@ -58,15 +76,11 @@ interface VimState
   cmdlineText: string
   stickyHint: string | null
   submitRequested: boolean
+  undoRequested: boolean
   lastChange: ChangeSpec | null
-}
-
-interface LineSpan
-{
-  row: number
-  start: number
-  // offset of the line's '\n' or value.length
-  end: number
+  // counts are unsupported; digits after a leading 1-9 are swallowed
+  countPending: boolean
+  changeInsert: PendingChangeInsert | null
 }
 
 const OPERATORS: Operator[] = ['d', 'c', 'y']
@@ -87,43 +101,6 @@ function isWordChar(ch: string): boolean
   return /[A-Za-z0-9_]/.test(ch)
 }
 
-function lineStartsOf(value: string): number[]
-{
-  const starts = [0]
-  for (let i = 0; i < value.length; i++)
-  {
-    if (value.charAt(i) === '\n')
-    {
-      starts.push(i + 1)
-    }
-  }
-  return starts
-}
-
-function locateLine(starts: number[], offset: number): number
-{
-  let row = 0
-  for (let i = 1; i < starts.length; i++)
-  {
-    if (starts[i] <= offset)
-    {
-      row = i
-    }
-  }
-  return row
-}
-
-function lineSpan(value: string, starts: number[], row: number): LineSpan
-{
-  const start = starts[row]
-  const nextStart = row + 1 < starts.length ? starts[row + 1] : value.length
-  return {
-    row,
-    start,
-    end: row + 1 < starts.length ? nextStart - 1 : value.length,
-  }
-}
-
 function firstNonBlank(value: string, span: LineSpan): number
 {
   let i = span.start
@@ -141,8 +118,7 @@ function firstNonBlank(value: string, span: LineSpan): number
 function clampNormal(value: string, offset: number): number
 {
   offset = clampGraphemeOffset(value, offset)
-  const starts = lineStartsOf(value)
-  const span = lineSpan(value, starts, locateLine(starts, offset))
+  const span = lineSpanAt(value, offset)
   if (span.end === span.start)
   {
     return span.start
@@ -282,8 +258,7 @@ function quoteRange(
 ): [number, number] | null
 {
   const idxs: number[] = []
-  const starts = lineStartsOf(value)
-  const span = lineSpan(value, starts, locateLine(starts, pos))
+  const span = lineSpanAt(value, pos)
   for (let i = span.start; i < span.end; i = nextGraphemeOffset(value, i))
   {
     const ch = value.charAt(i)
@@ -385,8 +360,7 @@ function resolveCharRange(
 ): [number, number] | null
 {
   const { value, cursor } = state
-  const starts = lineStartsOf(value)
-  const span = lineSpan(value, starts, locateLine(starts, cursor))
+  const span = lineSpanAt(value, cursor)
 
   switch (target)
   {
@@ -470,6 +444,28 @@ function linewiseText(text: string): string
   return text.endsWith('\n') ? text : `${text}\n`
 }
 
+// rows a linewise operator covers: its own line (`dd`), or one more below
+// (`dj`) or above (`dk`); null when that row does not exist
+function linewiseSpan(
+  value: string,
+  cursor: number,
+  target: string
+): LineSpan | null
+{
+  const span = lineSpanAt(value, cursor)
+  if (target === 'j')
+  {
+    if (span.end >= value.length) return null
+    return { ...span, end: lineSpanAt(value, span.end + 1).end }
+  }
+  if (target === 'k')
+  {
+    if (span.start === 0) return null
+    return { ...lineSpanAt(value, span.start - 1), end: span.end }
+  }
+  return span
+}
+
 // applies one completed operator change; returns false when the target fails
 // cleanly (no edit, caller just clears any pending state)
 function applyOperator(
@@ -479,13 +475,12 @@ function applyOperator(
 ): boolean
 {
   const { value } = state
-  const starts = lineStartsOf(value)
-  const row = locateLine(starts, state.cursor)
-  const span = lineSpan(value, starts, row)
-  const isLastRow = row + 1 >= starts.length
 
-  if (target === '')
+  if (target === '' || target === 'j' || target === 'k')
   {
+    const span = linewiseSpan(value, state.cursor, target)
+    if (!span) return false
+    const isLastRow = span.end >= value.length
     let lo = span.start
     let hi = span.end
     if (operator !== 'c')
@@ -499,7 +494,8 @@ function applyOperator(
         lo = span.start - 1
       }
     }
-    setRegister(state, linewiseText(value.slice(lo, hi)), true)
+    // the register holds the line alone, whichever newline the delete takes
+    setRegister(state, linewiseText(value.slice(span.start, span.end)), true)
     if (operator === 'y')
     {
       return true
@@ -543,8 +539,7 @@ function applyOperator(
 
 function deleteUnderCursor(state: VimState): void
 {
-  const starts = lineStartsOf(state.value)
-  const span = lineSpan(state.value, starts, locateLine(starts, state.cursor))
+  const span = lineSpanAt(state.value, state.cursor)
   if (state.cursor >= span.end)
   {
     return
@@ -561,14 +556,13 @@ function pasteRegister(state: VimState, after: boolean): void
   {
     return
   }
-  const starts = lineStartsOf(state.value)
-  const span = lineSpan(state.value, starts, locateLine(starts, state.cursor))
+  const span = lineSpanAt(state.value, state.cursor)
   if (state.registerLinewise)
   {
     const content = state.register.endsWith('\n')
       ? state.register.slice(0, -1)
       : state.register
-    const isLastRow = span.row + 1 >= starts.length
+    const isLastRow = span.end >= state.value.length
     const append = after && isLastRow
     const insertAt = after
       ? isLastRow
@@ -600,25 +594,59 @@ function pasteRegister(state: VimState, after: boolean): void
 // vertical moves preserve the grapheme column inside the target line's bounds
 function moveToRow(state: VimState, row: number): void
 {
-  const starts = lineStartsOf(state.value)
-  const targetRow = Math.min(Math.max(row, 0), starts.length - 1)
+  const starts = buildLineStarts(state.value)
   const offsets = graphemeOffsets(state.value)
   const col =
     offsets.indexOf(state.cursor) -
-    offsets.indexOf(starts[locateLine(starts, state.cursor)])
-  const target = lineSpan(state.value, starts, targetRow)
+    offsets.indexOf(lineSpanAt(state.value, state.cursor).start)
+  const target = rowSpan(state.value, starts, row)
   const targetOffset =
     offsets[offsets.indexOf(target.start) + col] ?? target.end
   state.cursor = clampNormal(state.value, Math.min(targetOffset, target.end))
+}
+
+// a `c` change is repeatable once its INSERT session ends; dot replays it only
+// when the session was plain typing at the change point
+function recordChange(state: VimState, change: ChangeSpec): void
+{
+  if (change.operator === 'c' && state.mode === 'insert')
+  {
+    state.changeInsert = { change, before: state.value, start: state.cursor }
+    return
+  }
+  state.lastChange = change
+}
+
+// the text typed since a `c` change; a session that moved the cursor or edited
+// outside the inserted run is not replayable and keeps the earlier change
+function finishChangeInsert(state: VimState): void
+{
+  const pending = state.changeInsert
+  if (!pending) return
+  state.changeInsert = null
+  const { before, start } = pending
+  const end = start + state.value.length - before.length
+  const plainTyping =
+    state.cursor === end &&
+    end >= start &&
+    state.value.slice(0, start) === before.slice(0, start) &&
+    state.value.slice(end) === before.slice(start)
+  if (plainTyping)
+  {
+    state.lastChange = {
+      ...pending.change,
+      text: state.value.slice(start, end),
+    }
+  }
 }
 
 function applyInsertInput(state: VimState, key: VimKey): void
 {
   if (key.escape)
   {
+    finishChangeInsert(state)
     // exit INSERT moving back one char, never crossing the line's own start
-    const starts = lineStartsOf(state.value)
-    const span = lineSpan(state.value, starts, locateLine(starts, state.cursor))
+    const span = lineSpanAt(state.value, state.cursor)
     state.mode = 'normal'
     state.cursor = Math.max(
       span.start,
@@ -719,6 +747,7 @@ function applyCmdlineInput(state: VimState, key: VimKey): void
 
 function enterInsert(state: VimState, cursor: number): void
 {
+  state.changeInsert = null
   state.mode = 'insert'
   state.pendingOperator = null
   state.pendingObject = null
@@ -733,9 +762,17 @@ function applyNormalInput(state: VimState, key: VimKey): void
     state.pendingOperator = null
     state.pendingObject = null
     state.pendingG = false
+    state.countPending = false
     return
   }
   const ch = key.input && key.input.length > 0 ? key.input : null
+  // counts are not supported; swallow them so the `0` in `10x` is not a motion
+  if (ch && (/^[1-9]$/.test(ch) || (state.countPending && ch === '0')))
+  {
+    state.countPending = true
+    return
+  }
+  state.countPending = false
   if (!ch)
   {
     return
@@ -787,7 +824,7 @@ function applyNormalInput(state: VimState, key: VimKey): void
       }
       if (target && applyOperator(state, op, target))
       {
-        state.lastChange = { operator: op, target }
+        recordChange(state, { operator: op, target })
       }
       return
     }
@@ -796,14 +833,14 @@ function applyNormalInput(state: VimState, key: VimKey): void
     {
       if (applyOperator(state, op, ''))
       {
-        state.lastChange = { operator: op, target: '' }
+        recordChange(state, { operator: op, target: '' })
       }
     }
     else if (MOTION_TARGETS.includes(ch))
     {
       if (applyOperator(state, op, ch))
       {
-        state.lastChange = { operator: op, target: ch }
+        recordChange(state, { operator: op, target: ch })
       }
     }
     // any other key just cancels the pending operator
@@ -812,12 +849,13 @@ function applyNormalInput(state: VimState, key: VimKey): void
 
   if (ch === '.')
   {
-    if (state.lastChange)
+    const change = state.lastChange
+    if (change && applyOperator(state, change.operator, change.target))
     {
-      const { operator, target } = state.lastChange
-      if (applyOperator(state, operator, target))
+      if (state.mode === 'insert')
       {
-        state.lastChange = { operator, target }
+        applyInsertInput(state, { input: change.text ?? '' })
+        applyInsertInput(state, { escape: true })
       }
     }
     return
@@ -832,6 +870,9 @@ function applyNormalInput(state: VimState, key: VimKey): void
 
   switch (ch)
   {
+    case 'u':
+      state.undoRequested = true
+      return
     case 'x':
       deleteUnderCursor(state)
       return
@@ -846,12 +887,7 @@ function applyNormalInput(state: VimState, key: VimKey): void
       return
     case 'a':
       {
-        const starts = lineStartsOf(state.value)
-        const span = lineSpan(
-          state.value,
-          starts,
-          locateLine(starts, state.cursor)
-        )
+        const span = lineSpanAt(state.value, state.cursor)
         enterInsert(
           state,
           Math.min(span.end, nextGraphemeOffset(state.value, state.cursor))
@@ -860,35 +896,20 @@ function applyNormalInput(state: VimState, key: VimKey): void
       return
     case 'I':
       {
-        const starts = lineStartsOf(state.value)
-        const span = lineSpan(
-          state.value,
-          starts,
-          locateLine(starts, state.cursor)
-        )
+        const span = lineSpanAt(state.value, state.cursor)
         enterInsert(state, firstNonBlank(state.value, span))
       }
       return
     case 'A':
       {
-        const starts = lineStartsOf(state.value)
-        const span = lineSpan(
-          state.value,
-          starts,
-          locateLine(starts, state.cursor)
-        )
+        const span = lineSpanAt(state.value, state.cursor)
         enterInsert(state, span.end)
       }
       return
     case 'o':
     case 'O':
       {
-        const starts = lineStartsOf(state.value)
-        const span = lineSpan(
-          state.value,
-          starts,
-          locateLine(starts, state.cursor)
-        )
+        const span = lineSpanAt(state.value, state.cursor)
         const splitAt = ch === 'o' ? span.end : span.start
         state.value =
           state.value.slice(0, splitAt) + '\n' + state.value.slice(splitAt)
@@ -905,8 +926,7 @@ function applyNormalInput(state: VimState, key: VimKey): void
 
   if (MOTION_TARGETS.includes(ch))
   {
-    const starts = lineStartsOf(state.value)
-    const span = lineSpan(state.value, starts, locateLine(starts, state.cursor))
+    const span = lineSpanAt(state.value, state.cursor)
     switch (ch)
     {
       case 'h':
@@ -979,7 +999,10 @@ export function createVimEngine(value: string): VimEngine
     cmdlineText: '',
     stickyHint: null,
     submitRequested: false,
+    undoRequested: false,
     lastChange: null,
+    countPending: false,
+    changeInsert: null,
   }
   return state as unknown as VimEngine
 }
@@ -1046,6 +1069,7 @@ export function vimView(engine: VimEngine): VimView
     cursorOffset: state.cursor,
     statusHint,
     submitRequested: state.submitRequested,
+    undoRequested: state.undoRequested,
   }
 }
 
@@ -1053,6 +1077,7 @@ export function applyVimInput(engine: VimEngine, key: VimKey): VimView
 {
   const state = engine as unknown as VimState
   if (!key.return) state.submitRequested = false
+  state.undoRequested = false
   // any incoming keypress dismisses a transient ex-command error hint
   state.stickyHint = null
   if (state.mode === 'insert')

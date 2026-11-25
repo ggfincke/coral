@@ -18,6 +18,35 @@ export function buildLineStarts(value: string): number[]
   return starts
 }
 
+// one logical line; end is the offset of its '\n' or value.length
+export interface LineSpan
+{
+  row: number
+  start: number
+  end: number
+}
+
+// span of one row, clamped into the value's rows
+export function rowSpan(
+  value: string,
+  starts: readonly number[],
+  row: number
+): LineSpan
+{
+  const clamped = Math.max(0, Math.min(row, starts.length - 1))
+  const start = starts[clamped] ?? 0
+  const end =
+    clamped + 1 < starts.length ? (starts[clamped + 1] ?? 0) - 1 : value.length
+  return { row: clamped, start, end }
+}
+
+// span of the line that holds offset
+export function lineSpanAt(value: string, offset: number): LineSpan
+{
+  const starts = buildLineStarts(value)
+  return rowSpan(value, starts, locateOffset(starts, offset).row)
+}
+
 // map a string offset to its zero-based row & column (UTF-16 units)
 export function locateOffset(
   starts: readonly number[],
@@ -45,12 +74,9 @@ export function offsetAt(
   position: LinePosition
 ): number
 {
-  const row = Math.max(0, Math.min(position.row, starts.length - 1))
-  const rowStart = starts[row] ?? 0
-  const rowEnd =
-    row + 1 < starts.length ? (starts[row + 1] ?? 0) - 1 : value.length
-  const col = Math.max(0, Math.min(position.col, rowEnd - rowStart))
-  return rowStart + col
+  const span = rowSpan(value, starts, position.row)
+  const col = Math.max(0, Math.min(position.col, span.end - span.start))
+  return span.start + col
 }
 
 // nudge an offset off surrogate-pair middles so vertical moves never split
@@ -91,12 +117,9 @@ export function verticalMove(
     return { offset, preferredCol: col }
   }
 
-  const rowStart = starts[targetRow] ?? 0
-  const rowEnd =
-    targetRow + 1 < starts.length
-      ? (starts[targetRow + 1] ?? 0) - 1
-      : value.length
-  const rawTarget = rowStart + Math.max(0, Math.min(col, rowEnd - rowStart))
+  const span = rowSpan(value, starts, targetRow)
+  const rawTarget =
+    span.start + Math.max(0, Math.min(col, span.end - span.start))
 
   return {
     offset: snapToCodePointBoundary(value, rawTarget),

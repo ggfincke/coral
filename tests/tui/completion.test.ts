@@ -169,4 +169,6 @@ test('parseMentions returns unique paths in submission order', () =>
   assert.deepEqual(parseMentions('nothing to see'), [])
   // an @ inside a word is not a mention
   assert.deepEqual(parseMentions('ping user@host'), [])
+  // sentence punctuation after an unquoted mention is not part of the path
+  assert.deepEqual(parseMentions('read @a.ts.'), ['a.ts'])
 })
