@@ -304,6 +304,9 @@ export class Agent
   private acceptedTurn?: ActiveAcceptedTurn
   // self-check edits after a clean completion (warn-only); off by default
   private verifyEdits: boolean
+  // set while the setting came from the project file, which a cloned repo
+  // controls, so it must not add paid self-check requests on a hosted model
+  private verifyEditsFromProject: boolean
   private subagentRunner: SubagentRunner
   private codeIntel: CodeIntelService
   private ownsCodeIntel: boolean
@@ -364,6 +367,7 @@ export class Agent
       )
     this.wireToolCatalog()
     this.maxIterations = options.maxIterations
+    this.verifyEditsFromProject = options.verifyEdits === undefined
     this.verifyEdits =
       options.verifyEdits ?? resolveVerifyConfig(this.cwd).enabled
     this.codeIntel = options.codeIntel ?? new TypeScriptCodeIntel(this.cwd)
@@ -511,20 +515,65 @@ export class Agent
     }
   }
 
-  // review edits with a fresh read-only subagent and return a warn-only verdict
+  // review edits with a fresh read-only subagent and return a warn-only verdict;
+  // a self-check that errors reports unknown so the user sees it did not run
   private async runEditVerification(
     request: string,
     diffs: string[],
     signal?: AbortSignal
   ): Promise<VerificationResult | null>
   {
+    // the subagent inherits this window, so size the diffs to its prompt limit
+    const subagentPromptLimit = requestBudgetCapacity(
+      this.numCtx || this.contextWindowSize || MIN_NUM_CTX,
+      this.hostedOutputTokens,
+      this.maxPromptTokens,
+      this.thinkMode !== false
+    ).promptLimit
     const result = await this.subagentRunner(
-      buildVerifyPrompt(request, diffs),
+      buildVerifyPrompt(request, diffs, subagentPromptLimit),
       signal
     )
 
-    if (result.error || result.aborted) return null
+    if (result.aborted) return null
+    if (result.error)
+    {
+      return {
+        status: 'unknown',
+        reason: `self-check failed: ${result.error.split('\n')[0]!.slice(0, 200)}`,
+        editCount: diffs.length,
+      }
+    }
     return parseVerifyVerdict(result.text, diffs.length)
+  }
+
+  // a failed round still commits when every call has a result, so history
+  // records the file changes its completed calls made; a commit that cannot
+  // be measured or fit is skipped so the executor's own error surfaces
+  private commitFailedToolRound(
+    assistantMessage: OllamaMessage,
+    toolResults: OllamaMessage[],
+    projectRound: () => RequestBudgetBreakdown
+  ): void
+  {
+    if (
+      toolResults.length === 0 ||
+      toolResults.length !== assistantMessage.tool_calls?.length
+    )
+    {
+      return
+    }
+    try
+    {
+      if (projectRound().fits)
+      {
+        this.pushMessages([assistantMessage, ...toolResults])
+      }
+    }
+    catch
+    {
+      // keep the failure the executor reported
+    }
   }
 
   // abort active work and close Agent-local resources without evicting host models
@@ -886,15 +935,27 @@ export class Agent
     return this.state.getCompactionMetrics().successfulCount
   }
 
-  // expose the runtime post-edit self-check toggle
+  // expose the runtime post-edit self-check toggle as it applies to this model
   getVerifyEdits(): boolean
   {
-    return this.verifyEdits
+    return this.verifyEditsActive()
   }
 
+  // an explicit toggle is the user's choice, so it also applies to hosted models
   setVerifyEdits(enabled: boolean): void
   {
     this.verifyEdits = enabled
+    this.verifyEditsFromProject = false
+  }
+
+  // a project-enabled self-check runs only on Ollama models
+  private verifyEditsActive(): boolean
+  {
+    return (
+      this.verifyEdits &&
+      (!this.verifyEditsFromProject ||
+        parseModelRef(this.model).provider === 'ollama')
+    )
   }
 
   getLastCompactedAt(): string | null
@@ -1983,7 +2044,11 @@ export class Agent
           }
 
           // optionally self-check edits before clean completion
-          if (this.verifyEdits && editDiffs.length > 0 && !signal?.aborted)
+          if (
+            this.verifyEditsActive() &&
+            editDiffs.length > 0 &&
+            !signal?.aborted
+          )
           {
             const verdict = await this.runEditVerification(
               userMessage,
@@ -2050,8 +2115,23 @@ export class Agent
         this.reliabilityStats.editRepairs += outcome.reliability.editRepairs
         if (outcome.doomTrip && !doomTrip) doomTrip = outcome.doomTrip
 
+        const toolResults = [...outcome.toolResults]
+        const projectRound = () =>
+          this.buildRequestBudget(
+            [...this.state.getMessages(), assistantMessage, ...toolResults].map(
+              toModelRequestMessage
+            ),
+            runAnchor,
+            userMessage
+          )
+
         if (toolExecution.status === 'failed')
         {
+          this.commitFailedToolRound(
+            assistantMessage,
+            toolResults,
+            projectRound
+          )
           if (signal.aborted || this.lifecycleAbort.signal.aborted)
           {
             return finish()
@@ -2059,15 +2139,8 @@ export class Agent
           return fail(toolExecution.error)
         }
 
-        const toolResults = [...outcome.toolResults]
         // stage the assistant call and results as one protected round before history commit
-        const projectedRound = this.buildRequestBudget(
-          [...this.state.getMessages(), assistantMessage, ...toolResults].map(
-            toModelRequestMessage
-          ),
-          runAnchor,
-          userMessage
-        )
+        const projectedRound = projectRound()
         if (!projectedRound.fits)
         {
           this.lastRequestBudget = projectedRound

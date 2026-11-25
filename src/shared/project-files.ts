@@ -13,6 +13,15 @@ import {
 
 const GIT_FILE_LIST_MAX_BUFFER = 16 * 1024 * 1024
 
+// output-style directory names that often hold real tracked source; tracked
+// paths under them stay listed, while deps and caches stay filtered
+const TRACKED_SOURCE_DIR_NAMES = new Set([
+  'build',
+  'dist',
+  'target',
+  'coverage',
+])
+
 export interface ProjectFile
 {
   path: string
@@ -74,41 +83,68 @@ async function statProjectFile(
   }
 }
 
+interface GitProjectPath
+{
+  path: string
+  // tracked paths may sit under build/, dist/, target/, or coverage/
+  tracked: boolean
+}
+
+async function listGitPaths(
+  cwd: string,
+  args: string[],
+  signal?: AbortSignal
+): Promise<string[] | null>
+{
+  const result = await runGitCommand(['ls-files', ...args, '-z'], cwd, {
+    maxBuffer: GIT_FILE_LIST_MAX_BUFFER,
+    signal,
+  })
+  if (result.error) return null
+  return result.output.split('\0').filter(Boolean)
+}
+
 // keep git's ignore-aware path list deterministic, or fall back outside a repo
 async function listGitProjectPaths(
   cwd: string,
   signal?: AbortSignal
-): Promise<string[] | null>
+): Promise<GitProjectPath[] | null>
 {
-  const result = await runGitCommand(
-    ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
-    cwd,
-    { maxBuffer: GIT_FILE_LIST_MAX_BUFFER, signal }
-  )
-
-  if (result.error) return null
+  const [tracked, untracked] = await Promise.all([
+    listGitPaths(cwd, ['--cached'], signal),
+    listGitPaths(cwd, ['--others', '--exclude-standard'], signal),
+  ])
+  if (!tracked || !untracked) return null
 
   // sort by code units so ordering does not depend on the host locale
-  return result.output
-    .split('\0')
-    .filter(Boolean)
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  return [
+    ...tracked.map((path) => ({ path, tracked: true })),
+    ...untracked.map((path) => ({ path, tracked: false })),
+  ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
 }
 
 async function* iterateGitProjectFiles(
   cwd: string,
-  paths: string[],
+  paths: GitProjectPath[],
   options: ProjectFileWalkerOptions
 ): AsyncGenerator<ProjectFile>
 {
   const ignored = createIgnoredEntrySet(options.ignoredEntries)
+  const trackedIgnored = new Set(
+    [...ignored].filter((name) => !TRACKED_SOURCE_DIR_NAMES.has(name))
+  )
+  // a caller's own extras still apply to tracked paths
+  for (const name of options.ignoredEntries ?? []) trackedIgnored.add(name)
   let yielded = 0
 
-  for (const path of paths)
+  for (const { path, tracked } of paths)
   {
     options.signal?.throwIfAborted()
     if (options.maxFiles !== undefined && yielded >= options.maxFiles) return
-    if (hasIgnoredPathSegment(path, ignored)) continue
+    if (hasIgnoredPathSegment(path, tracked ? trackedIgnored : ignored))
+    {
+      continue
+    }
     if (options.includePath && !options.includePath(path)) continue
 
     const file = await statProjectFile(cwd, path, options)
