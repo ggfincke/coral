@@ -82,28 +82,21 @@ function telemetryEventsDir(path: string): string
   return join(dirname(path), `${stem}.d`)
 }
 
-function readReliability(
-  value: unknown,
-  strict: boolean
-): ReliabilityStats | undefined
+// missing counters default to zero; a present non-counter rejects the record
+function readReliability(value: unknown): ReliabilityStats | undefined
 {
   if (!isPlainObject(value)) return undefined
 
   const stats = makeReliabilityStats()
   for (const key of RELIABILITY_KEYS)
   {
-    const present = Object.hasOwn(value, key)
-    const raw = present ? value[key] : undefined
-    if (
-      strict &&
-      present &&
-      (typeof raw !== 'number' || !Number.isInteger(raw) || Number(raw) < 0)
-    )
+    if (!Object.hasOwn(value, key)) continue
+    const raw = value[key]
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0)
     {
       return undefined
     }
-    const count = Number(raw)
-    stats[key] = Number.isFinite(count) && count >= 0 ? count : 0
+    stats[key] = raw
   }
   return stats
 }
@@ -117,39 +110,6 @@ function isIsoTimestamp(value: unknown): value is string
   )
 }
 
-function readModelTelemetry(value: unknown): ModelTelemetry | undefined
-{
-  if (!isPlainObject(value)) return undefined
-  const reliability = readReliability(value.reliability, false)
-  if (!reliability) return undefined
-  if (!Number.isInteger(value.sessions) || Number(value.sessions) < 0)
-  {
-    return undefined
-  }
-  if (typeof value.firstSeen !== 'string') return undefined
-  if (typeof value.updatedAt !== 'string') return undefined
-  return {
-    reliability,
-    sessions: Number(value.sessions),
-    firstSeen: value.firstSeen,
-    updatedAt: value.updatedAt,
-  }
-}
-
-function loadLegacyTelemetry(path: string): TelemetryStore
-{
-  const raw = readJsonObjectFile(path)
-  if (!raw || !isPlainObject(raw.models)) return emptyStore()
-
-  const models: Record<string, ModelTelemetry> = Object.create(null)
-  for (const [model, value] of Object.entries(raw.models))
-  {
-    const record = readModelTelemetry(value)
-    if (record) models[model] = record
-  }
-  return { models }
-}
-
 function isTelemetryEvent(value: unknown): value is TelemetryEvent
 {
   return (
@@ -160,7 +120,7 @@ function isTelemetryEvent(value: unknown): value is TelemetryEvent
     typeof value.model === 'string' &&
     value.model.length > 0 &&
     isIsoTimestamp(value.recordedAt) &&
-    readReliability(value.reliability, true) !== undefined
+    readReliability(value.reliability) !== undefined
   )
 }
 
@@ -190,7 +150,7 @@ function loadTelemetryEvents(path: string): TelemetryEvent[]
     {
       continue
     }
-    const reliability = readReliability(value.reliability, true)
+    const reliability = readReliability(value.reliability)
     if (!reliability) continue
     seen.add(value.id)
     events.push({ ...value, reliability })
@@ -235,36 +195,10 @@ export function addReliability(
   return sum
 }
 
-// fold one agent lifetime's final stats into a new per-model record
-export function foldReliability(
-  store: TelemetryStore,
-  model: string,
-  stats: ReliabilityStats,
-  now: string
-): TelemetryStore
-{
-  const existing = Object.hasOwn(store.models, model)
-    ? store.models[model]
-    : undefined
-  const record: ModelTelemetry = {
-    reliability: addReliability(existing?.reliability, stats),
-    sessions: (existing?.sessions ?? 0) + 1,
-    firstSeen: existing?.firstSeen ?? now,
-    updatedAt: now,
-  }
-  const models: Record<string, ModelTelemetry> = Object.create(null)
-  for (const [name, value] of Object.entries(store.models))
-  {
-    models[name] = value
-  }
-  models[model] = record
-  return { models }
-}
-
-// load the store, returning an empty value when absent or malformed
+// fold the immutable events beside path, returning an empty store when none
 export function loadTelemetry(path = telemetryPath()): TelemetryStore
 {
-  const store = loadLegacyTelemetry(path)
+  const store = emptyStore()
   for (const event of loadTelemetryEvents(path))
   {
     mergeTelemetryEvent(store, event)
@@ -272,7 +206,7 @@ export function loadTelemetry(path = telemetryPath()): TelemetryStore
   return store
 }
 
-// persist one immutable event so retries do not duplicate the legacy baseline
+// persist one immutable event so concurrent writers never merge in place
 export function recordReliability(
   model: string,
   stats: ReliabilityStats,
@@ -285,7 +219,7 @@ export function recordReliability(
     throw new Error('Telemetry events require a model and ISO timestamp')
   }
   const id = randomUUID()
-  const reliability = readReliability(stats, true)
+  const reliability = readReliability(stats)
   if (!reliability)
   {
     throw new Error('Reliability stats must be non-negative integer counters')

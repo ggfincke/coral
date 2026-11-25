@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   chmodSync,
+  mkdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -48,12 +49,26 @@ export function readJsonObjectFile<T extends object = Record<string, unknown>>(
   return isPlainObject(parsed) ? (parsed as T) : undefined
 }
 
-// write a value as pretty-printed JSON through a unique same-dir temp. exclusive
-// temp creation prevents writers from colliding, while rename keeps each final
-// value whole. the caller still owns any domain-level merge semantics
+// write Coral-private state as pretty-printed JSON inside a 0700 parent dir
 export function writeJsonFile(path: string, value: unknown): void
 {
   ensureParentDir(path)
+  replaceJsonFile(path, value)
+}
+
+// write a user-chosen output path as a 0600 file. missing parents get default
+// permissions and an existing parent keeps its mode, since it may be a repo root
+export function writeUserJsonFile(path: string, value: unknown): void
+{
+  mkdirSync(dirname(path), { recursive: true })
+  replaceJsonFile(path, value)
+}
+
+// replace the file through a unique same-dir 0600 temp. exclusive temp creation
+// prevents writers from colliding, while rename keeps each final value whole.
+// the caller still owns any domain-level merge semantics
+function replaceJsonFile(path: string, value: unknown): void
+{
   const tmp = join(
     dirname(path),
     `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`
