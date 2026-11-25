@@ -4,7 +4,8 @@
 import type { OllamaTool } from '../types/inference.js'
 import { ellipsize } from '../utils/ellipsize.js'
 import {
-  sanitizeUntrustedText,
+  flattenUntrustedText,
+  revealUntrustedText,
   stringifyForDisplay,
 } from '../utils/untrusted-text.js'
 import { normalizeToolName } from '../utils/tool-name.js'
@@ -250,23 +251,22 @@ function snapshotTool(tool: Tool): Tool
   return Object.freeze(snapshot)
 }
 
+// presentation text feeds approval prompts and tool headers, so hidden
+// controls are shown escaped rather than deleted
 function sanitizePresentationText(text: string, maxChars: number): string
 {
-  return ellipsize(
-    sanitizeUntrustedText(text).replace(/\s+/g, ' ').trim(),
-    maxChars
-  )
+  return ellipsize(flattenUntrustedText(text), maxChars)
 }
 
 function fallbackSummary(args: Record<string, unknown>): string
 {
-  return ellipsize(sanitizeUntrustedText(stringifyForDisplay(args)).trim(), 60)
+  return ellipsize(revealUntrustedText(stringifyForDisplay(args)).trim(), 60)
 }
 
 function sanitizePresentationSummary(text: string): string
 {
   return ellipsize(
-    sanitizeUntrustedText(text).trim(),
+    revealUntrustedText(text).trim(),
     MAX_PRESENTATION_SUMMARY_CHARS,
     PRESENTATION_SUMMARY_TRUNCATION
   )

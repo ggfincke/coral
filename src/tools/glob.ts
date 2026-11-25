@@ -18,7 +18,16 @@ export const globTool: Tool = {
     'Find files by name/path glob pattern. Returns matching file paths sorted by modification time (newest first). Requires ripgrep (rg) to be installed.',
   subagentSafe: true,
   parallelSafe: true,
-  display: { label: 'Glob', summarize: (args) => String(args.pattern ?? '') },
+  // the path shows too, so an outside-workspace search names where it looks
+  display: {
+    label: 'Glob',
+    summarize: (args) =>
+    {
+      const pattern = String(args.pattern ?? '')
+      const path = args.path ? ` ${String(args.path)}` : ''
+      return `${pattern}${path}`
+    },
+  },
   parameters: {
     type: 'object',
     properties: {
