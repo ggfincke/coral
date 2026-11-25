@@ -1113,7 +1113,8 @@ export class CoralAcpController
       {
         throw new AggregateError(
           [runtimeError, leaseError],
-          'ACP session runtime and lease cleanup failed'
+          'ACP session runtime and lease cleanup failed',
+          { cause: leaseError }
         )
       }
       throw leaseError
