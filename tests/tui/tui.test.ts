@@ -485,6 +485,18 @@ test('streaming markdown never styles an unclosed fence mid-block', () =>
 
   const tableSplit = splitStableMarkdown('intro\n\n| a | b |\n| - | - |')
   assert.equal(tableSplit.stableText, '')
+
+  // a fence nested in a list item stays open across its blank line
+  const nested = splitStableMarkdown('- item\n\n    ```js\n    x\n\n    y')
+  assert.equal(nested.unstableTail, '    ```js\n    x\n\n    y')
+
+  // the live tail sits one blank row below the settled region, as it will
+  // once it settles, so nothing shifts when the paragraph completes
+  const partial = renderStreamingMarkdown('para one\n\n- a', 80, 3)
+  assert.deepEqual(
+    partial.map((row) => stripAnsi(row)),
+    ['   para one', '   ', '   - a']
+  )
 })
 
 test('renderStreamingMarkdown caches the stable region between boundaries', () =>

@@ -15,7 +15,8 @@ export interface StreamingSplit
   unstableTail: string
 }
 
-const FENCE_START = /^ {0,3}(`{3,}|~{3,})(.*)$/
+// any indent counts so fences nested in list items are tracked too
+const FENCE_START = /^\s*(`{3,}|~{3,})(.*)$/
 const TABLE_ROW = /^\s*\|/
 
 function isTableRow(line: string): boolean
@@ -128,6 +129,8 @@ export function renderStreamingMarkdown(
 
   if (unstableTail)
   {
+    // the tail starts a new block, so keep the blank row the final render has
+    if (lines.length > 0) lines.push('   ')
     lines.push(
       ...wrapLines(sanitizeUntrustedText(unstableTail), width - 3, '   ')
     )

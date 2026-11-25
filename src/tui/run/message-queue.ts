@@ -1,6 +1,8 @@
 // src/tui/run/message-queue.ts
 // pure FIFO queue for prompts typed while a run is active
 
+import { ellipsize } from '../../utils/ellipsize.js'
+
 export interface QueuedMessage
 {
   readonly id: number
@@ -115,10 +117,6 @@ export function formatQueueLines(entries: readonly QueuedMessage[]): string[]
   return entries.map((entry) =>
   {
     const flat = entry.text.replace(/\s+/g, ' ')
-    const text =
-      flat.length > MAX_QUEUE_LINE_CHARS
-        ? `${flat.slice(0, MAX_QUEUE_LINE_CHARS - 1)}…`
-        : flat
-    return `queued #${entry.id}: ${text}`
+    return `queued #${entry.id}: ${ellipsize(flat, MAX_QUEUE_LINE_CHARS)}`
   })
 }
