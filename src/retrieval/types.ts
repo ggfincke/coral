@@ -75,6 +75,8 @@ export interface IndexStats
   totalFiles: number
   embeddedFiles: number
   chunks: number
+  // paths left out of this round because they were unreadable or kept changing
+  skippedFiles: string[]
 }
 
 // cached file state, including whether embeddings match the active chunker
