@@ -378,7 +378,8 @@ export class OllamaClient
       const detail = toErrorMessage(err)
       throw new Error(
         `${formatConnectionError(this.baseUrl, detail)} - the server may be down, or ` +
-          `the request may have exceeded the model's context or memory`
+          `the request may have exceeded the model's context or memory`,
+        { cause: err }
       )
     }
   }
@@ -408,7 +409,10 @@ export class OllamaClient
     catch (err)
     {
       if (options.signal?.aborted) throw err
-      throw new Error(formatConnectionError(this.baseUrl, toErrorMessage(err)))
+      throw new Error(
+        formatConnectionError(this.baseUrl, toErrorMessage(err)),
+        { cause: err }
+      )
     }
 
     if (!res.ok) throwApiError(res.status, await res.text())

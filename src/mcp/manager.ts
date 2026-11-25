@@ -706,7 +706,10 @@ export class McpManager
       await client.close().catch(() => undefined)
       if (deadline.aborted && !signal?.aborted)
       {
-        throw new Error(`startup timed out after ${server.startupTimeoutMs} ms`)
+        throw new Error(
+          `startup timed out after ${server.startupTimeoutMs} ms`,
+          { cause: error }
+        )
       }
       throw error
     }

@@ -1040,7 +1040,7 @@ export function materializeVimRegister(
 export function vimView(engine: VimEngine): VimView
 {
   const state = engine as unknown as VimState
-  let statusHint: string | null = null
+  let statusHint: string | null
   if (state.mode === 'insert')
   {
     statusHint = '-- INSERT --'
