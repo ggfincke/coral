@@ -240,7 +240,7 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
         )
         assert.ok((largeResult?.content?.length ?? Infinity) < 101_000)
         assert.equal(disconnectResult?.role, 'tool')
-        assert.match(disconnectResult?.content ?? '', /Connection closed/)
+        assert.match(disconnectResult?.content ?? '', /connection closed/i)
         assert.doesNotMatch(disconnectResult?.content ?? '', /context budget/)
         // strictly-invalid-but-coercible args must fail strict MCP validation
         yield echoCall({
@@ -319,9 +319,10 @@ test('MCP stdio bridge exposes only strict allowlisted namespaced tools', async 
   ])
   assert.deepEqual(approvalLabels, callLabels)
   const stderr = agent.getMcpStatus().servers[0]?.stderr ?? ''
-  assert.match(
-    agent.getMcpStatus().servers[0]?.message ?? '',
-    /context budget: wide/
+  // the disconnect replaces the install-time budget advisory
+  assert.equal(
+    agent.getMcpStatus().servers[0]?.message,
+    'MCP server connection closed'
   )
   assert.match(stderr, /\[redacted\]/)
   assert.doesNotMatch(stderr, /bridge|31m|value/)
@@ -663,4 +664,54 @@ test('MCP preflight and abort failures preserve status and retire processes', as
   await waitForProcessExit(pid)
   await manager.dispose()
   await manager.dispose()
+})
+
+test('MCP close replaces a ready server advisory with the close reason', async () =>
+{
+  const coralHome = await tempDir('coral-mcp-close-home-')
+  const pidPath = join(coralHome, 'close.pid')
+  process.env.CORAL_HOME = coralHome
+  const config = parseMcpConfig({
+    servers: {
+      closing: {
+        command: process.execPath,
+        args: [fixture, pidPath],
+        enabledTools: ['echo', 'not_exposed'],
+        startupTimeoutMs: 5_000,
+      },
+    },
+  })
+  const manager = new McpManager({
+    config,
+    mode: 'ask',
+    permissions: defaultToolPermissions(),
+    baseTools: allTools,
+    maxDynamicToolTokens: 8_192,
+  })
+  try
+  {
+    await manager.initialize({ onLaunchApproval: async () => true })
+    const ready = manager.getStatus().servers[0]
+    assert.equal(ready?.state, 'ready')
+    assert.match(ready?.message ?? '', /not exposed by server: not_exposed/)
+
+    const pid = await fixturePid(pidPath)
+    process.kill(pid, 'SIGKILL')
+    await waitForProcessExit(pid)
+    const deadline = Date.now() + 2_000
+    while (
+      manager.getStatus().servers[0]?.state === 'ready' &&
+      Date.now() < deadline
+    )
+    {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    const closed = manager.getStatus().servers[0]
+    assert.equal(closed?.state, 'failed')
+    assert.equal(closed?.message, 'MCP server connection closed')
+  }
+  finally
+  {
+    await manager.dispose()
+  }
 })

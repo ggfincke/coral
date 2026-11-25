@@ -47,6 +47,7 @@ export class McpToolScope
   private installedManager?: AgentMcpManager
   private bootstrapEpoch = 0
   private bootstrapPromise?: Promise<void>
+  private bootstrapPromiseSignal?: AbortSignal
   private readonly retirements = new Set<Promise<void>>()
   private readonly managerRetirements = new WeakMap<
     AgentMcpManager,
@@ -117,14 +118,20 @@ export class McpToolScope
     {
       return Promise.resolve()
     }
-    if (this.bootstrapPromise)
+    if (this.bootstrapPromise && this.bootstrapPromiseSignal)
     {
-      return raceAbort(this.bootstrapPromise, bootstrapSignal)
+      return this.joinBootstrap(
+        this.bootstrapPromise,
+        this.bootstrapPromiseSignal,
+        options,
+        bootstrapSignal
+      )
     }
 
     const epoch = this.bootstrapEpoch
     const bootstrap = this.bootstrapInternal(options, bootstrapSignal, epoch)
     this.bootstrapPromise = bootstrap
+    this.bootstrapPromiseSignal = bootstrapSignal
     const clear = () =>
     {
       if (this.bootstrapPromise === bootstrap)
@@ -134,6 +141,25 @@ export class McpToolScope
     }
     bootstrap.then(clear, clear)
     return bootstrap
+  }
+
+  // an aborted bootstrap winds down w/o admitting, so a live joiner starts a fresh one after it settles
+  private async joinBootstrap(
+    joined: Promise<void>,
+    joinedSignal: AbortSignal,
+    options: McpToolAdmission,
+    signal: AbortSignal
+  ): Promise<void>
+  {
+    try
+    {
+      await raceAbort(joined, signal)
+    }
+    catch (error)
+    {
+      if (signal.aborted || !joinedSignal.aborted) throw error
+    }
+    if (joinedSignal.aborted) await this.bootstrap(options)
   }
 
   // remove model-visible capability state before awaiting process cleanup

@@ -6,6 +6,7 @@ import type {
   jsonSchemaValidator,
 } from '@modelcontextprotocol/sdk/validation'
 import { Ajv, type Options as AjvOptions } from 'ajv'
+import { Ajv2019 } from 'ajv/dist/2019.js'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import addFormatsModule from 'ajv-formats'
 import type { JsonSchema } from '../types/inference.js'
@@ -46,6 +47,29 @@ function sanitizeDescription(
   return ellipsize(clean, MAX_TOOL_DESCRIPTION_CHARS)
 }
 
+// annotation strings never affect validation, so they are redacted for the model;
+// other schema text must stay verbatim so the projection matches the raw validator
+const ANNOTATION_KEYS = new Set([
+  'description',
+  'title',
+  '$comment',
+  'default',
+  'examples',
+])
+
+function assertVerbatimSchemaText(
+  text: string,
+  secretValues: readonly string[]
+): void
+{
+  if (redactDiagnostic(text, secretValues) !== text)
+  {
+    throw new Error(
+      'schema text outside annotations contains a forwarded environment value or control characters'
+    )
+  }
+}
+
 function schemaForModel(
   value: unknown,
   secretValues: readonly string[],
@@ -54,24 +78,29 @@ function schemaForModel(
 {
   if (typeof value === 'string')
   {
-    const clean = redactDiagnostic(value, secretValues)
-    if (key === 'description' || key === 'title' || key === '$comment')
+    if (key !== undefined && ANNOTATION_KEYS.has(key))
     {
-      return ellipsize(clean, MAX_TOOL_DESCRIPTION_CHARS)
+      return ellipsize(
+        redactDiagnostic(value, secretValues),
+        MAX_TOOL_DESCRIPTION_CHARS
+      )
     }
-    return clean
+    assertVerbatimSchemaText(value, secretValues)
+    return value
   }
   if (Array.isArray(value))
   {
-    return value.map((item) => schemaForModel(item, secretValues))
+    // examples items inherit the annotation key; other array items are structural
+    const itemKey = key === 'examples' ? key : undefined
+    return value.map((item) => schemaForModel(item, secretValues, itemKey))
   }
   if (typeof value === 'object' && value !== null)
   {
     const result: Record<string, unknown> = Object.create(null)
     for (const [childKey, childValue] of Object.entries(value))
     {
-      const cleanKey = redactDiagnostic(childKey, secretValues)
-      result[cleanKey] = schemaForModel(childValue, secretValues, childKey)
+      assertVerbatimSchemaText(childKey, secretValues)
+      result[childKey] = schemaForModel(childValue, secretValues, childKey)
     }
     return result
   }
@@ -82,29 +111,48 @@ function schemaForModel(
 const addFormats =
   addFormatsModule as unknown as typeof addFormatsModule.default
 
+// logger off keeps unknown-format warnings out of the TUI and stderr
 const ajvOptions: AjvOptions = {
+  logger: false,
   strict: false,
   validateFormats: true,
   validateSchema: false,
   allErrors: true,
 }
 
+type SchemaDialect = 'draft-07' | '2019-09' | '2020-12'
+
+const createAjv: Record<SchemaDialect, () => Ajv> = {
+  'draft-07': () => addFormats(new Ajv(ajvOptions)),
+  '2019-09': () => addFormats(new Ajv2019(ajvOptions)),
+  '2020-12': () => addFormats(new Ajv2020(ajvOptions)),
+}
+
 // anonymous schemas share one compiler per dialect
-const sharedAjv2020 = addFormats(new Ajv2020(ajvOptions))
-const sharedAjvDraft07 = addFormats(new Ajv(ajvOptions))
+const sharedAjv: Record<SchemaDialect, Ajv> = {
+  'draft-07': createAjv['draft-07'](),
+  '2019-09': createAjv['2019-09'](),
+  '2020-12': createAjv['2020-12'](),
+}
+
+// older drafts compile w/ draft-07 rules, which accept their array-form items;
+// undeclared schemas follow MCP's 2020-12 default
+function schemaDialect(schema: JsonSchema): SchemaDialect
+{
+  const declared = (schema as { $schema?: unknown }).$schema
+  if (typeof declared !== 'string') return '2020-12'
+  if (/draft-0[467]\b/.test(declared)) return 'draft-07'
+  if (declared.includes('2019-09')) return '2019-09'
+  return '2020-12'
+}
 
 // keep schema IDs local to each contract while honoring its declared dialect
 function schemaValidator<T>(schema: JsonSchema): JsonSchemaValidator<T>
 {
-  const declared = (schema as { $schema?: unknown }).$schema
-  const draft07 = typeof declared === 'string' && declared.includes('draft-07')
+  const dialect = schemaDialect(schema)
   // any $id gets a private registry so reused IDs never collide across tools
   const identified = JSON.stringify(schema).includes('"$id"')
-  const ajv = identified
-    ? addFormats(draft07 ? new Ajv(ajvOptions) : new Ajv2020(ajvOptions))
-    : draft07
-      ? sharedAjvDraft07
-      : sharedAjv2020
+  const ajv = identified ? createAjv[dialect]() : sharedAjv[dialect]
   const validate = ajv.compile(schema as Record<string, unknown>)
   // drop the shared cache entry so retired tool contracts can be collected
   if (!identified) ajv.removeSchema(schema as Record<string, unknown>)

@@ -244,7 +244,6 @@ Default root: `~/.coral`. Directories `0o700`, session/trust/index files typical
 | `telemetry.json`                                | Legacy baseline **read**; new interactive deltas go to `telemetry.d/`                                                 |
 | `telemetry.d/<uuid>.json`                       | Immutable per-Agent-lifetime reliability counters                                                                     |
 | `eval-telemetry.json` + `eval-telemetry.d/`     | Eval harness only (`npm run eval -- --save-telemetry`), not the interactive CLI                                       |
-| `mcp-trust.json`                                | Legacy launch-trust baseline (read)                                                                                   |
 | `mcp-trust.d/<alias>.json`                      | Atomic per-alias approvals (write path for new trust)                                                                 |
 | `tool-grants.d/<64-hex>.json`                   | Persistent per-workspace tool grants from `(p)`; see [Permissions](permissions.md#session-and-workspace-grants)       |
 | `retrieval/v2/spaces/<64-hex>.chunks-v2.sqlite` | Semantic indexes, isolated by embedding space and chunker version                                                     |

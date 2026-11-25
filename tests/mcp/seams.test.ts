@@ -73,6 +73,26 @@ describe('MCP output conversion', () =>
     assert.doesNotMatch(serverErrorText, /secret|31m|32m|token/)
     assert.equal(serverErrorText.includes(escape), false)
   })
+
+  test('MCP structured content redacts a secret before truncation can split it', () =>
+  {
+    const secret = 'structured-secret-value'
+    // the first string budget is 80_000 minus object & key overhead, so these offsets straddle it
+    for (let offset = 79_960; offset < 80_000; offset++)
+    {
+      const result = formatToolResult(
+        {
+          content: [],
+          structuredContent: {
+            data: `${'a'.repeat(offset)}${secret}${'b'.repeat(1_000)}`,
+          },
+        },
+        undefined,
+        [secret]
+      )
+      assert.doesNotMatch(result.output, /aaaastruct/)
+    }
+  })
 })
 
 describe('MCP tool adapter', () =>
@@ -144,10 +164,10 @@ describe('MCP tool adapter', () =>
           items: [{ type: 'string' }, { type: 'number' }],
           additionalItems: false,
         },
-        [secret]: { type: 'string', description: annotation },
+        note: { type: 'string', description: annotation, default: secret },
       },
-      required: ['pair', secret],
-      additionalProperties: false,
+      required: ['pair', 'note'],
+      additionalProperties: { type: 'string' },
     } as unknown as JsonSchema
     const originalSchema = structuredClone(inputSchema)
     const tool = createMcpTool({
@@ -161,20 +181,24 @@ describe('MCP tool adapter', () =>
 
     const accepted = tool.validateArgs?.({
       pair: ['value', 1],
-      [secret]: 'present',
+      note: 'present',
     })
     assert.deepEqual(accepted, {
       ok: true,
-      args: { pair: ['value', 1], [secret]: 'present' },
+      args: { pair: ['value', 1], note: 'present' },
     })
 
     const tupleRejected = tool.validateArgs?.({
       pair: ['value', 1, 'extra'],
-      [secret]: 'present',
+      note: 'present',
     })
     assert.equal(tupleRejected?.ok, false)
 
-    const secretRejected = tool.validateArgs?.({ pair: ['value', 1] })
+    const secretRejected = tool.validateArgs?.({
+      pair: ['value', 1],
+      note: 'present',
+      [secret]: 1,
+    })
     assert.equal(secretRejected?.ok, false)
     if (secretRejected?.ok === false)
     {
@@ -191,6 +215,25 @@ describe('MCP tool adapter', () =>
     assert.ok(tool.description.length <= 2_000)
     assert.deepEqual(inputSchema, originalSchema)
 
+    // structural schema text that would need redaction skips the tool instead of diverging
+    for (const structural of [
+      { properties: { [secret]: { type: 'string' } } },
+      { properties: { env: { type: 'string', enum: ['prod', 'dev'] } } },
+    ])
+    {
+      assert.throws(
+        () =>
+          createMcpTool({
+            name: 'mcp__fixture__structural',
+            displayLabel: 'MCP · fixture · structural',
+            inputSchema: { type: 'object', ...structural } as JsonSchema,
+            secretValues: [secret, 'prod'],
+            invoke: async () => ({ output: 'unused' }),
+          }),
+        /outside annotations contains a forwarded environment value/
+      )
+    }
+
     assert.throws(
       () =>
         createMcpTool({
@@ -204,5 +247,50 @@ describe('MCP tool adapter', () =>
         }),
       /type must be JSONType|schema is invalid/i
     )
+  })
+
+  test('MCP schemas route older dialects to a compiler that accepts tuple items', () =>
+  {
+    for (const dialect of [
+      'http://json-schema.org/draft-04/schema#',
+      'http://json-schema.org/draft-06/schema#',
+      'https://json-schema.org/draft/2019-09/schema',
+    ])
+    {
+      const tool = createMcpTool({
+        name: 'mcp__fixture__tuple',
+        displayLabel: 'MCP · fixture · tuple',
+        inputSchema: {
+          $schema: dialect,
+          type: 'object',
+          properties: {
+            pair: {
+              type: 'array',
+              items: [{ type: 'string' }, { type: 'number' }],
+            },
+          },
+        } as unknown as JsonSchema,
+        secretValues: [],
+        invoke: async () => ({ output: 'unused' }),
+      })
+      assert.equal(tool.validateArgs?.({ pair: ['value', 1] })?.ok, true)
+      assert.equal(tool.validateArgs?.({ pair: [1, 'value'] })?.ok, false)
+    }
+  })
+
+  test('MCP schema compilation keeps unknown-format warnings off the console', (context) =>
+  {
+    const warn = context.mock.method(console, 'warn', () => undefined)
+    createMcpTool({
+      name: 'mcp__fixture__format',
+      displayLabel: 'MCP · fixture · format',
+      inputSchema: {
+        type: 'object',
+        properties: { file: { type: 'string', format: 'path' } },
+      } as JsonSchema,
+      secretValues: [],
+      invoke: async () => ({ output: 'unused' }),
+    })
+    assert.equal(warn.mock.callCount(), 0)
   })
 })
