@@ -5,10 +5,14 @@ import { randomUUID } from 'node:crypto'
 import { execFile, spawn } from 'node:child_process'
 import { readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { StringDecoder } from 'node:string_decoder'
 import { ensurePrivateDir } from '../utils/fs.js'
 import { toErrorMessage } from '../utils/errors.js'
 import { writeJsonFile } from '../utils/json.js'
+import {
+  BoundedOutput,
+  childProcessEnv,
+  drainChildOutput,
+} from '../utils/process.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 import { jobDirectory } from './store.js'
 import { queryDarwinProcesses } from './darwin-process.js'
@@ -428,28 +432,15 @@ export async function runJobCommand(
     {
       cwd: options.cwd,
       detached: true,
-      env: { ...process.env, [PROCESS_TOKEN_KEY]: token },
+      env: childProcessEnv({ [PROCESS_TOKEN_KEY]: token }),
       stdio: ['pipe', 'pipe', 'pipe'],
     }
   )
-  let output = ''
-  let truncated = false
-  const append = (text: string) =>
-  {
-    output += text
-    if (output.length > OUTPUT_LIMIT)
-    {
-      output = output.slice(-OUTPUT_LIMIT)
-      truncated = true
-    }
-  }
-  // one decoder per stream: a multibyte character may straddle two reads
-  const decoders = [child.stdout, child.stderr].map((stream) =>
-  {
-    const decoder = new StringDecoder('utf8')
-    stream.on('data', (chunk: Buffer) => append(decoder.write(chunk)))
-    return decoder
-  })
+  // stdout & stderr interleave in arrival order, each w/ its own decoder
+  const output = new BoundedOutput(OUTPUT_LIMIT)
+  const flushes = [child.stdout, child.stderr].map((stream) =>
+    output.capture(stream)
+  )
   child.stdin.on('error', () =>
   {})
   const exited = new Promise<number | null>((resolve, reject) =>
@@ -497,19 +488,23 @@ export async function runJobCommand(
     if (options.signal?.aborted) requestStop()
     else child.stdin.end('start\n')
     const code = await exited
-    for (const decoder of decoders) append(decoder.end())
+    // 'exit' can fire before the last reads; descendants left holding the
+    // pipes are stopped below
+    await drainChildOutput([child.stdout, child.stderr])
+    for (const flush of flushes) flush()
     await stop
     if (stopError) throw stopError
     const leftover = (await ownedGroupMembers(owner)).length > 0
     if (leftover) await terminateOwnedGroup(owner)
     if (recordPath) rmSync(recordPath)
+    const text = output.toString()
     const result =
-      `${truncated ? '[Earlier command output truncated]\n' : ''}${output}` +
+      text +
       (cancelled ? '\nCommand cancelled or its deadline expired.' : '') +
       (leftover
         ? '\nBackground descendants were stopped; task commands must remain foreground.'
         : '') +
-      (code !== 0 && !output
+      (code !== 0 && !text
         ? `\nCommand exited with status ${String(code)}.`
         : '')
     return {

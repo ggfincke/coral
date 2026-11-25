@@ -151,7 +151,7 @@ test('applyEdit fuzzy-matches whitespace drift & re-indents the replacement', ()
 
   // refuse an ambiguous fuzzy match rather than guessing
   const ambiguous = applyEdit('a1\n  a1\n', 'a1 ', 'b', false)
-  assert.deepEqual(ambiguous, { ok: false, reason: 'not_found', count: 0 })
+  assert.deepEqual(ambiguous, { ok: false, reason: 'ambiguous', count: 2 })
 
   const all = applyEdit('a1\n  a1\n', 'a1 ', 'b', true)
   assert.equal(all.ok, true)
@@ -248,7 +248,7 @@ test('fuzzy correspondence preserves repeated lines or refuses ambiguous deletio
   )
   assert.deepEqual(
     applyEdit('  act()\n    act()\n', 'act()  \nact()', 'act()', false),
-    { ok: false, reason: 'not_found', count: 0 }
+    { ok: false, reason: 'repeated_lines', count: 0 }
   )
   assert.deepEqual(
     applyEdit('  act()\n  act()\n', 'act()  \nact()', 'act()', false),
@@ -270,6 +270,115 @@ test('fuzzy correspondence preserves repeated lines or refuses ambiguous deletio
       matchType: 'fuzzy',
     }
   )
+})
+
+// refuse instead of adding tab & space counts when the model's indent unit differs
+test('fuzzy edits refuse to re-indent across tab & space units', () =>
+{
+  assert.deepEqual(
+    applyEdit(
+      'def f():\n    if a:\n        b()\n    return 1\n',
+      '\tif a:\n\t\tb()',
+      '\tif a:\n\t\tb()\n\tif c:\n\t\td()',
+      false
+    ),
+    { ok: false, reason: 'indent_mismatch', count: 0 }
+  )
+  assert.deepEqual(
+    applyEdit(
+      'func f() {\n\tif x {\n\t\tb()\n\t}\n}\n',
+      '    if x {\n        b()\n    }',
+      '    if x {\n        b()\n        c()\n    }',
+      false
+    ),
+    { ok: false, reason: 'indent_mismatch', count: 0 }
+  )
+  // a changed line at the block's base level takes the file's indent as is
+  assert.deepEqual(
+    applyEdit('\tif x {\n\t\tb()\n', '    if x {', '    if y {', false),
+    { ok: true, after: '\tif y {\n\t\tb()\n', count: 1, matchType: 'fuzzy' }
+  )
+})
+
+// alignment spaces on one line (col-0 JSDoc, C comment, make continuation)
+// must not read as the file's unit for tab-indented lines elsewhere
+test('fuzzy edits keep same-unit tab edits next to space-aligned lines', () =>
+{
+  const cases = [
+    {
+      before: '/**\n * doc\n */\nexport function f() {\n\ta()\n}\n',
+      old: '/**\n * doc \n */\nexport function f() {\n\ta()',
+      neu: '/**\n * doc\n */\nexport function f() {\n\ta()\n\tb()',
+      after: '/**\n * doc\n */\nexport function f() {\n\ta()\n\tb()\n}\n',
+    },
+    {
+      before: '/*\n * init\n */\nint f(void)\n{\n\treturn 0;\n}\n',
+      old: '/*\n * init \n */\nint f(void)\n{\n\treturn 0;',
+      neu: '/*\n * init\n */\nint f(void)\n{\n\tinit();\n\treturn 0;',
+      after: '/*\n * init\n */\nint f(void)\n{\n\tinit();\n\treturn 0;\n}\n',
+    },
+    {
+      before: 'SRCS = a.c \\\n       b.c\nall:\n\t$(CC) $(SRCS)\n',
+      old: 'SRCS = a.c \\\n       b.c \nall:\n\t$(CC) $(SRCS)',
+      neu: 'SRCS = a.c \\\n       b.c\nall:\n\t$(CC) $(SRCS)\n\t$(LD) a.o',
+      after: 'SRCS = a.c \\\n       b.c\nall:\n\t$(CC) $(SRCS)\n\t$(LD) a.o\n',
+    },
+  ]
+  for (const { before, old, neu, after } of cases)
+  {
+    assert.deepEqual(applyEdit(before, old, neu, false), {
+      ok: true,
+      after,
+      count: 1,
+      matchType: 'fuzzy',
+    })
+  }
+})
+
+test('fuzzy refusals report why the normalized match was not applied', () =>
+{
+  assert.deepEqual(
+    applyEdit('  x\n   y\n  x\n   y\n', 'x\n  y', 'x\n  z', false),
+    {
+      ok: false,
+      reason: 'ambiguous',
+      count: 2,
+    }
+  )
+  assert.deepEqual(
+    applyEdit(
+      'func f() {\n\tif x {\n\t\tb()\n\t}\n}\n',
+      '    if x {\n        b()\n    }',
+      '    if x {\n        b()\n    }\n    if y {\n        c()\n    }',
+      false
+    ),
+    { ok: false, reason: 'repeated_lines', count: 0 }
+  )
+  assert.deepEqual(
+    applyEdit('  let x = 1\n', '\tlet x = 1', '\tlet x = 1 ', false),
+    {
+      ok: false,
+      reason: 'no_change',
+      count: 0,
+    }
+  )
+})
+
+test('exact edits in a CRLF file insert CRLF line breaks', () =>
+{
+  assert.deepEqual(applyEdit('a\r\nb\r\n', 'a', 'a\nc', false), {
+    ok: true,
+    after: 'a\r\nc\r\nb\r\n',
+    count: 1,
+    matchType: 'exact',
+  })
+  // a file that mixes endings keeps new_string as sent
+  assert.deepEqual(applyEdit('a\r\nb\n', 'a', 'a\nc', false), {
+    ok: true,
+    after: 'a\nc\r\nb\n',
+    count: 1,
+    matchType: 'exact',
+  })
 })
 
 test('fuzzy matching finds long repetitive blocks and keeps non-overlapping replacements', () =>
@@ -301,9 +410,6 @@ test('describeEditMiss points at a partial match or its absence', () =>
 
   const absent = describeEditMiss('let x = 1\n', 'totally unrelated')
   assert.match(absent, /No file line matches/)
-
-  const single = describeEditMiss('  let x = 1\n', '\tlet x = 1')
-  assert.match(single, /changes nothing/)
 })
 
 test('previewToolDiff reports oversized previous content without diffing', async () =>
@@ -373,4 +479,34 @@ test('previewToolDiff uses request cwd and does not leak off-workspace content',
   assert.equal(outsideEdit?.kind, 'message')
   assert.ok(!JSON.stringify(outsideWrite).includes('SECRET_VALUE'))
   assert.ok(!JSON.stringify(outsideEdit).includes('SECRET_VALUE'))
+})
+
+test('exact edits in CRLF files keep whole CRLF pairs at the match edges', () =>
+{
+  const file = 'f() {\r\n\ty()\r\n}\r\n'
+  assert.deepEqual(applyEdit(file, '\n}', '\n\tx()\n}', false), {
+    ok: true,
+    after: 'f() {\r\n\ty()\r\n\tx()\r\n}\r\n',
+    count: 1,
+    matchType: 'exact',
+  })
+  // a match that ends on the CR replaces up to the whole pair, never a lone CR
+  assert.deepEqual(applyEdit('a\r\nb\r\n', 'a\r', 'A', false), {
+    ok: true,
+    after: 'A\r\nb\r\n',
+    count: 1,
+    matchType: 'exact',
+  })
+})
+
+test('fuzzy re-indent keeps alignment spaces after a tab as spaces', () =>
+{
+  const result = applyEdit(
+    '\t/**\n\t * doc  \n\t */\n',
+    '\t/**\n\t * doc\n\t */',
+    '\t/**\n\t * better doc\n\t */',
+    false
+  )
+  assert.ok(result.ok)
+  assert.equal(result.after, '\t/**\n\t * better doc\n\t */\n')
 })

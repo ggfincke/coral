@@ -7,7 +7,8 @@ import {
   type AgentRunOutcome,
 } from '../agent/agent.js'
 import { AgentTodoState } from '../agent/state/todos.js'
-import type { AgentEvents } from '../agent/contracts.js'
+import { SURFACE_MAX_ITERATIONS, type AgentEvents } from '../agent/contracts.js'
+import { resolvePermissions } from '../config/permissions.js'
 import type { SessionData } from '../session/types.js'
 import { discoverSkills, loadUserInstructions } from '../skills/discover.js'
 import { BASH_DEFAULT_TIMEOUT_MS } from '../tools/bash.js'
@@ -336,12 +337,19 @@ export async function executeJob(
       }))
     // tasks follow the same standing instructions and skills as other surfaces
     const agentsHome = agentsHomePath()
+    // configured always_deny still wins over the forced allow map
+    const configured = resolvePermissions(job.worktree!.path)
     const options: AgentOptions = {
       tools,
       permissions: Object.fromEntries(
-        tools.map((tool) => [tool.name, 'always_allow'])
+        tools.map((tool) => [
+          tool.name,
+          configured[tool.name] === 'always_deny'
+            ? 'always_deny'
+            : 'always_allow',
+        ])
       ),
-      maxIterations: 100,
+      maxIterations: SURFACE_MAX_ITERATIONS,
       mcpMode: 'off',
       verifyEdits: false,
       todoState: new AgentTodoState(restored?.todos),

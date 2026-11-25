@@ -45,6 +45,7 @@ export interface AcpEventProjectionOptions
   cwd: string
   client: AgentContext
   signal: AbortSignal
+  // approvals need a live, unaborted operation; updates flush until settle()
   isCurrent: () => boolean
   getTodos: () => TodoItem[]
   getContextWindow: () => number
@@ -158,7 +159,7 @@ export class AcpEventProjection
   private promptCachedReadTokens?: number
   private promptCachedWriteTokens?: number
   private agentError?: Error
-  private iterationLimited = false
+  private settled = false
 
   constructor(
     private readonly options: AcpEventProjectionOptions,
@@ -166,11 +167,13 @@ export class AcpEventProjection
   )
   {}
 
+  // a cancelled turn still flushes its own updates before the prompt
+  // responds; only callbacks after settle() are dropped
   private enqueue(update: SessionUpdate): void
   {
+    if (this.settled) return
     this.notificationTail = this.notificationTail.then(async () =>
     {
-      if (!this.options.isCurrent()) return
       await this.options.client.notify(methods.client.session.update, {
         sessionId: this.options.sessionId,
         update,
@@ -372,7 +375,20 @@ export class AcpEventProjection
           protectedPath !== false
         ),
       onMcpLaunchApproval: async () => false,
-      onDoomLoop: async () => false,
+      // ACP has no continue prompt, so the turn says why it stops
+      onDoomLoop: async (message) =>
+      {
+        this.resetMessageSegments()
+        this.enqueue({
+          sessionUpdate: 'agent_message_chunk',
+          messageId: this.ids.next('message'),
+          content: {
+            type: 'text',
+            text: `Coral stopped this turn: ${sanitizeUntrustedText(message)}`,
+          },
+        })
+        return false
+      },
       onUsage: (usage) =>
       {
         this.promptInputTokens += usage.promptTokens
@@ -423,10 +439,6 @@ export class AcpEventProjection
             : {}),
         })
       },
-      onIterationLimit: () =>
-      {
-        this.iterationLimited = true
-      },
       onDone: () =>
       {},
       onError: (error) =>
@@ -434,11 +446,6 @@ export class AcpEventProjection
         this.agentError = error
       },
     }
-  }
-
-  hitIterationLimit(): boolean
-  {
-    return this.iterationLimited
   }
 
   getUsage(): Usage | undefined
@@ -454,5 +461,24 @@ export class AcpEventProjection
   async drain(): Promise<void>
   {
     await this.notificationTail
+  }
+
+  // fail tool calls the turn left open, flush, then ignore late callbacks
+  async settle(): Promise<void>
+  {
+    for (const call of this.tools.values())
+    {
+      const error = 'Tool call did not finish'
+      this.enqueue({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: call.acpId,
+        status: 'failed',
+        content: [{ type: 'content', content: { type: 'text', text: error } }],
+        rawOutput: { output: '', error },
+      })
+    }
+    this.tools.clear()
+    this.settled = true
+    await this.drain()
   }
 }

@@ -112,7 +112,7 @@ On a tool approval, `(a)` approves and grants that tool identity, with **any arg
 
 ## Headless
 
-`coral exec` profiles force `always_allow` on their catalog tools, then reject every `onToolApproval` / `onMcpLaunchApproval` / doom continue. Unexpected tools never run. `--mcp` only helps for already-trusted servers whose namespaced tools are `always_allow`. Details: [CLI](cli.md).
+`coral exec` profiles force `always_allow` on their catalog tools (a configured `always_deny` still wins), then reject every `onToolApproval` / `onMcpLaunchApproval` / doom continue. Unexpected tools never run. `--mcp` only helps for already-trusted servers whose namespaced tools are `always_allow`. Details: [CLI](cli.md).
 
 ---
 
