@@ -81,6 +81,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   works and still asks for approval. `search_code` is also left out for Ollama
   models when its embedding model is not pulled, instead of being offered and
   failing on every call. Hosted models are unchanged.
+- **Non-UTF-8 files:** `read_file` returns the text with a notice that the
+  file is not valid UTF-8, and `edit_file` and `write_file` refuse to change
+  it so the bytes stay intact.
+- **Shell runner:** `bash` and mutating git run in their own process group,
+  so a timeout or Esc stops the whole command tree, stdin readers return at
+  once, and git never draws a credential prompt over the TUI.
+- **Run limits:** `coral exec` and ACP cap a turn at 100 model rounds. A
+  declined doom loop ends exec with a `doom_loop_stopped` status and exit 1,
+  and ACP with `max_turn_requests`. `always_deny` now wins over exec and task
+  permission maps.
+- **Durable tasks:** task branches are named `coral/job-<id>` (older
+  `codex/job-` records no longer load), and task workers load standing
+  instructions and skills.
+- **History limit:** at 100 messages Coral trims older turns once down to 70,
+  keeps undo for the turns that remain, and says so, instead of dropping
+  history silently.
+- **`/diff`:** shows staged, unstaged, and untracked changes.
+- **Platforms:** Coral supports macOS and Linux.
+- **Tests:** CI typechecks every test file (`npm run typecheck:tests`).
+
+### Removed
+
+- The legacy `mcp-trust.json` reader, the pre-2026-07-18 telemetry baseline
+  reader, and the MLX benchmark harness (its recorded results stay).
 
 ### Fixed
 
@@ -108,6 +132,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the leading system message, so an edit no longer forces Ollama to re-prefill
   the whole conversation on the next round. Later system text now stays in
   place as user text, as the hosted adapters already did.
+- **Typing while busy:** keys that arrive together in one terminal read (fast
+  typing during a streaming turn, `tmux send-keys`) now edit the latest draft.
+  Enter inside such a run submits, and keys after it go to the new draft.
+  Pastes in approval prompts and other overlays can no longer answer them.
+- **Composer editing:** vi edits undo with `u` and Ctrl+_, Home and End stay
+  on the current line, unbound control chords no longer type text, and an
+  unquoted `@path` drops trailing punctuation.
+- **Stuck turns:** a turn that was accepted but never ran no longer blocks
+  the next submit, slash commands, or Ctrl+C in the TUI or ACP.
+- **Hosted turns:** a token-limit or unfinished hosted response fails the turn
+  instead of running a partial tool call, and malformed tool arguments get a
+  per-call tool error.
+- **Fuzzy edits:** `edit_file` refuses a re-indent that mixes tabs and
+  spaces, gives the real reason when a fuzzy match fails, and keeps CRLF
+  line endings.
+- **Transcript and export:** restored sessions and `/export` hide internal
+  nudges and match the live view, and the diff, list, tab, and code-fence
+  rendering edge cases are fixed.
+- **Session leases:** a lease whose process id now runs another process is
+  recovered.
+- **Durable task control:** malformed requests and commands no longer wedge
+  the queue, and the event log batches its writes.
+- **Retrieval:** an unreadable or still-changing file is skipped instead of
+  failing the whole index refresh.
+- **Terminal output:** `coral exec` and `coral models` strip control sequences
+  when writing to a terminal, and SIGHUP runs the normal shutdown.
+
+### Security
+
+- **Tool argument hardening:** `grep` and `glob` end their options with `--`
+  and never return `.git/` internals. Read-side git turns off fsmonitor,
+  external diff, textconv, and config-defined hooks and filter drivers.
+  `git_push` validates the branch and remote, and git pathspecs follow the
+  workspace path rule.
+- **Approvals show hidden bytes:** approval prompts, tool headers, diffs, and
+  ACP tool titles show control, bidi, and zero-width characters escaped with
+  a warning row instead of deleting them. `bash` refuses a command with raw
+  control bytes other than tab and newline.
+- **Scoped grants:** an "allow for session" answer covers only the scope it
+  was given in (inside or outside the workspace), a persisted grant never
+  covers an outside-workspace call, and persisted grants follow the active
+  session's directory.
+- **Protected paths:** `write_file` and `edit_file` aimed at `.git/`,
+  `CORAL_HOME`, `AGENTS_HOME`, or `~/.coral.json` always prompt and are never
+  covered by grants or ACP `auto-accept-edits`. Yolo and ACP `full-access`
+  still allow them.
+- **Workspace boundary:** dangling symlinks, FIFOs and other non-regular
+  files, and a symlink swapped in after the check no longer reach outside
+  the workspace. A project instruction file that links outside the workspace
+  is skipped with a notice. Paths starting with `~` are rejected.
+- **Child environments:** `bash`, git, `rg`, task commands, and language
+  servers no longer inherit hosted API keys.
 
 ## [0.17.10] - 2026-10-21
 
