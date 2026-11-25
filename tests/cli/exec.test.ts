@@ -2,7 +2,7 @@
 // verify headless capability profiles and structured execution evidence
 
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -178,6 +178,103 @@ test('tool-free generation stays ephemeral and reports inference failure and can
   {
     if (home === undefined) delete process.env.CORAL_HOME
     else process.env.CORAL_HOME = home
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// one-shot client whose final reply is the given text
+function replyClient(content: string): AgentInferenceClient
+{
+  return {
+    startKeepAlive()
+    {},
+    async listModels()
+    {
+      return []
+    },
+    async showModel()
+    {
+      return { contextLength: 8192, architecture: 'gemma' }
+    },
+    async *chatStream()
+    {
+      yield { message: { role: 'assistant', content }, done: true }
+    },
+  }
+}
+
+test('text output strips terminal controls on a TTY and stays raw for pipes', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-exec-tty-'))
+  const reply = 'hi\u001b]52;c;QQ==\u0007'
+  try
+  {
+    for (const isTTY of [true, false])
+    {
+      const stdout: string[] = []
+      await runCoralExec(
+        {
+          prompt: 'say hi',
+          cwd: dir,
+          model: 'fixture',
+          host: 'http://ollama.test',
+          permissionProfile: 'none',
+          outputFormat: 'text',
+          mcp: false,
+        },
+        {
+          inferenceClient: replyClient(reply),
+          writeStdout: (text) => stdout.push(text),
+          writeStderr()
+          {},
+          stdoutIsTTY: isTTY,
+        }
+      )
+      assert.equal(stdout.join(''), isTTY ? 'hi\n' : `${reply}\n`)
+    }
+  }
+  finally
+  {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('result file keeps an existing parent directory mode', async () =>
+{
+  const dir = await mkdtemp(join(tmpdir(), 'coral-exec-result-mode-'))
+  try
+  {
+    await chmod(dir, 0o755)
+    const resultFile = join(dir, 'result.json')
+    const result = await runCoralExec(
+      {
+        prompt: 'say hi',
+        cwd: dir,
+        model: 'fixture',
+        host: 'http://ollama.test',
+        permissionProfile: 'none',
+        outputFormat: 'json',
+        resultFile,
+        mcp: false,
+      },
+      {
+        inferenceClient: replyClient('hi'),
+        writeStdout()
+        {},
+        writeStderr()
+        {},
+      }
+    )
+    assert.equal(result.status, 'completed')
+    assert.equal(JSON.parse(await readFile(resultFile, 'utf-8')).response, 'hi')
+    if (process.platform !== 'win32')
+    {
+      assert.equal((await stat(dir)).mode & 0o7777, 0o755)
+      assert.equal((await stat(resultFile)).mode & 0o777, 0o600)
+    }
+  }
+  finally
+  {
     await rm(dir, { recursive: true, force: true })
   }
 })

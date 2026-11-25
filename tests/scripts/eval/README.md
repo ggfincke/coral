@@ -138,8 +138,7 @@ Each rep already captures the model's reliability counters, but they normally
 die with the process. With `--save-telemetry`, the harness sums every rep across
 every task for a model into one entry and folds it into
 an immutable record under `~/.coral/eval-telemetry.d/`, so reliability becomes
-comparable across runs over time instead of just per-invocation. A legacy
-`eval-telemetry.json` snapshot remains a read-only baseline when present.
+comparable across runs over time instead of just per-invocation.
 
 This is a **separate store** from the interactive `~/.coral/telemetry.d/` that
 the TUI's `/telemetry` reads: synthetic benchmark counters are kept out of the
