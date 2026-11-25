@@ -9,7 +9,8 @@ import {
   DEFAULT_EMBEDDING_MODEL,
   type IndexStore,
 } from '../../retrieval/types.js'
-import { runGitCommand } from '../../utils/git.js'
+import { runGitCommand, type GitCommandResult } from '../../utils/git.js'
+import { flattenUntrustedText } from '../../utils/untrusted-text.js'
 import { style } from '../theme.js'
 import type { Command } from './contracts.js'
 import {
@@ -22,18 +23,77 @@ import { systemBlock } from './output.js'
 
 // /diff command
 
+// untracked paths listed before the rest collapse into a count
+const MAX_UNTRACKED_LISTED = 50
+
+// staged & unstaged changes to tracked files; an unborn HEAD has nothing to
+// diff against, so it shows the index and worktree diffs one after another
+async function trackedChanges(cwd: string): Promise<GitCommandResult>
+{
+  const head = await runGitCommand(
+    ['rev-parse', '--verify', '--quiet', 'HEAD'],
+    cwd
+  )
+  const diffs = head.error
+    ? [['diff', '--cached'], ['diff']]
+    : [['diff', 'HEAD']]
+  const outputs: string[] = []
+  for (const args of diffs)
+  {
+    const result = await runGitCommand(args, cwd, { allowStdoutOnError: true })
+    if (result.error) return result
+    if (result.output.trim()) outputs.push(result.output)
+  }
+  return { output: outputs.join('\n') }
+}
+
+// untracked, non-ignored paths across the whole repo, relative to its root;
+// untracked directories collapse to one entry & empty ones are skipped,
+// like git status does
+async function untrackedPaths(cwd: string): Promise<string[] | undefined>
+{
+  const result = await runGitCommand(
+    [
+      'ls-files',
+      '--others',
+      '--exclude-standard',
+      '--directory',
+      '--no-empty-directory',
+      '--full-name',
+      '-z',
+      '--',
+      ':/',
+    ],
+    cwd
+  )
+  if (result.error) return undefined
+  return result.output.split('\0').filter(Boolean)
+}
+
+// names are flattened to one row so a crafted name cannot fake extra entries
+function formatUntracked(paths: string[]): string
+{
+  const listed = paths
+    .slice(0, MAX_UNTRACKED_LISTED)
+    .map((path) => `  ${flattenUntrustedText(path)}`)
+  const hidden = paths.length - listed.length
+  if (hidden > 0) listed.push(`  ... ${hidden} more`)
+  return `Untracked files:\n${listed.join('\n')}`
+}
+
 const diffCommand: Command = {
   name: 'diff',
-  description: 'Show git diff of working directory',
+  description: 'Show staged, unstaged, & untracked changes',
   async execute(_args, ctx)
   {
     const cwd = ctx.getCwd()
 
-    const result = await runGitCommand(['diff'], cwd, {
-      allowStdoutOnError: true,
-    })
+    const [tracked, untracked] = await Promise.all([
+      trackedChanges(cwd),
+      untrackedPaths(cwd),
+    ])
 
-    if (result.error)
+    if (tracked.error)
     {
       ctx.pushOutput(
         systemBlock('Not a git repository, or git is not installed')
@@ -41,14 +101,27 @@ const diffCommand: Command = {
       return
     }
 
-    if (!result.output.trim())
+    if (!tracked.output.trim() && untracked?.length === 0)
     {
       ctx.pushOutput(systemBlock('No uncommitted changes'))
       return
     }
 
     // diff blocks render with a gutter and theme colors in the transcript
-    ctx.pushOutput({ type: 'diff', unified: result.output })
+    if (tracked.output.trim())
+    {
+      ctx.pushOutput({ type: 'diff', unified: tracked.output })
+    }
+    if (untracked === undefined)
+    {
+      ctx.pushOutput(
+        systemBlock('Untracked files: unknown (git ls-files failed)')
+      )
+    }
+    else if (untracked.length > 0)
+    {
+      ctx.pushOutput(systemBlock(formatUntracked(untracked)))
+    }
   },
 }
 

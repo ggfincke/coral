@@ -5,8 +5,11 @@ import { lexer, type Token, type Tokens } from 'marked'
 import type { OllamaMessage } from '../../types/inference.js'
 import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
 
-// find the last assistant message with non-empty text; the clipboard gets
-// the same control-free text the transcript showed, so nothing hidden pastes
+// content Agent stores for a turn interrupted before any reply text arrived
+const INTERRUPTED_PLACEHOLDER = '(interrupted)'
+
+// find the last assistant message with real text; the clipboard gets the
+// same control-free text the transcript showed, so nothing hidden pastes
 export function lastAssistantText(messages: OllamaMessage[]): string | null
 {
   for (let i = messages.length - 1; i >= 0; i--)
@@ -14,7 +17,7 @@ export function lastAssistantText(messages: OllamaMessage[]): string | null
     const msg = messages[i]
     if (msg?.role !== 'assistant') continue
     const content = sanitizeUntrustedText(msg.content ?? '').trim()
-    if (content) return content
+    if (content && content !== INTERRUPTED_PLACEHOLDER) return content
   }
   return null
 }
