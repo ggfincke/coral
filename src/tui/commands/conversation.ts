@@ -240,6 +240,7 @@ const exportCommand: Command = {
         model: ctx.activeModel,
         cwd: ctx.getCwd(),
         messages: ctx.agent.getMessages(),
+        undo: ctx.agent.getUndoStack(),
       },
       { includeTools, includeThinking }
     )
