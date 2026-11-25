@@ -4,7 +4,7 @@
 import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { chmod, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { buildGitContextMessage } from '../../src/agent/request/git-context.js'
@@ -91,6 +91,46 @@ test(
     assert.match(status.output, /^ M a\.txt$/m)
     assert.match(diff.output, /^\+two$/m)
     assert.match(stat.output, /a\.txt/)
+  }
+)
+
+test(
+  'read-side git fails cleanly on a hook or filter config too large to override',
+  { skip: !HAS_GIT },
+  async () =>
+  {
+    const { dir } = await committedRepo('coral-git-cfg-many-')
+    const config = join(dir, '.git', 'config')
+    const hook = await markerScript(dir, 'hook')
+    const hooks = Array.from(
+      { length: 2000 },
+      (_, index) =>
+        `[hook "h${index}"]\n\tcommand = ${hook}\n\tevent = post-index-change\n`
+    )
+    await appendFile(config, hooks.join(''))
+    await writeFile(join(dir, 'a.txt'), 'two\n')
+
+    // many hook names on one event need a single event-level override
+    const hooked = await gitStatusTool.execute({}, toolContext(dir))
+    assert.equal(hooked.error, undefined)
+    assert.match(hooked.output, /^ M a\.txt$/m)
+
+    const clean = await markerScript(dir, 'clean')
+    await writeFile(join(dir, '.gitattributes'), '* filter=f0\n')
+    const filters = Array.from(
+      { length: 3000 },
+      (_, index) => `[filter "f${index}"]\n\tclean = ${clean}\n`
+    )
+    await appendFile(config, filters.join(''))
+    await writeFile(join(dir, 'a.txt'), 'three\n')
+
+    const status = await gitStatusTool.execute({}, toolContext(dir))
+    const context = await buildGitContextMessage(dir)
+
+    assert.match(status.error ?? '', /too many hook or filter entries/)
+    assert.equal(context, null)
+    assert.equal(existsSync(join(dir, 'hook.ran')), false)
+    assert.equal(existsSync(join(dir, 'clean.ran')), false)
   }
 )
 

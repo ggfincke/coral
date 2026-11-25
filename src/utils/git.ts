@@ -1,11 +1,14 @@
 // src/utils/git.ts
 // shared git command execution helpers
 
+import { toErrorMessage } from './errors.js'
 import {
   DEFAULT_CHILD_PROCESS_MAX_BUFFER,
   execFileCommand,
   formatProcessError,
   type ChildProcessFailure,
+  type ChildProcessOptions,
+  type ChildProcessResult,
 } from './process.js'
 
 export interface GitCommandResult
@@ -26,6 +29,10 @@ export interface GitCommandOptions
 }
 
 const DEFAULT_GIT_TIMEOUT = 10_000
+
+// total bytes the generated '-c' overrides may add to a read's argv; far below
+// the per-arg & total exec limits, so a huge config fails here, not at spawn
+const MAX_CONFIG_OVERRIDE_BYTES = 64 * 1024
 
 // hook events a read or a task checkout can fire (index refresh, checkout,
 // ref update); config-defined hooks ignore core.hooksPath
@@ -72,7 +79,8 @@ function configSubsection(
 }
 
 // turn configured hook & filter entries into '-c' overrides that disable them:
-// each hook event & named hook, & every filter driver (clean, smudge, process)
+// each hook event (hook.<event>.enabled=false covers every hook name on it) &
+// every filter driver (clean, smudge, process)
 function disableConfiguredCommands(
   entries: Array<{ key: string; value: string }>
 ): { args: string[] } | { error: string }
@@ -83,8 +91,6 @@ function disableConfiguredCommands(
     const hook = configSubsection(key, 'hook')
     if (hook)
     {
-      const name = configName(hook.name)
-      if (name) overrides.add(`hook.${name}.enabled=false`)
       const event = hook.variable === 'event' ? configName(value) : undefined
       if (event) overrides.add(`hook.${event}.enabled=false`)
       continue
@@ -104,7 +110,39 @@ function disableConfiguredCommands(
     }
     overrides.add(`filter.${name}.required=false`)
   }
-  return { args: [...overrides].flatMap((override) => ['-c', override]) }
+  const args = [...overrides].flatMap((override) => ['-c', override])
+  const bytes = args.reduce((sum, arg) => sum + Buffer.byteLength(arg) + 1, 0)
+  if (bytes > MAX_CONFIG_OVERRIDE_BYTES)
+  {
+    return {
+      error: `git config defines too many hook or filter entries to disable safely (${bytes} bytes of overrides, limit ${MAX_CONFIG_OVERRIDE_BYTES}); trim the repo's hook.* and filter.* config`,
+    }
+  }
+  return { args }
+}
+
+// execFile throws at spawn (E2BIG, a NUL byte in an arg) instead of calling
+// back, so turn that into an ordinary failure the caller can report
+async function execGit(
+  args: string[],
+  options: ChildProcessOptions
+): Promise<ChildProcessResult>
+{
+  try
+  {
+    return await execFileCommand('git', args, options)
+  }
+  catch (err)
+  {
+    options.signal?.throwIfAborted()
+    return {
+      ok: false,
+      stdout: '',
+      stderr: '',
+      message: `git could not start: ${toErrorMessage(err)}`,
+      code: (err as NodeJS.ErrnoException).code,
+    }
+  }
 }
 
 // read hook & filter config without running anything, so a read-only call can
@@ -114,8 +152,7 @@ async function readOnlyConfigOverrides(
   options: { timeout: number; maxBuffer: number; signal?: AbortSignal }
 ): Promise<{ args: string[] } | { error: string }>
 {
-  const result = await execFileCommand(
-    'git',
+  const result = await execGit(
     ['config', '-z', '--get-regexp', '^(hook|filter)\\.'],
     { cwd, ...options }
   )
@@ -227,7 +264,7 @@ export async function runGitCommand(
   const policy = await withGitPolicy(args, cwd, { timeout, maxBuffer, signal })
   signal?.throwIfAborted()
   if ('error' in policy) return { output: '', error: policy.error }
-  const result = await execFileCommand('git', policy.args, {
+  const result = await execGit(policy.args, {
     cwd,
     timeout,
     maxBuffer,
