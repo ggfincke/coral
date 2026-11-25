@@ -105,3 +105,42 @@ test('case variants of missing protected roots match on case-insensitive platfor
   assert.equal(await writes(userConfig), false)
   assert.equal(await writes(join(home, '.Agents', 'AGENTS.md')), false)
 })
+
+test('missing protected roots stay protected through a linked home', async (t) =>
+{
+  const previous = {
+    HOME: process.env.HOME,
+    AGENTS_HOME: process.env.AGENTS_HOME,
+  }
+  t.after(() =>
+  {
+    for (const [key, value] of Object.entries(previous))
+    {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  })
+  delete process.env.CORAL_HOME
+  delete process.env.AGENTS_HOME
+
+  // a workspace link to the home dir reaches roots that do not exist yet
+  const realHome = tempDirSync('coral-policy-real-home-')
+  const workspace = join(realHome, 'ws')
+  mkdirSync(workspace)
+  symlinkSync(realHome, join(workspace, 'homelink'))
+  process.env.HOME = realHome
+  const writes = (path: string, cwd = workspace) =>
+    touchesProtectedPath('write_file', { path, content: '' }, cwd)
+  assert.equal(await writes('homelink/.coral.json'), true)
+  assert.equal(await writes('homelink/.agents/AGENTS.md'), true)
+  assert.equal(await writes('homelink/.coral/tool-grants.d/x.json'), true)
+  assert.equal(await writes('homelink/notes.md'), false)
+
+  // HOME given as a link still protects writes through the real spelling
+  const linkHome = join(tempDirSync('coral-policy-link-home-'), 'home')
+  symlinkSync(realHome, linkHome)
+  process.env.HOME = linkHome
+  assert.equal(await writes(join(realHome, '.coral.json'), realHome), true)
+  assert.equal(await writes(join(realHome, '.agents', 'x.md'), realHome), true)
+  assert.equal(await writes(join(realHome, 'notes.md'), realHome), false)
+})

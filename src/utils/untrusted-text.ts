@@ -143,11 +143,13 @@ export function sanitizeUntrustedText(text: string): string
   return sanitized
 }
 
+// ASCII controls read as `\xNN`; anything wider uses the braced `\u{...}`
+// form so an astral code point never reads as four digits plus a literal
 function escapeHiddenChar(code: number): string
 {
-  return code <= 0xff
+  return code < 0x80
     ? `\\x${code.toString(16).padStart(2, '0')}`
-    : `\\u${code.toString(16).padStart(4, '0')}`
+    : `\\u{${code.toString(16)}}`
 }
 
 // a CR right before LF is an ordinary CRLF line ending, not a hidden control
@@ -156,8 +158,63 @@ function isLineEndingCr(text: string, pos: number): boolean
   return text.charCodeAt(pos) === 0x0d && text.charCodeAt(pos + 1) === 0x0a
 }
 
-// show hidden chars as `\xNN` / `\uNNNN` text so approval prompts, tool headers,
-// and diffs never omit bytes that will run; tab, newline & CRLF stay as lines
+const VS15 = 0xfe0e
+const VS16 = 0xfe0f
+const ZWJ = 0x200d
+const COMBINING_KEYCAP = 0x20e3
+const PICTOGRAPH = /^\p{Extended_Pictographic}$/u
+const EMOJI_MODIFIER = /^\p{Emoji_Modifier}$/u
+const KEYCAP_BASE = /^[0-9#*]$/
+
+function matchesCodePoint(pattern: RegExp, code: number | undefined): boolean
+{
+  return code !== undefined && pattern.test(String.fromCodePoint(code))
+}
+
+// the code point that ends right before pos, if any
+function codePointBefore(text: string, pos: number): number | undefined
+{
+  if (pos === 0) return undefined
+  const low = text.charCodeAt(pos - 1)
+  const high = text.charCodeAt(pos - 2)
+  const isPair =
+    low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff
+  return isPair ? text.codePointAt(pos - 2) : low
+}
+
+// ordinary emoji presentation renders inside a visible glyph: VS15/VS16 right
+// after a pictograph or keycap base, or a ZWJ joining two pictographs (the
+// first may carry VS16 or a skin tone); stray or repeated ones stay escaped
+function isEmojiPresentation(text: string, pos: number, code: number): boolean
+{
+  if (code === VS15 || code === VS16)
+  {
+    const before = codePointBefore(text, pos)
+    if (matchesCodePoint(PICTOGRAPH, before)) return true
+    return (
+      matchesCodePoint(KEYCAP_BASE, before) &&
+      text.charCodeAt(pos + 1) === COMBINING_KEYCAP
+    )
+  }
+  if (code !== ZWJ) return false
+  if (!matchesCodePoint(PICTOGRAPH, text.codePointAt(pos + 1))) return false
+
+  let before = codePointBefore(text, pos)
+  if (before === VS16 || matchesCodePoint(EMOJI_MODIFIER, before))
+  {
+    before = codePointBefore(text, pos - (before! > 0xffff ? 2 : 1))
+  }
+  return matchesCodePoint(PICTOGRAPH, before)
+}
+
+function isHiddenAt(text: string, pos: number, code: number): boolean
+{
+  return isHiddenChar(code) && !isEmojiPresentation(text, pos, code)
+}
+
+// show hidden chars as `\xNN` / `\u{...}` text so approval prompts, tool
+// headers, and diffs never omit bytes that will run; tab, newline, CRLF, and
+// emoji presentation stay as they are
 export function revealUntrustedText(text: string): string
 {
   let revealed = ''
@@ -167,7 +224,7 @@ export function revealUntrustedText(text: string): string
     const char = String.fromCodePoint(code)
     if (!isLineEndingCr(text, pos))
     {
-      revealed += isHiddenChar(code) ? escapeHiddenChar(code) : char
+      revealed += isHiddenAt(text, pos, code) ? escapeHiddenChar(code) : char
     }
     pos += char.length
   }
@@ -180,7 +237,7 @@ export function hasHiddenControls(text: string): boolean
   for (let pos = 0; pos < text.length;)
   {
     const code = text.codePointAt(pos)!
-    if (isHiddenChar(code) && !isLineEndingCr(text, pos)) return true
+    if (isHiddenAt(text, pos, code) && !isLineEndingCr(text, pos)) return true
     pos += code > 0xffff ? 2 : 1
   }
   return false

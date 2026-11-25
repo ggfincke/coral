@@ -262,7 +262,7 @@ export function buildApprovalContent(
   )
   {
     box.title(
-      'Warning: this call contains control or invisible characters, shown escaped as \\xNN or \\uNNNN.',
+      'Warning: this call contains control or invisible characters, shown escaped as \\xNN or \\u{...}.',
       box.warn
     )
   }
