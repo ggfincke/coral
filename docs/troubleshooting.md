@@ -108,7 +108,7 @@ Caps: 2,000 files, 512 KiB each, no symlinks. Huge monorepos will be incomplete.
 
 `Unknown tool: …` — name not in the active catalog (MCP not admitted yet, or not in the headless profile).
 
-Doom loop modal: identical tool+args or identical error **3** times in **12** calls. `(y) continue  (n) stop`. Exec emits `doom_loop_stopped` and ends.
+Doom loop modal: identical tool+args or identical error **3** times in **12** calls. `(y) continue  (n) stop`. Exec emits `doom_loop_stopped` and ends with status `doom_loop_stopped` (exit 1).
 
 `code_intel`: `code_intel supports .ts, .tsx, .mts, .cts, .js, .jsx, .mjs, and .cjs files`; `code_intel is unavailable in this session` / `TypeScript language server is unavailable`; `TypeScript diagnostics timed out after 5000ms`. Run the project typecheck as a fallback when diagnostics time out; Coral does not run it automatically.
 

@@ -15,6 +15,10 @@ import {
 export type { ExecPermissionProfile, ExecOutputFormat } from './args.js'
 import { Agent } from '../agent/agent.js'
 import type { AgentInferenceClient, TokenUsage } from '../agent/agent.js'
+import {
+  SURFACE_MAX_ITERATIONS,
+  type AgentRunOutcome,
+} from '../agent/contracts.js'
 import { resolveMcpConfig } from '../config/mcp.js'
 import {
   resolvePermissions,
@@ -30,7 +34,11 @@ import { writeUserJsonFile } from '../utils/json.js'
 import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
 
 export type ExecStatus =
-  'completed' | 'failed' | 'cancelled' | 'iteration_limited'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'iteration_limited'
+  | 'doom_loop_stopped'
 
 export interface CoralExecOptions
 {
@@ -103,19 +111,44 @@ export function resolveHeadlessProfile(
   return { tools, permissions }
 }
 
+// configured always_deny still wins over the profile's forced allow map
 function resolveHeadlessPermissions(
   profile: HeadlessProfile,
   cwd: string,
   mcp: boolean
 ): ToolPermissions
 {
-  if (!mcp) return profile.permissions
   const permissions = { ...profile.permissions }
   for (const [name, policy] of Object.entries(resolvePermissions(cwd)))
   {
-    if (name.startsWith('mcp__')) permissions[name] = policy
+    if (mcp && name.startsWith('mcp__')) permissions[name] = policy
+    else if (policy === 'always_deny' && Object.hasOwn(permissions, name))
+      permissions[name] = policy
   }
   return permissions
+}
+
+// read the Agent's settled outcome; an abort always reports cancelled
+function execStatus(
+  outcome: AgentRunOutcome | undefined,
+  runError: Error | undefined,
+  aborted: boolean
+): ExecStatus
+{
+  if (runError || !outcome || outcome.status === 'failed') return 'failed'
+  if (aborted) return 'cancelled'
+  switch (outcome.status)
+  {
+    case 'completed':
+      return 'completed'
+    case 'iteration_limit':
+      return 'iteration_limited'
+    case 'doom_loop_stopped':
+      return 'doom_loop_stopped'
+    case 'cancelled':
+    case 'stopped':
+      return 'cancelled'
+  }
 }
 
 function latestAssistantResponse(agent: Agent): string | undefined
@@ -190,6 +223,7 @@ export async function runCoralExec(
   const agent = new Agent(options.model, options.host, options.cwd, {
     tools: profile.tools,
     permissions: resolveHeadlessPermissions(profile, options.cwd, mcp),
+    maxIterations: SURFACE_MAX_ITERATIONS,
     mcpMode: mcp ? 'ask' : 'off',
     mcpConfig: mcp ? resolveMcpConfig() : { servers: [], issues: [] },
     verifyEdits: false,
@@ -202,12 +236,13 @@ export async function runCoralExec(
   })
   let streamedResponse = ''
   let runError: Error | undefined
-  let iterationLimited = false
+  let outcome: AgentRunOutcome | undefined
+  let doomLoopMessage: string | undefined
 
   try
   {
     emit({ type: 'init', run_id: runId, model: options.model })
-    await agent.run(
+    outcome = await agent.run(
       options.prompt,
       {
         onToken(token)
@@ -257,6 +292,7 @@ export async function runCoralExec(
         },
         async onDoomLoop(message)
         {
+          doomLoopMessage = message
           emit({ type: 'doom_loop_stopped', message, run_id: runId })
           return false
         },
@@ -267,10 +303,6 @@ export async function runCoralExec(
         onDone()
         {
           emit({ type: 'done', run_id: runId })
-        },
-        onIterationLimit()
-        {
-          iterationLimited = true
         },
         onError(error)
         {
@@ -298,14 +330,13 @@ export async function runCoralExec(
     }
   }
 
-  const status: ExecStatus = runError
-    ? 'failed'
-    : signal?.aborted
-      ? 'cancelled'
-      : iterationLimited
-        ? 'iteration_limited'
-        : 'completed'
+  const status = execStatus(outcome, runError, signal?.aborted === true)
   const finalResponse = latestAssistantResponse(agent) ?? streamedResponse
+  const error =
+    runError?.message ??
+    (status === 'doom_loop_stopped'
+      ? `stopped by the doom-loop guard: ${doomLoopMessage ?? 'repeated tool calls'}`
+      : undefined)
   let result: CoralExecResult = {
     version: 1,
     run_id: runId,
@@ -313,7 +344,7 @@ export async function runCoralExec(
     model: options.model,
     response: finalResponse.trim(),
     usage: usageResult(agent),
-    ...(runError ? { error: runError.message } : {}),
+    ...(error ? { error } : {}),
   }
   if (options.resultFile)
   {
