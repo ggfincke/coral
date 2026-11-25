@@ -3,15 +3,17 @@
 
 import { lexer, type Token, type Tokens } from 'marked'
 import type { OllamaMessage } from '../../types/inference.js'
+import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
 
-// find the last assistant message with non-empty text
+// find the last assistant message with non-empty text; the clipboard gets
+// the same control-free text the transcript showed, so nothing hidden pastes
 export function lastAssistantText(messages: OllamaMessage[]): string | null
 {
   for (let i = messages.length - 1; i >= 0; i--)
   {
     const msg = messages[i]
     if (msg?.role !== 'assistant') continue
-    const content = msg.content?.trim()
+    const content = sanitizeUntrustedText(msg.content ?? '').trim()
     if (content) return content
   }
   return null
