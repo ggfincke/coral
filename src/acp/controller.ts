@@ -5,7 +5,12 @@ import { realpathSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import * as acp from '@agentclientprotocol/sdk/unstable'
 import { Agent } from '../agent/agent.js'
-import type { AcceptedTurn, AgentEvents } from '../agent/contracts.js'
+import {
+  SURFACE_MAX_ITERATIONS,
+  type AcceptedTurn,
+  type AgentEvents,
+  type AgentRunOutcome,
+} from '../agent/contracts.js'
 import { AgentTodoState } from '../agent/state/todos.js'
 import type { McpConfigResolution } from '../config/mcp.js'
 import { parseModelRef } from '../providers/model-ref.js'
@@ -79,16 +84,23 @@ interface CoralAcpAgent
   extends InteractiveLifetimeAgent, ProviderTurnSnapshotAgent
   {
   acceptTurn(input: string): AcceptedTurn
-  // ACP settles turns from events; the returned outcome is unused here
   runAcceptedTurn(
     accepted: AcceptedTurn,
     events: AgentEvents,
     signal?: AbortSignal
-  ): Promise<unknown>
+  ): Promise<AgentRunOutcome>
   switchModel(model: string, signal?: AbortSignal): Promise<void>
   restoreMessages(messages: SessionData['messages']): void
   restoreUndoStack(undo?: UndoTurn[], redo?: UndoTurn[]): void
   getFrozenPrefix(): { contextWindow: number }
+}
+
+// per-binding policy handed to the Agent factory
+interface AgentBindingPolicy
+{
+  mcpConfig: McpConfigResolution
+  runtimeMode: CoralRuntimeMode
+  interactionMode: CoralInteractionMode
 }
 
 interface CoralAcpControllerDependencies
@@ -97,12 +109,7 @@ interface CoralAcpControllerDependencies
     model: string,
     cwd: string,
     restored: SessionData | undefined,
-    binding: {
-      sessionId: string
-      mcpConfig: McpConfigResolution
-      runtimeMode: CoralRuntimeMode
-      interactionMode: CoralInteractionMode
-    }
+    binding: AgentBindingPolicy
   ) => CoralAcpAgent
   listModels: (signal?: AbortSignal) => Promise<Model[]>
   createRuntimeIdentity: () => ProcessSessionRuntimeIdentity
@@ -131,6 +138,8 @@ interface BoundSession
   pendingWrite?: PendingWrite
   dirtyError?: Error
   activeTask?: Promise<unknown>
+  // close and shutdown share one release per binding
+  releaseTask?: Promise<void>
   // in-memory permission state; never persisted & reset on every binding
   runtimeMode: CoralRuntimeMode
   sessionToolGrants: Set<string>
@@ -197,22 +206,42 @@ function persistenceRequestError(
   )
 }
 
+// map a settled outcome to its stop reason when no cancel was requested
+function acpStopReason(outcome: AgentRunOutcome | undefined): acp.StopReason
+{
+  switch (outcome?.status)
+  {
+    case 'completed':
+      return 'end_turn'
+    // ACP has no doom-loop reason; the projection already said why it stopped
+    case 'iteration_limit':
+    case 'doom_loop_stopped':
+      return 'max_turn_requests'
+    case 'cancelled':
+    case 'stopped':
+      return 'cancelled'
+    case 'failed':
+    case undefined:
+      throw new Error('Coral turn ended without a settled outcome')
+  }
+}
+
 function defaultCreateAgent(
   options: CoralAcpControllerOptions,
   model: string,
   cwd: string,
   restored: SessionData | undefined,
-  binding: {
-    sessionId: string
-    mcpConfig: McpConfigResolution
-    runtimeMode: CoralRuntimeMode
-    interactionMode: CoralInteractionMode
-  }
+  binding: AgentBindingPolicy
 ): CoralAcpAgent
 {
   const agentsHome = agentsHomePath()
+  // ACP projects no self-check, caps rounds like exec, and, as an interactive
+  // surface whose client edits files between turns, tracks file changes
   const agent = new Agent(model, options.host, cwd, {
     think: true,
+    maxIterations: SURFACE_MAX_ITERATIONS,
+    verifyEdits: false,
+    trackFileChanges: true,
     mcpMode: 'off',
     mcpConfig: binding.mcpConfig,
     todoState: new AgentTodoState(restored?.todos),
@@ -246,6 +275,8 @@ export class CoralAcpController
   private phase: ControllerPhase = 'uninitialized'
   private binding?: BoundSession
   private shutdownPromise?: Promise<void>
+  // a release that already detached its binding; shutdown joins it
+  private releasing?: Promise<void>
   private setupTask?: Promise<unknown>
   private readonly setupAbort = new AbortController()
   private readonly dependencies: CoralAcpControllerDependencies
@@ -433,25 +464,27 @@ export class CoralAcpController
     ]
   }
 
-  private createBinding(
+  private createAgent(
+    model: string,
+    cwd: string,
+    restored: SessionData | undefined
+  ): CoralAcpAgent
+  {
+    return this.dependencies.createAgent(model, cwd, restored, {
+      mcpConfig: this.bindingMcpConfig(),
+      runtimeMode: 'approval-required',
+      interactionMode: 'default',
+    })
+  }
+
+  private bind(
     session: SessionData,
     lease: SessionLease,
     runtimeIdentity: ProcessSessionRuntimeIdentity,
-    mcpConfig: McpConfigResolution,
+    agent: CoralAcpAgent,
     modelNames: readonly string[]
   ): BoundSession
   {
-    const agent = this.dependencies.createAgent(
-      session.meta.model,
-      session.meta.cwd,
-      session,
-      {
-        sessionId: session.meta.id,
-        mcpConfig,
-        runtimeMode: 'approval-required',
-        interactionMode: 'default',
-      }
-    )
     const holder: { binding?: BoundSession } = {}
     const runtime = new InteractiveSessionRuntime<CoralAcpAgent>(
       {
@@ -505,24 +538,6 @@ export class CoralAcpController
       sessionToolGrants: new Set(),
     }
     holder.binding = binding
-    return binding
-  }
-
-  private bind(
-    session: SessionData,
-    lease: SessionLease,
-    runtimeIdentity: ProcessSessionRuntimeIdentity,
-    mcpConfig: McpConfigResolution,
-    modelNames: readonly string[]
-  ): BoundSession
-  {
-    const binding = this.createBinding(
-      session,
-      lease,
-      runtimeIdentity,
-      mcpConfig,
-      modelNames
-    )
     this.binding = binding
     this.phase = 'bound'
     return binding
@@ -539,46 +554,42 @@ export class CoralAcpController
       this.phase = 'binding'
       assertBaselineSessionRequest(request)
       const cwd = canonicalDirectory(request.cwd)
-      const mcpConfig = this.bindingMcpConfig()
       const names = await this.modelNames(signal)
       signal.throwIfAborted()
       const model = this.selectedNewModel(names)
+      // build the Agent first so a construction failure leaves no session file
+      const agent = this.createAgent(model, cwd, undefined)
       const runtimeIdentity = this.dependencies.createRuntimeIdentity()
-      const created = this.dependencies.createSession({
-        model,
-        cwd,
-        runtime: runtimeIdentity,
-      })
-      let binding: BoundSession | undefined
+      let created: ReturnType<typeof createProviderSession>
+      try
+      {
+        created = this.dependencies.createSession({
+          model,
+          cwd,
+          runtime: runtimeIdentity,
+        })
+      }
+      catch (error)
+      {
+        await agent.dispose().catch(() => undefined)
+        throw error
+      }
+      let binding: BoundSession
       try
       {
         binding = this.bind(
           created.session,
           created.lease,
           runtimeIdentity,
-          mcpConfig,
+          agent,
           names
         )
       }
       catch (error)
       {
-        if (binding && this.binding === binding)
-        {
-          try
-          {
-            await this.releaseBinding(binding)
-          }
-          finally
-          {
-            this.phase = 'ready_unbound'
-          }
-        }
-        else await created.lease.release()
+        await agent.dispose().catch(() => undefined)
+        await created.lease.release()
         throw error
-      }
-      if (!binding)
-      {
-        throw new Error('Coral ACP session binding was not created')
       }
       return {
         sessionId: binding.session.meta.id,
@@ -608,7 +619,6 @@ export class CoralAcpController
       this.phase = 'binding'
       assertBaselineSessionRequest(request)
       const cwd = canonicalDirectory(request.cwd)
-      const mcpConfig = this.bindingMcpConfig()
       const initial = this.dependencies.loadSession(request.sessionId)
       if (!initial)
       {
@@ -633,6 +643,7 @@ export class CoralAcpController
         runtimeIdentity
       )
       let resumed: SessionData
+      let agent: CoralAcpAgent | undefined
       try
       {
         const session = this.dependencies.loadSession(request.sessionId)
@@ -656,23 +667,13 @@ export class CoralAcpController
             lastCompactedAt: session.meta.lastCompactedAt,
           },
         })
-        this.bind(resumed, lease, runtimeIdentity, mcpConfig, names)
+        agent = this.createAgent(resumed.meta.model, resumed.meta.cwd, resumed)
+        this.bind(resumed, lease, runtimeIdentity, agent, names)
       }
       catch (error)
       {
-        const binding = this.binding
-        if (binding?.lease === lease)
-        {
-          try
-          {
-            await this.releaseBinding(binding)
-          }
-          finally
-          {
-            this.phase = 'ready_unbound'
-          }
-        }
-        else await lease.release()
+        await agent?.dispose().catch(() => undefined)
+        await lease.release()
         throw error
       }
       const binding = this.binding!
@@ -788,9 +789,10 @@ export class CoralAcpController
     )
 
     let failure: Error | undefined
+    let outcome: AgentRunOutcome | undefined
     try
     {
-      await binding.runtime.runOperation(handle, () =>
+      outcome = await binding.runtime.runOperation(handle, () =>
         handle.agent.runAcceptedTurn(accepted, projection.events(), signal)
       )
     }
@@ -802,7 +804,7 @@ export class CoralAcpController
     let notificationError: Error | undefined
     try
     {
-      await projection.drain()
+      await projection.settle()
     }
     catch (error)
     {
@@ -854,14 +856,14 @@ export class CoralAcpController
         boundedDiagnostic(notificationError)
       )
     }
-    if (failure || projection.getAgentError())
+    // ACP requires `cancelled` once the client sent session/cancel, even when
+    // the Agent had already settled or failed while stopping
+    const cancelled = signal.aborted
+    if (!cancelled && (failure || projection.getAgentError()))
       throw failure ?? projection.getAgentError()
+    if (!cancelled && outcome?.status === 'failed') throw outcome.error
     return {
-      stopReason: signal.aborted
-        ? 'cancelled'
-        : projection.hitIterationLimit()
-          ? 'max_turn_requests'
-          : 'end_turn',
+      stopReason: cancelled ? 'cancelled' : acpStopReason(outcome),
       ...(projection.getUsage() ? { usage: projection.getUsage() } : {}),
     }
   }
@@ -896,7 +898,8 @@ export class CoralAcpController
       }
       finally
       {
-        this.phase = 'ready_unbound'
+        // a shutdown that started meanwhile owns the final phase
+        if (!this.shutdownPromise) this.phase = 'ready_unbound'
       }
       if (persistenceError) throw persistenceError
     }
@@ -1085,7 +1088,16 @@ export class CoralAcpController
     }
   }
 
-  private async releaseBinding(binding: BoundSession): Promise<void>
+  private releaseBinding(binding: BoundSession): Promise<void>
+  {
+    if (binding.releaseTask) return binding.releaseTask
+    const task = this.releaseDetachedBinding(binding)
+    binding.releaseTask = task
+    this.releasing = task.catch(() => undefined)
+    return task
+  }
+
+  private async releaseDetachedBinding(binding: BoundSession): Promise<void>
   {
     if (this.binding === binding) this.binding = undefined
     let runtimeError: unknown
@@ -1130,28 +1142,29 @@ export class CoralAcpController
     await this.setupTask?.catch(() => undefined)
     const binding = this.binding
     let persistenceError: Error | undefined
-    if (binding)
+    try
     {
-      binding.runtime.abortActive()
-      await binding.activeTask?.catch(() => undefined)
-      try
+      if (binding)
       {
-        this.recoverPendingWrite(binding)
-      }
-      catch (error)
-      {
-        persistenceError = toError(error)
-      }
-      try
-      {
+        binding.runtime.abortActive()
+        await binding.activeTask?.catch(() => undefined)
+        try
+        {
+          this.recoverPendingWrite(binding)
+        }
+        catch (error)
+        {
+          persistenceError = toError(error)
+        }
         await this.releaseBinding(binding)
       }
-      finally
-      {
-        this.phase = 'closed'
-      }
+      // session/close may have detached its binding and still be releasing it
+      else await this.releasing
     }
-    else this.phase = 'closed'
+    finally
+    {
+      this.phase = 'closed'
+    }
     if (persistenceError) throw persistenceError
   }
 

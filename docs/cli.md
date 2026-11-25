@@ -55,19 +55,19 @@ Relative prompt-file and result-file paths resolve from the invoking shell direc
 
 ### Exit codes
 
-| Outcome                                                                        | Code |
-| ------------------------------------------------------------------------------ | ---- |
-| Completed, help, version                                                       | 0    |
-| Syntax errors (stderr), runtime errors, iteration limits, result-file failures | 1    |
-| Validly parsed input failures: model, cwd, host, prompt                        | 2    |
-| SIGINT cancellation, including stdin reads                                     | 130  |
-| SIGTERM cancellation, including stdin reads                                    | 143  |
+| Outcome                                                                                         | Code |
+| ----------------------------------------------------------------------------------------------- | ---- |
+| Completed, help, version                                                                        | 0    |
+| Syntax errors (stderr), runtime errors, iteration limits, doom-loop stops, result-file failures | 1    |
+| Validly parsed input failures: model, cwd, host, prompt                                         | 2    |
+| SIGINT cancellation, including stdin reads                                                      | 130  |
+| SIGTERM cancellation, including stdin reads                                                     | 143  |
 
 Parsed input failures produce the requested JSON/NDJSON result with empty response and zero usage, plus a stderr explanation. Syntax errors produce stderr only. The version-1 result shape below is unchanged.
 
 ### Permission profiles
 
-Every listed tool is set to `always_allow` inside the profile. Approvals still **always return false**, so anything that still requires a prompt (including MCP launch, doom-loop continue, and tools not in the profile) is rejected.
+Every listed tool is set to `always_allow` inside the profile unless user or project config sets it to `always_deny`, which still wins. Approvals still **always return false**, so anything that still requires a prompt (including MCP launch, doom-loop continue, and tools not in the profile) is rejected.
 
 **`none`:** no tools, no MCP startup, and no conversation writes. This profile
 overrides `--mcp`.
@@ -80,7 +80,7 @@ overrides `--mcp`.
 
 **In neither profile:** `git_add`, `git_commit`, `git_switch`, `git_push`, `task`, `todo_write`.
 
-`--mcp` copies `mcp__*` keys from `resolvePermissions(cwd)` into the map. Only tools that are already launch-trusted **and** `always_allow` can run; launch prompts and `require_approval` MCP calls are rejected. `verifyEdits` is always `false` (project `verify.enabled` is ignored). Thinking requests default to on; `--no-think` disables them.
+`--mcp` copies `mcp__*` keys from `resolvePermissions(cwd)` into the map. Only tools that are already launch-trusted **and** `always_allow` can run; launch prompts and `require_approval` MCP calls are rejected. `verifyEdits` is always `false` (project `verify.enabled` is ignored). A turn is capped at 100 model rounds and then ends as `iteration_limited`. Thinking requests default to on; `--no-think` disables them.
 
 These profiles are catalogs, not a sandbox. `bash` still runs on the host.
 
@@ -98,7 +98,7 @@ Result object:
 
 - `version`: `1`
 - `run_id`: UUID
-- `status`: `completed` \| `failed` \| `cancelled` \| `iteration_limited`
+- `status`: `completed` \| `failed` \| `cancelled` \| `iteration_limited` \| `doom_loop_stopped` (the doom-loop guard ended the run; `error` names the repeated call)
 - `model`, `response`
 - `usage`: `prompt_tokens`, `completion_tokens`, `prompt_eval_duration_ns`, `eval_duration_ns`
 - optional `error`

@@ -21,7 +21,7 @@ import {
   selectedRuntimeMode,
 } from '../../src/acp/session-policy.js'
 
-test('prompt normalization accepts text and rejects every non-text block', () =>
+test('prompt normalization accepts text and resource links and rejects other blocks', () =>
 {
   assert.equal(
     normalizeAcpPrompt([
@@ -31,16 +31,24 @@ test('prompt normalization accepts text and rejects every non-text block', () =>
     'first\n\nsecond'
   )
 
+  assert.equal(
+    normalizeAcpPrompt([
+      { type: 'text', text: 'summarize' },
+      {
+        type: 'resource_link',
+        name: 'README',
+        uri: 'file:///workspace/README.md',
+      },
+    ]),
+    'summarize\n\n[Referenced resource: README (file:///workspace/README.md)]'
+  )
+
   assert.throws(
     () =>
       normalizeAcpPrompt([
-        {
-          type: 'resource_link',
-          name: 'README',
-          uri: 'file:///workspace/README.md',
-        },
+        { type: 'image', data: 'AA==', mimeType: 'image/png' },
       ]),
-    /Coral supports text only/
+    /Coral supports text and resource_link only/
   )
 })
 

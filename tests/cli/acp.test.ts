@@ -54,6 +54,22 @@ test('ACP CLI reports startup errors on stderr', async () =>
   ])
 })
 
+test('ACP CLI reports a failure after serving as an exit failure', async () =>
+{
+  const errors: string[] = []
+  const exitCode = await runAcpCli([], {
+    serve: async (_options, onStarted) =>
+    {
+      onStarted()
+      throw new Error('session save failed')
+    },
+    writeStderr: (text) => errors.push(text),
+  })
+
+  assert.equal(exitCode, 1)
+  assert.deepEqual(errors, ['Coral ACP failed at exit: session save failed\n'])
+})
+
 interface SubprocessResult<T>
 {
   result: T
