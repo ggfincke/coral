@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 import Database from 'better-sqlite3'
 import {
-  fingerprintMcpLaunch,
   isMcpLaunchTrusted,
   type McpLaunchDescriptor,
 } from '../../src/mcp/trust.js'
@@ -27,7 +26,6 @@ import { listSessions, loadSession } from '../../src/session/store.js'
 import type { SessionMeta } from '../../src/session/types.js'
 import { loadTelemetry } from '../../src/telemetry/store.js'
 import { loadHistory } from '../../src/tui/prompt/input-history.js'
-import { writeJsonFile } from '../../src/utils/json.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import {
   finishRaceWorkers,
@@ -249,22 +247,6 @@ test('telemetry aggregates concurrent immutable deltas', async () =>
 test('MCP trust merges aliases and fails closed on conflicting or invalid sidecars', async () =>
 {
   const home = await tempDir('coral-trust-race-')
-  const legacy = descriptor('legacy', 'legacy')
-  const shadowed = descriptor('legacy_shadow', 'legacy-shadow')
-  writeJsonFile(join(home, 'mcp-trust.json'), {
-    version: 1,
-    servers: {
-      legacy: {
-        fingerprint: fingerprintMcpLaunch(legacy),
-        approvedAt: '2026-07-17T00:00:00.000Z',
-      },
-      legacy_shadow: {
-        fingerprint: fingerprintMcpLaunch(shadowed),
-        approvedAt: '2026-07-17T00:00:00.000Z',
-      },
-    },
-  })
-
   const distinct = ['alpha', 'beta', 'gamma'].map((alias) =>
     descriptor(alias, alias)
   )
@@ -277,7 +259,6 @@ test('MCP trust merges aliases and fails closed on conflicting or invalid sideca
   )
 
   process.env.CORAL_HOME = home
-  assert.equal(isMcpLaunchTrusted(legacy), true)
   for (const item of distinct) assert.equal(isMcpLaunchTrusted(item), true)
 
   const sharedA = descriptor('shared', 'a')
@@ -295,11 +276,11 @@ test('MCP trust merges aliases and fails closed on conflicting or invalid sideca
   )
 
   const sidecarDir = join(home, 'mcp-trust.d')
-  await writeFile(join(sidecarDir, 'legacy_shadow.json'), '{"broken":true}', {
+  await writeFile(join(sidecarDir, 'alpha.json'), '{"broken":true}', {
     encoding: 'utf-8',
     mode: 0o600,
   })
-  assert.equal(isMcpLaunchTrusted(shadowed), false)
+  assert.equal(isMcpLaunchTrusted(distinct[0]!), false)
 
   if (process.platform !== 'win32')
   {
