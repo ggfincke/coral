@@ -81,7 +81,9 @@ export async function runInteractiveCli(
         )
       )
     )
-    process.exit(0)
+    // return instead of exiting so a large list finishes draining into a pipe
+    process.exitCode = 0
+    return
   }
 
   // resolve session to resume (if any)

@@ -217,14 +217,23 @@ function writeSessionData(
   )
 }
 
+// refuse a snapshot the codec would not load back, so a bad turn fails loudly
+// and the previous file stays loadable
 function writeSessionDataUnlocked(session: SessionData): void
 {
+  const encoded = encodeSessionData(session)
+  if (!decodeSessionPreview(encoded))
+    throw new SessionPersistenceError(
+      'invalid_snapshot',
+      'Session snapshot would not load back',
+      { sessionId: session.meta.id }
+    )
   ensureDir()
   const path = sessionPath(session.meta.id)
   const cache = cacheForDirectory(dirname(path))
   try
   {
-    writeJsonFile(path, encodeSessionData(session))
+    writeJsonFile(path, encoded)
   }
   finally
   {
@@ -248,10 +257,9 @@ export function createSession(
 {
   ensureDir()
 
-  const id = generateId()
   const now = new Date().toISOString()
   const meta: SessionMeta = {
-    id,
+    id: generateId(),
     model,
     cwd,
     createdAt: now,
@@ -266,9 +274,42 @@ export function createSession(
       : {}),
   }
 
-  writeSessionData({ meta, messages, todos, undo, redo, sessionCost })
-
+  // ids are 32 random bits, so an id that is already saved or leased by a
+  // live session is drawn again rather than replaced
+  while (
+    !tryCreateSessionFile({ meta, messages, todos, undo, redo, sessionCost })
+  )
+  {
+    meta.id = generateId()
+  }
   return meta
+}
+
+// write a new session under its id's write lock unless that id is taken
+function tryCreateSessionFile(session: SessionData): boolean
+{
+  try
+  {
+    return withSessionWriteLock(
+      undefined,
+      () =>
+      {
+        if (existsSync(sessionPath(session.meta.id))) return false
+        writeSessionDataUnlocked(session)
+        return true
+      },
+      session.meta.id
+    )
+  }
+  catch (error)
+  {
+    if (
+      error instanceof SessionPersistenceError &&
+      error.code === 'session_in_use'
+    )
+      return false
+    throw error
+  }
 }
 
 // save an existing session
