@@ -4,7 +4,7 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 import {
@@ -305,6 +305,63 @@ describe('task graders', () =>
 
     assert.equal(result.passed, false)
     assert.equal(result.detail, 'renamed modules do not execute')
+  })
+
+  it('fails a source that exits 0 early & passes the real fix', async () =>
+  {
+    // rewrite one workspace file in place
+    const edit = async (
+      dir: string,
+      rel: string,
+      change: (text: string) => string
+    ) =>
+    {
+      const path = join(dir, rel)
+      await writeFile(path, change(await readFile(path, 'utf-8')), 'utf-8')
+    }
+    const exitEarly = (text: string) => `process.exit(0)\n${text}`
+    const rename = (text: string) => text.replaceAll('oldName', 'newName')
+    const cases: Record<
+      string,
+      Record<'broken' | 'fixed', (dir: string) => Promise<void>>
+    > = {
+      'bug-fix-verify': {
+        broken: (dir) => edit(dir, 'sum.mjs', exitEarly),
+        fixed: (dir) =>
+          edit(dir, 'sum.mjs', (text) => text.replace('a - b', 'a + b')),
+      },
+      'long-context-fix': {
+        broken: (dir) => edit(dir, 'src/orders/total.mjs', exitEarly),
+        fixed: (dir) =>
+          edit(dir, 'src/pricing/apply-discount.mjs', (text) =>
+            text.replace('(1 - rate)', '(1 - rate / 100)')
+          ),
+      },
+      'search-multi-edit': {
+        broken: async (dir) =>
+        {
+          await edit(dir, 'a.mjs', (text) => exitEarly(rename(text)))
+          await edit(dir, 'b.mjs', rename)
+        },
+        fixed: async (dir) =>
+        {
+          await edit(dir, 'a.mjs', rename)
+          await edit(dir, 'b.mjs', rename)
+        },
+      },
+    }
+    for (const [id, variants] of Object.entries(cases))
+    {
+      const task = requireTask(id)
+      for (const [variant, mutate] of Object.entries(variants))
+      {
+        const dir = await tempDir()
+        await task.setup(dir)
+        await mutate(dir)
+        const result = await task.grade({ dir, messages: [], finalText: '' })
+        assert.equal(result.passed, variant === 'fixed', `${id} ${variant}`)
+      }
+    }
   })
 })
 

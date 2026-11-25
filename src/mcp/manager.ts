@@ -249,10 +249,9 @@ export class McpManager
       const { candidate, connected, error } = result
       if (error || !connected)
       {
+        // rollback below owns the final interrupted status
         if (isAbortError(error) || options.signal?.aborted)
         {
-          candidate.status.state = 'stopped'
-          candidate.status.message = 'startup interrupted'
           aborted = true
           break
         }
@@ -278,8 +277,6 @@ export class McpManager
         await connected.client.close().catch(() => undefined)
         if (isAbortError(installError) || options.signal?.aborted)
         {
-          candidate.status.state = 'stopped'
-          candidate.status.message = 'startup interrupted'
           aborted = true
           break
         }
@@ -454,15 +451,7 @@ export class McpManager
 
         try
         {
-          const connected = await this.connectServer(
-            candidate.server,
-            candidate.executable,
-            candidate.environment,
-            candidate.status,
-            candidate.allowedTools,
-            candidate.secretValues,
-            signal
-          )
+          const connected = await this.connectServer(candidate, signal)
           results[resultIndex] = { candidate, connected }
         }
         catch (error)
@@ -621,15 +610,11 @@ export class McpManager
 
   // derive redaction from the caller's forwarded values for stderr and session output
   private async connectServer(
-    server: McpServerConfig,
-    executable: string,
-    environment: Record<string, string>,
-    status: McpServerStatus,
-    enabledTools: readonly string[],
-    secretValues: readonly string[],
+    candidate: LaunchCandidate,
     signal?: AbortSignal
   ): Promise<ConnectedServer>
   {
+    const { server, executable, environment, status, secretValues } = candidate
     const transport = new CoralStdioClientTransport({
       command: executable,
       args: server.args,
@@ -648,16 +633,20 @@ export class McpManager
         jsonSchemaValidator: permissiveSdkValidator,
       }
     )
+    // a runtime error explains a later close better than install-time advisories
+    let runtimeError = false
     client.onerror = (error) =>
     {
       if (this.closing) return
       status.message = formatMcpStatusMessage(error, secretValues)
+      if (status.state === 'ready') runtimeError = true
     }
+    // startup paths set their own failure status; only a ready server is replaced here
     client.onclose = () =>
     {
-      if (this.closing || status.state === 'stopped') return
+      if (this.closing || status.state !== 'ready') return
       status.state = 'failed'
-      status.message ??= 'MCP server connection closed'
+      if (!runtimeError) status.message = 'MCP server connection closed'
     }
 
     this.pendingClients.add(client)
@@ -697,7 +686,7 @@ export class McpManager
         {
           throw new Error('server exposed too many tools')
         }
-        if (enabledTools.every((name) => names.has(name)))
+        if (candidate.allowedTools.every((name) => names.has(name)))
         {
           return { client, transport, tools }
         }

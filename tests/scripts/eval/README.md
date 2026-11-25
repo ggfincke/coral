@@ -27,16 +27,18 @@ prompt, then grades the result deterministically:
 3. **create-file** — create `greeting.txt` whose entire contents are exactly
    `hello world`.
 4. **search-multi-edit** — rename `oldName` -> `newName` across two `.mjs` files
-   including the import/call sites; graded by walking the tree for both names.
+   including the import/call sites; graded by walking the tree for both names
+   and importing the renamed modules.
 5. **build-run** — write `fizzbuzz.mjs` for 1..15 and run it; graded by
    re-executing the file ourselves and checking stdout against the expected lines.
 6. **bug-fix-verify** — fix the subtract-instead-of-add bug in `sum.mjs` so
-   `sum.test.mjs` passes; graded by re-running `node --test` (exit 0 only on a
-   real fix).
+   `sum.test.mjs` passes; graded by re-running `node --test` and requiring the
+   locked test to report ok by name, so a source that exits early cannot pass.
 7. **long-context-fix** — find and fix a percent-vs-fraction bug that spans
    `discount-rate.mjs` and `apply-discount.mjs` inside a ~35 file project the
    prompt never names (`long-context-fixture.ts`); graded by re-running the
-   locked `node --test test/` suite. This is the task that grows the context
+   locked test files only (`node --test` on each), with every locked test
+   reported ok by name; tests the model adds are not run. This is the task that grows the context
    enough to exercise prompt caps, prefix-cache misses, and compaction.
 8. **long-context-followup** — the same fix inside a committed Git repo,
    followed by two short follow-up turns on the same agent. A tool-free question
@@ -136,8 +138,7 @@ Each rep already captures the model's reliability counters, but they normally
 die with the process. With `--save-telemetry`, the harness sums every rep across
 every task for a model into one entry and folds it into
 an immutable record under `~/.coral/eval-telemetry.d/`, so reliability becomes
-comparable across runs over time instead of just per-invocation. A legacy
-`eval-telemetry.json` snapshot remains a read-only baseline when present.
+comparable across runs over time instead of just per-invocation.
 
 This is a **separate store** from the interactive `~/.coral/telemetry.d/` that
 the TUI's `/telemetry` reads: synthetic benchmark counters are kept out of the

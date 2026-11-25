@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 import Database from 'better-sqlite3'
 import {
-  fingerprintMcpLaunch,
   isMcpLaunchTrusted,
   type McpLaunchDescriptor,
 } from '../../src/mcp/trust.js'
@@ -25,13 +24,8 @@ import {
 import type { Embedder, EmbeddingSpace } from '../../src/retrieval/types.js'
 import { listSessions, loadSession } from '../../src/session/store.js'
 import type { SessionMeta } from '../../src/session/types.js'
-import {
-  loadTelemetry,
-  type TelemetryStore,
-} from '../../src/telemetry/store.js'
+import { loadTelemetry } from '../../src/telemetry/store.js'
 import { loadHistory } from '../../src/tui/prompt/input-history.js'
-import { makeReliabilityStats } from '../../src/types/inference.js'
-import { writeJsonFile } from '../../src/utils/json.js'
 import { captureCoralHome } from '../helpers/coral-home.js'
 import {
   finishRaceWorkers,
@@ -190,21 +184,10 @@ test('session files remain authoritative across distinct and same-ID writers', a
   }
 })
 
-test('telemetry aggregates one legacy baseline and concurrent immutable deltas', async () =>
+test('telemetry aggregates concurrent immutable deltas', async () =>
 {
   const dir = await tempDir('coral-telemetry-race-')
   const path = join(dir, 'telemetry.json')
-  const baseline: TelemetryStore = {
-    models: {
-      'shared-model': {
-        reliability: makeReliabilityStats({ reprompts: 3, editRepairs: 1 }),
-        sessions: 2,
-        firstSeen: '2026-07-17T00:00:00.000Z',
-        updatedAt: '2026-07-17T01:00:00.000Z',
-      },
-    },
-  }
-  writeJsonFile(path, baseline)
 
   const workerCount = 4
   const iterations = 8
@@ -216,21 +199,19 @@ test('telemetry aggregates one legacy baseline and concurrent immutable deltas',
     }))
   )
 
-  const expectedSessions = 2 + workerCount * iterations
-  const expectedReprompts = 3 + workerCount * iterations
+  const expectedSessions = workerCount * iterations
+  const expectedReprompts = workerCount * iterations
   const expectedEditRepairs =
-    1 +
     workerCount *
-      Array.from({ length: iterations }, (_, index) => index % 2).reduce(
-        (sum, value) => sum + value,
-        0
-      )
+    Array.from({ length: iterations }, (_, index) => index % 2).reduce(
+      (sum, value) => sum + value,
+      0
+    )
   const first = loadTelemetry(path)
   const record = first.models['shared-model']
   assert.equal(record?.sessions, expectedSessions)
   assert.equal(record?.reliability.reprompts, expectedReprompts)
   assert.equal(record?.reliability.editRepairs, expectedEditRepairs)
-  assert.equal(record?.firstSeen, '2026-07-17T00:00:00.000Z')
 
   const deltaDir = join(dir, 'telemetry.d')
   const deltaFiles = (await readdir(deltaDir)).filter((file) =>
@@ -255,7 +236,6 @@ test('telemetry aggregates one legacy baseline and concurrent immutable deltas',
 
   if (process.platform !== 'win32')
   {
-    assert.equal((await stat(path)).mode & 0o777, 0o600)
     assert.equal((await stat(deltaDir)).mode & 0o777, 0o700)
     for (const file of await readdir(deltaDir))
     {
@@ -267,22 +247,6 @@ test('telemetry aggregates one legacy baseline and concurrent immutable deltas',
 test('MCP trust merges aliases and fails closed on conflicting or invalid sidecars', async () =>
 {
   const home = await tempDir('coral-trust-race-')
-  const legacy = descriptor('legacy', 'legacy')
-  const shadowed = descriptor('legacy_shadow', 'legacy-shadow')
-  writeJsonFile(join(home, 'mcp-trust.json'), {
-    version: 1,
-    servers: {
-      legacy: {
-        fingerprint: fingerprintMcpLaunch(legacy),
-        approvedAt: '2026-07-17T00:00:00.000Z',
-      },
-      legacy_shadow: {
-        fingerprint: fingerprintMcpLaunch(shadowed),
-        approvedAt: '2026-07-17T00:00:00.000Z',
-      },
-    },
-  })
-
   const distinct = ['alpha', 'beta', 'gamma'].map((alias) =>
     descriptor(alias, alias)
   )
@@ -295,7 +259,6 @@ test('MCP trust merges aliases and fails closed on conflicting or invalid sideca
   )
 
   process.env.CORAL_HOME = home
-  assert.equal(isMcpLaunchTrusted(legacy), true)
   for (const item of distinct) assert.equal(isMcpLaunchTrusted(item), true)
 
   const sharedA = descriptor('shared', 'a')
@@ -313,11 +276,11 @@ test('MCP trust merges aliases and fails closed on conflicting or invalid sideca
   )
 
   const sidecarDir = join(home, 'mcp-trust.d')
-  await writeFile(join(sidecarDir, 'legacy_shadow.json'), '{"broken":true}', {
+  await writeFile(join(sidecarDir, 'alpha.json'), '{"broken":true}', {
     encoding: 'utf-8',
     mode: 0o600,
   })
-  assert.equal(isMcpLaunchTrusted(shadowed), false)
+  assert.equal(isMcpLaunchTrusted(distinct[0]!), false)
 
   if (process.platform !== 'win32')
   {

@@ -9,6 +9,7 @@ import {
   type AgentEvents,
   type TokenUsage,
 } from '../../../src/agent/agent.js'
+import type { AgentRunOutcome } from '../../../src/agent/contracts.js'
 import { defaultToolPermissions } from '../../../src/config/permissions.js'
 import { DEFAULT_OLLAMA_HOST } from '../../../src/ollama/host.js'
 import {
@@ -93,6 +94,54 @@ function extractFinalText(
   return ''
 }
 
+// how a turn that did not complete stopped the rep
+interface RunStop
+{
+  aborted: boolean
+  errored: boolean
+  reason: string
+}
+
+// map a settled turn's status to the stop it causes; null only for completed.
+// a status added later fails typecheck here & fails the rep at runtime
+function stopForOutcome(
+  outcome: AgentRunOutcome,
+  doomLooped: boolean
+): RunStop | null
+{
+  switch (outcome.status)
+  {
+    case 'completed':
+      return null
+    case 'iteration_limit':
+      return {
+        aborted: true,
+        errored: false,
+        reason: 'iteration limit reached',
+      }
+    case 'stopped':
+      return {
+        aborted: true,
+        errored: false,
+        reason: doomLooped ? 'doom loop stopped' : 'aborted',
+      }
+    case 'cancelled':
+      return { aborted: true, errored: false, reason: 'aborted' }
+    case 'failed':
+      return { aborted: false, errored: true, reason: 'errored' }
+    default:
+    {
+      const unknown: never = outcome
+      const status = (unknown as { status?: unknown }).status
+      return {
+        aborted: false,
+        errored: true,
+        reason: `unknown run status ${String(status)}`,
+      }
+    }
+  }
+}
+
 // run one agent in an isolated scratch dir & capture its metrics
 export async function runRep(
   model: string,
@@ -120,10 +169,10 @@ export async function runRep(
   let lastUsage: TokenUsage | undefined
   const rounds: RoundSample[] = []
   let turn = 1
-  let aborted = false
-  let iterationLimited = false
+  // the first turn that did not complete; it fails the rep
+  let stop: RunStop | null = null
+  // the doom-loop callback only names the reason for a stopped status
   let doomLooped = false
-  let errored = false
   let agent: EvalAgent | undefined
 
   try
@@ -142,11 +191,7 @@ export async function runRep(
 
     // turn a timeout into the cancellation signal received by Agent.run
     const controller = new AbortController()
-    const timer = setTimeout(() =>
-    {
-      aborted = true
-      controller.abort()
-    }, timeoutMs)
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
 
     // collect only the callbacks needed for the eval metrics
     const events: AgentEvents = {
@@ -167,7 +212,6 @@ export async function runRep(
       onDoomLoop: async () =>
       {
         doomLooped = true
-        aborted = true
         return false
       },
       onVerification: () =>
@@ -192,15 +236,8 @@ export async function runRep(
       {},
       onDone: () =>
       {},
-      onIterationLimit: () =>
-      {
-        iterationLimited = true
-        aborted = true
-      },
       onError: () =>
-      {
-        errored = true
-      },
+      {},
     }
 
     const startMs = Date.now()
@@ -211,14 +248,21 @@ export async function runRep(
     {
       for (const prompt of [task.prompt, ...(task.followUps ?? [])])
       {
-        if (aborted || errored) break
-        await agent.run(prompt, events, controller.signal)
+        const outcome = await agent.run(prompt, events, controller.signal)
+        stop = stopForOutcome(outcome, doomLooped)
+        if (stop) break
         turn++
       }
     }
     catch
     {
-      errored = true
+      // a throw after the timeout fired still counts as the timeout too
+      const timedOut = controller.signal.aborted
+      stop = {
+        aborted: timedOut,
+        errored: true,
+        reason: timedOut ? 'aborted/errored' : 'errored',
+      }
     }
     finally
     {
@@ -244,21 +288,10 @@ export async function runRep(
       detail = `grade threw: ${err instanceof Error ? err.message : String(err)}`
     }
 
-    if (aborted || errored)
+    if (stop)
     {
-      const stopReason = iterationLimited
-        ? 'iteration limit reached'
-        : doomLooped
-          ? 'doom loop stopped'
-          : 'aborted'
-      const reason =
-        aborted && errored
-          ? `${stopReason}/errored`
-          : aborted
-            ? stopReason
-            : 'errored'
       passed = false
-      detail = detail ? `${reason}: ${detail}` : reason
+      detail = detail ? `${stop.reason}: ${detail}` : stop.reason
     }
 
     // read reliability after run completion so late updates are included
@@ -275,8 +308,8 @@ export async function runRep(
       tokensPerSecond: computeTokensPerSecond(lastUsage),
       wallMs,
       firstRoundPromptTokens: rounds[0]?.promptTokens ?? 0,
-      aborted,
-      errored,
+      aborted: stop?.aborted ?? false,
+      errored: stop?.errored ?? false,
     }
 
     return { ...metrics, rounds, passed, detail }
@@ -294,7 +327,7 @@ export async function runRep(
       tokensPerSecond: 0,
       wallMs: 0,
       firstRoundPromptTokens: rounds[0]?.promptTokens ?? 0,
-      aborted,
+      aborted: stop?.aborted ?? false,
       errored: true,
       passed: false,
       rounds,
@@ -426,12 +459,6 @@ export async function runEval(
   const host = opts.host ?? DEFAULT_OLLAMA_HOST
   const reps = opts.reps ?? DEFAULT_REPS
 
-  const filter = opts.taskFilter
-  const selectedTasks =
-    filter && filter.length > 0
-      ? tasks.filter((task) => filter.includes(task.id))
-      : tasks
-
   const modelReports: ModelReport[] = []
 
   for (const model of models)
@@ -439,7 +466,7 @@ export async function runEval(
     const taskResults: TaskResult[] = []
     const modelRuns: RunOutcome[] = []
 
-    for (const task of selectedTasks)
+    for (const task of tasks)
     {
       const runs: RunOutcome[] = []
       for (let rep = 0; rep < reps; rep++)

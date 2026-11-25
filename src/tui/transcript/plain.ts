@@ -1,5 +1,5 @@
 // src/tui/transcript/plain.ts
-// plain-text block lines shared by export, raw mode, & expanded views
+// plain-text block lines shared by raw mode, previews, & expanded views
 
 import type { OutputBlock } from './types.js'
 import { sanitizeUntrustedText } from './sanitize.js'
@@ -13,7 +13,7 @@ function blockLines(block: OutputBlock): string[]
   switch (block.type)
   {
     case 'user':
-      return [`> ${block.content}`]
+      return block.content.split('\n').map((line) => `> ${line}`)
     case 'assistant':
       return block.content.split('\n')
     case 'thinking':
@@ -43,7 +43,7 @@ function blockLines(block: OutputBlock): string[]
     case 'error':
       return ['[error]', ...block.content.split('\n')]
     case 'system':
-      return [block.content]
+      return block.content.split('\n')
   }
 }
 

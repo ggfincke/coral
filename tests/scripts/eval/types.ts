@@ -120,8 +120,6 @@ export interface EvalOptions
   // pinned (default) sends temperature 0 and seed = rep index so reps differ
   // only by what changed under test; model leaves Ollama's own sampling in place
   sampling?: 'pinned' | 'model'
-  // run only tasks whose id is in this list
-  taskFilter?: string[]
   // append each model's summed run reliability under ~/.coral/eval-telemetry.d
   saveTelemetry?: boolean
 }

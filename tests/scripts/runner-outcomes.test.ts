@@ -7,17 +7,11 @@ import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, type TestContext } from 'node:test'
-import { Agent } from '../../src/agent/agent.js'
 import type { AgentRunOutcome } from '../../src/agent/contracts.js'
-import type { AgentInferenceClient } from '../../src/agent/inference-client.js'
 import { getCwd, setCwd } from '../../src/cwd.js'
 import { makeReliabilityStats } from '../../src/types/inference.js'
 import { aggregateTask, runRep } from './eval/harness.js'
 import type { EvalTask } from './eval/types.js'
-import { ProcessTreeRssSampler } from './mlx-benchmark/process.js'
-import type { BenchmarkRuntime } from './mlx-benchmark/providers.js'
-import { runAgentCase } from './mlx-benchmark/suites.js'
-import type { ModelPair } from './mlx-benchmark/types.js'
 
 const scratchDir = join(tmpdir(), 'coral-runner-mock-only', String(process.pid))
 
@@ -121,169 +115,6 @@ test('eval iteration limits fail successful grades and aggregation', async (t) =
   }
   assert.equal(graded, 4)
   assert.equal(disposed, 4)
-  assert.equal(workspace.create.mock.callCount(), 4)
-  assert.equal(workspace.remove.mock.callCount(), 4)
-})
-
-test('MLX iteration limits and timeouts fail grades and skip the second prompt', async (t) =>
-{
-  const workspace = mockScratchWorkspace(t)
-  const startSampler = t.mock.method(
-    ProcessTreeRssSampler.prototype,
-    'start',
-    async () =>
-    {}
-  )
-  const stopSampler = t.mock.method(
-    ProcessTreeRssSampler.prototype,
-    'stop',
-    async () => []
-  )
-  const client: AgentInferenceClient = {
-    startKeepAlive()
-    {},
-    showModel()
-    {
-      assert.fail('mocked Agent.run must not resolve model metadata')
-    },
-    listModels()
-    {
-      assert.fail('mocked Agent.run must not resolve model metadata')
-    },
-    chatStream()
-    {
-      assert.fail('mocked Agent.run must not start inference')
-    },
-  }
-  const artifact = {
-    model: 'fake-model',
-    revision: 'fake-revision',
-    tokenizerRevision: 'fake-tokenizer',
-    chatTemplateSha256: 'fake-template',
-    quantization: 'fake-quantization',
-    contextWindow: 8_192,
-    localPath: scratchDir,
-  }
-  const pair: ModelPair = {
-    id: 'fake-pair',
-    description: 'in-memory test pair',
-    localEvidence: [],
-    ollama: artifact,
-    mlx: artifact,
-  }
-  const runtime: BenchmarkRuntime = {
-    identity: {
-      id: 'fake-runtime',
-      kind: 'stock-mlx',
-      role: 'candidate',
-      description: 'in-memory test runtime',
-      immutableRevision: 'fake-revision',
-    },
-    start()
-    {
-      assert.fail('mocked cases must not start a runtime')
-    },
-    client: async () => client,
-    model: () => artifact.model,
-    processRoots()
-    {
-      assert.fail('mocked RSS sampler must not inspect processes')
-    },
-    resetModel()
-    {
-      assert.fail('mocked cases must not reset a runtime')
-    },
-    crashAndRestart()
-    {
-      assert.fail('mocked cases must not restart a runtime')
-    },
-    allocatorMemory()
-    {
-      assert.fail('mocked cases must not sample allocator memory')
-    },
-    stop()
-    {
-      assert.fail('mocked cases must not stop a runtime')
-    },
-  }
-  let mode: 'cap' | 'timeout' | 'error' | 'complete' = 'cap'
-  let graded = 0
-  const prompts: string[] = []
-  const run: Agent['run'] = async function (
-    this: Agent,
-    input,
-    events,
-    signal
-  )
-  {
-    assert.ok(typeof input === 'string')
-    prompts.push(input)
-    assert.equal(signal?.aborted, false)
-    if (mode === 'cap') events.onIterationLimit?.()
-    if (mode === 'timeout')
-    {
-      t.mock.timers.tick(100)
-      assert.equal(signal?.aborted, true)
-    }
-    if (mode === 'error')
-    {
-      events.onError(new Error('simulated runtime failure'))
-    }
-    this.restoreMessages([{ role: 'assistant', content: 'partial answer' }])
-    events.onDone()
-    return mockOutcome(mode)
-  }
-  t.mock.method(Agent.prototype, 'run', run)
-  const task: EvalTask = {
-    id: 'stopped-mlx',
-    description: 'mocked stopped outcome',
-    prompt: 'first prompt',
-    async setup(dir)
-    {
-      assert.equal(dir, scratchDir)
-    },
-    async grade({ finalText })
-    {
-      graded++
-      assert.equal(finalText, 'partial answer')
-      return { passed: true, detail: 'grader accepted partial answer' }
-    },
-  }
-  for (const outcome of ['cap', 'timeout', 'error', 'complete'] as const)
-  {
-    mode = outcome
-    prompts.length = 0
-    const result = await runAgentCase({
-      runtime,
-      pair,
-      task,
-      prompt: task.prompt,
-      secondPrompt: 'second prompt',
-      think: false,
-      contextWindow: 8_192,
-      tools: [],
-      permissions: {},
-      limits: { maxOutputTokens: 100, requestTimeoutMs: 100 },
-    })
-    assert.equal(result.passed, outcome === 'complete')
-    assert.match(result.detail, /grader accepted partial answer/)
-    assert.deepEqual(
-      prompts,
-      outcome === 'complete'
-        ? ['first prompt', 'second prompt']
-        : ['first prompt']
-    )
-    if (outcome === 'cap')
-      assert.match(result.detail, /iteration limit reached/)
-    else if (outcome === 'timeout')
-      assert.match(result.detail, /request timed out/)
-    else if (outcome === 'error')
-      assert.match(result.detail, /agent emitted 1 error event/)
-    else assert.equal(result.detail, 'grader accepted partial answer')
-  }
-  assert.equal(graded, 4)
-  assert.equal(startSampler.mock.callCount(), 4)
-  assert.equal(stopSampler.mock.callCount(), 4)
   assert.equal(workspace.create.mock.callCount(), 4)
   assert.equal(workspace.remove.mock.callCount(), 4)
 })

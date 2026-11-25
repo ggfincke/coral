@@ -11,9 +11,11 @@ import {
 
 test('buildVerifyPrompt carries the request, diffs, & verdict instruction', () =>
 {
-  const prompt = buildVerifyPrompt('Add a retry to fetchUser', [
-    '--- a/user.ts\n+++ b/user.ts\n@@ retry @@',
-  ])
+  const prompt = buildVerifyPrompt(
+    'Add a retry to fetchUser',
+    ['--- a/user.ts\n+++ b/user.ts\n@@ retry @@'],
+    8_192
+  )
   assert.ok(prompt.includes('Add a retry to fetchUser'))
   assert.ok(prompt.includes('user.ts'))
   assert.ok(prompt.includes('VERDICT: PASS'))
@@ -49,6 +51,24 @@ test('parses a FAIL verdict & its reason across dash styles', () =>
   const emDash = parseVerifyVerdict('VERDICT: FAIL — wrong file edited', 1)
   assert.equal(emDash.status, 'fail')
   assert.equal(emDash.reason, 'wrong file edited')
+})
+
+test('parses bold & inflected verdicts without leaking emphasis', () =>
+{
+  assert.deepEqual(parseVerifyVerdict('**VERDICT: FAIL** - x', 1), {
+    status: 'fail',
+    reason: 'x',
+    editCount: 1,
+  })
+  assert.deepEqual(parseVerifyVerdict('**VERDICT: PASS**', 1), {
+    status: 'pass',
+    reason: undefined,
+    editCount: 1,
+  })
+  assert.equal(parseVerifyVerdict('VERDICT: PASSED', 1).status, 'pass')
+  const failed = parseVerifyVerdict('VERDICT: FAILED - x', 1)
+  assert.equal(failed.status, 'fail')
+  assert.equal(failed.reason, 'x')
 })
 
 test('scans from the end so trailing verdict wins', () =>
