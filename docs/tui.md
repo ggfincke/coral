@@ -66,7 +66,7 @@ synthetic instruction to load the selected skill.
 
 After abort, the transcript adds `Generation interrupted`. History keeps streamed assistant text; if only reasoning arrived, the stored assistant content is `(interrupted)`; if nothing streamed, history is unchanged.
 
-`/verify` self-check lines: `✓ self-check passed — N edit(s) reviewed`, `⚠ self-check flagged N edit(s): …`, or `self-check inconclusive`. FAIL may append ` — asking the model to fix it`.
+`/verify` self-check lines: `✓ self-check passed — N edit(s) reviewed`, `⚠ self-check flagged N edit(s): …`, `self-check inconclusive`, or `⚠ self-check errored, N edit(s) not reviewed: …` when the check itself could not run. FAIL may append ` — asking the model to fix it`.
 
 ---
 

@@ -11,6 +11,8 @@ export interface VerificationResult
   editCount: number
   // set when a failed check is feeding back into the model for a fix attempt
   retrying?: boolean
+  // the check itself could not run (status stays unknown); reason holds why
+  errored?: boolean
 }
 
 // cap failed-verification fix attempts before a warn-only finish

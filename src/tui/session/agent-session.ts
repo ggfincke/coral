@@ -96,7 +96,8 @@ export function buildPrimaryAgent(options: PrimaryAgentOptions): Agent
 
 export function persistAgentSession(
   agent: Agent,
-  target: SessionMeta | null
+  target: SessionMeta | null,
+  onError?: (error: unknown) => void
 ): SessionMeta | null
 {
   try
@@ -141,9 +142,10 @@ export function persistAgentSession(
           agent.getSessionCost()
         )
   }
-  catch
+  catch (error)
   {
-    // session save failure is non-fatal
+    // session save failure is non-fatal; the caller decides what to show
+    onError?.(error)
     return null
   }
 }
