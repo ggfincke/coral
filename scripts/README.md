@@ -17,7 +17,7 @@ code lives under `scripts/lib/`; it does not participate in the shipped runtime.
 ```bash
 npm run check:dev-tools
 npm run check:architecture
-npm run typecheck:scripts
+npm run typecheck:tests
 npm run sessions:analyze
 npm run reference:inventory
 ```
@@ -28,7 +28,8 @@ regressions, and checks analyzer constants against runtime policy defaults.
 runtime-cycle, application-entry, subsystem-direction, I/O-free Agent state,
 App-only TUI adapter composition, ranked/pure session layers, lazy MCP ingress
 and SDK/AJV containment, and ambient-cwd boundaries.
-`typecheck:scripts` typechecks the TypeScript eval and benchmark entrypoints.
+`typecheck:tests` typechecks every TypeScript file under `tests/`, including
+the eval and benchmark entrypoints.
 
 Direct invocations are also supported:
 

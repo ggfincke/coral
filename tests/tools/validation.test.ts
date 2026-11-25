@@ -5,6 +5,7 @@ import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 import { validateToolArgs } from '../../src/tools/validation.js'
 import type { Tool } from '../../src/tools/tool.js'
+import type { JsonSchemaNode } from '../../src/types/inference.js'
 
 const fixtureTool: Tool = {
   name: 'fixture',
@@ -72,7 +73,7 @@ test('coerces common weak-model slips & rejects uncoercible types', () =>
 
 test('caps a long validation problem list & keeps the fix instruction', () =>
 {
-  const properties: Record<string, { type: string }> = {}
+  const properties: Record<string, JsonSchemaNode> = {}
   const required: string[] = []
   for (let i = 1; i <= 12; i++)
   {

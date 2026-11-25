@@ -22,7 +22,7 @@ describe('MCP output conversion', () =>
 
     const validOutput: McpOutputValidator = (input) => ({
       valid: true,
-      data: input,
+      data: input as Record<string, unknown>,
       errorMessage: undefined,
     })
     assert.deepEqual(formatToolResult({ content: [] }, validOutput, []), {
@@ -34,6 +34,7 @@ describe('MCP output conversion', () =>
     const secret = 'secret-\x1b[31m-token'
     const invalidOutput: McpOutputValidator = () => ({
       valid: false,
+      data: undefined,
       errorMessage: `invalid ${secret} ${'x'.repeat(4_000)}`,
     })
     const invalid = formatToolResult(
@@ -55,7 +56,7 @@ describe('MCP output conversion', () =>
     const skippedOutput: McpOutputValidator = () =>
     {
       serverErrorValidations += 1
-      return { valid: false, errorMessage: 'must not run' }
+      return { valid: false, data: undefined, errorMessage: 'must not run' }
     }
     const serverError = formatToolResult(
       {

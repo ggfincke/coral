@@ -133,9 +133,11 @@ describe('project-context', () =>
       reads.mock.calls.reduce((total, call) => total + Number(call.result), 0),
       8_193
     )
+    // the mock types its args from the options overload; the reader passes length 4th
     for (const call of reads.mock.calls)
     {
-      assert.ok(Number(call.arguments[3]) <= 8_193)
+      const args: readonly unknown[] = call.arguments
+      assert.ok(Number(args[3]) <= 8_193)
     }
     const counts = [
       opens.mock.callCount(),

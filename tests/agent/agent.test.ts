@@ -50,12 +50,11 @@ const agentMcpConfig = parseMcpConfig({
   },
 })
 
-type LifecycleAgent = Agent & {
-  codeIntel: CodeIntelService & {
-    child?: {
-      exitCode: number | null
-      signalCode: NodeJS.Signals | null
-    }
+// code-intel service as the lifecycle test sees it, incl. the LSP child process
+type LifecycleCodeIntel = CodeIntelService & {
+  child?: {
+    exitCode: number | null
+    signalCode: NodeJS.Signals | null
   }
 }
 
@@ -1106,7 +1105,7 @@ test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o evic
     releaseStream = resolve
   })
 
-  const { agent: testAgent } = makeFakeAgent(
+  const { agent } = makeFakeAgent(
     dir,
     async function* (_request, signal)
     {
@@ -1130,27 +1129,28 @@ test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o evic
     },
     { numCtx: 8_192 }
   )
-  const agent = testAgent as LifecycleAgent
+  // bracket access reaches Agent's private service without widening its type
+  const codeIntel = agent['codeIntel'] as LifecycleCodeIntel
   t.after(async () =>
   {
     releaseStream()
     await agent.dispose()
   })
 
-  const initialHover = await agent.codeIntel.query({
+  const initialHover = await codeIntel.query({
     operation: 'hover',
     path: 'example.ts',
     line: 1,
     character: 7,
   })
   assert.match(initialHover, /const value: number/)
-  const languageServer = agent.codeIntel.child
+  const languageServer = codeIntel.child
   assert.ok(languageServer)
   assert.equal(languageServer.exitCode, null)
   assert.equal(languageServer.signalCode, null)
 
   await writeFile(sourcePath, 'const value: string = 1\n', 'utf-8')
-  const invalidDiagnostics = await agent.codeIntel.query({
+  const invalidDiagnostics = await codeIntel.query({
     operation: 'diagnostics',
     path: 'example.ts',
   })
@@ -1160,23 +1160,23 @@ test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o evic
     /Type 'number' is not assignable to type 'string'/
   )
   await writeFile(sourcePath, "const value: string = 'ok'\n", 'utf-8')
-  const correctedDiagnostics = await agent.codeIntel.query({
+  const correctedDiagnostics = await codeIntel.query({
     operation: 'diagnostics',
     path: 'example.ts',
   })
   assert.equal(correctedDiagnostics, 'No diagnostics reported for this file.')
-  const correctedHover = await agent.codeIntel.query({
+  const correctedHover = await codeIntel.query({
     operation: 'hover',
     path: 'example.ts',
     line: 1,
     character: 7,
   })
   assert.match(correctedHover, /const value: string/)
-  assert.equal(agent.codeIntel.child, languageServer)
+  assert.equal(codeIntel.child, languageServer)
   assert.equal(languageServer.exitCode, null)
   assert.equal(languageServer.signalCode, null)
 
-  await agent.codeIntel.query({
+  await codeIntel.query({
     operation: 'hover',
     path: 'dependency.ts',
     line: 1,
@@ -1187,7 +1187,7 @@ test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o evic
     path: 'importer.ts',
   }
   assert.equal(
-    await agent.codeIntel.query(importerQuery),
+    await codeIntel.query(importerQuery),
     'No diagnostics reported for this file.'
   )
   await writeFile(
@@ -1195,20 +1195,20 @@ test('Agent LSP tracks edits, and disposal joins the run before cleanup w/o evic
     'export const importedValue: string = "changed"\n'
   )
   assert.match(
-    await agent.codeIntel.query(importerQuery),
+    await codeIntel.query(importerQuery),
     /Type 'string' is not assignable to type 'number'/
   )
   await writeFile(dependencyPath, 'export const importedValue: number = 2\n')
   assert.equal(
-    await agent.codeIntel.query(importerQuery),
+    await codeIntel.query(importerQuery),
     'No diagnostics reported for this file.'
   )
   await rm(dependencyPath)
   assert.match(
-    await agent.codeIntel.query(importerQuery),
+    await codeIntel.query(importerQuery),
     /Cannot find module.*dependency/
   )
-  assert.equal(agent.codeIntel.child, languageServer)
+  assert.equal(codeIntel.child, languageServer)
 
   let doneCalled = false
   const run = agent.run(
