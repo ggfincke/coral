@@ -25,6 +25,8 @@ export interface CollectedFiles
 {
   changed: SourceFile[]
   unchangedPaths: string[]
+  // files that listed but could not be read, such as EACCES; deletes are omitted
+  unreadablePaths: string[]
 }
 
 export interface RevalidatedSourceStat
@@ -32,6 +34,11 @@ export interface RevalidatedSourceStat
   size: number
   mtimeMs: number
   ctimeMs: number
+}
+
+function isMissingFile(error: unknown): boolean
+{
+  return (error as NodeJS.ErrnoException).code === 'ENOENT'
 }
 
 function isProbablyText(buffer: Buffer): boolean
@@ -69,6 +76,7 @@ export async function collectIndexableFiles(
 {
   const changed: SourceFile[] = []
   const unchangedPaths: string[] = []
+  const unreadablePaths: string[] = []
 
   // stop after the project-file limit; binary content does not consume a slot
   for await (const file of iterateProjectFiles(cwd, {
@@ -85,25 +93,37 @@ export async function collectIndexableFiles(
       continue
     }
 
-    const source = await readSourceFile(file)
+    // one unreadable file drops out of the index instead of failing the refresh
+    let source: SourceFile | null
+    try
+    {
+      source = await readSourceFile(file)
+    }
+    catch (error)
+    {
+      // a file deleted since listing just drops out with no report
+      if (!isMissingFile(error)) unreadablePaths.push(file.path)
+      continue
+    }
     if (source) changed.push(source)
   }
 
-  return { changed, unchangedPaths }
+  return { changed, unchangedPaths, unreadablePaths }
 }
 
-// revalidate bytes through one descriptor immediately before persistence
+// revalidate bytes through one descriptor immediately before persistence;
+// 'missing' means the file is gone, 'changed' covers every other mismatch
 export async function revalidateSourceFile(
   cwd: string,
   source: SourceFile
-): Promise<RevalidatedSourceStat | null>
+): Promise<RevalidatedSourceStat | 'changed' | 'missing'>
 {
   let handle
   try
   {
     handle = await open(resolve(cwd, source.path), 'r')
     const before = await handle.stat()
-    if (!before.isFile()) return null
+    if (!before.isFile()) return 'changed'
 
     const buffer = await handle.readFile()
     const after = await handle.stat()
@@ -116,20 +136,20 @@ export async function revalidateSourceFile(
       buffer.length !== after.size
     )
     {
-      return null
+      return 'changed'
     }
 
     const digest = createHash('sha256').update(buffer).digest('hex')
-    if (digest !== source.sha256) return null
+    if (digest !== source.sha256) return 'changed'
     return {
       size: after.size,
       mtimeMs: after.mtimeMs,
       ctimeMs: after.ctimeMs,
     }
   }
-  catch
+  catch (error)
   {
-    return null
+    return isMissingFile(error) ? 'missing' : 'changed'
   }
   finally
   {
