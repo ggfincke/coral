@@ -73,7 +73,6 @@ import {
   type CompletionItem,
 } from './completion.js'
 import CompletionMenu, { buildCompletionMenuRows } from './completion-menu.js'
-import { resetPromptFileSuggestions } from './prompt-file-suggestions.js'
 import {
   buildPromptRenderModel,
   movePromptVertically,
@@ -366,10 +365,9 @@ export default function PromptInput({
     filesCacheKeyRef.current = filesCacheKey
     fileRequestIdRef.current += 1
 
-    const reset = resetPromptFileSuggestions()
-    setFiles(reset.files)
-    setSelectedIndex(reset.selectedIndex)
-    setDismissed(reset.dismissed)
+    setFiles([])
+    setSelectedIndex(0)
+    setDismissed(false)
   }, [filesCacheKey, setDismissed, setSelectedIndex])
 
   useEffect(() =>
@@ -500,7 +498,7 @@ export default function PromptInput({
     const popped = popUndo(memoryRef.current, live)
     memoryRef.current = popped.memory
     const restore = popped.restore
-    if (!restore || restore.value === live.value) return
+    if (restore.value === live.value) return
 
     applyDraft(restore.value, restore.cursorOffset)
     setDismissed(false)

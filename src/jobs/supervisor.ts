@@ -47,7 +47,8 @@ import {
 } from './runtime.js'
 import { assertJobWorktree } from './git.js'
 import {
-  SETTLED_JOB_STATUSES,
+  canCancelJob,
+  canContinueJob,
   type JobRecord,
   type JobRequest,
   type JobResponse,
@@ -698,9 +699,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
         cancelRequested = true
         stopWorker()
       }
-      else if (
-        ['queued', 'draft', 'interrupted', 'needs_input'].includes(job.status)
-      )
+      else if (canCancelJob(job))
       {
         // unprovable leftovers block only this task's control, not the queue
         await cleanupJobProcesses(job.id)
@@ -711,7 +710,7 @@ export async function runJobSupervisor(signal?: AbortSignal): Promise<void>
     }
     else
     {
-      if (!(SETTLED_JOB_STATUSES as readonly string[]).includes(job.status))
+      if (!canContinueJob(job))
       {
         throw new Error('Only a settled or interrupted task can be continued.')
       }

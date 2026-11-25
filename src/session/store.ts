@@ -29,6 +29,7 @@ import {
 import {
   decodeSessionData,
   decodeSessionPreview,
+  decodeSessionPreviewWithUndo,
   encodeSessionData,
 } from './codec.js'
 import {
@@ -148,7 +149,10 @@ async function readPreview(
   id: string,
   signal?: AbortSignal
 ): Promise<
-  | { data: Pick<SessionData, 'meta' | 'messages'>; revision: string | null }
+  | {
+      data: Pick<SessionData, 'meta' | 'messages' | 'undo'>
+      revision: string | null
+    }
   | undefined
 >
 {
@@ -167,7 +171,7 @@ async function readPreview(
       signal?.throwIfAborted()
       if (!current) return undefined
 
-      const data = decodeSessionPreview(tryParseJson(text))
+      const data = decodeSessionPreviewWithUndo(tryParseJson(text))
       if (!data || data.meta.id !== id) return undefined
       return {
         data,
@@ -474,6 +478,7 @@ export async function loadSessionPreview(
         kind: 'loaded',
         revision: preview.revision,
         messages: preview.data.messages,
+        undo: preview.data.undo,
       }
     : { kind: 'missing' }
 }

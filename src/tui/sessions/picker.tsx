@@ -7,6 +7,7 @@ import wrapAnsi from 'wrap-ansi'
 import { sameWorkspace } from '../../session/resume.js'
 import { listSessions, loadSessionPreview } from '../../session/store.js'
 import type { OllamaMessage } from '../../types/inference.js'
+import { findUserTurnStarts, type UndoTurn } from '../../types/undo.js'
 import type { SessionMeta } from '../../session/types.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import {
@@ -18,6 +19,7 @@ import {
 } from '../palette/palette.js'
 import { formatBlocksPlain } from '../transcript/plain.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
+import { sanitizeUntrustedLine } from '../../utils/untrusted-text.js'
 import { buildRestoredBlocks } from '../transcript/restored-blocks.js'
 import { useCoralInput } from '../input/use-coral-input.js'
 import { useLiveState } from '../input/use-live-state.js'
@@ -127,20 +129,25 @@ interface SessionPreviewTail
 }
 
 // walk backward only until the visible tail is filled; restored/plain owners
-// retain displayContent and notices while prioritizing prompts and answers
+// retain displayContent and notices while prioritizing prompts and answers;
+// undo provenance hides internal corrective prompts as the live view does
 export function buildSessionPreviewTail(
   messages: readonly OllamaMessage[],
-  maxRows: number
+  maxRows: number,
+  undo: readonly UndoTurn[] = []
 ): SessionPreviewTail
 {
   const budget = Math.max(0, Math.floor(maxRows))
+  const turnStarts = new Set(findUserTurnStarts(messages, undo))
   const groups: string[][] = []
   let retained = 0
   let index = messages.length - 1
   for (; index >= 0 && retained < budget; index--)
   {
+    const message = messages[index]!
+    if (message.role === 'user' && !turnStarts.has(index)) continue
     const lines = formatBlocksPlain(
-      buildRestoredBlocks([messages[index]!]).filter(
+      buildRestoredBlocks([message]).filter(
         (block) => block.type !== 'thinking' && block.type !== 'tool_result'
       )
     )
@@ -202,7 +209,11 @@ export class SessionPreviewLoader
         return { lines: [], complete: true }
       }
 
-      const tail = buildSessionPreviewTail(result.messages, maxRows)
+      const tail = buildSessionPreviewTail(
+        result.messages,
+        maxRows,
+        result.undo
+      )
       const entry =
         result.revision === null
           ? undefined
@@ -371,9 +382,7 @@ export function buildSessionPickerLines(
   if (remaining > 1)
   {
     const selected = sessions[selectedIndex]!
-    const context = sanitizeUntrustedText(`${selected.model} · ${selected.cwd}`)
-      .replace(/\s+/g, ' ')
-      .trim()
+    const context = sanitizeUntrustedLine(`${selected.model} · ${selected.cwd}`)
     lines.push(`${chalk.bold('Preview')} ${chalk.dim(`· ${context}`)}`)
     lines.push(
       ...buildSessionPreviewLines(opts.previewLines ?? [], previewRows, width)
@@ -545,10 +554,7 @@ export default function SessionPicker({
           })
         : state === 'loading'
           ? ['Loading saved sessions…']
-          : [
-              'Failed to load saved sessions',
-              sanitizeUntrustedText(error).replace(/\s+/g, ' ').trim(),
-            ],
+          : ['Failed to load saved sessions', sanitizeUntrustedLine(error)],
     [
       error,
       currentProject,

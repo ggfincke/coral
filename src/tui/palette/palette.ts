@@ -3,7 +3,7 @@
 
 import chalk from 'chalk'
 import { selectionStyle, style } from '../theme.js'
-import { sanitizeUntrustedText } from '../transcript/sanitize.js'
+import { sanitizeUntrustedLine } from '../../utils/untrusted-text.js'
 import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
 import { appendDraftInput, deleteDraftGrapheme } from '../prompt/grapheme.js'
 import type { CommandInfo } from '../commands/contracts.js'
@@ -22,7 +22,6 @@ export interface PaletteEntry
   detail: string
   keywords: string[]
   command?: string
-  keybinding?: string
   action?: KeybindingAction
 }
 
@@ -105,7 +104,6 @@ export function buildPaletteEntries(
     title: binding.keys,
     detail: binding.description,
     keywords: [binding.keys, binding.description],
-    keybinding: binding.keys,
     action: binding.action,
   }))
 
@@ -211,7 +209,7 @@ export function formatPickerQuery(
   placeholder: string
 ): string
 {
-  const clean = sanitizeUntrustedText(query).replace(/\s+/g, ' ').trim()
+  const clean = sanitizeUntrustedLine(query)
   if (!clean) return chalk.dim(truncateLine(placeholder, width))
   const full = `query: ${clean}`
   if (visibleWidth(full) <= width) return chalk.dim(full)
@@ -229,11 +227,13 @@ function formatEntry(
   width: number
 ): string
 {
-  const clean = (text: string) =>
-    sanitizeUntrustedText(text).replace(/\s+/g, ' ').trim()
   const marker = selected ? '›' : ' '
-  const title = selected ? chalk.bold(clean(entry.title)) : clean(entry.title)
-  const detail = selected ? clean(entry.detail) : chalk.dim(clean(entry.detail))
+  const title = selected
+    ? chalk.bold(sanitizeUntrustedLine(entry.title))
+    : sanitizeUntrustedLine(entry.title)
+  const detail = selected
+    ? sanitizeUntrustedLine(entry.detail)
+    : chalk.dim(sanitizeUntrustedLine(entry.detail))
   const disabled = entry.kind === 'keybinding' && !entry.action
   const suffix = disabled
     ? selected
@@ -296,12 +296,7 @@ export function buildPaletteLines(opts: PaletteLinesOptions): string[]
   if (detailRows)
   {
     const selected = opts.entries[selectedIndex]!
-    lines.push(
-      '',
-      chalk.dim(
-        sanitizeUntrustedText(selected.detail).replace(/\s+/g, ' ').trim()
-      )
-    )
+    lines.push('', chalk.dim(sanitizeUntrustedLine(selected.detail)))
   }
   return lines.slice(0, height).map((line) => truncateLine(line, width))
 }

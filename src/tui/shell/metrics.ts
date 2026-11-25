@@ -127,25 +127,6 @@ function percentOfWindow(tokens: number, contextWindow: number): number
   return Math.min(Math.round((tokens / contextWindow) * 100), 100)
 }
 
-export function buildTokenGauge(
-  totalTokens: number,
-  contextWindow: number
-): string
-{
-  if (totalTokens === 0 && contextWindow === 0) return ''
-
-  const used = formatTokenCount(totalTokens)
-
-  if (contextWindow > 0)
-  {
-    const window = formatTokenCount(contextWindow)
-    const pct = percentOfWindow(totalTokens, contextWindow)
-    return `${used}/${window} ctx (${pct}%)`
-  }
-
-  return `${used} tokens`
-}
-
 // frozen-prefix coverage for /status — tokens Coral keeps byte-stable across
 // compaction, with a percentage of the pinned window when known. this is
 // what Coral froze to enable prefix reuse, not a measured server-side cache hit

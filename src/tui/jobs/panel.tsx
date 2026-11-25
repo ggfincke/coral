@@ -15,7 +15,13 @@ import {
   readJobEvents,
   readJobSnapshot,
 } from '../../jobs/store.js'
-import type { JobEvent, JobRecord } from '../../jobs/types.js'
+import {
+  canCancelJob,
+  canContinueJob,
+  unsettledShellCommands,
+  type JobEvent,
+  type JobRecord,
+} from '../../jobs/types.js'
 import type { SessionData } from '../../session/types.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
@@ -454,10 +460,7 @@ export default function JobPanel({
       )
       return
     }
-    if (
-      current.unsettledShells?.some((shell) => !shell.result) &&
-      !shellResolution
-    )
+    if (unsettledShellCommands(current).length > 0 && !shellResolution)
     {
       setError(
         'Inspect the unsettled Agent shell commands, then choose c to continue with their effects or t to permit retry.'
@@ -541,15 +544,13 @@ export default function JobPanel({
                 `Setup decision: ${screen.setupResolution ?? '(required)'}`,
               ]
             : []),
-          ...(current.unsettledShells?.some((shell) => !shell.result)
+          ...(unsettledShellCommands(current).length > 0
             ? [
                 '',
                 style('warning')(
                   'These Agent shell commands have no settled result:'
                 ),
-                ...current.unsettledShells
-                  .filter((shell) => !shell.result)
-                  .map((shell) => sanitizeUntrustedText(shell.command)),
+                ...unsettledShellCommands(current).map(sanitizeUntrustedText),
                 'c = continue with existing effects; t = explicitly permit retry after reconciliation.',
                 `Shell decision: ${screen.shellResolution ?? '(required)'}`,
               ]
@@ -704,12 +705,13 @@ export default function JobPanel({
           setScreen({ ...screen, setupResolution: 'skip' })
         else if (
           input === 'c' &&
-          current?.unsettledShells?.some((shell) => !shell.result)
+          current &&
+          unsettledShellCommands(current).length > 0
         )
           setScreen({ ...screen, shellResolution: 'continue' })
         else if (
           input === 't' &&
-          (current?.unsettledShells?.some((shell) => !shell.result) ||
+          ((current && unsettledShellCommands(current).length > 0) ||
             current?.pendingCommand?.phase === 'checks')
         )
           setScreen({ ...screen, shellResolution: 'retry' })
@@ -737,20 +739,9 @@ export default function JobPanel({
         )
       }
       else if (input === 's') start(current)
-      else if (
-        input === 'c' &&
-        current &&
-        ['draft', 'queued', 'running', 'interrupted', 'needs_input'].includes(
-          current.status
-        )
-      )
+      else if (input === 'c' && current && canCancelJob(current))
         navigate({ kind: 'cancel', id: current.id })
-      else if (
-        input === 'r' &&
-        current &&
-        current.approval &&
-        !['draft', 'queued', 'running'].includes(current.status)
-      )
+      else if (input === 'r' && current?.approval && canContinueJob(current))
         navigate({
           kind: 'resume',
           id: current.id,
@@ -833,10 +824,10 @@ export default function JobPanel({
         : screen.kind === 'cancel'
           ? 'y cancel task · n / esc return'
           : screen.kind === 'resume'
-            ? `e edit ·${current?.pendingCommand?.phase === 'setup' ? ' r retry setup / k skip ·' : ''}${current?.unsettledShells?.some((shell) => !shell.result) ? ' c accept effects / t permit retry ·' : ''}${current?.pendingCommand?.phase === 'checks' ? ' t retry checks ·' : ''} enter continue · ↑↓ scroll · esc back`
+            ? `e edit ·${current?.pendingCommand?.phase === 'setup' ? ' r retry setup / k skip ·' : ''}${current && unsettledShellCommands(current).length > 0 ? ' c accept effects / t permit retry ·' : ''}${current?.pendingCommand?.phase === 'checks' ? ' t retry checks ·' : ''} enter continue · ↑↓ scroll · esc back`
             : current?.status === 'draft'
               ? 'e edit JSON · space acknowledge · s start · c cancel · tab view · ↑↓ scroll · esc back'
-              : `tab view · ↑↓ / pgup pgdn scroll · g/G top/end${current && ['queued', 'running', 'interrupted', 'needs_input'].includes(current.status) ? ' · c cancel' : ''}${current?.approval && !['draft', 'queued', 'running'].includes(current.status) ? ' · r continue' : ''} · esc back`
+              : `tab view · ↑↓ / pgup pgdn scroll · g/G top/end${current && canCancelJob(current) ? ' · c cancel' : ''}${current?.approval && canContinueJob(current) ? ' · r continue' : ''} · esc back`
   return (
     <Box flexDirection="column" height={height} overflowY="hidden">
       <LineList

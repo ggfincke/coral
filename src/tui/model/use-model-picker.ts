@@ -8,7 +8,6 @@ import type { SessionData } from '../../session/types.js'
 import type { Model } from '../../types/inference.js'
 import { clamp } from '../../utils/clamp.js'
 import { toErrorMessage } from '../../utils/errors.js'
-import { restoredSessionForPickerSelection } from './model-activation.js'
 import { sortModels } from './model-picker.js'
 import type { InteractiveSession } from '../session/use-interactive-session.js'
 
@@ -232,10 +231,7 @@ export function useModelPicker(
   {
     const selected = models[selectedIndex]
     if (!selected) return
-    chooseModel(
-      selected.name,
-      restoredSessionForPickerSelection(Boolean(agent), initialSession)
-    )
+    chooseModel(selected.name, agent ? null : initialSession)
   }, [agent, chooseModel, initialSession, models, selectedIndex])
 
   const shutdown = useCallback(() =>

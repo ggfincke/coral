@@ -8,7 +8,10 @@ import {
   type SkillRecord,
 } from '../../skills/types.js'
 import { excerpt } from '../../utils/ellipsize.js'
-import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
+import {
+  sanitizeUntrustedLine,
+  sanitizeUntrustedText,
+} from '../../utils/untrusted-text.js'
 import {
   keybindingInfos as sharedKeybindingInfos,
   type KeybindingSummary,
@@ -192,7 +195,7 @@ function skillCommandInfos(skills: readonly SkillRecord[]): CommandInfo[]
       name: sanitizeUntrustedText(record.name),
       aliases: [],
       description: excerpt(
-        sanitizeUntrustedText(record.description).replace(/\s+/g, ' ').trim(),
+        sanitizeUntrustedLine(record.description),
         SKILL_DETAIL_MAX
       ),
     }))

@@ -61,6 +61,9 @@ export type AgentRunOutcome =
 // exec, ACP, and durable tasks cap model rounds per turn; the TUI stays uncapped
 export const SURFACE_MAX_ITERATIONS = 100
 
+// stored reply text for a turn interrupted after thinking but before any text
+export const INTERRUPTED_REPLY_PLACEHOLDER = '(interrupted)'
+
 // a rejection may carry the user's free-text reason; plain booleans stay valid
 export type ToolApprovalDecision =
   boolean | { approved: boolean; reason?: string }

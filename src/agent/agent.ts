@@ -147,12 +147,13 @@ import {
   estimateModelRequestMessageDeltaTokens,
   toModelRequestMessage,
 } from './request/projection.js'
-import type {
-  AcceptedTurn,
-  AgentEvents,
-  AgentOptions,
-  AgentRunOutcome,
-  SamplingOverrides,
+import {
+  INTERRUPTED_REPLY_PLACEHOLDER,
+  type AcceptedTurn,
+  type AgentEvents,
+  type AgentOptions,
+  type AgentRunOutcome,
+  type SamplingOverrides,
 } from './contracts.js'
 
 // cap tool-call rounds for research subagents
@@ -1476,7 +1477,7 @@ export class Agent
     if (!fullContent && !fullThinking) return
     const partial: OllamaMessage = {
       role: 'assistant',
-      content: fullContent || '(interrupted)',
+      content: fullContent || INTERRUPTED_REPLY_PLACEHOLDER,
     }
     if (fullThinking) partial.thinking = fullThinking
     this.pushMessage(partial)
