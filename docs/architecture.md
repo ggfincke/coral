@@ -622,7 +622,7 @@ These are Agent-loop features, not separate products:
 - **Doom loop** pause (interactive) or stop (exec): 3 identical calls **or** identical errors in a window of 12.
 - **`/verify`** — off by default; project `.coral.json` `verify.enabled: true` can turn it on for new Agents. After an edit-producing completion, a read-only subagent must answer `VERDICT: PASS` or `VERDICT: FAIL`. FAIL gets one model retry (`onVerification` is warn-only). Headless ignores this (`verifyEdits: false`).
 - **`/status`** shows estimated tokens, Ollama prompt/decode counts and speeds, compaction count, frozen-prefix coverage, and a Repairs line once **any** reliability counter is nonzero. On that line, `tool-call`, `nudge`, and `invalid-args` always appear (zeros included); `nameRepairs` is folded into `tool-call`; the last five labels appear only when nonzero.
-- **`/telemetry`** shows **lifetime** per-model counters from `CORAL_HOME/telemetry.json` + `telemetry.d/` (written when an interactive Agent that produced a turn is closed). Not a network service.
+- **`/telemetry`** shows **lifetime** per-model counters from `CORAL_HOME/telemetry.d/` (written when an interactive Agent that produced a turn is closed). Not a network service.
 
 `onAttachments` fires only after the user message is committed with a materialization. `onUsage` reports Ollama token counts and nanosecond durations.
 
