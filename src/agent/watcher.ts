@@ -4,7 +4,7 @@
 import { watch, type FSWatcher } from 'node:fs'
 import { relative, resolve, sep } from 'node:path'
 import { createIgnoredEntrySet } from '../shared/ignored-entries.js'
-import { isPathInsideProject } from '../shared/project-tree.js'
+import { isPathInsideProject } from '../utils/path-containment.js'
 
 const DEBOUNCE_MS = 75
 const FALLBACK_INTERVAL_MS = 30_000

@@ -447,6 +447,19 @@ export default function App({
   // prompt viewport geometry for the modal scroll keys
   const promptViewportRef = useRef({ maxOffset: 0, pageSize: 1 })
   const currentCwd = agent?.getCwd() ?? cwd ?? getCwd()
+
+  // say once per working dir when an instruction file was skipped for linking
+  // outside it; /status repeats the notice
+  const contextNoticeCwd = useRef<string | null>(null)
+  useEffect(() =>
+  {
+    if (!agent || contextNoticeCwd.current === currentCwd) return
+    contextNoticeCwd.current = currentCwd
+    const notices = agent.getProjectContextNotices()
+    if (notices.length === 0) return
+    setOutput((previous) => [...previous, systemBlock(notices.join('\n'))])
+  }, [agent, currentCwd, setOutput])
+
   const transcriptWidth = Math.max(terminalSize.columns - 2, 1)
   const sessionPickerVisible =
     sessionPickerOpen && !pickerVisible && !jobsOpen && Boolean(agent)

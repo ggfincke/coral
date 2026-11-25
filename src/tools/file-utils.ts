@@ -14,6 +14,8 @@ export interface FileContent
   ok: true
   path: string
   content: string
+  // invalid UTF-8 bytes were replaced w/ U+FFFD while decoding
+  lossy?: true
 }
 
 // failure result from readFileGuarded
@@ -37,4 +39,13 @@ export async function readFileGuarded(
     path: result.path,
     result: { output: '', error: formatRequiredTextFileError(result) },
   }
+}
+
+// explain why a write tool leaves a non-UTF-8 file untouched
+export function formatNotUtf8Refusal(action: string, path: string): string
+{
+  return (
+    `Refusing to ${action} ${path}: file is not valid UTF-8, and rewriting ` +
+    `it as text would replace its invalid bytes. Use bash for this file.`
+  )
 }

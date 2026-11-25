@@ -5,6 +5,7 @@ import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { readFileGuarded } from './file-utils.js'
 import { getCwd } from '../cwd.js'
 import { checkWorkspacePath } from '../shared/workspace-path.js'
+import { formatNotUtf8Notice } from '../utils/file-read.js'
 
 export const readTool: Tool = {
   name: 'read_file',
@@ -51,12 +52,13 @@ export const readTool: Tool = {
     )
     if (!allowed.ok) return { output: '', error: allowed.error }
 
-    const result = await readFileGuarded(allowed.path)
+    const result = await readFileGuarded(allowed.path, { root: allowed.root })
     if (!result.ok) return result.result
     context?.observeFile?.(allowed.path, result.content)
+    const notice = result.lossy ? formatNotUtf8Notice(allowed.path) : ''
     if (args.offset === undefined && args.limit === undefined)
     {
-      return { output: result.content }
+      return { output: notice + result.content }
     }
 
     // preserve line endings without counting a trailing newline as an extra line
@@ -69,13 +71,13 @@ export const readTool: Tool = {
     if (count <= 0)
     {
       return {
-        output: `Empty page at line ${offset}; total lines: ${lines.length}.`,
+        output: `${notice}Empty page at line ${offset}; total lines: ${lines.length}.`,
       }
     }
     const end = offset + count - 1
     const next = end < lines.length ? ` Next offset: ${end + 1}.` : ''
     return {
-      output: `Lines ${offset}-${end} of ${lines.length}.${next}\n${lines.slice(offset - 1, end).join('')}`,
+      output: `${notice}Lines ${offset}-${end} of ${lines.length}.${next}\n${lines.slice(offset - 1, end).join('')}`,
     }
   },
 }

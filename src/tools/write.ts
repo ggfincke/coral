@@ -9,7 +9,10 @@ import { getCwd } from '../cwd.js'
 import { formatBytes } from '../utils/bytes.js'
 import { computeDiff } from '../utils/diff.js'
 import { toErrorMessage } from '../utils/errors.js'
+import { formatNotUtf8Refusal } from './file-utils.js'
 import {
+  EXCLUSIVE_CREATE_FLAGS,
+  overwriteRegularFile,
   readOptionalPreviousTextFile,
   TEXT_FILE_READ_LIMIT_BYTES,
 } from '../utils/file-read.js'
@@ -43,6 +46,12 @@ export const writeTool: Tool = {
       // allow approved outside-workspace writes without undo capture
       if (allowOutside)
       {
+        // keep a non-UTF-8 file's bytes intact even w/o undo capture
+        const existing = await readOptionalPreviousTextFile(path)
+        if (existing.ok && existing.lossy)
+        {
+          return { output: '', error: formatNotUtf8Refusal('write', path) }
+        }
         await mkdir(dirname(path), { recursive: true })
         await writeFile(path, content, 'utf-8')
         context?.observeFile?.(path, content)
@@ -65,7 +74,9 @@ export const writeTool: Tool = {
         }
       }
 
-      const before = await readOptionalPreviousTextFile(path)
+      const before = await readOptionalPreviousTextFile(path, {
+        root: allowed.root,
+      })
       if (!before.ok)
       {
         return {
@@ -75,9 +86,24 @@ export const writeTool: Tool = {
             `(${before.message})`,
         }
       }
+      // undo would restore lossy text, not the original bytes
+      if (before.lossy)
+      {
+        return { output: '', error: formatNotUtf8Refusal('write', path) }
+      }
 
-      await mkdir(dirname(path), { recursive: true })
-      await writeFile(path, content, 'utf-8')
+      if (before.existed)
+      {
+        await overwriteRegularFile(path, content, { root: allowed.root })
+      }
+      else
+      {
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(path, content, {
+          encoding: 'utf-8',
+          flag: EXCLUSIVE_CREATE_FLAGS,
+        })
+      }
       context?.observeFile?.(path, content)
       return {
         output: `Wrote ${formatBytes(contentBytes)} to ${path}`,

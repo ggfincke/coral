@@ -1,9 +1,16 @@
 // src/agent/effects/file-replay.ts
 // reverse or reapply one turn's file edits
 
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open, rm, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { toErrorMessage } from '../../utils/errors.js'
+import {
+  EXCLUSIVE_CREATE_FLAGS,
+  openRegularFileForWrite,
+  overwriteRegularFile,
+  readOptionalPreviousTextFile,
+  replaceOpenedFile,
+} from '../../utils/file-read.js'
 import { checkWorkspacePath } from '../../shared/workspace-path.js'
 import type { UndoFileChange } from '../../types/undo.js'
 
@@ -23,11 +30,14 @@ interface ReplayOptions
 interface ReplayChange extends NetChange
 {
   resolvedPath: string
+  // workspace root later opens must stay inside
+  root?: string
 }
 
 interface RollbackChange
 {
   path: string
+  root?: string
   restore: string | null
 }
 
@@ -51,8 +61,10 @@ function mergeFileChanges(changes: UndoFileChange[]): NetChange[]
   return [...byPath.values()].filter((change) => change.before !== change.after)
 }
 
+// snapshots are strict UTF-8 under the text read limit, so a lossy, oversized,
+// or non-regular current file is an error; rewriting it would lose its bytes
 async function readCurrentFile(
-  path: string,
+  change: ReplayChange,
   signal?: AbortSignal
 ): Promise<{
   exists: boolean
@@ -60,19 +72,16 @@ async function readCurrentFile(
   error?: string
 }>
 {
-  try
+  const read = await readOptionalPreviousTextFile(change.resolvedPath, {
+    root: change.root,
+    signal,
+  })
+  if (!read.ok) return { exists: false, content: '', error: read.message }
+  if (read.lossy)
   {
-    return {
-      exists: true,
-      content: await readFile(path, { encoding: 'utf-8', signal }),
-    }
+    return { exists: true, content: '', error: 'file is not valid UTF-8' }
   }
-  catch (err)
-  {
-    const code = (err as NodeJS.ErrnoException).code
-    if (code === 'ENOENT') return { exists: false, content: '' }
-    return { exists: false, content: '', error: toErrorMessage(err) }
-  }
+  return { exists: read.existed, content: read.content }
 }
 
 async function validateReplayPaths(
@@ -96,7 +105,11 @@ async function validateReplayPaths(
         error: allowed.error ?? `Cannot access ${change.path}`,
       }
     }
-    replayChanges.push({ ...change, resolvedPath: allowed.path })
+    replayChanges.push({
+      ...change,
+      resolvedPath: allowed.path,
+      root: allowed.root,
+    })
   }
 
   return { ok: true, changes: replayChanges }
@@ -112,7 +125,7 @@ async function preflightChanges(
   {
     signal?.throwIfAborted()
     const expected = direction === 'undo' ? change.after : change.before
-    const current = await readCurrentFile(change.resolvedPath, signal)
+    const current = await readCurrentFile(change, signal)
     signal?.throwIfAborted()
     if (current.error)
     {
@@ -148,31 +161,49 @@ async function applyChanges(
     for (const change of changes)
     {
       signal?.throwIfAborted()
-      const previous = await readCurrentFile(change.resolvedPath, signal)
+      const previous = await readCurrentFile(change, signal)
       signal?.throwIfAborted()
       if (previous.error)
       {
         throw new Error(`Cannot read ${change.resolvedPath}: ${previous.error}`)
       }
 
-      rollback.push({
+      // record rollback only once the target is open, so a refused open
+      // (swapped link, concurrent create) never rolls back someone else's file
+      const entry: RollbackChange = {
         path: change.resolvedPath,
+        root: change.root,
         restore: previous.exists ? previous.content : null,
-      })
-
+      }
       const content = contentFor(change)
       if (content === null)
       {
+        rollback.push(entry)
         await rm(change.resolvedPath, { force: true })
+      }
+      else if (previous.exists)
+      {
+        const file = await openRegularFileForWrite(change.resolvedPath, {
+          root: change.root,
+          signal,
+        })
+        rollback.push(entry)
+        await replaceOpenedFile(file, content, signal)
       }
       else
       {
         await mkdir(dirname(change.resolvedPath), { recursive: true })
         signal?.throwIfAborted()
-        await writeFile(change.resolvedPath, content, {
-          encoding: 'utf-8',
-          signal,
-        })
+        const handle = await open(change.resolvedPath, EXCLUSIVE_CREATE_FLAGS)
+        rollback.push(entry)
+        try
+        {
+          await handle.writeFile(content, { encoding: 'utf-8', signal })
+        }
+        finally
+        {
+          await handle.close()
+        }
       }
       signal?.throwIfAborted()
       files++
@@ -194,6 +225,28 @@ async function applyChanges(
   return { ok: true, files }
 }
 
+// put back a file's old text through the same confined write paths, creating
+// it again when the failed replay had removed it
+async function restoreFile(
+  change: RollbackChange,
+  restore: string
+): Promise<void>
+{
+  try
+  {
+    await overwriteRegularFile(change.path, restore, { root: change.root })
+  }
+  catch (err)
+  {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    await mkdir(dirname(change.path), { recursive: true })
+    await writeFile(change.path, restore, {
+      encoding: 'utf-8',
+      flag: EXCLUSIVE_CREATE_FLAGS,
+    })
+  }
+}
+
 async function rollbackAppliedChanges(
   changes: RollbackChange[]
 ): Promise<string | null>
@@ -209,8 +262,7 @@ async function rollbackAppliedChanges(
       }
       else
       {
-        await mkdir(dirname(change.path), { recursive: true })
-        await writeFile(change.path, change.restore, 'utf-8')
+        await restoreFile(change, change.restore)
       }
     }
     catch (err)

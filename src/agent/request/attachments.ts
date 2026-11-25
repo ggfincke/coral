@@ -4,7 +4,7 @@
 import { realpath } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { checkWorkspacePath } from '../../shared/workspace-path.js'
-import { isPathInsideProject } from '../../shared/project-tree.js'
+import { isPathInsideProject } from '../../utils/path-containment.js'
 import type {
   AttachmentReport,
   AttachmentReportAttached,
@@ -18,6 +18,7 @@ import {
 } from '../../types/attachments.js'
 import { formatAttachedFileBlock } from '../../utils/attached-file.js'
 import {
+  formatNotUtf8Notice,
   readRequiredTextFile,
   TEXT_FILE_READ_LIMIT_BYTES,
   type TextFileReadOptions,
@@ -278,7 +279,10 @@ export async function captureAttachments(
     let result: TextFileReadResult
     try
     {
-      result = await read(canonical.path, { signal: options.signal })
+      result = await read(canonical.path, {
+        root: allowed.root,
+        signal: options.signal,
+      })
       options.signal?.throwIfAborted()
     }
     catch (error)
@@ -301,8 +305,9 @@ export async function captureAttachments(
       entries.push(skip(path, failure.reason, failure.message))
       continue
     }
-    const capturedBytes = Buffer.byteLength(result.content, 'utf-8')
-    if (capturedBytes > TEXT_FILE_READ_LIMIT_BYTES)
+    if (
+      Buffer.byteLength(result.content, 'utf-8') > TEXT_FILE_READ_LIMIT_BYTES
+    )
     {
       entries.push(
         skip(
@@ -324,6 +329,11 @@ export async function captureAttachments(
       )
       continue
     }
+    // the notice counts toward the shared budget but not the per-file limit
+    const content = result.lossy
+      ? formatNotUtf8Notice(path) + result.content
+      : result.content
+    const capturedBytes = Buffer.byteLength(content, 'utf-8')
     if (retainedBytes + capturedBytes > retainedByteLimit)
     {
       entries.push(
@@ -342,7 +352,7 @@ export async function captureAttachments(
         status: 'captured',
         path,
         resolvedPath: canonical.path,
-        content: result.content,
+        content,
       })
     )
   }

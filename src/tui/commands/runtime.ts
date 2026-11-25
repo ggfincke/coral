@@ -196,6 +196,10 @@ const statusCommand: Command = {
     }
 
     lines.push(`  CWD:          ${chalk.dim(cwd)}`)
+    for (const notice of ctx.agent.getProjectContextNotices())
+    {
+      lines.push(`  Notice:       ${style('warning')(notice)}`)
+    }
 
     if (gitBranch)
     {
