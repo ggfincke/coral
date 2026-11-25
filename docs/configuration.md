@@ -265,7 +265,7 @@ Think, yolo, host, model, `--theme` for this process: [CLI](cli.md). Slash-comma
 
 ## Project prompt files (not `.coral.json`)
 
-At request time Coral injects one project instruction file into the system prompt: the first of `.coral.md`, `AGENTS.md`, or `CLAUDE.md` that exists as a regular file inside the workspace. A symlink that resolves outside it is skipped, and the TUI and `/status` show a one-line notice such as "AGENTS.md links outside the workspace; not loaded". READMEs, manifests, and the directory tree are not loaded; the model reads them with tools when it needs them. The prompt always carries a short root summary (project name, project type detected from root manifests, top-level entries).
+At request time Coral injects one project instruction file into the system prompt: the first of `.coral.md`, `AGENTS.md`, or `CLAUDE.md` that exists as a regular file inside the workspace. A symlink that resolves outside it is skipped, and the TUI and `/status` show a one-line notice such as "AGENTS.md links outside the workspace; not loaded". READMEs, manifests, and the directory tree are not loaded; the model reads them with tools when it needs them. The prompt always carries a short root summary (project name, project type detected from root manifests, top-level entries), captured once per session and refreshed on a model switch, `/new`, or `/clear` so a new root entry does not rewrite the prompt prefix.
 
 Cap 8,192 bytes. Total budget scales with the pinned window (~1/8, clamped 4,096–32,768 characters) and is the first thing dropped when the request does not fit. Injected text **cannot grant tools**.
 

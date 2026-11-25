@@ -20,6 +20,7 @@ import {
   requestBudgetCapacity,
   type RequestBudgetBreakdown,
 } from '../request/budget.js'
+import { compactGitContext } from '../request/git-context.js'
 import {
   estimateModelRequestMessageDeltaTokens,
   estimateModelRequestMessageTokens,
@@ -49,6 +50,8 @@ export interface PendingAttachmentPlan
 export interface ModelRequestPlanInput extends RequestPlanningSnapshot
 {
   fileChanges?: OllamaMessage | null
+  // stored-message index the notice goes in front of; omitted -> the tail
+  fileChangesAt?: number
   pendingAttachments?: PendingAttachmentPlan
   historyCompactionAvailable: boolean
 }
@@ -325,7 +328,7 @@ export class RequestPlanner
     // degrade volatile repository detail before durable context
     if (!candidate.budget.fits && gitContext)
     {
-      gitContext = this.compactGitContext(gitContext)
+      gitContext = compactGitContext(gitContext)
       candidate = this.requestCandidate(
         input,
         systemContent,
@@ -664,7 +667,7 @@ export class RequestPlanner
   }
 
   private requestCandidate(
-    input: RequestPlanningSnapshot,
+    input: RequestPlanningSnapshot & { fileChangesAt?: number },
     systemContent: string,
     gitContext: string | null,
     fileChanges: OllamaMessage | null,
@@ -687,14 +690,23 @@ export class RequestPlanner
             ),
       gitContext: gitContext ?? undefined,
     })
-    if (fileChanges) messages.push(toModelRequestMessage(fileChanges))
+    let activeIndex = input.activeIndex
+    if (fileChanges)
+    {
+      const at = Math.min(
+        Math.max(input.fileChangesAt ?? messages.length, 1),
+        messages.length
+      )
+      messages.splice(at, 0, toModelRequestMessage(fileChanges))
+      if (at <= activeIndex) activeIndex++
+    }
 
     return {
       messages,
       budget: this.measureRequest({
         contextWindow: input.contextWindow,
         messages,
-        activeIndex: input.activeIndex,
+        activeIndex,
         cleanActiveContent: input.cleanActiveContent,
         baseSystemContent: input.baseSystemContent,
         tools: input.tools,
@@ -719,13 +731,68 @@ export class RequestPlanner
     }
     return messages
   }
+}
 
-  private compactGitContext(gitContext: string): string | null
+// fingerprint of the request message a placed notice follows
+function placementKey(message: ModelRequestMessage | undefined): string
+{
+  return JSON.stringify(message ?? null)
+}
+
+/**
+ * Keeps an outstanding file-change notice where it first went out.
+ *
+ * The notice is request-only, so at the tail the next assistant reply would
+ * land on its bytes; holding its position keeps later requests a byte prefix.
+ * A notice w/ different content moves to the tail of the next request.
+ */
+export class FileNoticePlacement
+{
+  private placed?: { content: string; at: number; before: string }
+
+  // stored-message index the notice goes in front of for this request
+  indexFor(
+    notice: OllamaMessage | null,
+    storedMessages: readonly OllamaMessage[]
+  ): number
   {
-    const keep =
-      /^(## Git Context|Automatic Coral repository snapshot taken at turn start, not a user message;|- (root|cwd|branch|operation|status):)/
-    const lines = gitContext.split('\n').filter((line) => keep.test(line))
-    if (lines.length <= 1) return null
-    return `${lines.join('\n')}\n- detail: omitted to fit request budget`
+    const placed = this.placed
+    const held =
+      notice !== null &&
+      placed !== undefined &&
+      placed.content === notice.content &&
+      placed.at <= storedMessages.length &&
+      // a tool result must stay right after the call that asked for it
+      storedMessages[placed.at]?.role !== 'tool' &&
+      placementKey(
+        storedMessages[placed.at - 1] &&
+          toModelRequestMessage(storedMessages[placed.at - 1]!)
+      ) === placed.before
+    return held ? placed.at : storedMessages.length
+  }
+
+  // remember where a sent request carried the full notice; a dropped or
+  // shortened one is placed afresh next time
+  record(
+    notice: OllamaMessage | null,
+    at: number,
+    requestMessages: readonly ModelRequestMessage[]
+  ): void
+  {
+    if (!notice || requestMessages[at]?.content !== notice.content)
+    {
+      this.clear()
+      return
+    }
+    this.placed = {
+      content: notice.content,
+      at,
+      before: placementKey(requestMessages[at - 1]),
+    }
+  }
+
+  clear(): void
+  {
+    this.placed = undefined
   }
 }

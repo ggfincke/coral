@@ -109,7 +109,7 @@ On a tool approval, `(a)` approves and grants that tool identity, with **any arg
 
 ## Undo and secrets
 
-`/undo` checks that the file on disk still matches Coral's recorded `after` (undo) or `before` (redo). If you or another process edited it: `file changed outside Coral`. Summarize, trim, `/compact`, and `/clear` clear undo; tool-result prune does not. Session snapshots under `CORAL_HOME/sessions/` can duplicate file contents, including secrets.
+`/undo` checks that the file on disk still matches Coral's recorded `after` (undo) or `before` (redo). If you or another process edited it: `file changed outside Coral`. Summarize, `/compact`, and `/clear` clear undo; tool-result prune does not, and a history trim drops undo only for the turns it removes. Session snapshots under `CORAL_HOME/sessions/` can duplicate file contents, including secrets.
 
 ---
 

@@ -13,6 +13,12 @@ const MAX_RECENT_COMMITS = 5
 const MAX_CONTEXT_CHARS = 6000
 
 export const GIT_CONTEXT_HEADING = '## Git Context'
+// the compacted form keeps this lead so the "not a user message" line survives
+const GIT_CONTEXT_PREAMBLE_LEAD =
+  'Automatic Coral repository snapshot taken at turn start, not a user message;'
+const GIT_CONTEXT_PREAMBLE = `${GIT_CONTEXT_PREAMBLE_LEAD} call git tools before staging, committing, switching branches, or pushing. Later turns repeat it only when it changes.`
+// snapshot fields a budget-compacted snapshot keeps
+const COMPACT_GIT_FIELDS = ['root', 'cwd', 'branch', 'operation', 'status']
 
 interface StatusGroups
 {
@@ -233,7 +239,7 @@ export async function buildGitContextMessage(
   const lines = [
     GIT_CONTEXT_HEADING,
     '',
-    'Automatic Coral repository snapshot taken at turn start, not a user message; call git tools before staging, committing, switching branches, or pushing. Later turns repeat it only when it changes.',
+    GIT_CONTEXT_PREAMBLE,
     '',
     `- root: ${root}`,
     `- cwd: ${cwdFromRoot}`,
@@ -251,4 +257,17 @@ export async function buildGitContextMessage(
     role: 'system',
     content: truncateContext(lines.join('\n')),
   }
+}
+
+// shrink a snapshot to its heading, preamble & identity fields to fit a
+// tight request budget; null when nothing but the heading would remain
+export function compactGitContext(gitContext: string): string | null
+{
+  const keep = (line: string): boolean =>
+    line.startsWith(GIT_CONTEXT_HEADING) ||
+    line.startsWith(GIT_CONTEXT_PREAMBLE_LEAD) ||
+    COMPACT_GIT_FIELDS.some((field) => line.startsWith(`- ${field}:`))
+  const lines = gitContext.split('\n').filter(keep)
+  if (lines.length <= 1) return null
+  return `${lines.join('\n')}\n- detail: omitted to fit request budget`
 }

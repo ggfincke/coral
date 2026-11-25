@@ -557,7 +557,7 @@ describe('ConversationState', () =>
     )
     assert.deepEqual(threshold, { status: 'recorded', failureCount: 0 })
     assert.equal(thresholdState.getMessages().length, beforeNoDrop)
-    assert.equal(thresholdState.getUndoStack().length, 0)
+    assert.equal(thresholdState.getUndoStack().length, 1)
     assert.deepEqual(thresholdState.getCompactionMetrics(), {
       failureCount: 0,
       successfulCount: 0,
