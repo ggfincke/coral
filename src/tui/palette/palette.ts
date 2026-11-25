@@ -5,6 +5,7 @@ import chalk from 'chalk'
 import { selectionStyle, style } from '../theme.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
+import { appendDraftInput, deleteDraftGrapheme } from '../prompt/grapheme.js'
 import type { CommandInfo } from '../commands/contracts.js'
 import type {
   KeybindingAction,
@@ -48,6 +49,7 @@ export interface PaletteInputKey
   delete?: boolean
   ctrl?: boolean
   meta?: boolean
+  tab?: boolean
 }
 
 export interface PaletteInputResult
@@ -182,21 +184,21 @@ export function reducePaletteInput(
     return {
       handled: true,
       state: {
-        query: state.query.slice(0, -1),
+        query: deleteDraftGrapheme(state.query),
         selectedIndex: 0,
       },
     }
   }
 
-  if (!key.ctrl && !key.meta && input.length === 1 && input >= ' ')
+  // a lone control byte (tab, ctrl keys) never types into the filter
+  const control = input.length === 1 && input < ' '
+  const query =
+    key.ctrl || key.meta || key.tab || control
+      ? state.query
+      : appendDraftInput(state.query, input)
+  if (query !== state.query)
   {
-    return {
-      handled: true,
-      state: {
-        query: state.query + input,
-        selectedIndex: 0,
-      },
-    }
+    return { handled: true, state: { query, selectedIndex: 0 } }
   }
 
   return { handled: false, state }

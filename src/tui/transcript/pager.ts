@@ -4,7 +4,7 @@
 import chalk from 'chalk'
 import stripAnsi from 'strip-ansi'
 import type { CoralKey } from '../input/terminal-input.js'
-import { previousGraphemeOffset } from '../prompt/grapheme.js'
+import { appendDraftInput, deleteDraftGrapheme } from '../prompt/grapheme.js'
 import { selectionStyle } from '../theme.js'
 import { sanitizeUntrustedText } from './sanitize.js'
 import { truncateLine, visibleWidth } from '../wrap.js'
@@ -195,15 +195,14 @@ function reduceSearchInput(
     return {
       state: {
         ...state,
-        draft: draft.slice(0, previousGraphemeOffset(draft, draft.length)),
+        draft: deleteDraftGrapheme(draft),
       },
     }
   }
   if (key.ctrl || key.meta || key.tab || !input) return { state }
-  // fast typing arrives as one multi-character token; append it whole
-  const clean = sanitizeUntrustedText(input).replace(/\s+/g, ' ')
-  if (!clean) return { state }
-  return { state: { ...state, draft: `${draft}${clean}` } }
+  const next = appendDraftInput(draft, input)
+  if (next === draft) return { state }
+  return { state: { ...state, draft: next } }
 }
 
 // less-style browsing keys; everything unhandled leaves the state untouched

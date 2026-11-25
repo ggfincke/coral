@@ -21,6 +21,7 @@ import { toErrorMessage } from '../../utils/errors.js'
 import { sanitizeUntrustedText } from '../../utils/untrusted-text.js'
 import { LineList } from '../components/line-list.js'
 import { useCoralInput } from '../input/use-coral-input.js'
+import { useLiveState } from '../input/use-live-state.js'
 import { runInExternalEditor } from '../prompt/editor-handoff.js'
 import PromptInput from '../prompt/prompt-input.js'
 import { selectionStyle, style } from '../theme.js'
@@ -77,6 +78,16 @@ type PanelScreen =
       shellResolution?: 'continue' | 'retry'
     }
 
+// the job a detail, cancel, or resume screen is about
+function screenJobId(screen: PanelScreen): string | undefined
+{
+  return screen.kind === 'detail' ||
+    screen.kind === 'cancel' ||
+    screen.kind === 'resume'
+    ? screen.id
+    : undefined
+}
+
 const EMPTY_COMPLETIONS: [] = []
 const NO_ACTION = () =>
 {}
@@ -92,9 +103,15 @@ export default function JobPanel({
   onClose,
 }: JobPanelProps)
 {
-  const [screen, setScreen] = useState<PanelScreen>({ kind: 'list' })
+  // key handlers & the actions they call read live refs: every key of one
+  // stdin read is handled before React renders the previous key's change
+  const [screen, screenRef, setScreen] = useLiveState<PanelScreen>({
+    kind: 'list',
+  })
   const [jobs, setJobs] = useState<JobRecord[]>([])
-  const [selectedId, setSelectedId] = useState<string>()
+  const [selectedId, selectedIdRef, setSelectedId] = useLiveState<
+    string | undefined
+  >(undefined)
   const [events, setEvents] = useState<JobEvent[]>([])
   const [snapshot, setSnapshot] = useState<SessionData>()
   const [diff, setDiff] = useState('')
@@ -104,20 +121,16 @@ export default function JobPanel({
   const [unreadable, setUnreadable] = useState(0)
   const [externalEditorOpen, setExternalEditorOpen] = useState(false)
   const [refresh, setRefresh] = useState(0)
-  const [offset, setOffset] = useState(0)
-  const [acknowledgedDigest, setAcknowledgedDigest] = useState<string>()
+  const [offset, offsetRef, setOffset] = useLiveState(0)
+  const [acknowledgedDigest, acknowledgedDigestRef, setAcknowledgedDigest] =
+    useLiveState<string | undefined>(undefined)
   const [now, setNow] = useState(Date.now)
   const mounted = useRef(false)
   const actionActive = useRef(false)
   const actionAbort = useRef<AbortController | undefined>(undefined)
   const pollGeneration = useRef(0)
 
-  const detailId =
-    screen.kind === 'detail' ||
-    screen.kind === 'cancel' ||
-    screen.kind === 'resume'
-      ? screen.id
-      : undefined
+  const detailId = screenJobId(screen)
   const tab = screen.kind === 'detail' ? screen.tab : 'overview'
   const current = jobs.find((job) => job.id === detailId)
   const selectedIndex = Math.max(
@@ -203,17 +216,20 @@ export default function JobPanel({
     }
   }, [detailId, tab, refresh])
 
-  const navigate = useCallback((next: PanelScreen) =>
-  {
-    setScreen(next)
-    setOffset(0)
-    setError('')
-    setNotice('')
-    setAcknowledgedDigest(undefined)
-    setEvents([])
-    setSnapshot(undefined)
-    setDiff('')
-  }, [])
+  const navigate = useCallback(
+    (next: PanelScreen) =>
+    {
+      setScreen(next)
+      setOffset(0)
+      setError('')
+      setNotice('')
+      setAcknowledgedDigest(undefined)
+      setEvents([])
+      setSnapshot(undefined)
+      setDiff('')
+    },
+    [setAcknowledgedDigest, setOffset, setScreen]
+  )
 
   const close = useCallback(() =>
   {
@@ -224,6 +240,7 @@ export default function JobPanel({
 
   const back = () =>
   {
+    const screen = screenRef.current
     if (busy) close()
     else if (
       (screen.kind === 'create' || screen.kind === 'resume') &&
@@ -273,6 +290,7 @@ export default function JobPanel({
 
   const create = () =>
   {
+    const screen = screenRef.current
     if (screen.kind !== 'create') return
     const fields = screen.fields
     void perform(
@@ -323,7 +341,8 @@ export default function JobPanel({
     )
   }
 
-  const editDraft = () =>
+  // job actions take the job the handler resolved from the live screen
+  const editDraft = (current: JobRecord | undefined) =>
   {
     if (!current || current.status !== 'draft') return
     setAcknowledgedDigest(undefined)
@@ -358,10 +377,11 @@ export default function JobPanel({
     )
   }
 
-  const start = () =>
+  const start = (current: JobRecord | undefined) =>
   {
+    const digest = current ? jobSpecDigest(current.spec) : undefined
     if (!current || current.status !== 'draft' || !digest) return
-    if (!acknowledged)
+    if (acknowledgedDigestRef.current !== digest)
     {
       setError(
         'Press space to acknowledge that the reviewed commands run on this host, then s to start.'
@@ -387,6 +407,7 @@ export default function JobPanel({
 
   const cancel = () =>
   {
+    const screen = screenRef.current
     if (screen.kind !== 'cancel') return
     const id = screen.id
     void perform(
@@ -407,6 +428,8 @@ export default function JobPanel({
 
   const resume = () =>
   {
+    const screen = screenRef.current
+    const current = jobs.find((job) => job.id === screenJobId(screen))
     if (screen.kind !== 'resume' || !current) return
     const { id, instructions, setupResolution, shellResolution } = screen
     if (!instructions.trim())
@@ -591,6 +614,18 @@ export default function JobPanel({
         return
       }
       if (busy) return
+      const screen = screenRef.current
+      // an earlier key of this read opened a text field; it is not mounted yet
+      if (
+        (screen.kind === 'create' || screen.kind === 'resume') &&
+        screen.editing
+      )
+        return
+      const current = jobs.find((job) => job.id === screenJobId(screen))
+      const selectedIndex = Math.max(
+        0,
+        jobs.findIndex((job) => job.id === selectedIdRef.current)
+      )
       if (screen.kind === 'list')
       {
         if (key.upArrow || key.downArrow || key.pageUp || key.pageDown)
@@ -650,9 +685,8 @@ export default function JobPanel({
       {
         const direction = key.upArrow || key.pageUp || key.wheelUp ? -1 : 1
         const step = key.pageUp || key.pageDown ? bodyHeight : 1
-        setOffset(
-          Math.min(Math.max(shownOffset + direction * step, 0), maxOffset)
-        )
+        const from = Math.min(offsetRef.current, maxOffset)
+        setOffset(Math.min(Math.max(from + direction * step, 0), maxOffset))
         return
       }
       if (screen.kind === 'cancel')
@@ -694,10 +728,15 @@ export default function JobPanel({
       }
       else if (input === 'g') setOffset(0)
       else if (input === 'G') setOffset(maxOffset)
-      else if (input === 'e') editDraft()
+      else if (input === 'e') editDraft(current)
       else if (input === ' ' && current?.status === 'draft')
-        setAcknowledgedDigest(acknowledged ? undefined : digest)
-      else if (input === 's') start()
+      {
+        const digest = jobSpecDigest(current.spec)
+        setAcknowledgedDigest((acknowledged) =>
+          acknowledged === digest ? undefined : digest
+        )
+      }
+      else if (input === 's') start(current)
       else if (
         input === 'c' &&
         current &&
@@ -730,6 +769,7 @@ export default function JobPanel({
         : ''
   const changeInput = (value: string) =>
   {
+    const screen = screenRef.current
     if (screen.kind === 'create')
       setScreen({
         ...screen,
@@ -740,6 +780,7 @@ export default function JobPanel({
   }
   const submitInput = (value: string) =>
   {
+    const screen = screenRef.current
     if (screen.kind === 'create')
       setScreen({
         ...screen,

@@ -1,13 +1,14 @@
 // src/tui/transcript/backtrack-selector.tsx
 // overlay listing prior user prompts for esc-esc rewind
 
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import {
   buildBacktrackLines,
   reduceBacktrackInput,
   type BacktrackTurn,
 } from './backtrack.js'
 import { useCoralInput } from '../input/use-coral-input.js'
+import { useLiveState } from '../input/use-live-state.js'
 import type { CoralKey } from '../input/terminal-input.js'
 import { LineList } from '../components/line-list.js'
 
@@ -36,10 +37,12 @@ export default function BacktrackSelector({
 }: BacktrackSelectorProps)
 {
   // newest prompt preselected; backtracks usually target recent turns
-  const [selectedIndex, setSelectedIndex] = useState(
+  const [selectedIndex, selectedIndexRef, setSelectedIndex] = useLiveState(
     Math.max(turns.length - 1, 0)
   )
-  const safeIndex = Math.min(selectedIndex, Math.max(turns.length - 1, 0))
+  const clampIndex = (index: number) =>
+    Math.min(index, Math.max(turns.length - 1, 0))
+  const safeIndex = clampIndex(selectedIndex)
   const lines = useMemo(
     () =>
       buildBacktrackLines({
@@ -59,15 +62,17 @@ export default function BacktrackSelector({
         onClose()
         return
       }
+      // keys earlier in the same stdin read may have moved the selection
+      const liveIndex = clampIndex(selectedIndexRef.current)
       if (key.return)
       {
-        const selected = turns[safeIndex]
+        const selected = turns[liveIndex]
         if (selected) onSelect(selected)
         return
       }
 
       const next = reduceBacktrackInput(
-        { selectedIndex: safeIndex },
+        { selectedIndex: liveIndex },
         key,
         turns.length
       )

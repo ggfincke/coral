@@ -20,7 +20,7 @@ import {
 } from '../../utils/untrusted-text.js'
 import { truncateLine, visibleWidth } from '../wrap.js'
 import type { CoralKey } from '../input/terminal-input.js'
-import { previousGraphemeOffset } from '../prompt/grapheme.js'
+import { appendDraftInput, deleteDraftGrapheme } from '../prompt/grapheme.js'
 import { REJECTION_REASON_MAX_CHARS } from '../../utils/limits.js'
 
 const MAX_MCP_APPROVAL_ARG_CHARS = 8_000
@@ -73,15 +73,11 @@ export function reduceRejectReasonKey(
   if (key.backspace || key.delete)
   {
     if (!draft) return { kind: 'exit' }
-    return {
-      kind: 'edit',
-      draft: draft.slice(0, previousGraphemeOffset(draft, draft.length)),
-    }
+    return { kind: 'edit', draft: deleteDraftGrapheme(draft) }
   }
   if (key.ctrl || key.meta || key.tab || !input) return { kind: 'ignore' }
-  const clean = sanitizeUntrustedText(input).replace(/\s+/g, ' ')
-  if (!clean) return { kind: 'ignore' }
-  const next = `${draft}${clean}`
+  const next = appendDraftInput(draft, input)
+  if (next === draft) return { kind: 'ignore' }
   if (next.length <= REJECTION_REASON_MAX_CHARS)
     return { kind: 'edit', draft: next }
   return {

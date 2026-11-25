@@ -20,6 +20,8 @@ import { formatBlocksPlain } from '../transcript/plain.js'
 import { sanitizeUntrustedText } from '../transcript/sanitize.js'
 import { buildRestoredBlocks } from '../transcript/restored-blocks.js'
 import { useCoralInput } from '../input/use-coral-input.js'
+import { useLiveState } from '../input/use-live-state.js'
+import { appendDraftInput } from '../prompt/grapheme.js'
 import { getThemeGeneration, selectionStyle, style } from '../theme.js'
 import { padEnd, truncateLine, visibleWidth } from '../wrap.js'
 import { LineList } from '../components/line-list.js'
@@ -429,9 +431,13 @@ export default function SessionPicker({
     useState<Exclude<SessionPickerState, 'hidden'>>('loading')
   const [sessions, setSessions] = useState<SessionMeta[]>([])
   const [error, setError] = useState('')
-  const [query, setQuery] = useState('')
-  const [currentProject, setCurrentProject] = useState(false)
-  const [selectedIndex, setSelectedIndex] = useState(0)
+  // handlers read the live filter: keys of one stdin read arrive before a render
+  const [filter, filterRef, setFilter] = useLiveState({
+    query: '',
+    currentProject: false,
+    selectedIndex: 0,
+  })
+  const { query, currentProject, selectedIndex } = filter
 
   const [reload, setReload] = useState(0)
   const [previewLoader] = useState(() => new SessionPreviewLoader())
@@ -469,15 +475,19 @@ export default function SessionPicker({
 
   useEffect(() => () => previewLoader.dispose(), [previewLoader])
 
-  const matches = useMemo(
-    () =>
+  const matchesFor = useCallback(
+    (view: { query: string; currentProject: boolean }) =>
       filterSessions(
-        currentProject
+        view.currentProject
           ? sessions.filter((session) => sameWorkspace(session.cwd, cwd))
           : sessions,
-        query
+        view.query
       ),
-    [query, sessions, currentProject, cwd]
+    [sessions, cwd]
+  )
+  const matches = useMemo(
+    () => matchesFor({ query, currentProject }),
+    [matchesFor, query, currentProject]
   )
   const safeIndex = Math.min(selectedIndex, Math.max(matches.length - 1, 0))
   const selectedId = matches[safeIndex]?.id
@@ -564,8 +574,11 @@ export default function SessionPicker({
       }
       if (key.tab)
       {
-        setCurrentProject((value) => !value)
-        setSelectedIndex(0)
+        setFilter((current) => ({
+          ...current,
+          currentProject: !current.currentProject,
+          selectedIndex: 0,
+        }))
         setPreview(null)
         return
       }
@@ -575,33 +588,50 @@ export default function SessionPicker({
         if (input.toLowerCase() === 'r') load()
         return
       }
+      const live = filterRef.current
+      const liveMatches = live === filter ? matches : matchesFor(live)
+      const liveIndex = Math.min(
+        live.selectedIndex,
+        Math.max(liveMatches.length - 1, 0)
+      )
       if (key.return)
       {
-        const selected = matches[safeIndex]
+        const selected = liveMatches[liveIndex]
         if (selected) onResume(selected.id)
         return
       }
 
       const next = reduceSessionPickerInput(
-        { query, selectedIndex: safeIndex },
+        { query: live.query, selectedIndex: liveIndex },
         input,
         key,
-        matches.length
+        liveMatches.length
       )
       if (next.handled)
       {
         if (
-          next.state.query !== query ||
-          next.state.selectedIndex !== safeIndex
+          next.state.query !== live.query ||
+          next.state.selectedIndex !== liveIndex
         )
         {
           setPreview(null)
         }
-        setQuery(next.state.query)
-        setSelectedIndex(next.state.selectedIndex)
+        setFilter({ ...live, ...next.state })
       }
     },
-    { isActive: active }
+    {
+      isActive: active,
+      onPaste: (text) =>
+      {
+        if (state !== 'ready') return
+        setPreview(null)
+        setFilter((live) => ({
+          ...live,
+          query: appendDraftInput(live.query, text),
+          selectedIndex: 0,
+        }))
+      },
+    }
   )
 
   return (

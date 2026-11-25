@@ -1,9 +1,11 @@
 // src/tui/transcript/transcript-pager.tsx
 // full-height transcript overlay with less-style paging and substring search
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { LineList } from '../components/line-list.js'
 import { useCoralInput } from '../input/use-coral-input.js'
+import { useLiveState } from '../input/use-live-state.js'
+import { appendDraftInput } from '../prompt/grapheme.js'
 import {
   buildPagerFooter,
   buildPagerTitle,
@@ -66,7 +68,7 @@ export default function TranscriptPager({
     [committed.lines, live.lines]
   )
 
-  const [state, setState] = useState<PagerState>(() =>
+  const [state, stateRef, setState] = useLiveState<PagerState>(() =>
     initialPagerState(rows.length, bodyHeight)
   )
 
@@ -103,7 +105,7 @@ export default function TranscriptPager({
         top: wasAtBottom ? limit : Math.min(current.top, limit),
       }
     })
-  }, [bodyHeight, rows.length, width])
+  }, [bodyHeight, rows.length, setState, width])
 
   const matches = useMemo(
     () => findMatchRows(plain, state.query),
@@ -114,7 +116,9 @@ export default function TranscriptPager({
   useCoralInput(
     (input, key) =>
     {
-      const step = reducePagerInput(state, input, key, {
+      // keys earlier in the same stdin read may have moved the pager
+      const live = stateRef.current
+      const step = reducePagerInput(live, input, key, {
         total: rows.length,
         bodyHeight,
         matchesFor: (query) => findMatchRows(plain, query),
@@ -129,9 +133,18 @@ export default function TranscriptPager({
         onClose()
         return
       }
-      if (step.state !== state) setState(step.state)
+      if (step.state !== live) setState(step.state)
     },
-    { isActive: active }
+    {
+      isActive: active,
+      // only an open search draft takes pasted text
+      onPaste: (text) =>
+        setState((live) =>
+          live.draft === null
+            ? live
+            : { ...live, draft: appendDraftInput(live.draft, text) }
+        ),
+    }
   )
 
   // the visible slice is a handful of rows, so build it each render and let
