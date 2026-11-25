@@ -1,5 +1,14 @@
 // src/utils/abort.ts
-// shared abort-signal race helper
+// shared abort-signal race helper and abort-error predicate
+
+// DOMException aborts and SDK errors that only say 'Aborted' both count
+export function isAbortError(error: unknown): boolean
+{
+  return (
+    error instanceof Error &&
+    (error.name === 'AbortError' || error.message === 'Aborted')
+  )
+}
 
 // race a promise against an AbortSignal and reject with AbortError when aborted
 // first; pre-aborted signals reject immediately; listeners detach on settle

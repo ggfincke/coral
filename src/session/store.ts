@@ -69,6 +69,14 @@ function readSessionData(path: string): SessionData | undefined
   return decodeSessionData(readJsonObjectFile(path))
 }
 
+// same validity and id rule as loadSession without hydrating undo state
+function storedSessionExists(id: string): boolean
+{
+  if (!isValidSessionId(id)) return false
+  const preview = decodeSessionPreview(readJsonObjectFile(sessionPath(id)))
+  return preview?.meta.id === id
+}
+
 // derive the session-list title from the first user message
 function extractTitle(messages: OllamaMessage[]): string
 {
@@ -225,8 +233,14 @@ function writeSessionDataUnlocked(session: SessionData): void
       'Session snapshot would not load back',
       { sessionId: session.meta.id }
     )
+  writeEncodedSessionUnlocked(session.meta.id, encoded)
+}
+
+// the caller has already encoded and validated the snapshot
+function writeEncodedSessionUnlocked(id: string, encoded: object): void
+{
   ensureDir()
-  const path = sessionPath(session.meta.id)
+  const path = sessionPath(id)
   const cache = cacheForDirectory(dirname(path))
   try
   {
@@ -450,9 +464,7 @@ export async function loadSessionPreview(
 {
   signal?.throwIfAborted()
   if (!isValidSessionId(id)) return { kind: 'missing' }
-  const dir = sessionsDir()
-  cacheForDirectory(dir)
-  const path = join(dir, `${id}.json`)
+  const path = join(sessionsDir(), `${id}.json`)
   const revision = await readRevision(path, signal)
   if (!revision) return { kind: 'missing' }
   if (revision === knownRevision) return { kind: 'unchanged', revision }
@@ -571,19 +583,19 @@ export function saveProviderSession(
     )
   }
   const encoded = encodeSessionData(input.snapshot)
-  if (!decodeSessionData(encoded))
+  if (!decodeSessionPreview(encoded))
     throw new SessionPersistenceError(
       'invalid_snapshot',
       'Invalid provider snapshot'
     )
   withSessionWriteLock(input.lease, () =>
   {
-    if (!loadSession(input.sessionId))
+    if (!storedSessionExists(input.sessionId))
       throw new SessionPersistenceError(
         'session_not_found',
         'Session disappeared before save'
       )
-    writeSessionDataUnlocked(input.snapshot)
+    writeEncodedSessionUnlocked(input.sessionId, encoded)
   })
   return input.snapshot
 }

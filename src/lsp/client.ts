@@ -17,6 +17,8 @@ import {
   type TextFileReadResult,
 } from '../utils/file-read.js'
 import { isPlainObject } from '../utils/guards.js'
+import { isAbortError } from '../utils/abort.js'
+import { childProcessEnv } from '../utils/process.js'
 import { toErrorMessage } from '../utils/errors.js'
 import {
   formatDiagnostics,
@@ -44,11 +46,6 @@ interface OpenDocument
 {
   version: number
   content?: string
-}
-
-function isAbortError(error: unknown): boolean
-{
-  return (error as { name?: unknown } | null)?.name === 'AbortError'
 }
 
 function waitForSpawn(child: ChildProcessWithoutNullStreams): Promise<void>
@@ -337,7 +334,8 @@ export class TypeScriptCodeIntel implements CodeIntelService
       [serverCli, '--stdio', '--log-level', '1'],
       {
         cwd: this.cwd,
-        env: { ...process.env },
+        // the language server runs project plugins, so it gets no API keys
+        env: childProcessEnv(),
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       }

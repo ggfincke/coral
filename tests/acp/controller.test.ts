@@ -15,11 +15,6 @@ import type {
   AgentEvents,
   AgentRunOutcome,
 } from '../../src/agent/contracts.js'
-import type {
-  CoralInteractionMode,
-  CoralRuntimeMode,
-} from '../../src/acp/session-policy.js'
-import type { McpConfigResolution } from '../../src/config/mcp.js'
 import { CoralAcpController } from '../../src/acp/controller.js'
 import { OllamaClient } from '../../src/ollama/client.js'
 import { SessionPersistenceError } from '../../src/session/errors.js'
@@ -52,7 +47,6 @@ interface FakeAgentHooks
 {
   onBlocked?: () => void
   onDispose?: () => Promise<void>
-  onMcpPreflight?: (signal?: AbortSignal) => Promise<void>
   onStart?: () => void
   onSwitch?: (model: string) => Promise<void>
 }
@@ -72,8 +66,6 @@ class FakeAcpAgent
   private nextTurn = 0
   private readonly turnStarts = new Map<string, number>()
   private produced = false
-  private runtimeMode: CoralRuntimeMode
-  private interactionMode: CoralInteractionMode
   turnCount = 0
 
   constructor(
@@ -81,11 +73,7 @@ class FakeAcpAgent
     private readonly cwd: string,
     restored: SessionData | undefined,
     private readonly mode: FakeRunMode,
-    private readonly hooks: FakeAgentHooks,
-    policy: {
-      runtimeMode: CoralRuntimeMode
-      interactionMode: CoralInteractionMode
-    }
+    private readonly hooks: FakeAgentHooks
   )
   {
     const tail =
@@ -93,8 +81,6 @@ class FakeAcpAgent
         ? restored.messages.slice(1)
         : (restored?.messages ?? [])
     this.model = model
-    this.runtimeMode = policy.runtimeMode
-    this.interactionMode = policy.interactionMode
     this.messages = [
       { role: 'system', content: `System for ${model}` },
       ...structuredClone(tail),
@@ -112,6 +98,12 @@ class FakeAcpAgent
       id: Symbol(turnId),
       input: { content: input },
     }
+  }
+
+  // every fake turn starts running at once, so there is never one to release
+  releaseAcceptedTurn(): boolean
+  {
+    return false
   }
 
   async runAcceptedTurn(
@@ -266,31 +258,6 @@ class FakeAcpAgent
     this.messages[0] = { role: 'system', content: `System for ${model}` }
   }
 
-  getRuntimeMode(): CoralRuntimeMode
-  {
-    return this.runtimeMode
-  }
-
-  getInteractionMode(): CoralInteractionMode
-  {
-    return this.interactionMode
-  }
-
-  setRuntimeMode(mode: CoralRuntimeMode): void
-  {
-    this.runtimeMode = mode
-  }
-
-  async setInteractionMode(mode: CoralInteractionMode): Promise<void>
-  {
-    this.interactionMode = mode
-  }
-
-  async preflightClientMcp(signal?: AbortSignal): Promise<void>
-  {
-    await this.hooks.onMcpPreflight?.(signal)
-  }
-
   restoreMessages(messages: OllamaMessage[]): void
   {
     this.messages = structuredClone(messages)
@@ -399,25 +366,15 @@ function controller(
 ): {
   controller: CoralAcpController
   agents: FakeAcpAgent[]
-  mcpConfigs: McpConfigResolution[]
 }
 {
   const agents: FakeAcpAgent[] = []
-  const mcpConfigs: McpConfigResolution[] = []
   const instance = new CoralAcpController(
     { host: 'http://ollama.test', model: 'model-a' },
     {
-      createAgent: (model, cwd, restored, binding) =>
+      createAgent: (model, cwd, restored) =>
       {
-        mcpConfigs.push(structuredClone(binding.mcpConfig))
-        const agent = new FakeAcpAgent(
-          model,
-          cwd,
-          restored,
-          mode,
-          hooks,
-          binding
-        )
+        const agent = new FakeAcpAgent(model, cwd, restored, mode, hooks)
         agents.push(agent)
         return agent
       },
@@ -436,7 +393,7 @@ function controller(
       ...overrides,
     }
   )
-  return { controller: instance, agents, mcpConfigs }
+  return { controller: instance, agents }
 }
 
 function client(

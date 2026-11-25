@@ -53,15 +53,10 @@ const WORKER_TOOLS = new Set([
 export interface JobWorkerDependencies
 {
   createAgent?: (job: JobRecord, options: AgentOptions) => Agent
-  readJob?: typeof readJob
   writeJob?: typeof writeJob
-  appendJobEvent?: typeof appendJobEvent
   writeJobSnapshot?: typeof writeJobSnapshot
-  writeJobCommandOutput?: typeof writeJobCommandOutput
-  readJobSnapshot?: typeof readJobSnapshot
   ensureJobWorktree?: typeof ensureJobWorktree
   assertJobWorktree?: typeof assertJobWorktree
-  getJobDiff?: typeof getJobDiff
   runJobCommand?: typeof runJobCommand
 }
 
@@ -73,21 +68,14 @@ export async function executeJob(
 ): Promise<JobRecord>
 {
   const io = {
-    readJob,
     writeJob,
-    appendJobEvent,
     writeJobSnapshot,
-    writeJobCommandOutput,
-    readJobSnapshot,
     ensureJobWorktree,
     assertJobWorktree,
-    getJobDiff,
     runJobCommand,
     ...dependencies,
   }
-  const loaded = io.readJob(id)
-  if (!loaded) throw new Error(`Unknown task: ${id}`)
-  let job: JobRecord = loaded
+  let job: JobRecord = readJob(id)
   if (job.status !== 'running')
     throw new Error('Only a dispatched task may execute')
   if (
@@ -140,7 +128,7 @@ export async function executeJob(
   // stream and tool events are frequent, so they reach disk in coalesced batches
   const event = (type: string, text: string, coalesce = false) =>
     durable(() =>
-      io.appendJobEvent(id, type, text, coalesce ? { coalesce } : undefined)
+      appendJobEvent(id, type, text, coalesce ? { coalesce } : undefined)
     )
   const save = (terminal = false) =>
   {
@@ -418,7 +406,7 @@ export async function executeJob(
     // verbose suites can never push the record past its size limit
     const outputFile =
       result.output.length > JOB_OUTPUT_TAIL_CHARS
-        ? durable(() => io.writeJobCommandOutput(id, result.output))
+        ? durable(() => writeJobCommandOutput(id, result.output))
         : undefined
     const evidence = {
       phase,
@@ -453,14 +441,12 @@ export async function executeJob(
     save()
     await io.assertJobWorktree(job, signal)
     const restored = job.snapshot
-      ? durable(() => io.readJobSnapshot(id, job.snapshot!))
+      ? durable(() => readJobSnapshot(id, job.snapshot!))
       : undefined
-    if (job.snapshot && !restored)
-      throw new Error('Task checkpoint is missing or invalid')
 
     if (job.continuation !== undefined)
     {
-      const diff = await io.getJobDiff(job, signal)
+      const diff = await getJobDiff(job, signal)
       agent = createAgent(restored, true)
       const outcome = await runTurn(
         'reconcile',
@@ -545,7 +531,7 @@ export async function executeJob(
     }
     agent = createAgent(
       job.snapshot
-        ? durable(() => io.readJobSnapshot(id, job.snapshot!))
+        ? durable(() => readJobSnapshot(id, job.snapshot!))
         : restored
     )
     const prompt = [

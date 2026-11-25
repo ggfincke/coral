@@ -14,7 +14,11 @@ import type { SubagentRunner } from '../../tools/subagent.js'
 import { capErrorMessage } from '../../tools/tool-output.js'
 import type { ToolExecutionContext, ToolResult } from '../../tools/tool.js'
 import { validateToolArgs } from '../../tools/validation.js'
-import type { OllamaMessage, OllamaToolCall } from '../../types/inference.js'
+import {
+  MALFORMED_TOOL_ARGUMENTS_KEY,
+  type OllamaMessage,
+  type OllamaToolCall,
+} from '../../types/inference.js'
 import { cloneTodoItems, type TodoState } from '../../types/todo.js'
 import { formatStoredToolResult } from '../../types/tool-result.js'
 import type { UndoFileChange, UndoTodoChange } from '../../types/undo.js'
@@ -25,6 +29,7 @@ import {
   trimTrailingHighSurrogate,
 } from '../../utils/ellipsize.js'
 import { toError, toErrorMessage } from '../../utils/errors.js'
+import { cloneFrozenJson } from '../../utils/json.js'
 import {
   MAX_LOCAL_TOOL_OUTPUT_CHARS,
   MAX_TOOL_OUTPUT_CHARS,
@@ -159,20 +164,13 @@ function toolError(error: string): ToolResult
   return { output: '', error }
 }
 
-function cloneFrozenJson<T>(value: T): T
+// the error a hosted adapter left in place of unparseable arguments
+function malformedArgumentsError(
+  args: Record<string, unknown>
+): string | undefined
 {
-  if (Array.isArray(value))
-  {
-    return Object.freeze(value.map((item) => cloneFrozenJson(item))) as T
-  }
-  if (typeof value === 'object' && value !== null)
-  {
-    const clone = Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, cloneFrozenJson(item)])
-    )
-    return Object.freeze(clone) as T
-  }
-  return value
+  const message = args[MALFORMED_TOOL_ARGUMENTS_KEY]
+  return typeof message === 'string' ? message : undefined
 }
 
 function frozenToolCall(
@@ -219,12 +217,13 @@ function storedToolCall(call: OllamaToolCall): OllamaToolCall
   })
 }
 
+// the largest fallback buildToolMessage can emit: the redacted notice on an error
 function minimumToolResultMessage(toolName: string): OllamaMessage
 {
   return Object.freeze({
     role: 'tool',
     tool_name: toolName,
-    content: `Error: ${TOOL_RESULT_REDACTED_OMITTED}`,
+    content: formatStoredToolResult('', TOOL_RESULT_REDACTED_OMITTED),
   })
 }
 
@@ -242,7 +241,7 @@ function padInterruptedResults(
       Object.freeze({
         role: 'tool',
         tool_name: calls[index]!.function.name,
-        content: 'Error: Tool call interrupted',
+        content: formatStoredToolResult('', 'Tool call interrupted'),
       })
     )
   }
@@ -294,7 +293,6 @@ function isolatedOutcome(outcome: MutableToolRoundOutcome): ToolRoundOutcome
   })
 }
 
-// coordinate one exact catalog snapshot without owning conversation history
 // a rejection reason is user-authored but still untrusted text headed for the
 // model: strip controls, flatten whitespace, cap it, and drop it when empty
 export function normalizeApprovalDecision(decision: ToolApprovalDecision): {
@@ -320,6 +318,7 @@ export function rejectionError(reason?: string): string
   return `Tool call rejected by user: "${reason}". Adjust your approach to follow this feedback instead of retrying the same call.`
 }
 
+// coordinate one exact catalog snapshot without owning conversation history
 export class ToolRoundExecutor
 {
   private readonly cwd: string
@@ -617,6 +616,21 @@ export class ToolRoundExecutor
         continue
       }
 
+      // a malformed hosted call is answered in place, never approved or run
+      const malformed = malformedArgumentsError(invocation.args)
+      if (malformed !== undefined)
+      {
+        this.recordToolOutcome({
+          invocation,
+          result: toolError(malformed),
+          budget: input.budget,
+          events: input.events,
+          doomLoop: input.doomLoop,
+          outcome: input.outcome,
+        })
+        continue
+      }
+
       const crossesWorkspace = requiresWorkspacePathApproval(
         invocation.name,
         invocation.args,
@@ -774,6 +788,7 @@ export class ToolRoundExecutor
   {
     return (
       catalog.getProfile(toolName)?.parallelSafe === true &&
+      malformedArgumentsError(args) === undefined &&
       this.resolveInvocationPolicy(
         toolName,
         requiresWorkspacePathApproval(toolName, args, this.cwd)

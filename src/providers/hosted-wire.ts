@@ -1,7 +1,10 @@
 // src/providers/hosted-wire.ts
 // sdk-free request and result policy shared by both hosted adapters
 
-import type { ChatRequest } from '../types/inference.js'
+import {
+  MALFORMED_TOOL_ARGUMENTS_KEY,
+  type ChatRequest,
+} from '../types/inference.js'
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 16_000
 // reasoning cannot be fully disabled and its tokens count against the output
@@ -53,13 +56,14 @@ export function isBillingRejectedStatus(status: number | undefined): boolean
   return status !== undefined && status >= 400 && status < 500 && status !== 408
 }
 
-// a completed call whose arguments are not one JSON object never runs
-export function malformedArgumentsError(
+// a completed call whose arguments are not one JSON object keeps its place
+// in the round but carries only the marker, so it gets a tool error unrun
+export function malformedArguments(
   provider: string,
   toolName: string
-): Error
+): Record<string, unknown>
 {
-  return new Error(
-    `${provider} sent malformed arguments for ${toolName}; the call was not run`
-  )
+  return {
+    [MALFORMED_TOOL_ARGUMENTS_KEY]: `${provider} sent malformed arguments for ${toolName}; the call was not run`,
+  }
 }

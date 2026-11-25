@@ -42,7 +42,6 @@ import {
 } from '../config/permissions.js'
 import {
   estimateMessageTokens,
-  type CompactionConfig,
   type CompactionResult,
 } from './state/compaction.js'
 import {
@@ -92,11 +91,12 @@ import {
   MAX_VERIFY_REPROMPTS,
   type VerificationResult,
 } from './loop/edit-verification.js'
-import type {
-  UndoFileChange,
-  UndoResult,
-  UndoTodoChange,
-  UndoTurn,
+import {
+  cloneUndoTodoChange,
+  type UndoFileChange,
+  type UndoResult,
+  type UndoTodoChange,
+  type UndoTurn,
 } from '../types/undo.js'
 import {
   cloneTodoItems,
@@ -242,10 +242,7 @@ function finalizedTodoChange(
 ): UndoTodoChange | undefined
 {
   if (!change.before || !change.after) return undefined
-  return {
-    before: cloneTodoItems(change.before),
-    after: cloneTodoItems(change.after),
-  }
+  return cloneUndoTodoChange({ before: change.before, after: change.after })
 }
 
 interface ActiveAcceptedTurn
@@ -274,8 +271,6 @@ export class Agent
   // derive lookup, schemas, names, and token cost from one immutable profile
   private toolCatalog!: ToolCatalog
   private maxIterations?: number
-  // hold options.num_ctx constant so Ollama does not reload the runner per session
-  private numCtx = 0
   // hosted output cap from model metadata; undefined means a local model
   private hostedOutputTokens?: number
   // pinned seed/temperature for repeatable local runs; hosted transports ignore it
@@ -291,6 +286,8 @@ export class Agent
   private totalEvalDurationNs = 0
   private totalCachedPromptTokens = 0
   private totalDroppedThinkingBlocks = 0
+  // pinned window sent as options.num_ctx, held constant so Ollama does not
+  // reload the runner per session; 0 until resolved
   private contextWindowSize = 0
   // root listing frozen per session so a new top-level entry never rewrites
   // the leading system message; a model switch or /clear refreshes it
@@ -405,7 +402,6 @@ export class Agent
     // inherit a parent's pinned context window so shared-model subagents preserve the KV cache
     if (options.numCtx && options.numCtx > 0)
     {
-      this.numCtx = options.numCtx
       this.contextWindowSize = options.numCtx
       this.hostedOutputTokens = options.hostedOutputTokens
       this.requestPlanner.setHostedOutputTokens(this.hostedOutputTokens)
@@ -417,14 +413,7 @@ export class Agent
     this.compactor = new CompactionCoordinator(this.state, this.client)
     if (options.numCtx && options.numCtx > 0)
     {
-      this.compactor.setPromptLimit(
-        requestBudgetCapacity(
-          options.numCtx,
-          this.hostedOutputTokens,
-          this.maxPromptTokens,
-          this.thinkMode !== false
-        ).promptLimit
-      )
+      this.compactor.setPromptLimit(this.promptLimitFor(options.numCtx))
     }
 
     this.subagentRunner =
@@ -458,7 +447,7 @@ export class Agent
         ? subagentTools.filter((tool) => tool.name !== 'search_code')
         : subagentTools,
       maxIterations: SUBAGENT_MAX_ITERATIONS,
-      numCtx: this.numCtx,
+      numCtx: this.contextWindowSize,
       hostedOutputTokens: this.hostedOutputTokens,
       verifyEdits: false,
       codeIntel: this.codeIntel,
@@ -531,12 +520,7 @@ export class Agent
   ): Promise<VerificationResult | null>
   {
     // the subagent inherits this window, so size the diffs to its prompt limit
-    const subagentPromptLimit = requestBudgetCapacity(
-      this.effectiveContextWindow,
-      this.hostedOutputTokens,
-      this.maxPromptTokens,
-      this.thinkMode !== false
-    ).promptLimit
+    const subagentPromptLimit = this.promptLimitFor(this.effectiveContextWindow)
     const result = await this.subagentRunner(
       buildVerifyPrompt(request, diffs, subagentPromptLimit),
       signal
@@ -636,12 +620,7 @@ export class Agent
 
   private dynamicToolTokenBudget(): number
   {
-    const promptLimit = requestBudgetCapacity(
-      this.effectiveContextWindow,
-      this.hostedOutputTokens,
-      this.maxPromptTokens,
-      this.thinkMode !== false
-    ).promptLimit
+    const promptLimit = this.promptLimitFor(this.effectiveContextWindow)
     const totalToolBudget = Math.floor(promptLimit * 0.5)
     return Math.max(
       totalToolBudget - this.toolCatalog.trustedDefinitionTokens,
@@ -748,7 +727,7 @@ export class Agent
     return this.replay.redoLastTurn(signal)
   }
 
-  // drop stored history from an earlier user turn onward (esc-esc backtrack);
+  // drop stored history from an earlier user turn onward;
   // refused while a turn is accepted or running so live state cannot orphan
   truncateToTurn(startIndex: number): number | null
   {
@@ -833,7 +812,6 @@ export class Agent
     this.model = nextModel
     this.toolCatalog = catalog
     this.contextWindowSize = 0
-    this.numCtx = 0
     this.hostedOutputTokens = undefined
     this.contextCap = undefined
     this.requestPlanner.setHostedOutputTokens(undefined)
@@ -841,13 +819,8 @@ export class Agent
     // rebuild the system prompt with the new model name
     this.replaceSystemPrompt(systemContent)
 
-    // start keep-alive for the new model
+    // record the new model as the client's eviction target
     this.client.startKeepAlive(nextModel)
-  }
-
-  setCompactionConfig(config: Partial<CompactionConfig>): void
-  {
-    this.compactor.setConfig(config)
   }
 
   // reset conversation history to the system prompt and return the cleared count
@@ -1132,7 +1105,6 @@ export class Agent
               )
             )
     this.contextWindowSize = contextWindow
-    this.numCtx = contextWindow
     this.hostedOutputTokens = resolved?.hostedOutputTokens
     // resolved.nativeContext is already the provider-capped window, so a
     // smaller pinned window means CORAL_NUM_CTX narrowed it further
@@ -1142,14 +1114,7 @@ export class Agent
         ? { native, byEnv: contextWindow < resolved.nativeContext }
         : undefined
     this.requestPlanner.setHostedOutputTokens(this.hostedOutputTokens)
-    this.compactor.setPromptLimit(
-      requestBudgetCapacity(
-        contextWindow,
-        this.hostedOutputTokens,
-        this.maxPromptTokens,
-        this.thinkMode !== false
-      ).promptLimit
-    )
+    this.compactor.setPromptLimit(this.promptLimitFor(contextWindow))
     this.replaceSystemPrompt(this.buildSystemContent(this.model))
 
     return this.contextWindowSize
@@ -1176,7 +1141,18 @@ export class Agent
   // pinned window, or the request-budget fallback before it resolves
   private get effectiveContextWindow(): number
   {
-    return this.numCtx || this.contextWindowSize || MIN_NUM_CTX
+    return this.contextWindowSize || MIN_NUM_CTX
+  }
+
+  // prompt ceiling for a window under this Agent's output and prompt caps
+  private promptLimitFor(window: number): number
+  {
+    return requestBudgetCapacity(
+      window,
+      this.hostedOutputTokens,
+      this.maxPromptTokens,
+      this.thinkMode !== false
+    ).promptLimit
   }
 
   // snapshot mutable Agent inputs for one compaction operation
@@ -1185,7 +1161,7 @@ export class Agent
     return {
       model: this.model,
       contextWindow: this.effectiveContextWindow,
-      numCtx: this.numCtx || undefined,
+      numCtx: this.contextWindowSize || undefined,
       hostedOutputTokens: this.hostedOutputTokens,
       maxPromptTokens: this.maxPromptTokens,
       toolDefinitionTokens: this.toolCatalog.definitionTokens,
@@ -1760,7 +1736,8 @@ export class Agent
 
         try
         {
-          let fileChanges = await this.turnContext.gatherFileChanges(signal)
+          let fileChangeContext =
+            await this.turnContext.gatherFileChanges(signal)
           signal.throwIfAborted()
           const activeMessage = this.state.getMessage(runAnchor)
           if (!activeMessage)
@@ -1788,7 +1765,7 @@ export class Agent
               })
           // the Git snapshot is stored w/ the turn, so only these stay volatile
           const volatileTokens =
-            (fileChanges ? estimateMessageTokens(fileChanges) : 0) +
+            (fileChangeContext ? estimateMessageTokens(fileChangeContext) : 0) +
             pendingAttachmentTokens
 
           let refreshFileChanges = await this.compactor.compactIfNeeded({
@@ -1813,7 +1790,8 @@ export class Agent
             // compaction can await inference while external edits keep arriving
             if (refreshFileChanges)
             {
-              fileChanges = await this.turnContext.gatherFileChanges(signal)
+              fileChangeContext =
+                await this.turnContext.gatherFileChanges(signal)
               signal.throwIfAborted()
               refreshFileChanges = false
             }
@@ -1827,7 +1805,7 @@ export class Agent
 
             const storedMessages = this.state.getMessages()
             fileChangesAt = this.fileNotices.indexFor(
-              fileChanges,
+              fileChangeContext,
               storedMessages
             )
             const plan = this.requestPlanner.planModelRequest({
@@ -1837,7 +1815,7 @@ export class Agent
               cleanActiveContent: userMessage,
               baseSystemContent: this.buildSystemContent(this.model, 0),
               tools: this.toolCatalog.ollamaTools,
-              fileChanges,
+              fileChanges: fileChangeContext,
               fileChangesAt,
               ...(attachmentsCommitted
                 ? {}
@@ -1881,7 +1859,11 @@ export class Agent
           this.lastRequestBudget = requestBudget
           assertRequestBudget(requestBudget)
           signal.throwIfAborted()
-          this.fileNotices.record(fileChanges, fileChangesAt, requestMessages)
+          this.fileNotices.record(
+            fileChangeContext,
+            fileChangesAt,
+            requestMessages
+          )
 
           // keep the stored snapshot equal to what this request sends, so a
           // budget degrade does not make later requests diverge from it
@@ -1938,7 +1920,7 @@ export class Agent
               messages: requestMessages,
               tools: [...this.toolCatalog.ollamaTools],
               think: this.thinkMode,
-              num_ctx: this.numCtx || undefined,
+              num_ctx: this.contextWindowSize || undefined,
               num_predict: requestBudget.responseReserve,
               seed: this.sampling?.seed,
               temperature: this.sampling?.temperature,

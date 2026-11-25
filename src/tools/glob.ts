@@ -8,7 +8,6 @@ import {
   resolveRgSearchTarget,
   RG_EXCLUDE_GIT_DIR,
 } from './ripgrep-utils.js'
-import { truncateOutput } from '../utils/truncate-output.js'
 
 const MAX_FILES = 100
 
@@ -72,10 +71,9 @@ export const globTool: Tool = {
     const result = await execRipgrep(rgArgs, NO_MATCHING_FILES_MESSAGE, {
       cwd: isProjectPath ? cwd : undefined,
       signal: context?.signal,
+      maxItems: MAX_FILES,
+      label: 'files',
     })
-    if (result.error || result.output === NO_MATCHING_FILES_MESSAGE)
-      return result
-
-    return { output: truncateOutput(result.output, MAX_FILES, 'files') }
+    return result
   },
 }

@@ -32,7 +32,6 @@ type ChatMessage = ChatRequest['messages'][number]
 
 interface JsonRequestOptions
 {
-  method?: string
   body?: unknown
   signal?: AbortSignal
 }
@@ -391,7 +390,7 @@ export class OllamaClient
   ): Promise<T>
   {
     const init: RequestInit = {
-      method: options.method ?? (options.body === undefined ? 'GET' : 'POST'),
+      method: options.body === undefined ? 'GET' : 'POST',
       headers: JSON_HEADERS,
       signal: options.signal,
     }

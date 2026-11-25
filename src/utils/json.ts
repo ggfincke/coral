@@ -1,5 +1,5 @@
 // src/utils/json.ts
-// parse JSON and read or write files
+// parse, deep-freeze, and read or write JSON
 
 import { randomUUID } from 'node:crypto'
 import {
@@ -25,6 +25,23 @@ export function tryParseJson(text: string): unknown
   {
     return undefined
   }
+}
+
+// deep copy of a JSON-shaped value with every array and object frozen
+export function cloneFrozenJson<T>(value: T): T
+{
+  if (Array.isArray(value))
+  {
+    return Object.freeze(value.map((item) => cloneFrozenJson(item))) as T
+  }
+  if (typeof value === 'object' && value !== null)
+  {
+    const clone = Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, cloneFrozenJson(item)])
+    )
+    return Object.freeze(clone) as T
+  }
+  return value
 }
 
 // read a JSON file, returning undefined when absent, unreadable, or invalid

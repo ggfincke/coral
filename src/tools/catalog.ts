@@ -3,6 +3,7 @@
 
 import type { OllamaTool } from '../types/inference.js'
 import { ellipsize } from '../utils/ellipsize.js'
+import { cloneFrozenJson } from '../utils/json.js'
 import {
   flattenUntrustedText,
   revealUntrustedText,
@@ -24,7 +25,6 @@ export type DefaultToolPolicy =
 export interface WorkspacePathRule
 {
   argument: 'path' | 'paths'
-  defaultPath?: '.'
 }
 
 export interface BuiltInToolRegistration
@@ -59,27 +59,27 @@ const REGISTRATIONS: BuiltInToolRegistration[] = [
   {
     name: 'write_file',
     defaultPolicy: 'require_approval',
-    workspacePath: { argument: 'path', defaultPath: '.' },
+    workspacePath: { argument: 'path' },
   },
   {
     name: 'edit_file',
     defaultPolicy: 'require_approval',
-    workspacePath: { argument: 'path', defaultPath: '.' },
+    workspacePath: { argument: 'path' },
   },
   {
     name: 'grep',
     defaultPolicy: 'always_allow',
-    workspacePath: { argument: 'path', defaultPath: '.' },
+    workspacePath: { argument: 'path' },
   },
   {
     name: 'glob',
     defaultPolicy: 'always_allow',
-    workspacePath: { argument: 'path', defaultPath: '.' },
+    workspacePath: { argument: 'path' },
   },
   {
     name: 'list_files',
     defaultPolicy: 'always_allow',
-    workspacePath: { argument: 'path', defaultPath: '.' },
+    workspacePath: { argument: 'path' },
   },
   { name: 'search_code', defaultPolicy: 'always_allow' },
   { name: 'skill', defaultPolicy: 'always_allow' },
@@ -211,22 +211,6 @@ function assertUniqueActiveNames(tools: readonly Tool[]): void
     }
     seenNormalized.set(normalized, tool.name)
   }
-}
-
-function cloneFrozenJson<T>(value: T): T
-{
-  if (Array.isArray(value))
-  {
-    return Object.freeze(value.map((item) => cloneFrozenJson(item))) as T
-  }
-  if (typeof value === 'object' && value !== null)
-  {
-    const clone = Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, cloneFrozenJson(item)])
-    )
-    return Object.freeze(clone) as T
-  }
-  return value
 }
 
 // snapshot declarative metadata so later source mutation cannot split views
@@ -367,17 +351,12 @@ export class ToolCatalog
     const tool = this.get(name)
     if (!profile || !tool) return undefined
 
-    let summary = fallbackSummary(args)
-    let customSummary = false
+    let customSummary: string | undefined
     try
     {
       const summarizeArgs = cloneFrozenJson(args)
       const value = tool.display?.summarize?.(summarizeArgs)
-      if (typeof value === 'string')
-      {
-        summary = value
-        customSummary = true
-      }
+      if (typeof value === 'string') customSummary = value
     }
     catch
     {
@@ -395,9 +374,10 @@ export class ToolCatalog
 
     return Object.freeze({
       label: displayLabel || nameLabel || 'tool',
-      summary: customSummary
-        ? sanitizePresentationSummary(summary)
-        : fallbackSummary(args),
+      summary:
+        customSummary !== undefined
+          ? sanitizePresentationSummary(customSummary)
+          : fallbackSummary(args),
       mcp: profile.source === 'dynamic',
     })
   }

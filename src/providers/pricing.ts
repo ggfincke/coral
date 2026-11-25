@@ -3,10 +3,6 @@
 
 import type { BillingUsage } from '../types/session-cost.js'
 
-// sources: developers.openai.com/api/docs/pricing
-// & platform.claude.com/docs/en/about-claude/pricing
-export const PRICING_AS_OF = '2026-10-30'
-
 type Rates = readonly (number | null)[]
 interface RateCard
 {
@@ -23,6 +19,8 @@ interface RateCard
   ultrafastLong?: Rates
 }
 
+// sources: developers.openai.com/api/docs/pricing
+// & platform.claude.com/docs/en/about-claude/pricing
 const OPENAI_RATES: Record<string, RateCard> = {
   'openai/gpt-6-astra': {
     threshold: 272_000,
@@ -362,7 +360,6 @@ export function estimateRequestCost(usage: BillingUsage): number | undefined
       rate === null ? null : rate / 2
     ) as Rates
   }
-  if (anthropic && tier === 'fast' && !card.threshold) rates = card.fast
   if (!rates) return undefined
   let cost = 0
   for (let index = 0; index < values.length; index++)

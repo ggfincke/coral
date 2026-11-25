@@ -155,9 +155,7 @@ export function settlementApproved(settlement: PromptSettlement): boolean
 // a rejection keeps its reason; approvals and plain answers stay booleans
 export type ToolApprovalResult = boolean | { approved: false; reason: string }
 
-export function toolApprovalResult(
-  settlement: PromptSettlement
-): ToolApprovalResult
+function toolApprovalResult(settlement: PromptSettlement): ToolApprovalResult
 {
   if (typeof settlement === 'object' && !settlement.approved)
   {

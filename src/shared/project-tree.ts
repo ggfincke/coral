@@ -11,38 +11,19 @@ export interface ProjectTreeEntry
   isSymlink?: boolean
 }
 
-interface FilterOptions
-{
-  includeHidden?: boolean
-}
-
-interface SortOptions
-{
-  directoriesFirst?: boolean
-}
-
 export function shouldIncludeProjectTreeEntry(
   name: string,
-  ignored: Set<string>,
-  options: FilterOptions = {}
+  ignored: Set<string>
 ): boolean
 {
-  if (ignored.has(name)) return false
-  if (options.includeHidden === false && name.startsWith('.')) return false
-  return true
+  return !ignored.has(name)
 }
 
 export function compareProjectTreeEntries(
   left: ProjectTreeEntry,
-  right: ProjectTreeEntry,
-  options: SortOptions = {}
+  right: ProjectTreeEntry
 ): number
 {
-  if (options.directoriesFirst && left.isDir !== right.isDir)
-  {
-    return left.isDir ? -1 : 1
-  }
-
   return left.name.localeCompare(right.name)
 }
 

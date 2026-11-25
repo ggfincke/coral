@@ -1,20 +1,12 @@
 // src/skills/discover.ts
 // discover skill packages, format the prompt catalog, and load confined files
 
-import {
-  closeSync,
-  constants,
-  existsSync,
-  fstatSync,
-  openSync,
-  readSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from 'node:fs'
-import { isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { existsSync, readdirSync, realpathSync, statSync } from 'node:fs'
+import { isAbsolute, join, resolve } from 'node:path'
 import { ellipsize, excerpt, truncateUtf8 } from '../utils/ellipsize.js'
-import { sanitizeUntrustedText } from '../utils/untrusted-text.js'
+import { readRegularFileSync } from '../utils/file-read.js'
+import { isPathInsideProject } from '../utils/path-containment.js'
+import { flattenUntrustedText } from '../utils/untrusted-text.js'
 import { parseSkillFrontmatter } from './parse.js'
 import {
   canonicalSkillName,
@@ -29,7 +21,7 @@ export { EMPTY_SKILL_INDEX, SkillIndex } from './types.js'
 export type { SkillCollision, SkillRecord, SkillSource } from './types.js'
 
 // local prompts trim further; hosted prompts carry the whole loaded body
-export const USER_INSTRUCTIONS_READ_LIMIT_BYTES = 32_768
+const USER_INSTRUCTIONS_READ_LIMIT_BYTES = 32_768
 const CATALOG_DESCRIPTION_MAX_CHARS = 400
 const SKILL_FILE_READ_LIMIT_BYTES = 1_048_576
 
@@ -56,15 +48,6 @@ interface SkillFileRead
 {
   content: string
   path: string
-}
-
-function isPathInsideRoot(root: string, target: string): boolean
-{
-  const rel = relative(root, target)
-  return (
-    rel === '' ||
-    (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel))
-  )
 }
 
 function resolveDirectory(path: string): string | null
@@ -108,7 +91,7 @@ function skillRoots(options: DiscoverSkillsOptions): SkillRoot[]
     // root; scan it once so it does not collide with itself
     if (
       dir &&
-      isPathInsideRoot(checkout, dir) &&
+      isPathInsideProject(checkout, dir) &&
       !roots.some((root) => root.dir === dir)
     )
     {
@@ -118,87 +101,26 @@ function skillRoots(options: DiscoverSkillsOptions): SkillRoot[]
   return roots
 }
 
-// size the buffer from fstat so small files never allocate the full limit;
-// growth past that size after fstat reads as truncation
-function readDescriptorBounded(
-  descriptor: number,
-  maxBytes: number,
-  sizeHint: number
-): { content: string; truncated: boolean }
-{
-  const limit = Math.min(maxBytes, sizeHint)
-  const buffer = Buffer.alloc(limit + 1)
-  let offset = 0
-  while (offset < buffer.length)
-  {
-    const read = readSync(
-      descriptor,
-      buffer,
-      offset,
-      buffer.length - offset,
-      offset
-    )
-    if (read === 0) break
-    offset += read
-  }
-  const truncated = offset > limit
-  const used = truncated ? limit : offset
-  return {
-    content: buffer.subarray(0, used).toString('utf-8'),
-    truncated,
-  }
-}
-
+// realpath, confinement, no-follow open, and inode checks come from the
+// shared reader; any failure or an oversized file reads as unavailable
 function readConfinedRegularFile(
   root: string,
   segments: readonly string[]
 ): SkillFileRead | null
 {
-  const candidate = resolve(root, ...segments)
-  let target: string
   try
   {
-    target = realpathSync(candidate)
-  }
-  catch
-  {
-    return null
-  }
-  if (!isPathInsideRoot(root, target)) return null
-
-  let descriptor: number | undefined
-  try
-  {
-    descriptor = openSync(
-      target,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
-    )
-    const stats = fstatSync(descriptor)
-    const current = statSync(target)
-    if (
-      !stats.isFile() ||
-      stats.dev !== current.dev ||
-      stats.ino !== current.ino ||
-      stats.size > SKILL_FILE_READ_LIMIT_BYTES
-    )
-    {
-      return null
-    }
-    const bounded = readDescriptorBounded(
-      descriptor,
+    const read = readRegularFileSync(
+      resolve(root, ...segments),
       SKILL_FILE_READ_LIMIT_BYTES,
-      stats.size
+      root
     )
-    if (bounded.truncated) return null
-    return { path: target, content: bounded.content }
+    if (read.truncated) return null
+    return { path: read.path, content: read.bytes.toString('utf-8') }
   }
   catch
   {
     return null
-  }
-  finally
-  {
-    if (descriptor !== undefined) closeSync(descriptor)
   }
 }
 
@@ -209,7 +131,7 @@ function recordFromPackage(
 {
   const packageRoot = resolveDirectory(packageDir)
   if (!packageRoot) return null
-  if (root.confinePackages && !isPathInsideRoot(root.dir, packageRoot))
+  if (root.confinePackages && !isPathInsideProject(root.dir, packageRoot))
   {
     return null
   }
@@ -296,11 +218,12 @@ export interface SkillDisplayFields
   description: string
 }
 
-// sanitized single-line fields shared by `coral skills` & `/skills`
+// single-line fields shared by `coral skills` & `/skills`; hidden controls
+// show escaped like every other one-row display of untrusted text
 export function skillDisplayFields(record: SkillRecord): SkillDisplayFields
 {
   const field = (value: string, max: number): string =>
-    excerpt(sanitizeUntrustedText(value).replace(/\s+/g, ' ').trim(), max)
+    excerpt(flattenUntrustedText(value), max)
   return {
     name: field(record.name, DISPLAY_NAME_MAX),
     source: field(record.source, DISPLAY_SOURCE_MAX),
@@ -377,41 +300,16 @@ export function loadUserInstructions(agentsHome: string): string
 {
   const path = join(agentsHome, 'AGENTS.md')
   if (!existsSync(path)) return ''
-  let descriptor: number | undefined
   try
   {
-    const target = realpathSync(path)
-    descriptor = openSync(
-      target,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
-    )
-    const stats = fstatSync(descriptor)
-    const current = statSync(target)
-    if (
-      !stats.isFile() ||
-      stats.dev !== current.dev ||
-      stats.ino !== current.ino
-    )
-    {
-      return ''
-    }
-    const bounded = readDescriptorBounded(
-      descriptor,
-      USER_INSTRUCTIONS_READ_LIMIT_BYTES,
-      stats.size
-    )
-    if (!bounded.content.trim()) return ''
-    return bounded.truncated
-      ? `${bounded.content}\n... (truncated)`
-      : bounded.content
+    const read = readRegularFileSync(path, USER_INSTRUCTIONS_READ_LIMIT_BYTES)
+    const content = read.bytes.toString('utf-8')
+    if (!content.trim()) return ''
+    return read.truncated ? `${content}\n... (truncated)` : content
   }
   catch
   {
     return ''
-  }
-  finally
-  {
-    if (descriptor !== undefined) closeSync(descriptor)
   }
 }
 

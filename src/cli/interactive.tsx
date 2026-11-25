@@ -4,7 +4,7 @@
 import { render } from 'ink'
 import { resolve } from 'node:path'
 import { isSessionDirectory, sameWorkspace } from '../session/resume.js'
-import { parseCliArgs, type CliOptions } from './args.js'
+import type { CliOptions } from './args.js'
 import App from '../tui/App.js'
 import { loadPrefs } from '../config/prefs.js'
 import { listSessions } from '../session/store.js'
@@ -22,19 +22,8 @@ import {
 } from '../tui/commands/session-output.js'
 import { launchCliApp } from './app-launch.js'
 
-export async function runInteractiveCli(
-  input: CliOptions | string[] = process.argv
-): Promise<void>
+export async function runInteractiveCli(opts: CliOptions): Promise<void>
 {
-  const parsed = Array.isArray(input)
-    ? parseCliArgs(input.slice(2))
-    : { kind: 'interactive' as const, options: input }
-  if (parsed.kind === 'exit')
-  {
-    process.exitCode = parsed.code
-    return
-  }
-  const opts = parsed.options
   const cwd = opts.cwd ? resolve(opts.cwd) : process.cwd()
   if (!isSessionDirectory(cwd))
   {

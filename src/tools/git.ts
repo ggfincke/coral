@@ -1,5 +1,5 @@
 // src/tools/git.ts
-// git tools for status, diff, and log
+// git status, diff, and log tools plus approval-gated add, commit, switch, and push
 
 import type { Tool, ToolExecutionContext, ToolResult } from './tool.js'
 import { getCwd } from '../cwd.js'
@@ -578,7 +578,7 @@ export const gitPushTool: Tool = {
     }
 
     // --porcelain writes the push result to stdout; the human-readable summary
-    // goes to stderr, which execFileSync drops on success
+    // goes to stderr, which runGitCommand drops on success
     const flags = ['push', '--porcelain']
     if (setUpstream) flags.push('-u')
     if (remote) flags.push(remote)

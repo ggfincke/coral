@@ -23,7 +23,7 @@ import { isPlainObject } from '../../utils/guards.js'
 import {
   hostedOutputBudget,
   INTERRUPTED_TOOL_RESULT,
-  malformedArgumentsError,
+  malformedArguments,
   orphanToolResultText,
   syntheticCallId,
 } from '../hosted-wire.js'
@@ -268,15 +268,14 @@ function toolCallsFrom(content: readonly BetaContentBlock[]): OllamaToolCall[]
   {
     if (block.type !== 'tool_use') return []
     const input: unknown = block.input
-    if (!isPlainObject(input))
-    {
-      throw malformedArgumentsError('Claude', block.name)
-    }
+    const args = isPlainObject(input)
+      ? input
+      : malformedArguments('Claude', block.name)
     return [
       {
         id: block.id,
         type: 'function' as const,
-        function: { name: block.name, arguments: input },
+        function: { name: block.name, arguments: args },
       },
     ]
   })

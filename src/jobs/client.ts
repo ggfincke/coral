@@ -7,13 +7,13 @@ import { closeSync, openSync, readFileSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
-import { assertJobsPlatform, processIdentity } from './process.js'
+import { assertJobsPlatform } from './process.js'
 import {
   coralJobProcessArgs,
   jobProcessEnvironment,
   jobRuntimePaths,
 } from './runtime.js'
-import { readSupervisorOwner } from './supervisor.js'
+import { isSupervisorOwnerGone, readSupervisorOwner } from './supervisor.js'
 import type { JobRequest, JobResponse } from './types.js'
 
 export function sendJobRequest(request: JobRequest): Promise<JobResponse>
@@ -105,7 +105,7 @@ export async function ensureJobSupervisor(): Promise<void>
   const launchIfOwnerGone = async () =>
   {
     const owner = readSupervisorOwner()
-    if (owner && (await processIdentity(owner.pid)) === owner.identity) return
+    if (owner && !(await isSupervisorOwnerGone(owner))) return
     launchLog = join(jobRuntimePaths().directory, `launch-${randomUUID()}.log`)
     const descriptor = openSync(launchLog, 'wx', 0o600)
     try

@@ -4,17 +4,17 @@
 import type { OllamaMessage } from '../types/inference.js'
 import {
   cloneMessages,
+  cloneUndoTodoChange,
   isUndoTurnAligned,
   MAX_UNDO_TURNS,
   type UndoFileChange,
   type UndoTodoChange,
   type UndoTurn,
 } from '../types/undo.js'
-import { cloneTodoItems } from '../types/todo.js'
 
 // bound the live stack by count and persisted snapshots by bytes
 export { MAX_UNDO_TURNS } from '../types/undo.js'
-export const DEFAULT_PERSISTED_UNDO_BYTE_CAP = 8 * 1024 * 1024
+const DEFAULT_PERSISTED_UNDO_BYTE_CAP = 8 * 1024 * 1024
 
 export interface PersistedUndoTurn
 {
@@ -41,20 +41,11 @@ export interface HydratedUndoState
 interface SerializeOptions
 {
   byteCap?: number
-  maxTurns?: number
 }
 
 function cloneChanges(changes: UndoFileChange[]): UndoFileChange[]
 {
   return changes.map((change) => ({ ...change }))
-}
-
-function cloneTodoChange(change: UndoTodoChange): UndoTodoChange
-{
-  return {
-    before: cloneTodoItems(change.before),
-    after: cloneTodoItems(change.after),
-  }
 }
 
 function serializeTurn(
@@ -70,7 +61,8 @@ function serializeTurn(
   }
 
   if (includeMessages) persisted.messages = cloneMessages(turn.messages)
-  if (turn.todoChange) persisted.todoChange = cloneTodoChange(turn.todoChange)
+  if (turn.todoChange)
+    persisted.todoChange = cloneUndoTodoChange(turn.todoChange)
   return persisted
 }
 
@@ -120,9 +112,8 @@ export function serializeUndoState(
   options: SerializeOptions = {}
 ): PersistedUndoState
 {
-  const maxTurns = options.maxTurns ?? MAX_UNDO_TURNS
-  const cappedUndo = sliceNewestTurns(undo, maxTurns)
-  const cappedRedo = sliceNewestTurns(redo, maxTurns)
+  const cappedUndo = sliceNewestTurns(undo, MAX_UNDO_TURNS)
+  const cappedRedo = sliceNewestTurns(redo, MAX_UNDO_TURNS)
 
   const state: PersistedUndoState = {
     undo: cappedUndo.map((turn) =>
@@ -134,7 +125,7 @@ export function serializeUndoState(
   return capState(state, options.byteCap ?? DEFAULT_PERSISTED_UNDO_BYTE_CAP)
 }
 
-export function hydrateUndoTurn(
+function hydrateUndoTurn(
   messages: OllamaMessage[],
   turn: PersistedUndoTurn,
   requirePersistedMessages: boolean
@@ -147,7 +138,8 @@ export function hydrateUndoTurn(
       messages: cloneMessages(turn.messages),
       changes: cloneChanges(turn.changes),
     }
-    if (turn.todoChange) hydrated.todoChange = cloneTodoChange(turn.todoChange)
+    if (turn.todoChange)
+      hydrated.todoChange = cloneUndoTodoChange(turn.todoChange)
     return hydrated
   }
 
@@ -159,7 +151,8 @@ export function hydrateUndoTurn(
     messages: cloneMessages(messages.slice(turn.startIndex, turn.endIndex)),
     changes: cloneChanges(turn.changes),
   }
-  if (turn.todoChange) hydrated.todoChange = cloneTodoChange(turn.todoChange)
+  if (turn.todoChange)
+    hydrated.todoChange = cloneUndoTodoChange(turn.todoChange)
   return hydrated
 }
 

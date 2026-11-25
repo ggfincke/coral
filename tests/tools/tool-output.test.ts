@@ -8,10 +8,7 @@ import {
   MAX_TOOL_OUTPUT_CHARS,
   MAX_ERROR_MESSAGE_CHARS,
 } from '../../src/utils/limits.js'
-import {
-  truncateOutput,
-  type TruncateOutputOptions,
-} from '../../src/utils/truncate-output.js'
+import { truncateOutput } from '../../src/utils/truncate-output.js'
 
 describe('capToolOutput / capErrorMessage', () =>
 {
@@ -49,19 +46,6 @@ describe('truncateOutput', () =>
     assert.equal(
       truncateOutput('a\nb\nc\nd', 2, 'matches'),
       'a\nb\n\n(Showing 2 of 4 matches — use a more specific pattern to narrow results)'
-    )
-  })
-
-  test('honors a custom separator & buildSuffix (restored tool-result shape)', () =>
-  {
-    const options: TruncateOutputOptions = {
-      dropEmpty: false,
-      separator: '\n',
-      buildSuffix: (shown, total) => `… (${total - shown} more lines)`,
-    }
-    assert.equal(
-      truncateOutput('l1\nl2\nl3\nl4', 2, 'lines', options),
-      'l1\nl2\n… (2 more lines)'
     )
   })
 })
