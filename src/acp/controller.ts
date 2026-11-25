@@ -206,8 +206,7 @@ function persistenceRequestError(
   )
 }
 
-// the settled outcome decides the stop reason, so a cancel that lands after
-// the Agent finished cannot relabel a completed turn
+// map a settled outcome to its stop reason when no cancel was requested
 function acpStopReason(outcome: AgentRunOutcome | undefined): acp.StopReason
 {
   switch (outcome?.status)
@@ -857,11 +856,14 @@ export class CoralAcpController
         boundedDiagnostic(notificationError)
       )
     }
-    if (failure || projection.getAgentError())
+    // ACP requires `cancelled` once the client sent session/cancel, even when
+    // the Agent had already settled or failed while stopping
+    const cancelled = signal.aborted
+    if (!cancelled && (failure || projection.getAgentError()))
       throw failure ?? projection.getAgentError()
-    if (outcome?.status === 'failed') throw outcome.error
+    if (!cancelled && outcome?.status === 'failed') throw outcome.error
     return {
-      stopReason: acpStopReason(outcome),
+      stopReason: cancelled ? 'cancelled' : acpStopReason(outcome),
       ...(projection.getUsage() ? { usage: projection.getUsage() } : {}),
     }
   }

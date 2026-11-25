@@ -898,7 +898,7 @@ test('cancel also settles blocked tool execution and permission requests', async
   })
 })
 
-test('a cancel after the Agent settles keeps the completed turn as end_turn', async () =>
+test('a cancel after the Agent settles still answers cancelled, as ACP requires', async () =>
 {
   await withCoralHome(async (cwd) =>
   {
@@ -924,7 +924,7 @@ test('a cancel after the Agent settles keeps the completed turn as end_turn', as
         })
         await settled.promise
         await cx.notify(acp.methods.agent.session.cancel, { sessionId })
-        assert.equal((await prompt).stopReason, 'end_turn')
+        assert.equal((await prompt).stopReason, 'cancelled')
         assert.ok(
           updates.some(
             (entry) => entry.update.sessionUpdate === 'agent_message_chunk'
