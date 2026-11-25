@@ -7,7 +7,7 @@ const OSC_PAYLOAD_MAX = 200
 
 // every terminal control (C0, DEL, C1) plus bidi embeddings, overrides, and
 // isolates is stripped so a payload can't end the sequence early or reorder it
-function isOscStripped(code: number): boolean
+export function isOscStripped(code: number): boolean
 {
   return (
     code === 0x09 ||

@@ -24,7 +24,7 @@ import type { OllamaMessage } from '../../types/inference.js'
 import { findUserTurnStarts, type UndoTurn } from '../../types/undo.js'
 import { toErrorMessage } from '../../utils/errors.js'
 import { ellipsize } from '../../utils/ellipsize.js'
-import { isUnsafeTerminalControl } from '../../utils/untrusted-text.js'
+import { isOscStripped } from '../shell/notify.js'
 import { agentsHomePath } from '../../utils/agents-home.js'
 
 export interface StartupSession
@@ -251,12 +251,9 @@ export function sanitizeSessionTitle(raw: string): string | null
   for (const char of raw)
   {
     const code = char.codePointAt(0)!
-    // controls (C0 incl newlines, DEL, C1) become separators so multi-line
-    // replies flatten and the title escape can't be ended early
-    cleaned +=
-      code === 0x09 || code === 0x0a || isUnsafeTerminalControl(code)
-        ? ' '
-        : char
+    // controls (C0 incl newlines, DEL, C1) & bidi controls become separators
+    // so multi-line replies flatten and the title can't end or reorder a row
+    cleaned += isOscStripped(code) ? ' ' : char
   }
   const collapsed = cleaned.replace(/\s+/g, ' ').trim()
   if (!collapsed) return null
