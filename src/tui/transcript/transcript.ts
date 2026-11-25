@@ -19,7 +19,13 @@ import { buildFileLink } from '../shell/links.js'
 import { formatElapsed } from '../shell/metrics.js'
 import { shimmerText } from './shimmer.js'
 import { getThemeGeneration, style } from '../theme.js'
-import { physicalLines, SOFT_WRAP_OPTIONS, wrapLines } from '../wrap.js'
+import {
+  expandTabs,
+  physicalLines,
+  SOFT_WRAP_OPTIONS,
+  visibleWidth,
+  wrapLines,
+} from '../wrap.js'
 import type { ToolCallPresentation } from '../../tools/tool.js'
 import { ellipsize } from '../../utils/ellipsize.js'
 import { stringifyForDisplay } from '../../utils/untrusted-text.js'
@@ -307,10 +313,9 @@ function maybeLinkifyPathArg(
     const shown = sanitizeUntrustedText(value)
     if (!argSummary.includes(shown)) continue
 
-    return argSummary.replace(
-      shown,
-      buildFileLink(value, shown, { enabled: true, cwd })
-    )
+    // a replacer fn keeps `$&` and friends in the path literal
+    const link = buildFileLink(value, shown, { enabled: true, cwd })
+    return argSummary.replace(shown, () => link)
   }
   return argSummary
 }
@@ -469,14 +474,19 @@ function formatToolResultLines(
   const textStyle = isError ? style('error') : chalk.dim
   const border = isError ? style('error')('│') : chalk.dim('│')
   const maxWidth = Math.max(width - 8, 12)
-  const contentLines = sanitizeUntrustedText(content).split('\n')
+  const contentLines = expandTabs(sanitizeUntrustedText(content)).split('\n')
   const result: string[] = []
 
   for (const raw of contentLines)
   {
-    if (raw.length > maxWidth)
+    if (visibleWidth(raw) > maxWidth)
     {
-      const wrapped = wrapAnsi(raw, maxWidth, SOFT_WRAP_OPTIONS).split('\n')
+      // hard-break words wider than the row (CJK runs, long paths) so every
+      // continuation keeps the gutter instead of a later bare wrap
+      const wrapped = wrapAnsi(raw, maxWidth, {
+        ...SOFT_WRAP_OPTIONS,
+        hard: true,
+      }).split('\n')
       for (const segment of wrapped)
       {
         result.push(`   ${border}   ${textStyle(segment)}`)

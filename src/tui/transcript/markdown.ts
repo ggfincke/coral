@@ -5,7 +5,7 @@ import chalk from 'chalk'
 import { lexer, type Token, type Tokens } from 'marked'
 import { highlightCode } from './code-highlight.js'
 import { codeSpanStyle, headingStyle, style } from '../theme.js'
-import { padEnd, visibleWidth } from '../wrap.js'
+import { expandTabs, padEnd, visibleWidth } from '../wrap.js'
 import { sanitizeUntrustedText } from './sanitize.js'
 
 function prefixLines(
@@ -21,6 +21,8 @@ function prefixLines(
   })
 }
 
+// marked decodes numeric character references (`&#27;`) after the source was
+// sanitized, so decoded leaves are sanitized again before they are styled
 function renderInline(tokens: Token[] | undefined): string
 {
   if (!tokens?.length) return ''
@@ -32,10 +34,12 @@ function renderInline(tokens: Token[] | undefined): string
     switch (token.type)
     {
       case 'text':
-        output += token.tokens?.length ? renderInline(token.tokens) : token.text
+        output += token.tokens?.length
+          ? renderInline(token.tokens)
+          : sanitizeUntrustedText(token.text)
         break
       case 'escape':
-        output += token.text
+        output += sanitizeUntrustedText(token.text)
         break
       case 'strong':
         output += chalk.bold(renderInline(token.tokens))
@@ -51,22 +55,30 @@ function renderInline(tokens: Token[] | undefined): string
         break
       case 'link':
       {
-        const label = renderInline(token.tokens) || token.href
+        const href = sanitizeUntrustedText(token.href)
+        const label = renderInline(token.tokens) || href
         const renderedLabel = style('user').underline(label)
         output +=
-          label === token.href
+          label === href
             ? renderedLabel
-            : `${renderedLabel}${chalk.dim(` (${token.href})`)}`
+            : `${renderedLabel}${chalk.dim(` (${href})`)}`
         break
       }
       case 'image':
-        output += style('accent')(`[image: ${token.text || token.href}]`)
+        output += style('accent')(
+          `[image: ${sanitizeUntrustedText(token.text || token.href)}]`
+        )
         break
       case 'br':
         output += '\n'
         break
+      // loose task items carry the checkbox inline; the bullet shows it
+      case 'checkbox':
+        break
       default:
-        output += 'text' in token ? token.text : token.raw
+        output += sanitizeUntrustedText(
+          'text' in token ? token.text : token.raw
+        )
         break
     }
   }
@@ -111,14 +123,14 @@ function renderList(token: Tokens.List, indent: number): string[]
 
   token.items.forEach((item, index) =>
   {
-    if (lines.length > 0) lines.push('')
+    // only loose lists (items split by blank lines) keep a blank between items
+    if (lines.length > 0 && token.loose) lines.push('')
 
+    const checkbox = item.task ? `${item.checked ? '[x]' : '[ ]'} ` : ''
     const bullet = token.ordered
-      ? `${orderedStart + index}. `
-      : item.task
-        ? `${item.checked ? '[x]' : '[ ]'} `
-        : '• '
-    const content = renderBlocks(item.tokens, 0)
+      ? `${orderedStart + index}. ${checkbox}`
+      : checkbox || '• '
+    const content = renderBlocks(item.tokens, 0, token.loose)
 
     if (content.length === 0)
     {
@@ -142,8 +154,20 @@ function renderBlock(token: Token, indent: number): string[]
   {
     case 'space':
       return []
+    // the task bullet already shows the checkbox state
+    case 'checkbox':
+      return []
     case 'paragraph':
       return renderInline(token.tokens)
+        .split('\n')
+        .map((line) => pad + line)
+    // tight list items hold their inline content in block-level text tokens
+    case 'text':
+      return (
+        token.tokens
+          ? renderInline(token.tokens)
+          : sanitizeUntrustedText(token.text)
+      )
         .split('\n')
         .map((line) => pad + line)
     case 'heading':
@@ -179,7 +203,7 @@ function renderBlock(token: Token, indent: number): string[]
       const code = token as Tokens.Code
       const fence = pad + chalk.dim('┌─ ') + style('code')(code.lang || 'code')
       const codePrefix = pad + chalk.dim('│ ')
-      const highlighted = highlightCode(code.text, code.lang)
+      const highlighted = highlightCode(expandTabs(code.text), code.lang)
       const codeLines = (highlighted || '')
         .split('\n')
         .map((line) => codePrefix + line)
@@ -190,18 +214,23 @@ function renderBlock(token: Token, indent: number): string[]
     case 'hr':
       return [pad + chalk.dim('─'.repeat(40))]
     case 'html':
-      return (token as Tokens.HTML).text
+      return sanitizeUntrustedText((token as Tokens.HTML).text)
         .split('\n')
         .map((line: string) => pad + line)
     default:
-      return ('raw' in token ? token.raw : '')
+      return sanitizeUntrustedText('raw' in token ? token.raw : '')
         .split('\n')
         .filter(Boolean)
         .map((line) => pad + line)
   }
 }
 
-function renderBlocks(tokens: Token[], indent: number): string[]
+// blocks are separated by a blank row, except inside a tight list item
+function renderBlocks(
+  tokens: Token[],
+  indent: number,
+  spaced = true
+): string[]
 {
   const rendered: string[] = []
 
@@ -210,7 +239,7 @@ function renderBlocks(tokens: Token[], indent: number): string[]
     const block = renderBlock(token, indent)
 
     if (block.length === 0) continue
-    if (rendered.length > 0) rendered.push('')
+    if (rendered.length > 0 && spaced) rendered.push('')
     rendered.push(...block)
   }
 

@@ -129,25 +129,32 @@ function jumpToMatch(
 {
   const matches = view.matchesFor(state.query)
   if (matches.length === 0) return { ...state, current: null }
+  const at = state.current === null ? -1 : matches.indexOf(state.current)
   let index: number
-  if (state.current === null)
+  if (at >= 0)
   {
-    // first match at or below the viewport top when nothing is selected yet
-    const found = matches.findIndex((row) => row >= state.top)
-    index = found < 0 ? 0 : found
+    index = (at + direction + matches.length) % matches.length
   }
   else
   {
-    const at = matches.indexOf(state.current)
-    const base = at < 0 ? matches.findIndex((row) => row > state.current!) : at
-    index =
-      at < 0
-        ? base < 0
-          ? 0
-          : direction === 1
-            ? base
-            : (base - 1 + matches.length) % matches.length
-        : (base + direction + matches.length) % matches.length
+    // w/o a selected match, search past a stale selection, or from the
+    // viewport edge so a visible match wins, wrapping at the ends
+    const selected = state.current
+    if (direction === 1)
+    {
+      const next = matches.findIndex((row) =>
+        selected === null ? row >= state.top : row > selected
+      )
+      index = next < 0 ? 0 : next
+    }
+    else
+    {
+      const bottom = state.top + view.bodyHeight - 1
+      const before = matches.findLastIndex((row) =>
+        selected === null ? row <= bottom : row < selected
+      )
+      index = before < 0 ? matches.length - 1 : before
+    }
   }
   const current = matches[index]!
   return { ...state, current, top: revealRow(current, state, view) }
@@ -313,7 +320,7 @@ export function buildPagerFooter(
     )
   }
   const below = view.total - to
-  if (below > 0) parts.push(`↓ ${below} new`)
+  if (below > 0) parts.push(`↓ ${below} more`)
   const hints = chalk.dim('/ search · n/N · q closes')
   return truncateLine(`${parts.join(' · ')} ${chalk.dim('·')} ${hints}`, width)
 }

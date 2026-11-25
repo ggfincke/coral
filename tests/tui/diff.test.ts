@@ -99,6 +99,28 @@ test('paired -/+ rows get word-level emphasis, unpaired ones stay plain', () =>
   assert.notEqual(pAdd, sAdd)
 })
 
+test('rows starting -- or ++ inside a hunk stay removals and additions', () =>
+{
+  const lines = renderUnifiedDiff(
+    [
+      '--- a/q.sql',
+      '+++ b/q.sql',
+      '@@ -1,4 +1,4 @@',
+      ' select 1;',
+      '--- old comment',
+      '+-- new comment',
+      ' select 2;',
+      ' select 3;',
+    ].join('\n'),
+    80
+  )
+  const removed = findRow(lines, '--- old comment')
+  assert.ok(removed.includes(REMOVE_BG))
+  assert.match(stripAnsi(removed), /^ 2 {4}--- old comment/)
+  assert.match(stripAnsi(findRow(lines, 'select 2;')), /^ 3 {2}3 {2}select 2;/)
+  assert.match(stripAnsi(findRow(lines, 'select 3;')), /^ 4 {2}4 {2}select 3;/)
+})
+
 test('width > 120 switches to side-by-side panes within the width budget', () =>
 {
   const diff = [
