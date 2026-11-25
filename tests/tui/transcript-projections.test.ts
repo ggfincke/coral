@@ -120,6 +120,33 @@ test('export shows typed prompts only and closes a dangling fence', () =>
   ])
 })
 
+test('export leaves fences that a quote, list, or indent already closed', () =>
+{
+  const bodies = [
+    '> ```js\n> x\n\nafter quote',
+    '- item\n  ```js\n  x\n\nafter list',
+    'para\n\n    ```\n    not a fence\n\ndone',
+  ]
+  for (const body of bodies)
+  {
+    const md = buildSessionMarkdown({
+      model: 'm',
+      messages: [
+        { role: 'assistant', content: body },
+        { role: 'user', content: 'next' },
+      ],
+    })
+    const headings = lexer(md)
+      .filter((token) => token.type === 'heading')
+      .map((token) => token.raw.trim())
+    assert.deepEqual(
+      headings,
+      ['# Coral session', '## Assistant', '## User'],
+      body
+    )
+  }
+})
+
 test('a failed live tool result keeps the output the model saw', () =>
 {
   const text = failedToolResultText('Command failed: tsc', 'src/a.ts: TS2322')

@@ -1,6 +1,7 @@
 // src/tui/shell/export-markdown.ts
 // serialize stored conversation messages to portable markdown
 
+import { lexer } from 'marked'
 import type { OllamaMessage } from '../../types/inference.js'
 import { findUserTurnStarts, type UndoTurn } from '../../types/undo.js'
 import { formatMentionNotice } from '../prompt/mentions.js'
@@ -34,37 +35,24 @@ function fence(body: string): string
   return `${delimiter}\n${body}\n${delimiter}`
 }
 
-// a fence opener or closer, also after list or quote markers: 3+ backticks
-// or tildes, then an info string
-const FENCE_LINE = /^[ \t]*(?:(?:[-*+>]|\d{1,9}[.)])[ \t]*)*(`{3,}|~{3,})(.*)$/u
+// a heading that only an unterminated top-level fence can swallow
+const FENCE_PROBE = '\n\n# coral-export-fence-probe'
+
+// a fenced code block's opening run, after up to 3 spaces of indent
+const FENCE_OPENER = /^ {0,3}(`{3,}|~{3,})/u
 
 // close a code fence a raw body left open (an interrupted answer) so it
-// cannot swallow every later section of the export
+// cannot swallow every later section of the export; marked decides what is
+// open, so fences ended by a quote, list, or indented code are left alone
 function closeOpenFence(body: string): string
 {
-  let open: string | null = null
-  for (const line of body.split('\n'))
-  {
-    const match = FENCE_LINE.exec(line)
-    if (!match) continue
-    const run = match[1]!
-    const rest = match[2]!
-    if (open === null)
-    {
-      // a backtick fence's info string may not contain a backtick
-      if (run[0] === '`' && rest.includes('`')) continue
-      open = run
-    }
-    else if (
-      run[0] === open[0] &&
-      run.length >= open.length &&
-      rest.trim() === ''
-    )
-    {
-      open = null
-    }
-  }
-  return open === null ? body : `${body}\n${open}`
+  const tokens = lexer(body + FENCE_PROBE).filter(
+    (token) => token.type !== 'space'
+  )
+  const last = tokens[tokens.length - 1]
+  if (last?.type !== 'code') return body
+  const opener = FENCE_OPENER.exec(last.raw)
+  return opener ? `${body}\n${opener[1]}` : body
 }
 
 // the handoff header is model-facing framing; keep only the summary itself
