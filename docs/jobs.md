@@ -82,7 +82,8 @@ asks for another; setup and check commands are bounded only by the task budget.
 ### Environment
 
 A task runs with the environment of the shell that started or resumed it
-(`PATH`, Node version, virtualenv, credentials), not the environment of
+(`PATH`, Node version, virtualenv, credentials), minus hosted API keys
+(`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`), not the environment of
 whichever shell launched the supervisor. The supervisor holds that environment
 in memory only; it is never written to task records. If the supervisor restarts
 while a task is still queued, the environment is gone, so the task moves to
