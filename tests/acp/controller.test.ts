@@ -10,7 +10,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import * as acp from '@agentclientprotocol/sdk/unstable'
-import type { AcceptedTurn, AgentEvents } from '../../src/agent/contracts.js'
+import type {
+  AcceptedTurn,
+  AgentEvents,
+  AgentRunOutcome,
+} from '../../src/agent/contracts.js'
 import type {
   CoralInteractionMode,
   CoralRuntimeMode,
@@ -33,7 +37,9 @@ import type {
 } from '../../src/types/inference.js'
 
 type FakeRunMode =
+  | 'cancel_after_done'
   | 'complete'
+  | 'doom_loop'
   | 'failed'
   | 'iteration_limited'
   | 'missing_anchor'
@@ -112,7 +118,7 @@ class FakeAcpAgent
     _accepted: AcceptedTurn,
     events: AgentEvents,
     signal?: AbortSignal
-  ): Promise<void>
+  ): Promise<AgentRunOutcome>
   {
     this.hooks.onStart?.()
     if (this.mode === 'wait_for_cancel')
@@ -120,7 +126,7 @@ class FakeAcpAgent
       this.hooks.onBlocked?.()
       await waitForAbort(signal)
       events.onDone()
-      return
+      return { status: 'cancelled' }
     }
 
     if (
@@ -165,21 +171,42 @@ class FakeAcpAgent
         content: 'Error: Tool call interrupted',
       })
       events.onDone()
-      return
+      return { status: signal?.aborted ? 'cancelled' : 'completed' }
     }
 
     if (this.mode === 'iteration_limited')
     {
       events.onIterationLimit?.()
       events.onDone()
-      return
+      return { status: 'iteration_limit' }
+    }
+
+    if (this.mode === 'doom_loop')
+    {
+      const proceed = await events.onDoomLoop?.(
+        'Coral called read_file with identical arguments 3 times.'
+      )
+      events.onDone()
+      return { status: proceed ? 'completed' : 'doom_loop_stopped' }
+    }
+
+    // the Agent settles, then a cancel lands before the controller responds
+    if (this.mode === 'cancel_after_done')
+    {
+      events.onToken('finished')
+      this.messages.push({ role: 'assistant', content: 'finished' })
+      this.produced = true
+      events.onDone()
+      this.hooks.onBlocked?.()
+      await waitForAbort(signal)
+      return { status: 'completed' }
     }
 
     if (this.mode === 'failed')
     {
       const error = new Error('fake inference failed')
       events.onError(error)
-      return
+      return { status: 'failed', error }
     }
 
     if (this.mode === 'permission')
@@ -229,7 +256,7 @@ class FakeAcpAgent
     this.messages.push({ role: 'assistant', content: response })
     this.produced = true
     events.onDone()
-    return
+    return { status: 'completed' }
   }
 
   async switchModel(model: string): Promise<void>
@@ -833,28 +860,193 @@ test('cancel also settles blocked tool execution and permission requests', async
       )
       const permissionMode =
         mode === 'wait_for_permission_cancel' ? 'wait' : 'allow'
-      await client([], permissionMode, () => permission.resolve()).connectWith(
-        run.controller.createApp(),
-        async (cx) =>
-        {
-          await initialize(cx)
-          const { sessionId } = await cx.request(
-            acp.methods.agent.session.new,
-            { cwd, mcpServers: [] }
+      const updates: acp.SessionNotification[] = []
+      await client(updates, permissionMode, () =>
+        permission.resolve()
+      ).connectWith(run.controller.createApp(), async (cx) =>
+      {
+        await initialize(cx)
+        const { sessionId } = await cx.request(acp.methods.agent.session.new, {
+          cwd,
+          mcpServers: [],
+        })
+        const prompt = cx.request(acp.methods.agent.session.prompt, {
+          sessionId,
+          prompt: [{ type: 'text', text: `cancel ${mode}` }],
+        })
+        await blocked.promise
+        if (mode === 'wait_for_permission_cancel') await permission.promise
+        await cx.notify(acp.methods.agent.session.cancel, { sessionId })
+        assert.equal((await prompt).stopReason, 'cancelled')
+        // the interrupted call's terminal update flushes before the response
+        const call = updates.find(
+          (entry) => entry.update.sessionUpdate === 'tool_call'
+        )?.update as { toolCallId: string } | undefined
+        assert.ok(call)
+        assert.ok(
+          updates.some(
+            (entry) =>
+              entry.update.sessionUpdate === 'tool_call_update' &&
+              entry.update.toolCallId === call.toolCallId &&
+              entry.update.status === 'failed'
           )
-          const prompt = cx.request(acp.methods.agent.session.prompt, {
-            sessionId,
-            prompt: [{ type: 'text', text: `cancel ${mode}` }],
-          })
-          await blocked.promise
-          if (mode === 'wait_for_permission_cancel') await permission.promise
-          await cx.notify(acp.methods.agent.session.cancel, { sessionId })
-          assert.equal((await prompt).stopReason, 'cancelled')
-          await cx.request(acp.methods.agent.session.close, { sessionId })
-        }
-      )
+        )
+        await cx.request(acp.methods.agent.session.close, { sessionId })
+      })
       await run.controller.shutdown()
     }
+  })
+})
+
+test('a cancel after the Agent settles still answers cancelled, as ACP requires', async () =>
+{
+  await withCoralHome(async (cwd) =>
+  {
+    const settled = Promise.withResolvers<void>()
+    const run = controller(
+      'cancel_after_done',
+      {},
+      { onBlocked: () => settled.resolve() }
+    )
+    const updates: acp.SessionNotification[] = []
+    await client(updates).connectWith(
+      run.controller.createApp(),
+      async (cx) =>
+      {
+        await initialize(cx)
+        const { sessionId } = await cx.request(acp.methods.agent.session.new, {
+          cwd,
+          mcpServers: [],
+        })
+        const prompt = cx.request(acp.methods.agent.session.prompt, {
+          sessionId,
+          prompt: [{ type: 'text', text: 'finish' }],
+        })
+        await settled.promise
+        await cx.notify(acp.methods.agent.session.cancel, { sessionId })
+        assert.equal((await prompt).stopReason, 'cancelled')
+        assert.ok(
+          updates.some(
+            (entry) => entry.update.sessionUpdate === 'agent_message_chunk'
+          )
+        )
+        await cx.request(acp.methods.agent.session.close, { sessionId })
+      }
+    )
+    await run.controller.shutdown()
+  })
+})
+
+test('a doom-loop stop says why before ending with max_turn_requests', async () =>
+{
+  await withCoralHome(async (cwd) =>
+  {
+    const run = controller('doom_loop')
+    const updates: acp.SessionNotification[] = []
+    await client(updates).connectWith(
+      run.controller.createApp(),
+      async (cx) =>
+      {
+        await initialize(cx)
+        const { sessionId } = await cx.request(acp.methods.agent.session.new, {
+          cwd,
+          mcpServers: [],
+        })
+        const result = await cx.request(acp.methods.agent.session.prompt, {
+          sessionId,
+          prompt: [{ type: 'text', text: 'loop' }],
+        })
+        assert.equal(result.stopReason, 'max_turn_requests')
+        const notice = updates.find(
+          (entry) => entry.update.sessionUpdate === 'agent_message_chunk'
+        )?.update as { content: { type: string; text: string } } | undefined
+        assert.match(notice?.content.text ?? '', /Coral stopped this turn/)
+        await cx.request(acp.methods.agent.session.close, { sessionId })
+      }
+    )
+    await run.controller.shutdown()
+  })
+})
+
+test('shutdown joins a session/close that is still releasing its binding', async () =>
+{
+  await withCoralHome(async (cwd) =>
+  {
+    const disposing = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const run = controller(
+      'complete',
+      {},
+      {
+        onDispose: async () =>
+        {
+          disposing.resolve()
+          await release.promise
+        },
+      }
+    )
+    await client([]).connectWith(run.controller.createApp(), async (cx) =>
+    {
+      await initialize(cx)
+      const { sessionId } = await cx.request(acp.methods.agent.session.new, {
+        cwd,
+        mcpServers: [],
+      })
+      const closing = cx.request(acp.methods.agent.session.close, {
+        sessionId,
+      })
+      await disposing.promise
+      let shutdownSettled = false
+      const shutdown = run.controller.shutdown().then(() =>
+      {
+        shutdownSettled = true
+      })
+      await new Promise((resolve) => setImmediate(resolve))
+      assert.equal(shutdownSettled, false)
+      release.resolve()
+      await closing
+      await shutdown
+    })
+  })
+})
+
+test('session/new leaves no session file when the Agent cannot be built', async () =>
+{
+  await withCoralHome(async (cwd) =>
+  {
+    const instance = new CoralAcpController(
+      { host: 'http://ollama.test', model: 'model-a' },
+      {
+        createAgent: () =>
+        {
+          throw new Error('agent construction failed')
+        },
+        listModels: async () => [
+          {
+            name: 'model-a',
+            size: 1,
+            modified_at: '2026-01-01T00:00:00.000Z',
+          },
+        ],
+      }
+    )
+    await client([]).connectWith(instance.createApp(), async (cx) =>
+    {
+      await initialize(cx)
+      await assert.rejects(
+        cx.request(acp.methods.agent.session.new, { cwd, mcpServers: [] }),
+        /agent construction failed/
+      )
+    })
+    await instance.shutdown()
+    const { existsSync, readdirSync } = await import('node:fs')
+    const sessions = join(process.env.CORAL_HOME!, 'sessions')
+    assert.deepEqual(
+      existsSync(sessions)
+        ? readdirSync(sessions).filter((name) => name.endsWith('.json'))
+        : [],
+      []
+    )
   })
 })
 

@@ -20,11 +20,14 @@ load that TUI.
 - Initialize protocol version 1 without creating a session or loading a model.
   No authentication method is advertised or required.
 - Create one session per connection, send text turns, and receive streamed text,
-  thinking, usage and tool evidence. Approvals allow one call, always allow
+  thinking, usage and tool evidence. A `resource_link` block becomes a plain
+  reference (name and URI) in the turn; Coral never fetches it. Approvals allow one call, always allow
   that tool for the rest of the session, or reject one call.
 - Pick a runtime mode with the `coral.runtime-mode` session config option, even
   mid-turn; the next approval uses the new mode.
-- Cancel an active turn, then continue the same session.
+- Cancel an active turn, then continue the same session. Updates the cancelled
+  turn already produced still arrive before its response, and any tool call it
+  left open ends as `failed`.
 - Change the model while idle using session config options.
 - Resume an existing native session using `session/resume`, without replaying
   its messages to the client. Close the session and release its resources.
@@ -42,8 +45,14 @@ Runtime modes:
 No mode overrides `always_deny`. Always-allow grants live in memory for the
 session binding only and are never written to workspace grants.
 
-Only the default session mode is supported. Attachments, additional directories,
-and client-supplied MCP servers are rejected. MCP is disabled, including the
+A turn is capped at 100 model rounds and then ends with `max_turn_requests`.
+When the doom-loop guard stops repeated identical calls or errors, Coral sends
+an agent message saying why and also ends with `max_turn_requests`, since ACP
+has no closer stop reason. The post-edit self-check is off in ACP, and file
+changes made between turns are reported to the model as in the TUI.
+
+Only the default session mode is supported. Image, audio, and embedded resource
+blocks, additional directories, and client-supplied MCP servers are rejected. MCP is disabled, including the
 user's configured servers. App MCP, session import/replacement, and speculative
 plan publishing are outside this integration.
 
@@ -58,8 +67,8 @@ coral exec --permission-profile none --ephemeral --no-mcp \
 This profile exposes no tools and starts no MCP servers even with `--mcp`.
 Exec never writes conversation sessions. A result-file option, if supplied,
 still writes its explicitly requested result. Final status distinguishes
-completion, failure, cancellation, and the iteration limit; only completion
-exits successfully.
+completion, failure, cancellation, the iteration limit, and a doom-loop stop;
+only completion exits successfully.
 
 ## Native session ownership
 

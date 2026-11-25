@@ -1585,7 +1585,11 @@ export class Agent
       }
     }
     const finish = (
-      status: 'completed' | 'iteration_limit' | 'stopped' = 'completed'
+      status:
+        | 'completed'
+        | 'iteration_limit'
+        | 'stopped'
+        | 'doom_loop_stopped' = 'completed'
     ): AgentRunOutcome =>
     {
       finalize()
@@ -2211,14 +2215,16 @@ export class Agent
               signal
             )
           }
-          catch
+          catch (err)
           {
-            return finish('stopped')
+            // an abort is the expected rejection; any other host failure fails the turn
+            if (signal.aborted) return finish('stopped')
+            return fail(toError(err))
           }
 
           if (!proceed)
           {
-            return finish('stopped')
+            return finish('doom_loop_stopped')
           }
           // fresh streak required before tripping again
           doomLoop.reset()
