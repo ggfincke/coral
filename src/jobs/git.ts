@@ -12,8 +12,8 @@ import type { JobRecord, JobRepository } from './types.js'
 
 const MAX_GIT_BYTES = 4 * 1024 * 1024
 const MAX_DIFF_BYTES = 1024 * 1024
-// task git never runs hooks, on top of the shared read-only config
-const GIT_OPTIONS = ['-c', 'core.hooksPath=/dev/null', ...READ_ONLY_GIT_CONFIG]
+// task git runs no fsmonitor & no hooks for index, checkout, or ref events
+const GIT_OPTIONS = READ_ONLY_GIT_CONFIG
 
 async function git(
   cwd: string,

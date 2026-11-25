@@ -139,7 +139,7 @@ Runs in the session cwd. **Not sandboxed.** Network and paths outside the projec
 
 ## Git
 
-Refs/paths starting with `-` are rejected so git does not treat them as options. Pathspecs starting with `:` (pathspec magic) are rejected, and `path` / `paths` go through the workspace path gate. Every call disables `core.fsmonitor`; diffs add `--no-ext-diff --no-textconv --no-color` and logs `--no-color --no-show-signature`, so repo-local config cannot run commands or rewrite output. Hooks still run for the mutating tools.
+Refs/paths starting with `-` are rejected so git does not treat them as options. Pathspecs starting with `:` (pathspec magic) are rejected, and `path` / `paths` go through the workspace path gate. Every call disables `core.fsmonitor`. Read-only calls (status, diff, log, and Coral's own git context) also turn off every hook (`core.hooksPath` and each config-defined `hook.*` name and event) and blank every configured `filter.*` driver; diffs add `--no-ext-diff --no-textconv --no-color` and logs `--no-color --no-show-signature`. Hooks and filter drivers still run for the approval-gated `git_add`, `git_commit`, `git_switch`, and `git_push`, so repo config can run commands there. `git_push` refuses a remote with `mirror = true` or a push refspec led by `+` or `:` (with no remote given, any such remote).
 
 ### Read
 

@@ -1,5 +1,5 @@
 // tests/tools/git-hardening.test.ts
-// git tools ignore config-driven commands, report cut output, & refuse refspecs
+// git tools ignore config-driven commands, report cut output, & refuse unsafe pushes
 
 import { strict as assert } from 'node:assert'
 import { spawnSync } from 'node:child_process'
@@ -68,6 +68,33 @@ test(
 )
 
 test(
+  'read-side git runs no config-defined hook or filter driver',
+  { skip: !HAS_GIT },
+  async () =>
+  {
+    const { dir, run } = await committedRepo('coral-git-cfg-hook-')
+    await writeFile(join(dir, '.gitattributes'), '* filter=marker\n')
+    run('config', 'hook.marker.command', await markerScript(dir, 'hook'))
+    run('config', 'hook.marker.event', 'post-index-change')
+    run('config', 'filter.marker.clean', await markerScript(dir, 'clean'))
+    run('config', 'filter.marker.required', 'true')
+    await writeFile(join(dir, 'a.txt'), 'two\n')
+
+    const context = await buildGitContextMessage(dir)
+    const status = await gitStatusTool.execute({}, toolContext(dir))
+    const diff = await gitDiffTool.execute({}, toolContext(dir))
+    const stat = await gitDiffTool.execute({ stat: true }, toolContext(dir))
+
+    assert.ok(context)
+    assert.equal(existsSync(join(dir, 'hook.ran')), false)
+    assert.equal(existsSync(join(dir, 'clean.ran')), false)
+    assert.match(status.output, /^ M a\.txt$/m)
+    assert.match(diff.output, /^\+two$/m)
+    assert.match(stat.output, /a\.txt/)
+  }
+)
+
+test(
   'an approved git_commit still runs repository hooks',
   { skip: !HAS_GIT },
   async () =>
@@ -76,6 +103,8 @@ test(
     const hook = join(dir, '.git', 'hooks', 'pre-commit')
     await writeFile(hook, `#!/bin/sh\ntouch "${join(dir, 'hook.ran')}"\n`)
     await chmod(hook, 0o755)
+    run('config', 'hook.marker.command', await markerScript(dir, 'cfghook'))
+    run('config', 'hook.marker.event', 'pre-commit')
     await writeFile(join(dir, 'a.txt'), 'two\n')
     assert.equal(run('add', '-A').status, 0)
 
@@ -86,6 +115,7 @@ test(
 
     assert.equal(result.error, undefined)
     assert.equal(existsSync(join(dir, 'hook.ran')), true)
+    assert.equal(existsSync(join(dir, 'cfghook.ran')), true)
   }
 )
 
@@ -147,3 +177,25 @@ test(
     assert.equal(upstream.stdout.trim(), 'origin/feat/x')
   }
 )
+
+test('git_push refuses a mirror remote', { skip: !HAS_GIT }, async () =>
+{
+  const bare = await tempDir('coral-git-mirror-')
+  assert.equal(spawnSync('git', ['init', '--bare', bare]).status, 0)
+  const { dir, run } = await committedRepo('coral-git-mirror-push-')
+  assert.equal(run('remote', 'add', 'origin', bare).status, 0)
+  assert.equal(run('config', 'remote.origin.mirror', 'true').status, 0)
+
+  const named = await gitPushTool.execute(
+    { remote: 'origin' },
+    toolContext(dir)
+  )
+  const implicit = await gitPushTool.execute({}, toolContext(dir))
+  const refs = spawnSync('git', ['-C', bare, 'for-each-ref'], {
+    encoding: 'utf-8',
+  })
+
+  assert.match(named.error ?? '', /mirror remote/)
+  assert.match(implicit.error ?? '', /mirror remote/)
+  assert.equal(refs.stdout.trim(), '')
+})

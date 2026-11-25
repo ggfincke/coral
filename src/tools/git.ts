@@ -70,6 +70,53 @@ async function isConfiguredRemote(
   return remotes.output.split('\n').some((name) => name.trim() === remote)
 }
 
+// remote names from '-z --get-regexp' entries whose value passes the test
+async function remotesWhere(
+  pattern: string,
+  typeArgs: string[],
+  matches: (value: string) => boolean,
+  cwd: string,
+  signal?: AbortSignal
+): Promise<string[]>
+{
+  const config = await runGitCommand(
+    ['config', '-z', ...typeArgs, '--get-regexp', pattern],
+    cwd,
+    { signal }
+  )
+  return config.output
+    .split('\0')
+    .map((entry) => entry.split('\n'))
+    .filter(([, value]) => value !== undefined && matches(value))
+    .map(([key = '']) => key.slice('remote.'.length, key.lastIndexOf('.')))
+}
+
+// remotes whose config forces or deletes on a plain push: mirror = true, or a
+// push refspec led by '+' (force) or ':' (delete)
+async function forcingRemotes(
+  cwd: string,
+  signal?: AbortSignal
+): Promise<Set<string>>
+{
+  const [mirrors, refspecs] = await Promise.all([
+    remotesWhere(
+      '^remote\\..*\\.mirror$',
+      ['--type=bool'],
+      (value) => value === 'true',
+      cwd,
+      signal
+    ),
+    remotesWhere(
+      '^remote\\..*\\.push$',
+      [],
+      (value) => /^\s*[+:]/.test(value),
+      cwd,
+      signal
+    ),
+  ])
+  return new Set([...mirrors, ...refspecs])
+}
+
 // run a git command, applying a display placeholder when output is empty
 async function runGit(
   args: string[],
@@ -506,6 +553,15 @@ export const gitPushTool: Tool = {
     if (branch && !(await isPlainBranchName(branch, cwd, context?.signal)))
     {
       return { output: '', error: `Invalid branch: ${branch}` }
+    }
+    // w/o a remote git picks the default one, so any forcing remote refuses
+    const forcing = await forcingRemotes(cwd, context?.signal)
+    if (remote ? forcing.has(remote) : forcing.size > 0)
+    {
+      return {
+        output: '',
+        error: `Refusing to push to a mirror remote or one whose push refspec forces or deletes: ${[...forcing].join(', ')}`,
+      }
     }
 
     // --porcelain writes the push result to stdout; the human-readable summary
