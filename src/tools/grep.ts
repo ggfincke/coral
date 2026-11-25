@@ -6,6 +6,7 @@ import {
   execRipgrep,
   NO_MATCHES_MESSAGE,
   resolveRgSearchTarget,
+  RG_EXCLUDE_GIT_DIR,
 } from './ripgrep-utils.js'
 import { truncateOutput } from '../utils/truncate-output.js'
 
@@ -75,8 +76,10 @@ export const grepTool: Tool = {
     {
       rgArgs.push('--glob', include)
     }
+    rgArgs.push(...RG_EXCLUDE_GIT_DIR)
 
-    rgArgs.push(searchPath)
+    // '--' ends rg options so a model-supplied path can never act as a flag
+    rgArgs.push('--', searchPath)
 
     const result = await execRipgrep(rgArgs, NO_MATCHES_MESSAGE, {
       cwd: isProjectPath ? cwd : undefined,

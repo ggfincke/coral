@@ -36,9 +36,18 @@ export async function resolveRgSearchTarget(
 
   const path = allowed.path
   const isProjectPath = isPathInsideProject(cwd, path)
-  const searchPath = isProjectPath ? formatProjectPath(cwd, path) : path
+  const projectPath = isProjectPath ? formatProjectPath(cwd, path) : path
+  // callers also pass '--' before the path; the ./ prefix keeps a dash-led
+  // name from reading as an rg flag even if that separator is ever dropped
+  const searchPath = projectPath.startsWith('-')
+    ? `./${projectPath}`
+    : projectPath
   return { searchPath, cwd, isProjectPath }
 }
+
+// keep rg out of git internals since --hidden would otherwise include them;
+// callers add it after any user glob because a later rg glob wins
+export const RG_EXCLUDE_GIT_DIR = ['--glob', '!.git'] as const
 
 const RG_TIMEOUT = 15_000
 const RG_MAX_BUFFER = 5 * 1024 * 1024

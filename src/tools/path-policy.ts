@@ -4,19 +4,19 @@
 import { resolveWorkspacePath } from '../shared/workspace-path.js'
 import { getBuiltInToolRegistration } from './catalog.js'
 
-function toolPathArg(
+function toolPathArgs(
   toolName: string,
   args: Record<string, unknown>
-): string | undefined
+): string[]
 {
   const rule = getBuiltInToolRegistration(toolName)?.workspacePath
-  if (!rule) return undefined
+  if (!rule) return []
 
-  const path =
-    typeof args[rule.argument] === 'string'
-      ? (args[rule.argument] as string)
-      : undefined
-  return path ?? rule.defaultPath
+  const value = args[rule.argument]
+  if (typeof value === 'string') return [value]
+  if (Array.isArray(value))
+    return value.filter((entry): entry is string => typeof entry === 'string')
+  return rule.defaultPath === undefined ? [] : [rule.defaultPath]
 }
 
 export function requiresWorkspacePathApproval(
@@ -25,7 +25,7 @@ export function requiresWorkspacePathApproval(
   cwd: string
 ): boolean
 {
-  const rawPath = toolPathArg(toolName, args)
-  if (rawPath === undefined) return false
-  return !resolveWorkspacePath(cwd, rawPath).isInsideWorkspace
+  return toolPathArgs(toolName, args).some(
+    (rawPath) => !resolveWorkspacePath(cwd, rawPath).isInsideWorkspace
+  )
 }
