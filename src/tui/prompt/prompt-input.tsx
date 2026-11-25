@@ -150,12 +150,9 @@ interface LiveDraft
   cursorOffset: number
 }
 
-// a key that arrived after a submit, waiting for the parent's answer to render
-interface HeldKey
-{
-  input: string
-  key: CoralKey
-}
+// a key or paste that arrived after a submit, waiting for the parent's
+// answer to render
+type HeldKey = { input: string; key: CoralKey } | { paste: string }
 
 const EMPTY_HISTORY_ENTRIES: readonly HistoryEntry[] = []
 const INITIAL_RESET: PromptReset = { epoch: 0, kind: 'external' }
@@ -641,6 +638,11 @@ export default function PromptInput({
   const handlePaste = useCallback(
     (raw: string) =>
     {
+      if (heldKeysRef.current)
+      {
+        heldKeysRef.current.push({ paste: raw })
+        return
+      }
       const text = sanitizePastedText(raw)
       if (!text) return
       if (searchRef.current.active)
@@ -1263,8 +1265,12 @@ export default function PromptInput({
     if (!held) return
     heldKeysRef.current = null
     if (!focus) return
-    for (const { input, key } of held) handleInput(input, key)
-  }, [focus, handleInput, submitCount])
+    for (const item of held)
+    {
+      if ('paste' in item) handlePaste(item.paste)
+      else handleInput(item.input, item.key)
+    }
+  }, [focus, handleInput, handlePaste, submitCount])
 
   useCoralInput(handleInput, { isActive: focus })
 
