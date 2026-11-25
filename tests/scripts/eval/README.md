@@ -37,8 +37,8 @@ prompt, then grades the result deterministically:
 7. **long-context-fix** — find and fix a percent-vs-fraction bug that spans
    `discount-rate.mjs` and `apply-discount.mjs` inside a ~35 file project the
    prompt never names (`long-context-fixture.ts`); graded by re-running the
-   locked `node --test test/` suite, with every locked test reported ok by
-   name. This is the task that grows the context
+   locked test files only (`node --test` on each), with every locked test
+   reported ok by name; tests the model adds are not run. This is the task that grows the context
    enough to exercise prompt caps, prefix-cache misses, and compaction.
 8. **long-context-followup** — the same fix inside a committed Git repo,
    followed by two short follow-up turns on the same agent. A tool-free question

@@ -330,7 +330,7 @@ const LONG_CONTEXT_TEST_NAMES = lockedTestNames(
   ...Object.values(LONG_CONTEXT_TEST_FILES)
 )
 
-// pass only when the locked tests are untouched and the whole suite is green
+// pass only when the locked tests are untouched and every locked test passes
 async function gradeLongContext(ctx: GradeContext): Promise<GradeResult>
 {
   // reject any edit to the locked tests
@@ -342,8 +342,8 @@ async function gradeLongContext(ctx: GradeContext): Promise<GradeResult>
       return { passed: false, detail: `${rel} was modified` }
     }
   }
-  // the whole suite must pass, not just the gold case
-  // run only the locked files so an added test can't stand in for a locked one
+  // every locked test must pass, not just the gold case; run only the locked
+  // files so an added test can't stand in for a locked one
   return runLockedTests(
     ctx.dir,
     Object.keys(LONG_CONTEXT_TEST_FILES),
