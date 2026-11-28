@@ -10,7 +10,7 @@
     "test": "node --test test/inspect-image.test.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "4.6.7",
     "sharp": "0.35.5"
   }
